@@ -71,7 +71,8 @@ class InitSetupTests(MainCase):
 
     def test_name_refusal_restart_reuses_the_explicit_census_choice(self) -> None:
         from tests.project.test_rom import BOOTCODES, CODE, cartridge
-        from unbake.project import census, header, init
+        from unbake.project import census, flow, header, init
+        from unbake.project.config import Unfinished
 
         target = self.directory / "unrelated name"
         init.run(target)
@@ -81,6 +82,7 @@ class InitSetupTests(MainCase):
             patch.object(header, "RETAIL", BOOTCODES),
             patch.object(census, "measured_code", return_value=ranges),
             patch.object(config, "load_policy", return_value=self.policy),
+            patch.object(flow, "plan_layout", side_effect=Unfinished("setup", "layout.plan")),
         ):
             code, out, _error = self.run_main(
                 ["--project", str(target), "setup", "--names-from", "us"], load_project=False

@@ -10,6 +10,21 @@ from unbake.project import config
 
 
 class MainTests(MainCase):
+    def test_registration_import_failure_has_a_terminal_receipt(self) -> None:
+        original = builtins.__import__
+
+        def unavailable(name: str, *args: Any, **kwargs: Any) -> Any:
+            fromlist = args[2] if len(args) > 2 else kwargs.get("fromlist", ())
+            if name == "unbake.cli" and "draft" in fromlist:
+                raise ImportError("dependency.pycparser: missing installed dependency")
+            return original(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=unavailable):
+            code, out, error = self.run_main(["--help"], load_project=False)
+        self.assertEqual(code, 1)
+        self.assertIn("HELD(config): dependency.pycparser", out)
+        self.assertEqual(error, "")
+
     def test_all_phases_and_verbs_parse(self) -> None:
         cases = (
             ("setup", ["setup"]),
