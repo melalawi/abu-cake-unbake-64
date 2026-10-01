@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from unbake.decomp.score import objdiff_cli
 from unbake.project.config import Held, Policy, Project
-from unbake.report import files
+from unbake.report import files, readme_layout
 from unbake.report import units as report_units
 
 
@@ -147,6 +147,14 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
         blocks.append(
             f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{function_line}</code></pre> |"
         )
+    if len(reports) > 1:
+        summaries = {"all": _aggregate(reports), **reports}
+        width = max(map(len, summaries))
+        lines = [
+            f"<code>{_line(version.ljust(width), document, version)} bytes</code>"
+            for version, document in summaries.items()
+        ]
+        blocks.insert(0, "<pre>" + "<br>".join(lines) + "</pre>")
     return "\n\n".join(blocks)
 
 
@@ -201,16 +209,9 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
     """Update only figures in existing summaries and VERSION or bytes/functions tables."""
-    heading = "## Progress\n\n"
-    if template.count(heading) != 1:
-        raise Held("report", "readme.Progress: exactly one heading required")
-    before, body = template.split(heading)
-    end = body.find("\n## ")
-    if end < 0:
-        raise Held("report", "readme.Progress: following section missing")
+    before, block, after = readme_layout.section(template)
     if not reports:
         raise Held("report", "reports: missing VERSION values")
-    block = body[:end]
     # Reconcile a uniquely renamed VERSION while retaining the established layout.
     labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|$", block, re.MULTILINE)
     missing = set(reports) - set(labels)
@@ -233,7 +234,7 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
         descriptions[version] = match[1]
         matches.append((version, match))
     if "<pre>" not in block:
-        return before + heading + progress(reports, descriptions) + "\n" + body[end:]
+        return before + progress(reports, descriptions) + "\n" + after
     replacements = []
     for version, match in matches:
         following = re.search(r"^\| [\w-]+ \([^\n|]+ \|$", block[match.end() :], re.MULTILINE)
@@ -243,11 +244,10 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
             raise Held("report", f"readme.Progress.{version}: progress block missing")
         start = match.end() + figures.start(1)
         stop = match.end() + figures.end(1)
-        code = re.fullmatch(r"<code>(.*?)</code>", figures[1], re.DOTALL)
-        figure = _FIGURE.fullmatch(code[1]) if code else None
-        version_row = figure is not None and figure["label"] == version
-        replacement = _replace_figures(figures[1], reports[version], version, table=not version_row)
+        replacement = _replace_figures(figures[1], reports[version], version, table=True)
         replacements.append((start, stop, replacement))
+    if not readme_layout.complete(block):
+        raise Held("report", "readme.Progress: complete bytes/functions tables and summary required")
     # Summary labels and their order belong to the template, including its all line.
     first_table = min(match.start() for _, match in matches)
     summary = block[:first_table]
@@ -262,7 +262,7 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
         )
     for start, stop, replacement in sorted(replacements, reverse=True):
         block = block[:start] + replacement + block[stop:]
-    return before + heading + block + body[end:]
+    return before + block + after
 
 
 def measure(project: Project, policy: Policy, version: str) -> dict[str, Any]:
@@ -337,7 +337,7 @@ def write(project: Project, policy: Policy) -> list[Path]:
     try:
         original = readme.read_text(encoding="utf-8")
         reports = {version: measure(project, policy, version) for version in project.versions}
-        rendered = render(original, reports)
+        rendered = render(readme_layout.restore(original, project.root), reports)
         written: list[Path] = []
         for version, document in reports.items():
             destination = project.root / "versions" / version / "report.json"

@@ -22,6 +22,7 @@ from unbake.project.config import Held, Policy, Project
 from unbake.project.header import Header
 from unbake.project.rom import Rom
 from unbake.report import progress as report
+from unbake.report import readme_layout
 from unbake.report import units as report_units
 
 
@@ -38,26 +39,48 @@ def document(code: int, total: int, matched_percent: float, fuzzy_percent: float
 
 
 class RenderTests(unittest.TestCase):
-    def test_version_rows_preserve_layout_and_only_replace_figures(self) -> None:
-        for version, padding, old, complete, fuzzy, percent in (
-            ("us", " ", "2.11", 7200, 77.6, " 72.00"),
-            ("us", " ", "2.11", 10000, 100, " 100.00"),
-            ("us-rev1", "   ", "71.09", 10000, 100, " 100.00"),
-        ):
+    def test_reduced_version_rows_require_restoration(self) -> None:
+        for version in ("us", "us-rev1"):
             with self.subTest(version=version):
                 original = (
                     "intro\n## Progress\n\n"
                     f"| {version} (release description) |\n|---|\n"
-                    f"| <pre><code>{version}{padding}[{'░' * 20}]  {old}% (~0.00%)"
+                    f"| <pre><code>{version} [{'░' * 20}]  2.11% (~0.00%)"
                     "  0 of 10,000 bytes</code></pre> |\n\n## End\nfooter\n"
                 )
-                bar = "██████████████▒▒░░░░" if complete == 7200 else "█" * 20
-                expected = original.replace("░" * 20, bar).replace(
-                    f"  {old}% (~0.00%)  0", f"{percent}% (~{fuzzy:.2f}%)  {complete:,}"
+                with self.assertRaisesRegex(Held, "unexpected label"):
+                    report.render(original, {version: document(7200, 10000, 0, 77.6)})
+
+    def test_history_restores_complete_layout_and_preserves_live_prose(self) -> None:
+        root = Path(__file__).parent
+        for stem in ("battletanx", "ragewars"):
+            with self.subTest(project=stem):
+                reference = (root / f"{stem}-reference.golden").read_text()
+                golden = (root / f"{stem}-progress.golden").read_text()
+                reports = json.loads((root / f"{stem}-measures.json").read_text())
+                reduced = "\n\n".join(
+                    f"| {version} (release) |\n|---|\n| <pre><code>{version} "
+                    f"[{'░' * 20}]  0.00%  0 of 0 bytes</code></pre> |"
+                    for version in reports
                 )
-                reports = {version: document(complete, 10000, 0, fuzzy)}
-                self.assertEqual(report.render(original, reports), expected)
-                self.assertEqual(report.render(expected, reports), expected)
+                live = "live intro\n## Progress\n\n" + reduced + "\n\n## End\nlive footer\n"
+                committed = "old intro\n## Progress\n\n" + reference + "\n## End\nold footer\n"
+                responses = [
+                    SimpleNamespace(returncode=0, stdout="reduced\ncomplete\n"),
+                    SimpleNamespace(returncode=0, stdout=live),
+                    SimpleNamespace(returncode=0, stdout=committed),
+                ]
+                with patch("unbake.report.readme_layout.subprocess.run", side_effect=responses) as history:
+                    restored = readme_layout.restore(live, root)
+                self.assertEqual(history.call_count, 3)
+                expected = "live intro\n## Progress\n\n" + golden + "\n## End\nlive footer\n"
+                rendered = report.render(restored, reports)
+                self.assertEqual(rendered, expected)
+                self.assertTrue(readme_layout.complete(readme_layout.section(rendered)[1]))
+                with patch("unbake.report.readme_layout.subprocess.run") as history:
+                    self.assertEqual(readme_layout.restore(rendered, root), rendered)
+                history.assert_not_called()
+                self.assertEqual(report.render(rendered, reports), rendered)
 
     def test_reference_layout_goldens_and_idempotence(self) -> None:
         for stem in ("battletanx", "ragewars"):
@@ -100,7 +123,7 @@ class RenderTests(unittest.TestCase):
             "<code>us-rev1 [--------------------]   0.00%  0 of 300 bytes</code></pre>\n\n"
         )
         reports = {"us": document(50, 100, 50, 75), "us-rev1": document(300, 300, 100, 100)}
-        tables = report.progress(reports, {v: v + " (release)" for v in reports})
+        tables = report.progress(reports, {v: v + " (release)" for v in reports}).split("</pre>\n\n", 1)[1]
         template = "## Progress\n\n" + summary + tables + "\n\n## End\n"
         rendered = report.render(template, reports)
         self.assertIn("all     [█████████████████▒▒░]  87.50% (~93.75%)  350 of 400 bytes", rendered)

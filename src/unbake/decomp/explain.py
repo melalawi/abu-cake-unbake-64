@@ -50,7 +50,7 @@ class Allocation:
 
 def function_dump(text: str, function: str) -> str:
     """Select exactly one function, refusing absent or duplicate sections."""
-    matches = list(re.finditer(r"^;; Function (\S+)\s*$", text, re.M))
+    matches = list(re.finditer(r"^;; Function (\S+)(?:[ \t]+\([^\n]*\))?[ \t]*$", text, re.M))
     sections = [
         text[m.end() : matches[i + 1].start() if i + 1 < len(matches) else len(text)]
         for i, m in enumerate(matches)
@@ -147,6 +147,11 @@ def render(allocation: Allocation) -> str:
     if allocation.pseudos and all(p.allocator == "local" and p.rank is None for p in allocation.pseudos):
         rows.append("Global allocation order is empty; no pseudos to rank.")
     by_number = {p.number: p for p in allocation.pseudos}
+    for pseudo in sorted((p for p in allocation.pseudos if p.rank is not None), key=lambda p: cast(int, p.rank)):
+        rows.append(
+            f"allocation rank {pseudo.rank}: pseudo {pseudo.number} in {pseudo.hard}; "
+            f"priority={pseudo.priority} refs={pseudo.references} length={pseudo.live_length}"
+        )
     for difference in allocation.differences:
         rows.append(
             f"+0x{difference.target_offset:04X}: register {difference.draft_hard} wants "
@@ -286,10 +291,16 @@ def _gcc_input(project: Project, policy: Policy, source: Path, version: str, wor
         except ValueError as error:
             raise Held("explain", f"compiler.cflags: {error}") from error
         recipe = makefile.recipe(project)
-        command = [makefile.host_executable(policy, recipe.cpp or "", "cpp"), *recipe.cppflags, *options, str(source)]
+        command = [
+            makefile.host_executable(policy, recipe.cpp or "", "cpp"),
+            *recipe.cppflags,
+            *options,
+            "-DNON_MATCHING=1",
+            str(source),
+        ]
     else:
         codeflags = [flag for flag in flags if flag != "-c"]
-        command = [str(compiler.cc), *codeflags, "-E", str(source)]
+        command = [str(compiler.cc), *codeflags, "-DNON_MATCHING=1", "-E", str(source)]
     expanded = trial_compile.run_tool(command, work, "explain")
     expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
     return expanded, codeflags

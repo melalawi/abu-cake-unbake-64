@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from unbake.layout import shared
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
-from unbake.layout.structs_types import SCALARS
+from unbake.layout.structs_types import SCALARS, Aggregate
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -105,6 +106,63 @@ def scalar_edits(project: Any, parser: Parser) -> tuple[set[str], list[tuple[int
         if len(retained) != len(members):
             replacements.append((start, end, "\n".join("typedef " + member.declaration for member in retained)))
     return includes, replacements
+
+
+def _dependencies(fields: tuple[Field, ...]) -> set[str]:
+    result: set[str] = set()
+    for field in fields:
+        match = re.match(r"(?:struct|union) ([A-Za-z_]\w*)", field.type)
+        if match and "*" not in field.type:
+            result.add(match[1])
+        result.update(_dependencies(field.fields))
+    return result
+
+
+def _order_header(text: str, prefix: str) -> str:
+    """Order complete declarations without moving guards or duplicating typedefs."""
+    parser = Parser(prefix + text)
+    records = {record.name: record for record in parser.parse() if record.start >= len(prefix)}
+    spans: dict[str, tuple[int, int]] = {}
+    for declaration in parser.declarations:
+        base = declaration.base
+        if isinstance(base, Aggregate) and base.name in records and declaration.start <= base.start < declaration.end:
+            spans[base.name] = (declaration.start - len(prefix), declaration.end - len(prefix))
+    pending = {name: _dependencies(records[name].fields) & spans.keys() for name in spans}
+    ordered = []
+    while pending:
+        ready = sorted(name for name, dependencies in pending.items() if not dependencies)
+        if not ready:
+            held(", ".join(sorted(pending)), "cyclic shared-header dependency")
+        for name in ready:
+            ordered.append(text[slice(*spans[name])])
+            del pending[name]
+        for dependencies in pending.values():
+            dependencies.difference_update(ready)
+    slots = sorted(spans.values())
+    replacements = [(start, end, value) for (start, end), value in zip(slots, ordered, strict=True)]
+    # Standalone aggregate typedefs belong before the ordered definitions.
+    # Leaving them in their former slots can hide a pointer alias or name an
+    # incomplete by-value dependency after its consumer.
+    aliases = []
+    for declaration in parser.declarations:
+        start, end = declaration.start - len(prefix), declaration.end - len(prefix)
+        value = text[start:end]
+        if (
+            start >= 0
+            and isinstance(declaration.base, Aggregate)
+            and declaration.base.name in spans
+            and not declaration.operations
+            and value.lstrip().startswith("typedef ")
+            and "{" not in value
+        ):
+            aliases.append(value)
+            replacements.append((start, end, ""))
+    position = min((start for start, _, _ in replacements), default=0)
+    for start, end, value in sorted(replacements, reverse=True):
+        text = text[:start] + value + text[end:]
+    if aliases:
+        text = text[:position] + "\n".join(aliases) + "\n" + text[position:]
+    return text
 
 
 def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | None = None) -> list[Edit]:
@@ -273,12 +331,43 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
             + _scalar_include(project, texts, list(additions.values()))
             + "\n#endif\n"
         )
-        new_declarations = "\n".join(shared.declaration(record) for record in additions.values())
+        forward = "".join(
+            f"{record.kind} {record.name};\n"
+            + "".join(f"typedef {record.kind} {record.name} {alias};\n" for alias in record.aliases)
+            for record in sorted(additions.values(), key=lambda item: item.name)
+        )
+        new_declarations = "\n".join(
+            shared.declaration(replace(record, aliases=()))
+            for record in sorted(additions.values(), key=lambda item: item.name)
+        )
         existing_edit = next((edit for edit in edits if edit.path == path), None)
         if existing_edit is not None:
             edits.remove(existing_edit)
             before_header = existing_edit.after
-        edits.append(Edit(path, before, shared.append(before_header, new_declarations), tuple(versions)))
+        # Forward typedefs must precede existing definitions too: an extended
+        # aggregate may now use one of the newly promoted types.
+        prefix = "\n".join(text for other, text in texts.items() if other != path) + "\n"
+        probe_prefix = prefix + forward
+        header_parser = Parser(probe_prefix + shared.append(before_header, new_declarations))
+        header_records = [
+            record
+            for record in header_parser.parse()
+            if len(probe_prefix) <= record.start < len(probe_prefix) + len(before_header)
+        ]
+        position = min(
+            (record.start - len(probe_prefix) for record in header_records), default=before_header.rfind("#endif")
+        )
+        if position < 0:
+            position = len(before_header)
+        if header_records:
+            position = min(
+                declaration.start - len(probe_prefix)
+                for declaration in header_parser.declarations
+                if declaration.start <= position + len(probe_prefix) < declaration.end
+            )
+        before_header = before_header[:position] + forward + before_header[position:]
+        after = shared.append(before_header, new_declarations)
+        edits.append(Edit(path, before, _order_header(after, prefix), tuple(versions)))
     if edits:
         updated = dict(texts)
         for edit in edits:

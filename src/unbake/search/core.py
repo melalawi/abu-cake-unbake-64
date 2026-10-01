@@ -102,11 +102,11 @@ def preprocess(project: Project, policy: Policy, source: Path, version: str, dea
             raise Held("search", f"compiler.cflags: {error}") from error
         recipe = makefile.recipe(project)
         cpp = makefile.host_executable(policy, recipe.cpp or "", "cpp")
-        command = [cpp, *recipe.cppflags, *options, str(source)]
+        command = [cpp, *recipe.cppflags, *options, "-DNON_MATCHING=1", str(source)]
     else:
         if not compiler.cc:
             raise Held("search", "compiler.cc: missing value")
-        command = [str(compiler.cc), *(flag for flag in flags if flag != "-c"), "-E", str(source)]
+        command = [str(compiler.cc), *(flag for flag in flags if flag != "-c"), "-DNON_MATCHING=1", "-E", str(source)]
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise Held("search", "context.deadline: preprocessing budget exhausted")
