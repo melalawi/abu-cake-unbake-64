@@ -580,6 +580,19 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
 
     changed = {edit.path.resolve() for edit in edits}
     graph: dict[Path, set[Path]] = {}
+    resolved: dict[Path, Path] = {}
+    regular: dict[Path, bool] = {}
+
+    def canonical(path: Path) -> Path:
+        if path not in resolved:
+            resolved[path] = path.resolve()
+        return resolved[path]
+
+    def is_file(path: Path) -> bool:
+        if path not in regular:
+            regular[path] = path.is_file()
+        return regular[path]
+
     recipe = makefile.recipe(project)
     configured_flags = (
         *(compiler.cflags for compiler in project.compilers.values()),
@@ -601,7 +614,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
                 search.append(path if path.is_absolute() else project.root / path)
 
     def dependencies(path: Path) -> set[Path]:
-        path = path.resolve()
+        path = canonical(path)
         if path in graph:
             return graph[path]
         graph[path] = set()
@@ -616,8 +629,8 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
             # Include flags and conditional headers can choose different homes.
             # Scan all known candidates so the proof cannot miss an includer.
             for candidate in candidates:
-                if candidate.is_file():
-                    target = candidate.resolve()
+                if is_file(candidate):
+                    target = canonical(candidate)
                     if not target.is_relative_to(project.root):
                         held(str(path), f"cannot isolate external include {target} for header compile proof")
                     graph[path].add(target)
@@ -625,7 +638,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
         return graph[path]
 
     def affected(path: Path, visited: set[Path]) -> bool:
-        path = path.resolve()
+        path = canonical(path)
         if path in changed:
             return True
         if path in visited:
@@ -657,9 +670,25 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
     try:
         with tempfile.TemporaryDirectory(prefix="structs-proof-", dir=temporary_root) as temporary:
             overlay = Path(temporary)
-            for root in (project.src, *project.include):
+            for root in project.include:
                 shutil.copytree(root, overlay / root.relative_to(project.root), dirs_exist_ok=True)
-            for dependency in graph:
+            # Only selected consumers and their complete literal include
+            # closures are needed. Copying every unrelated C unit twice does
+            # not contribute to the physical compiler proof.
+            needed = {canonical(source) for source, _, _ in includers}
+            needed.update(
+                canonical(Path(flags[index + 1]))
+                for _, _, flags in includers
+                for index, flag in enumerate(flags)
+                if flag == "-include"
+            )
+            pending = list(needed)
+            while pending:
+                for dependency in dependencies(pending.pop()):
+                    if dependency not in needed:
+                        needed.add(dependency)
+                        pending.append(dependency)
+            for dependency in needed:
                 destination = overlay / dependency.relative_to(project.root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(dependency, destination)
