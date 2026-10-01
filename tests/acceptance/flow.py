@@ -208,6 +208,41 @@ class Proof:
             arguments.extend(["--supply", supply])
         self.cli(*arguments, cwd=project)
         require(read_config(project)["project"]["state"] == "ready", "setup.publication: project not ready")
+        accepted = (project / "docs/setup/compiler.json").read_bytes()
+        require(hashlib.sha256(accepted).hexdigest() == token, "setup.confirmation: published evidence differs")
+        require(
+            accepted == (self.logs / (project.name + ".proposal.json")).read_bytes(),
+            "setup.confirmation: accepted bytes differ from the displayed proposal",
+        )
+        require(not list((project / read_config(project)["paths"]["src"]).rglob("*.c")), "setup.assembly: C supplied")
+        layout = json.loads((project / read_config(project)["paths"]["build"] / "setup/layout.json").read_bytes())
+        coverage = {}
+        for version, row in layout["versions"].items():
+            cursor = 0
+            counts: dict[str, int] = {}
+            functions = {item["name"] for item in row["functions"]}
+            shared = set()
+            for provider in sorted(row["providers"], key=lambda item: item["start"]):
+                require(provider["start"] == cursor < provider["end"], f"layout.coverage.{version}: overlap or gap")
+                cursor = provider["end"]
+                kind = provider["kind"]
+                counts[kind] = counts.get(kind, 0) + 1
+                if kind == "text":
+                    require(provider["evidence"]["assembly"], f"layout.text.{version}: non-assembly initial provider")
+                elif kind == "private":
+                    require(
+                        len(provider["owners"]) == 1 and provider["owners"][0] in functions,
+                        f"layout.owner.{version}: private pool has no unique function",
+                    )
+                elif kind == "shared":
+                    shared.add(provider["evidence"]["logical_provider"])
+                if provider["evidence"].get("safe_sole_candidate"):
+                    require(kind == "private", f"layout.owner.{version}: safely private pool was not carved")
+            size = (project / read_config(project)["version"][version]["baserom"]).stat().st_size
+            require(cursor == size, f"layout.coverage.{version}: incomplete ROM coverage")
+            require(len(shared) <= 1, f"layout.shared.{version}: shared logical provider is not explicit")
+            coverage[version] = {"bytes": cursor, "providers": counts, "shared_provider": sorted(shared)}
+        (self.logs / (project.name + ".coverage.json")).write_text(json.dumps(coverage, indent=2) + "\n")
         self.verify(project)
 
     def verify(self, project: Path) -> None:
@@ -229,6 +264,7 @@ class Proof:
             require(result.returncode == 0, f"rodata.owners.{version}: inspection failed")
             require("Next:" not in result.stdout, "rodata.json: guidance leaked to stdout")
             json.loads(result.stdout)
+            require(result.stderr.count("Next: ") == 1, "rodata.next: expected exactly one stderr receipt")
             require(result.stderr.rstrip().splitlines()[-1].startswith("Next: "), "rodata.next: missing stderr receipt")
         contributing = (project / "CONTRIBUTING.md").read_text()
         require(not re.search(r"@[A-Z_]+@", contributing), "docs.template: unexpanded placeholder")
@@ -248,6 +284,7 @@ class Proof:
         standalone["PATH"] = os.pathsep.join(
             entry for entry in self.env["PATH"].split(os.pathsep) if not (Path(entry) / "unbake").exists()
         )
+        standalone["PYTHON"] = str(self.python)
         require(shutil.which("unbake", path=standalone["PATH"]) is None, "make.standalone: unbake remains on PATH")
         result = self.run(["make", "check"], project, env=standalone)
         require(result.returncode == 0, "make.standalone: proof failed with unbake removed from PATH")
@@ -380,8 +417,9 @@ class Proof:
             "names=['unbake.layout.rodata_migrate','unbake.layout.rodata_bulk',"
             "'unbake.layout.rodata_switch','unbake.decomp.ledger']; "
             "assert all(u.find_spec(name) is None for name in names); "
-            "import unbake.decomp.similar as s, unbake.decomp.declarations as d, unbake.match.free as f; "
-            "assert all(not hasattr(module,'main') for module in (s,d,f))"
+            "import unbake.cli.rodata as r, unbake.decomp.similar as s, "
+            "unbake.decomp.declarations as d, unbake.match.free as f; "
+            "assert all(not hasattr(module,'main') for module in (r,s,d,f))"
         )
         result = self.run([self.python, "-c", code])
         require(result.returncode == 0, "retire.imports: retired API remains")
