@@ -63,7 +63,14 @@ class Proof:
         command = [str(value) for value in argv]
         directory = cwd or self.root
         number = len(list(self.logs.glob("*.command.json"))) + 1
-        label = f"{number:04d}"
+        while True:
+            label = f"{number:04d}"
+            try:
+                with (self.logs / f"{label}.command.json").open("x") as reserved:
+                    reserved.write(json.dumps({"argv": command, "cwd": str(directory), "status": "running"}) + "\n")
+                break
+            except FileExistsError:
+                number += 1
         print(f"$ (cd {shlex.quote(str(directory))} && {shlex.join(command)})", flush=True)
         started = time.time()
         result = subprocess.run(
@@ -108,7 +115,9 @@ class Proof:
             replacement = key + " = " + json.dumps(str(self.root / folder))
             text, count = re.subn(r"(?m)^" + key + r"\s*=.*$", lambda _, value=replacement: value, text)
             require(count == 1, f"policy.{key}: expected one explicit value")
-        (self.root / "policy.toml").write_text(text)
+        destination = self.root / "policy.toml"
+        if not destination.is_file() or destination.read_text() != text:
+            destination.write_text(text)
 
     def install(self, spec: str) -> None:
         require(not self.python.exists(), "accept.root: existing virtual environment")
