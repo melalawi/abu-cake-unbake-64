@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import suppress
+from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING, TypeVar
 
@@ -141,8 +143,13 @@ def references(target_words: Sequence[int], gp: int | None) -> list[Reference]:
     return result
 
 
-def _row(rows: Sequence[DataRow], address: int, size: int, name: str) -> DataRow:
+def _row(
+    rows: Sequence[DataRow], address: int, size: int, name: str, resident: Callable[[int, int], DataRow] | None
+) -> DataRow:
     found = [row for row in rows if row.start <= address < row.end]
+    if not found and resident is not None:
+        with suppress(Held):
+            found = [resident(address, max(size, 1))]
     if len(found) != 1:
         raise Held("symbols", f"{name}: data row at 0x{address:08X} is missing or ambiguous")
     row = found[0]
@@ -171,11 +178,15 @@ def _need(
     rows: Sequence[DataRow],
     bindings: dict[str, Binding],
     evidence: str,
+    absolute: bool,
+    resident: Callable[[int, int], DataRow] | None,
 ) -> list[Need]:
     existing = bindings.get(name)
     if existing and existing.address != address:
         raise Held("symbols", f"{name}: placed-elsewhere at 0x{existing.address:08X}, inferred 0x{address:08X}")
-    row = _row(rows, address, size, name)
+    if absolute:
+        return [SymbolNeed(version, name, address, addend, "absolute", "address", 0, evidence)]
+    row = _row(rows, address, size, name, resident)
     needs: list[Need] = [SymbolNeed(version, name, address, addend, row.section, type_, size, evidence)]
     if row.start < address and not existing:
         needs.append(LabelNeed(version, name, address, row.name, evidence))
@@ -188,12 +199,18 @@ def derive(
     version: str,
     declared: dict[str, int] | None = None,
     aligned: Sequence[int] | None = None,
+    resident: Callable[[int, int], DataRow] | None = None,
 ) -> list[Need]:
     """Bind relocation symbols using paired target immediates and object addends."""
     required(version, "version")
     required(trial_elf, "trial_elf")
     required(target_words, "target_words")
     bindings = _bindings(trial_elf.bindings)
+    absolute = {
+        address
+        for address in (() if declared is None else declared.values())
+        if not any(row.start <= address < row.end for row in trial_elf.rows)
+    }
     access = {ref.offset: ref for ref in references(target_words, trial_elf.gp) if ref.address not in trial_elf.settled}
     family = required(trial_elf.family, "trial_elf.family")
     relocations = [
@@ -224,7 +241,11 @@ def derive(
         if name in observed and observed[name] != address:
             raise Held("symbols", f"{name}: two-addresses")
         observed[name] = address
-        if address in trial_elf.settled and (binding is None or binding.address == address):
+        if (
+            address in trial_elf.settled
+            and (binding is None or binding.address == address)
+            and (declared is None or name in declared or address not in absolute)
+        ):
             continue
         ref = access.get(offset)
         if aligned is not None and ref is not None and ref.address != effective:
@@ -244,7 +265,26 @@ def derive(
         if size <= 0 and (type_, size) != ("address", 0):
             raise Held("symbols", f"{name}.size: expected positive extent")
         evidence = f"relocation {kind} at +0x{offset:X}; reference 0x{effective:08X}; addend {addend}"
-        result.extend(_need(version, name, address, addend, type_, size, trial_elf.rows, bindings, evidence))
+        # An established absolute field plus the object's addend proves an
+        # unnamed aggregate base, but supplies no storage type or extent.
+        absolute_reference = (address in absolute or effective in absolute) and not any(
+            row.start <= address < row.end for row in trial_elf.rows
+        )
+        result.extend(
+            _need(
+                version,
+                name,
+                address,
+                addend,
+                type_,
+                size,
+                trial_elf.rows,
+                bindings,
+                evidence,
+                absolute_reference,
+                resident,
+            )
+        )
     # Constant references without relocations still expose missing mid-interval labels.
     for ref in access.values():
         if any(need.address + need.addend == ref.address for need in result if isinstance(need, SymbolNeed)):
@@ -262,6 +302,8 @@ def derive(
                 trial_elf.rows,
                 bindings,
                 f"constant reference at +0x{ref.offset:X}",
+                False,
+                resident,
             )
         )
     unique: dict[tuple[type[Need], str, int], Need] = {}
@@ -304,9 +346,9 @@ def symbol_line(need: SymbolNeed) -> str:
 
 def derive_trial(context: TrialContext) -> list[Need]:
     """Consume TrialContext artifacts and add exact declarations to try comparisons."""
-    from unbake.decomp.guide import data_rows, render, words
+    from unbake.decomp.guide import data_rows, render, resident_row, words
     from unbake.decomp.trial_compare import align_words
-    from unbake.decomp.trial_layout import symbol_values
+    from unbake.decomp.trial_layout import project_reader, symbol_values
     from unbake.project_tools.elf import Object
 
     result = []
@@ -390,7 +432,15 @@ def derive_trial(context: TrialContext) -> list[Need]:
         object_evidence = TrialElf(
             draft, relocations, tuple(bindings), rows, values.get("_gp"), family, frozenset(placed)
         )
-        derived = derive(object_evidence, artifact["target_words"], version, declared, aligned)
+        reader = project_reader(context.project, version)
+        derived = derive(
+            object_evidence,
+            artifact["target_words"],
+            version,
+            declared,
+            aligned,
+            partial(resident_row, reader),
+        )
         for name, counterpart in correspondence.items():
             if not any(isinstance(need, SymbolNeed) and need.name == name for need in derived):
                 address = declared[name]

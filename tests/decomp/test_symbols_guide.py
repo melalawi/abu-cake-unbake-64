@@ -14,7 +14,7 @@ from unbake.decomp import guide, needs, symbols, symbols_edits, trial
 from unbake.decomp.needs import LabelNeed, SymbolNeed
 from unbake.decomp.trial_artifacts import TrialContext
 from unbake.decomp.trial_compare import Compare
-from unbake.decomp.trial_layout import FunctionSpan
+from unbake.decomp.trial_layout import FunctionSpan, RomReader
 from unbake.decomp.trial_link import inspect
 from unbake.families import Family, family_for
 from unbake.project.config import Compiler, Held, Policy, Project, Version
@@ -174,6 +174,68 @@ class SymbolTests(unittest.TestCase):
                     conflicting = symbols.Binding("resident", address + 0x10, ".data", "s32", 4)
                     with self.assertRaisesRegex(Held, "placed-elsewhere"):
                         symbols.derive(replace(obj, bindings=(conflicting,)), target, "us")
+
+    def test_absolute_aggregate_base_and_resident_bin_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = project_for(root / "symbols")
+            version = project.version("us")
+            version.split.write_text(
+                "segments:\n  - name: main\n    type: code\n    start: 0x40\n"
+                "    vram: 0x80200000\n    end: 0x80\n    subsegments:\n"
+                "      - [0x40, asm, alpha]\n      - [0x50, bin, globals]\n"
+            )
+            reader = RomReader(
+                version,
+                lambda: [dict(address=0x800C0000, start=0x54, end=0x74, table_entry_bias=0)],
+            )
+
+            def resident(address: int, size: int) -> symbols.DataRow:
+                return guide.resident_row(reader, address, size)
+
+            for addend in (1, 0x5A8, -4):
+                with self.subTest(addend=addend):
+                    base = 0x801462D4
+                    target = (*pair(base + addend), *pair(0x800C0004))
+                    obj = symbols.TrialElf(
+                        (*pair(addend & 0xFFFFFFFF), *pair(0)),
+                        (
+                            symbols.Relocation(0, 5, "globals"),
+                            symbols.Relocation(4, 6, "globals"),
+                            symbols.Relocation(8, 5, "value"),
+                            symbols.Relocation(12, 6, "value"),
+                        ),
+                        (),
+                        guide.data_rows(project, "us"),
+                        None,
+                        self.family,
+                        frozenset({base + addend}),
+                    )
+                    derived = symbols.derive(obj, target, "us", {"field": base + addend}, resident=resident)
+                    placed = [n for n in derived if isinstance(n, SymbolNeed)]
+                    self.assertEqual(
+                        [(n.name, n.address, n.type, n.size, n.section) for n in placed],
+                        [("globals", base, "address", 0, "absolute"), ("value", 0x800C0004, "f32", 4, ".data")],
+                    )
+                    self.assertEqual(
+                        [(n.name, n.row) for n in derived if isinstance(n, LabelNeed)], [("value", "globals")]
+                    )
+                    with self.assertRaisesRegex(Held, "globals: data row"):
+                        symbols.derive(obj, target, "us", {}, resident=resident)
+                    with self.assertRaisesRegex(Held, "placed-elsewhere"):
+                        symbols.derive(
+                            replace(obj, bindings=(symbols.Binding("globals", base + 4, ".data", "u8", 1),)),
+                            target,
+                            "us",
+                            {"field": base + addend},
+                            resident=resident,
+                        )
+            self.assertEqual((resident(0x800C0004, 4).start, resident(0x800C0004, 4).end), (0x800C0000, 0x800C0020))
+            with self.assertRaisesRegex(Held, "unmapped or ambiguous"):
+                resident(0x800C001C, 8)
+            ambiguous = replace(obj, rows=(self.rows[0], self.rows[0]))
+            with self.assertRaisesRegex(Held, "value: data row"):
+                symbols.derive(ambiguous, target, "us", {"field": base - 4}, resident=resident)
 
     def test_named_function_float_fixtures(self) -> None:
         cases = (

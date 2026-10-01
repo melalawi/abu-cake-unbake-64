@@ -18,7 +18,7 @@ from tests.support import test_policy, tool
 from unbake.cli import check
 from unbake.decomp import score
 from unbake.project import init
-from unbake.project.config import Held
+from unbake.project.config import Held, Policy, Project
 from unbake.project.header import Header
 from unbake.project.rom import Rom
 from unbake.report import progress as report
@@ -261,7 +261,7 @@ class ReportTest(unittest.TestCase):
         self.assertTrue(self.readme.read_text().endswith("## Contributions\nGuide\n"))
         self.assertNotIn("old figures", self.readme.read_text())
 
-    def test_cross_version_c_is_not_an_assembly_versions_draft(self) -> None:
+    def test_cross_version_c_is_compiled_fresh_for_partial_progress(self) -> None:
         original = self.project.version("us")
         other_split = self.root / "other.yaml"
         other_split.write_text(original.split.read_text())
@@ -271,16 +271,36 @@ class ReportTest(unittest.TestCase):
         self.object(self.generation / "obj/asm/matched.o", "matched")
         self.object(project.root / "build/eu.nonmatching/obj/src/draft.o", "draft")
         stale = project.root / "build/us.nonmatching/obj/src/matched.o"
-        for stale_present in (False, True):
-            if stale_present:
-                self.object(stale, "matched")
-            for version, complete in (("us", False), ("eu", True)):
-                with self.subTest(version=version, stale_present=stale_present):
-                    rows = report_units.units(project, self.policy, version, self.generation, self.root / "report")
-                    self.assertEqual(rows[0]["metadata"]["complete"], complete)
-                    self.assertEqual("base_path" in rows[0], complete)
-                    self.assertIn("base_path", rows[1])
-                    self.assertNotIn("base_path", rows[2])
+        project.build_link("eu").symlink_to(self.generation.name)
+
+        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            self.assertEqual(source, project.src / "matched.c")
+            self.assertEqual(version, "us")
+            self.assertEqual(policy, self.policy)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(report.target_object("matched", struct.pack(">III", 0x24020002, 0x03E00008, 0)))
+            return out
+
+        with patch.object(report_units, "compile_object", side_effect=compile_source) as compiler:
+            for stale_present in (False, True):
+                if stale_present:
+                    self.object(stale, "matched")
+                for version, complete in (("us", False), ("eu", True)):
+                    with self.subTest(version=version, stale_present=stale_present):
+                        result = report.measure(project, self.policy, version)
+                        measures = result["measures"]
+                        self.assertEqual(measures["complete_code"], 12 if complete else 0)
+                        self.assertGreater(measures["fuzzy_match_percent"], 33.34)
+                        self.assertLessEqual(measures["fuzzy_match_percent"], 66.67)
+                        rows = json.loads((self.generation / "objdiff.json").read_text())["units"]
+                        self.assertEqual(rows[0]["metadata"]["complete"], complete)
+                        base = (self.generation / rows[0]["base_path"]).resolve()
+                        self.assertNotEqual(base, stale)
+                        self.assertIn("base_path", rows[1])
+                        self.assertNotIn("base_path", rows[2])
+                        if not complete:
+                            self.object(base, "matched")
+            self.assertEqual(compiler.call_count, 2)
 
     def test_partial_report_measures_objects_without_linking_undefined_drafts(self) -> None:
         subprocess.run(

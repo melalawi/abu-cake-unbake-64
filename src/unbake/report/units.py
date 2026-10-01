@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout import split
+from unbake.project.build import compile_object
 from unbake.project.config import Held, Policy, Project, Version
 from unbake.project_tools.elf import Object, Symbol
 from unbake.project_tools.extract import partial_rows
@@ -180,6 +181,9 @@ def units(project: Project, policy: Policy, version: str, generation: Path, work
                         f"run make -j4 VERSION={version} NON_MATCHING=1 "
                         f"{base.relative_to(project.root)}",
                     )
+            elif row.kind == "asm" and source.is_file():
+                base = workspace / "partial" / "obj" / "src" / (row.path + ".o")
+                compile_object(project, policy, source, version, base)
         if base is not None:
             unit["base_path"] = os.path.relpath(base, generation)
             unit["metadata"]["source_path"] = os.path.relpath(source, project.root)

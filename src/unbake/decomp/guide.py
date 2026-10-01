@@ -5,6 +5,10 @@ from __future__ import annotations
 import shlex
 import struct
 from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from unbake.decomp.trial_layout import RomReader
 
 from unbake.decomp.commands import prefix
 from unbake.decomp.draft_input import version_for
@@ -128,6 +132,18 @@ def data_rows(project: Project, version: str) -> tuple[DataRow, ...]:
                 end = start + split.end(row) - row.start
             result.append(DataRow(row.path, start, end, "." + kind))
     return tuple(result)
+
+
+def resident_row(reader: RomReader, address: int, size: int) -> DataRow:
+    """Translate a proved runtime copy back to its bounded split data row."""
+    from unbake.layout import split
+
+    mapping = reader.span(address, size)
+    _, row = reader.backing_row(address, size)
+    start = mapping.address + max(row.start, mapping.offset) - mapping.offset
+    end = mapping.address + min(split.end(row), mapping.offset + mapping.end - mapping.address) - mapping.offset
+    kind = row.kind.lstrip(".")
+    return DataRow(row.path, start, end, ".data" if kind == "bin" else "." + kind)
 
 
 def run(project: Project, function: str, version: str | None) -> str:
