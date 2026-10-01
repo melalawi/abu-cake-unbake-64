@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -233,6 +234,22 @@ def _build_options(layout: LayoutManifest, policy: SetupPolicy) -> dict[str, Any
     }
 
 
+def layout_receipts(layout: LayoutManifest) -> list[str]:
+    lines = []
+    for version, record in layout["versions"].items():
+        groups = []
+        for kind in ("text", "private", "shared", "writable", "unresolved", "bin"):
+            providers = [provider for provider in record["providers"] if provider["kind"] == kind]
+            count = len(providers)
+            size = sum(provider["end"] - provider["start"] for provider in providers)
+            groups.append(f"{kind}={count} ({size} bytes)")
+        lines.append(f"layout {version}: " + "; ".join(groups))
+        for provider in record["providers"]:
+            if provider["kind"] == "shared":
+                lines.append(f"shared provider {version}:{provider['name']}: owners={','.join(provider['owners'])}")
+    return lines
+
+
 def _publish(
     project: PendingProject | Project,
     staged: Project,
@@ -294,7 +311,7 @@ def _publish(
             raise Held("setup", "setup.publication: current generations changed during proof")
         try:
             for target in [*writes, *obsolete]:
-                if target.is_symlink():
+                if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
                     raise Held("setup", f"setup.publication: output symlink {target}")
                 before[target] = (target.read_bytes(), target.stat().st_mode & 0o777) if target.exists() else None
                 parent = target.parent
@@ -376,6 +393,7 @@ def _prove_publish(
     *,
     fresh: bool,
     supply: Path | None,
+    before_publish: Callable[[], None] | None = None,
 ) -> list[str]:
     staged = config.load(tree)
     generations = _generations(project, staged.versions)
@@ -391,6 +409,8 @@ def _prove_publish(
         setup_proof.proof(staged, version, data, policy.cores, log=log)
         digest = hashlib.sha1(data).hexdigest()
         receipts.append(f"{version}: SHA1 {digest}; every cartridge byte proved")
+    if before_publish is not None:
+        before_publish()
     _publish(project, staged, fingerprint, fresh=fresh, generations=generations)
     return [*receipts, "ready: confirmed configuration and proved generations published"]
 
@@ -456,7 +476,17 @@ def complete_setup(
                 "typedef signed long long s64;\ntypedef unsigned long long u64;\n"
                 "typedef float f32;\ntypedef double f64;\n#endif\n",
             )
-        return _prove_publish(project, tree, policy, fingerprint, fresh=True, supply=supply)
+        return _prove_publish(
+            project,
+            tree,
+            policy,
+            fingerprint,
+            fresh=True,
+            supply=supply,
+            before_publish=lambda: compilers.confirm_proposal(
+                project, census, layout, proposal, policy, confirm=hashlib.sha256(accepted).hexdigest()
+            ),
+        )
 
 
 def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:

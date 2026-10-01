@@ -11,7 +11,9 @@ from unittest.mock import Mock, patch
 import toml
 
 from tests.project.makefile_fixture import WORK, fixture
+from tests.project.test_bootstrap import cartridge
 from unbake.project import config, fingerprint, setup, setup_proof
+from unbake.project.census import Census
 
 
 class SetupTransactionTests(unittest.TestCase):
@@ -223,3 +225,70 @@ class SetupTransactionTests(unittest.TestCase):
         staging.assert_not_called()
         self.assertEqual(setup._inputs(pending), before)
         self.assertEqual(config.load_pending(self.root).state, "awaiting-roms")
+
+    def test_fresh_completion_publishes_only_after_proof_and_revalidates_proposal(self) -> None:
+        data = tomllib.loads((self.root / "config.toml").read_text())
+        data["project"]["state"] = "awaiting-roms"
+        del data["project"]["default_compiler"]
+        del data["compilers"]
+        del data["units"]
+        (self.root / "config.toml").write_text(toml.dumps(data))
+        pending = config.load_pending(self.root)
+        rom = cartridge(self.project.version("us").baserom, b"ABC")
+        census = Census((rom,), {rom.path: "us"}, "us", {}, {}, self.project.build / "setup/roms.json")
+        layout = {
+            "schema": 1,
+            "project_id": pending.id,
+            "workspace_id": pending.workspace_id,
+            "rom_sha1": {"us": rom.sha1},
+            "names_from": "us",
+            "inputs_sha256": {},
+            "versions": {
+                "us": {
+                    "functions": [],
+                    "providers": [],
+                    "loaded_spans": [],
+                    "evidence": {
+                        "split_yaml": self.project.version("us").split.read_text(),
+                        "symbols_text": self.project.version("us").symbols.read_text(),
+                        "resident_mappings": [],
+                    },
+                }
+            },
+        }
+        proposal = {
+            "schema": 1,
+            "project_id": pending.id,
+            "workspace_id": pending.workspace_id,
+            "rom_sha1": {"us": rom.sha1},
+            "layout_sha256": "a" * 64,
+            "inputs_sha256": {},
+            "default_compiler": "fixture",
+            "assignments": {"main": "fixture"},
+            "cflags": {"fixture": []},
+            "candidates": {},
+            "unresolved": [],
+        }
+        proposal_path = self.project.build / "setup/proposal.json"
+        proposal_path.parent.mkdir(parents=True)
+        accepted = b'{"reviewed": true}\n'
+        proposal_path.write_bytes(accepted)
+        token = hashlib.sha256(accepted).hexdigest()
+
+        def prove(*args: object, **kwargs: object) -> None:
+            self.assertEqual(config.load_pending(self.root).state, "awaiting-roms")
+            self.assertNotIn("compilers", tomllib.loads((self.root / "config.toml").read_text()))
+            self.proof(*args, **kwargs)  # type: ignore[arg-type]
+
+        with (
+            patch.object(fingerprint, "receipt", return_value=[]),
+            patch.object(fingerprint, "confirm_proposal") as confirmation,
+            patch.object(setup_proof, "proof", side_effect=prove),
+        ):
+            setup.complete_setup(pending, census, layout, proposal, self.settings, confirm=token)
+        self.assertEqual(config.load_pending(self.root).state, "ready")
+        self.assertEqual(confirmation.call_count, 2)
+        self.assertEqual(confirmation.call_args.kwargs["confirm"], token)
+        self.assertEqual((self.root / "docs/setup/compiler.json").read_bytes(), accepted)
+        self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), rom.sha1 + "  roms/baserom.us.z64\n")
+        self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")

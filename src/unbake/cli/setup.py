@@ -80,6 +80,7 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
     print(f"OK(setup): census: {result.manifest}")
     policy = config.load_policy(args.policy, stage="setup")
     layout = flow.plan_layout(project, result, policy)
+    receipt("setup", setup.layout_receipts(layout))
     proposal = flow.propose_compilers(
         project, result, layout, policy, choices=pairs(args.compiler, "--compiler") or None
     )
