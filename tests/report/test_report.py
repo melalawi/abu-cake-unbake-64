@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -277,6 +278,59 @@ class ReportTest(unittest.TestCase):
             destination.write_bytes(current)
             self.assertEqual(report.findings(self.project, self.policy), [])
 
+    def test_check_detects_stale_open_units_even_when_totals_agree(self) -> None:
+        report.write(self.project, self.policy)
+        destination = self.project.root / "versions/us/report.json"
+        original = json.loads(destination.read_bytes())
+        for change in ("name", "complete"):
+            with self.subTest(change=change):
+                saved = json.loads(json.dumps(original))
+                if change == "name":
+                    saved["units"][2]["name"] = "removed_piece"
+                else:
+                    saved["units"][0]["metadata"]["complete"] = False
+                    saved["units"][2]["metadata"]["complete"] = True
+                destination.write_text(json.dumps(saved))
+                self.assertEqual(saved["measures"], original["measures"])
+                self.assertEqual(
+                    report.findings(self.project, self.policy),
+                    ["HELD(check): stale report VERSION us: run unbake report"],
+                )
+                report.write(self.project, self.policy)
+                repaired = json.loads(destination.read_bytes())
+                self.assertEqual(repaired["units"], original["units"])
+
+    def test_publication_refuses_obsolete_function_rows_before_writing(self) -> None:
+        report.write(self.project, self.policy)
+        destination = self.project.root / "versions/us/report.json"
+        saved = json.loads(destination.read_bytes())
+        before = destination.read_bytes(), self.readme.read_bytes()
+        saved["units"][2]["name"] = "removed_piece"
+        with self.assertRaisesRegex(Held, "VERSION us: function rows changed"):
+            report.write(self.project, self.policy, reports={"us": saved})
+        self.assertEqual((destination.read_bytes(), self.readme.read_bytes()), before)
+
+    def test_each_version_counts_only_its_own_function_rows(self) -> None:
+        version = self.project.version("us")
+        other_split = self.root / "other.yaml"
+        other_split.write_text(version.split.read_text().replace("[24, asm, untouched]", "[24, data, untouched]"))
+        other = replace(version, name="other", split=other_split)
+        project = replace(self.project, versions=("us", "other"), version_map={"us": version, "other": other})
+        other_generation = project.root / "build/other.1"
+        shutil.copytree(self.generation, other_generation)
+        project.build_link("other").symlink_to(other_generation.name)
+        for versions in (("us", "other"), ("other", "us")):
+            with self.subTest(versions=versions):
+                self.readme.write_text("## Progress\n\n| us (fixture) |\n\n| other (fixture) |\n\n## End\n")
+                report.write(replace(project, versions=versions), self.policy)
+                for name, expected_open in (("us", ["draft", "untouched"]), ("other", ["draft"])):
+                    saved = json.loads((project.root / "versions" / name / "report.json").read_bytes())
+                    opened = [unit["name"] for unit in saved["units"] if not unit["metadata"]["complete"]]
+                    self.assertEqual(opened, expected_open)
+                    self.assertEqual(saved["measures"]["total_units"], 1 + len(expected_open))
+                    self.assertEqual(saved["measures"]["complete_units"], 1)
+                    self.assertEqual(saved["measures"]["total_code"], 12 * (1 + len(expected_open)))
+
     def test_native_reports_use_partial_objects_and_project_versions(self) -> None:
         written = report.write(self.project, self.policy)
         self.assertEqual(len(written), 3)
@@ -440,16 +494,7 @@ class ReportTest(unittest.TestCase):
         before = {path.relative_to(state): path.read_bytes() for path in state.rglob("*") if path.is_file()}
         destination = self.project.root / "versions/us/report.json"
         destination.write_bytes(b"stale report\n")
-        units = [
-            {
-                "name": "matched",
-                "base_path": "obj/src/matched.o",
-                "target_path": "obj/src/matched.o",
-                "metadata": {"complete": True},
-            }
-        ]
-        with patch.object(report_units, "units", return_value=units):
-            written = report.write(self.project, self.policy)
+        written = report.write(self.project, self.policy)
         self.assertIn(destination, written)
         self.assertEqual(json.loads(destination.read_bytes())["version"], 2)
         after = {path.relative_to(state): path.read_bytes() for path in state.rglob("*") if path.is_file()}
