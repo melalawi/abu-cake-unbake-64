@@ -360,7 +360,18 @@ def render_yaml(template: str, providers: list[ProviderRecord], size: int) -> st
     for p in providers:
         start, address = p["start"], p["address"]
         if address is None:
-            lines.append(f"  - [0x{start:X}, bin, {json.dumps(p['name'])}]\n")
+            # Unmapped cartridge bytes have no RAM placement. Use their ROM
+            # offsets solely for independent ELF storage, avoiding Splat's
+            # implicit continuation of the preceding loaded RAM segment.
+            lines.extend(
+                (
+                    f"  - name: {json.dumps(p['name'])}\n",
+                    "    type: bin\n",
+                    f"    start: 0x{start:X}\n",
+                    f"    vram: 0x{start:X}\n",
+                    "    align: 1\n",
+                )
+            )
             previous = None
             continue
         kind = "asm" if p["kind"] == "text" else "rodata" if p["kind"] in ("private", "shared") else "data"
