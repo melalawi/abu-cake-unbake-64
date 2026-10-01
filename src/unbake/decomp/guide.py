@@ -10,7 +10,7 @@ from unbake.decomp.commands import prefix
 from unbake.decomp.draft_input import version_for
 from unbake.decomp.indexed import table_guidance
 from unbake.decomp.needs import LayoutNeed, Need, SymbolNeed
-from unbake.decomp.symbols import Binding, DataRow, TrialElf, derive, symbol_line
+from unbake.decomp.symbols import Binding, DataRow, TrialElf, derive, references, symbol_line
 from unbake.families import Family
 from unbake.project.config import Held, Project, load_policy
 
@@ -70,9 +70,10 @@ def from_words(
     rows: Iterable[DataRow],
     gp: int | None,
     family: Family,
+    settled: frozenset[int] = frozenset(),
 ) -> list[Need]:
     """Derive guidance before drafting, using the same constant-reference analysis."""
-    evidence = TrialElf(tuple(target_words), (), tuple(bindings), tuple(rows), gp, family, frozenset())
+    evidence = TrialElf(tuple(target_words), (), tuple(bindings), tuple(rows), gp, family, settled)
     return derive(evidence, target_words, version)
 
 
@@ -142,14 +143,33 @@ def run(project: Project, function: str, version: str | None) -> str:
     family = family_for(project.compiler_for(project.src / (function + ".c")).id)
     rows = data_rows(project, version)
     target = words(trial_layout.target(configured, span), "big")
-    inferred = from_words(target, version, (), rows, values.get("_gp"), family)
+    from unbake.decomp.guide_layout import resolve
+
+    refs = references(target, values.get("_gp"))
+    settled, field_guidance = resolve(project, load_policy(), project.src / (function + ".c"), version, values, refs)
+    for ref in refs:
+        aliases = [name for name, address in values.items() if address == ref.address]
+        if (
+            ref.address not in settled
+            and len(aliases) == 1
+            and not any(row.start <= ref.address < row.end for row in rows)
+        ):
+            settled.add(ref.address)
+            field_guidance.append(f"reference: 0x{ref.address:08X} = {aliases[0]}; configured symbol")
+    reader = trial_layout.project_reader(project, version)
+    for ref in refs:
+        if ref.address in settled or any(row.start <= ref.address < row.end for row in rows):
+            continue
+        mapping = reader.span(ref.address, ref.size)
+        rows += (DataRow(f"resident_{mapping.address:08X}", mapping.address, mapping.end, ".rodata"),)
+    inferred = from_words(target, version, (), rows, values.get("_gp"), family, frozenset(settled))
     bindings = []
     for need in inferred:
         if isinstance(need, SymbolNeed):
             aliases = [name for name, address in values.items() if address == need.address]
             if len(aliases) == 1:
                 bindings.append(Binding(aliases[0], need.address, need.section, need.type, need.size))
-    needs = from_words(target, version, bindings, rows, values.get("_gp"), family)
+    needs = from_words(target, version, bindings, rows, values.get("_gp"), family, frozenset(settled))
     from unbake.decomp.drafts import Store
 
     store = Store(load_policy(), project)
@@ -178,6 +198,7 @@ def run(project: Project, function: str, version: str | None) -> str:
         part
         for part in (
             prologue(target),
+            *field_guidance,
             render(needs),
             table_guidance(project, version, function, span, target),
             *dict.fromkeys(commands),

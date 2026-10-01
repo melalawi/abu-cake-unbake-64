@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import re
 from collections.abc import Mapping
 from dataclasses import replace
@@ -13,6 +12,39 @@ from unbake.project.config import Held
 
 def dump_flags() -> tuple[str, ...]:
     return ("-da",)
+
+
+def global_priority(refs: int, live: int) -> int:
+    """GCC 2.x global allocno priority for a one-word pseudo: floor_log2(refs) * refs / live * 10000."""
+    if refs < 1 or live < 1:
+        raise Held("explain", "priority.references/live_length: expected positive values")
+    return (refs.bit_length() - 1) * refs * 10000 // live
+
+
+def flip(candidate: tuple[int, int], holder: tuple[int, int]) -> str:
+    """Name the smallest single change that ranks the candidate ahead of the holder.
+
+    Each pair is (references, live_length); global allocation visits higher priorities first.
+    """
+    priority = global_priority(*candidate)
+    target = global_priority(*holder)
+    live = min(candidate[1], (candidate[0].bit_length() - 1) * candidate[0] * 10000 // (target + 1))
+    low, high = candidate[0], candidate[0]
+    while global_priority(high, candidate[1]) <= target:
+        high *= 2
+    while low < high:
+        middle = (low + high) // 2
+        if global_priority(middle, candidate[1]) > target:
+            high = middle
+        else:
+            low = middle + 1
+    options = [f"candidate references >= {low}"]
+    if priority:
+        longer = max(holder[1], (holder[0].bit_length() - 1) * holder[0] * 10000 // priority + 1)
+        options.append(f"holder live_length >= {longer}")
+    if live:
+        options.insert(0, f"candidate live_length <= {live}")
+    return "; ".join(options)
 
 
 def _stream(dumps: Mapping[str, str], name: str) -> str:
@@ -60,7 +92,7 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
             refs,
             live,
             None,
-            math.log2(refs) * refs / live,
+            float(global_priority(refs, live)),
             order.index(number) if number in order else None,
             conflicts.get(number, ()),
             "global" if number in order else "local",
@@ -150,5 +182,7 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
     if "lalloc" not in dumps:
         limitations.append("Local decision log unavailable; usage priority is an estimate.")
     if "galloc" not in dumps:
-        limitations.append("Global decision log unavailable; priority is log2(refs) * refs / live_length.")
+        limitations.append(
+            "Global decision log unavailable; priority is floor_log2(refs) * refs / live_length * 10000 per word."
+        )
     return Allocation(tuple(facts.values()), (), tuple(limitations), tuple(sorted(set(dispositions.values()))))

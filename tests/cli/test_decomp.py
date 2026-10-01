@@ -112,4 +112,29 @@ class DecompTests(MainCase):
         module = self.module("drafts", Store=Mock(return_value=store))
         code, _out, error = self.run_main(self.args("decomp", "best", "alpha"), {"drafts": module})
         self.assertEqual(code, 1)
-        self.assertEqual(error, "HELD(decomp): best draft for function alpha: missing value\n")
+        self.assertEqual(error, "HELD(decomp): no draft recorded for function alpha\n")
+
+    def test_draft_and_try_hold_project_build_lock(self) -> None:
+        import fcntl
+
+        from unbake.cli import decomp
+        from unbake.decomp import m2c, trial, trial_compile
+        from unbake.project.config import Held
+
+        def assert_locked(*args: object, **kwargs: object) -> str:
+            with (self.root / "build/.lock").open("a+b") as stream, self.assertRaises(BlockingIOError):
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raise Held("proof", "lock held")
+
+        for verb in ("draft", "try"):
+            with self.subTest(verb=verb):
+                operands = ["alpha", "--version", "us"] if verb == "draft" else [str(self.source)]
+                with (
+                    patch.object(trial_compile, "run_tool", side_effect=assert_locked),
+                    patch.object(trial, "try_draft", side_effect=assert_locked),
+                    patch.object(m2c, "draft", return_value=self.source),
+                    patch.object(decomp, "store_trial"),
+                ):
+                    code, _, error = self.run_main(self.args("decomp", verb, *operands, "--scratch", str(self.scratch)))
+                self.assertEqual(code, 1)
+                self.assertIn("lock held", error)

@@ -12,12 +12,8 @@ from typing import Any, cast
 from unbake.decomp.trial import Trial
 from unbake.project.config import Held
 from unbake.search.core import Context, Mutation
-
-
-def _walk(node: Any) -> Iterator[Any]:
-    yield node
-    for _, child in node.children():
-        yield from _walk(child)
+from unbake.search.loops import variants as loop_variants
+from unbake.search.loops import walk
 
 
 def _items(node: Any, ast: Any) -> list[Any]:
@@ -31,7 +27,7 @@ def _identifier(node: Any, ast: Any) -> str | None:
 class _Safety:
     def __init__(self, function: Any, ast: Any, tree: Any) -> None:
         self.ast = ast
-        declarations = [node for node in _walk(function.body) if isinstance(node, ast.Decl)]
+        declarations = [node for node in walk(function.body) if isinstance(node, ast.Decl)]
         params = function.decl.type.args
         if params:
             declarations += [node for node in params.params if isinstance(node, ast.Decl)]
@@ -40,29 +36,29 @@ class _Safety:
         self.types = {node.name: node for node in declarations}
         self.escaped = {
             node.expr.name
-            for node in _walk(function.body)
+            for node in walk(function.body)
             if isinstance(node, ast.UnaryOp) and node.op == "&" and isinstance(node.expr, ast.ID)
         }
         volatile_types = {
             node.name
-            for node in _walk(tree)
-            if isinstance(node, ast.Typedef) and any("volatile" in getattr(child, "quals", []) for child in _walk(node))
+            for node in walk(tree)
+            if isinstance(node, ast.Typedef) and any("volatile" in getattr(child, "quals", []) for child in walk(node))
         }
         while True:
             inherited = {
                 node.name
-                for node in _walk(tree)
+                for node in walk(tree)
                 if isinstance(node, ast.Typedef)
                 and any(
-                    isinstance(child, ast.IdentifierType) and set(child.names) & volatile_types for child in _walk(node)
+                    isinstance(child, ast.IdentifierType) and set(child.names) & volatile_types for child in walk(node)
                 )
             }
             if inherited <= volatile_types:
                 break
             volatile_types |= inherited
         self.volatile_members = any(
-            isinstance(node, ast.Struct) and any("volatile" in getattr(child, "quals", []) for child in _walk(node))
-            for node in _walk(tree)
+            isinstance(node, ast.Struct) and any("volatile" in getattr(child, "quals", []) for child in walk(node))
+            for node in walk(tree)
         )
         self.volatile = {
             decl.name
@@ -70,7 +66,7 @@ class _Safety:
             if any(
                 "volatile" in getattr(node, "quals", [])
                 or (isinstance(node, ast.IdentifierType) and set(node.names) & volatile_types)
-                for node in _walk(decl)
+                for node in walk(decl)
             )
         }
 
@@ -152,7 +148,8 @@ class _Safety:
 
 def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tuple[Any, str, Callable[[Any], Any]]]:
     safety = _Safety(function, ast, tree)
-    for node in _walk(function.body):
+    yield from loop_variants(function, ast, tree)
+    for node in walk(function.body):
         if isinstance(node, ast.Compound):
             items = node.block_items or []
             for index, (left, right) in enumerate(pairwise(items)):
@@ -171,7 +168,7 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                         and not any(
                             isinstance(child, (ast.Goto, ast.Label, ast.Return, ast.Break, ast.Continue, ast.Decl))
                             for branch in branches
-                            for child in _walk(branch)
+                            for child in walk(branch)
                         )
                     ):
 
@@ -189,23 +186,23 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                 tail = [label.stmt, *items[label_index + 1 :]]
                 if not tail or not isinstance(tail[-1], (ast.Return, ast.Goto)):
                     continue
-                if any(isinstance(child, (ast.Decl, ast.Label)) for statement in tail for child in _walk(statement)):
+                if any(isinstance(child, (ast.Decl, ast.Label)) for statement in tail for child in walk(statement)):
                     continue
                 jumps = [
                     child
                     for statement in items[:label_index]
-                    for child in _walk(statement)
+                    for child in walk(statement)
                     if isinstance(child, ast.Goto) and child.name == label.name
                 ]
                 all_jumps = [
-                    child for child in _walk(function.body) if isinstance(child, ast.Goto) and child.name == label.name
+                    child for child in walk(function.body) if isinstance(child, ast.Goto) and child.name == label.name
                 ]
                 if not jumps or len(jumps) != len(all_jumps):
                     continue
                 if any(
                     isinstance(child, ast.Decl)
                     for statement in items[:label_index]
-                    for child in _walk(statement)
+                    for child in walk(statement)
                     if child not in items
                 ):
                     continue
@@ -230,7 +227,7 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                 uses = [
                     pos
                     for pos in range(index + 1, len(items))
-                    if any(isinstance(child, ast.ID) and child.name == decl.name for child in _walk(items[pos]))
+                    if any(isinstance(child, ast.ID) and child.name == decl.name for child in walk(items[pos]))
                 ]
                 if not uses:
                     continue
@@ -240,8 +237,8 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                     not isinstance(assign, ast.Assignment)
                     or assign.op != "="
                     or _identifier(assign.lvalue, ast) != decl.name
-                    or any(isinstance(child, ast.ID) and child.name == decl.name for child in _walk(assign.rvalue))
-                    or any(isinstance(child, (ast.Goto, ast.Label)) for child in _walk(node))
+                    or any(isinstance(child, ast.ID) and child.name == decl.name for child in walk(assign.rvalue))
+                    or any(isinstance(child, (ast.Goto, ast.Label)) for child in walk(node))
                 ):
                     continue
 
@@ -279,7 +276,16 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                     return ast.Assignment("=", yes.lvalue, ast.TernaryOp(target.cond, yes.rvalue, no.rvalue))
 
                 yield node, "if/else to ternary", conditional
-        elif (
+        elif isinstance(node, ast.TernaryOp):
+
+            def arms(target: Any) -> None:
+                target.cond = ast.UnaryOp("!", target.cond)
+                target.iftrue, target.iffalse = target.iffalse, target.iftrue
+
+            # Swapping arms keeps the conditional's type; arm order decides what GCC evaluates
+            # into an outgoing argument slot first.
+            yield node, "conditional arm order", arms
+        if (
             isinstance(node, ast.Assignment)
             and node.op == "="
             and isinstance(node.rvalue, ast.TernaryOp)
@@ -300,7 +306,7 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
 
 def _replace(root: Any, wanted: Any, change: Callable[[Any], Any]) -> None:
     """Apply one edit to the corresponding node in a cloned tree."""
-    for parent in _walk(root):
+    for parent in walk(root):
         for name, child in parent.children():
             if child is wanted:
                 replacement = change(child)
@@ -363,8 +369,8 @@ def propose(source: str, trial: Trial, ctx: Context) -> Iterator[Mutation]:
             return
         made = deepcopy(tree)
         # Preorder traversal is stable across a deepcopy.
-        position = next(index for index, node in enumerate(_walk(tree)) if node is target)
-        cloned = next(node for index, node in enumerate(_walk(made)) if index == position)
+        position = next(index for index, node in enumerate(walk(tree)) if node is target)
+        cloned = next(node for index, node in enumerate(walk(made)) if index == position)
         _replace(made, cloned, change)
         text = "".join(comment + "\n" for comment in comments) + printer.visit(made) + "\n"
         if text not in seen:

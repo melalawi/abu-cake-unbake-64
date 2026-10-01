@@ -20,7 +20,7 @@ class MatchTests(MatchFixture):
             cartridge.split.write_text(
                 cartridge.split.read_text().replace("segments:\n", "segments:\n  - [0, header, header]\n")
             )
-        self.fail.add(("alpha", "us"))
+        self.build_failures.add(("alpha", "us"))
         offset = 0x1012
 
         def produce(tree, generation_for):
@@ -43,7 +43,7 @@ class MatchTests(MatchFixture):
                 self.assertEqual(len(self.queued()), 1)
 
     def test_failed_build_with_unchanged_rom_keeps_build_reason(self) -> None:
-        self.fail.add(("alpha", "us"))
+        self.build_failures.add(("alpha", "us"))
 
         def produce(tree, generation_for):
             for version in self.versions:

@@ -9,7 +9,7 @@ from unbake.match import queue, staging
 class PublicationSpeedTests(MatchFixture):
     def test_single_failed_candidate_is_built_once_and_remains_queued(self) -> None:
         self.queue("alpha")
-        self.fail.add(("alpha", "us"))
+        self.build_failures.add(("alpha", "us"))
         receipts = queue.run(self.project, self.policy)
         self.assertEqual(self.calls, [("alpha",)])
         self.assertIn("alpha: build compare failed", receipts[0])

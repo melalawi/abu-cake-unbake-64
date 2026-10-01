@@ -12,8 +12,12 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from unbake.decomp import drafts, needs
-from unbake.match import queue as match
+import unbake.decomp.drafts as drafts
+import unbake.decomp.needs as needs
+import unbake.match.queue as match
+from unbake.decomp.trial import Trial
+from unbake.decomp.trial_compare import Compare
+from unbake.project import build
 from unbake.project.config import Compiler, Held, Policy, Project, Version
 
 SCRATCH_ROOT = Path(tempfile.gettempdir())
@@ -106,12 +110,12 @@ class MatchFixture(unittest.TestCase):
         self.store = drafts.Store(self.policy, self.project)
         (self.root / "Makefile").write_text("all:\n\ttrue\n")
         self.calls: list[tuple[str, ...]] = []
-        self.fail: set[tuple[str, str]] = set()
+        self.build_failures: set[tuple[str, str]] = set()
         self.interactions: list[set[str]] = []
         self.on_build: Callable[[Path, Callable[[str], Path]], object] | None = None
         self.addCleanup(patch.stopall)
-        patch.object(match.build, "build", self.build, create=True).start()
-        patch.object(match.build, "current_generation", self.current, create=True).start()
+        patch.object(build, "build", self.build, create=True).start()
+        patch.object(build, "current_generation", self.current, create=True).start()
 
     def current(self, project: Project, version: str) -> Path:
         link = project.build_link(version)
@@ -149,7 +153,7 @@ class MatchFixture(unittest.TestCase):
             (generation / "object.o").write_bytes(("compiled " + ",".join(functions)).encode())
             log = generation / "build.log"
             log.write_text("compare\n")
-            ok = not any((function, version) in self.fail for function in functions)
+            ok = not any((function, version) in self.build_failures for function in functions)
             ok = ok and not any(group <= set(functions) for group in self.interactions)
             results[version] = SimpleNamespace(
                 version=version, ok=ok, sha1_line="fixture: OK" if ok else "FAIL", log=log, generation=generation
@@ -180,15 +184,14 @@ class MatchFixture(unittest.TestCase):
     ) -> None:
         selected = self.versions if versions is None else versions
         typed = dict.fromkeys(("register", "order", "immediate", "relocation", "inserted", "missing", "changed"), 0)
-        trial = SimpleNamespace(
+        trial = Trial(
             function=source.stem,
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-            identical_everywhere=identical,
             needs=[] if pending is None else pending,
             preconditions=[],
             next_command="match submit " + source.name,
             compares={
-                v: SimpleNamespace(version=v, identical=4 if identical else 3, of=4, typed=typed.copy(), lines=[])
+                v: Compare(version=v, identical=4 if identical else 3, of=4, typed=typed.copy(), lines=[])
                 for v in selected
             },
         )

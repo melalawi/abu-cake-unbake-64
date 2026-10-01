@@ -148,7 +148,16 @@ def rename(project: Project, function: str, new_name: str) -> list[split.Edit]:
     function, new_name = split.name(function), split.name(new_name, "new_name")
     if function == new_name:
         raise Held("split", "new_name: must differ from function")
-    edits = [edit for v in project.versions for edit in rename_version(project, v, function, new_name)]
+    from unbake.layout.data_symbols import counterparts
+
+    text_names = {item for v in project.versions for row in split.functions(project, v) for item in row.aliases}
+    present = [v for v in project.versions if function in split.symbols(project.version(v).symbols)[1]]
+    names = (
+        {}
+        if function in text_names or not present or len(present) == len(project.versions)
+        else counterparts(project, function)
+    )
+    edits = [edit for v in project.versions for edit in rename_version(project, v, names.get(v, function), new_name)]
     if not edits:
         raise Held("split", f"function {function}: not present in any VERSION")
     return edits

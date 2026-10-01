@@ -3,12 +3,14 @@
 import hashlib
 from collections.abc import Callable
 from dataclasses import asdict
+from itertools import pairwise
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.decomp import needs
 from unbake.layout.structs import layouts
+from unbake.layout.structs_parser import Parser
 from unbake.match import declarations
 from unbake.match import queue as match
 from unbake.project import build as project_build
@@ -16,6 +18,33 @@ from unbake.project.config import Held
 
 
 class DeclarationTests(MatchFixture):
+    def test_forward_typedef_spans_preserve_externs_and_function_body(self) -> None:
+        for kind in ("struct", "union"):
+            with self.subTest(kind=kind):
+                forwards = [f"typedef {kind} {name} {name};" for name in ("First", "Second", "Third")]
+                definitions = [f"{kind} {name} {{ int value; }};" for name in ("First", "Second", "Third")]
+                extern = "extern Second *global;"
+                body = "int alpha(First *arg) { return arg->value + global->value; }"
+                text = "\n".join([*forwards, definitions[0], extern, *definitions[1:], body]) + "\n"
+                parser = Parser(text)
+                records = parser.parse()
+                self.assertEqual(
+                    [text[item.start : item.end] for item in parser.declarations],
+                    [
+                        *forwards,
+                        *definitions,
+                    ],
+                )
+                self.assertEqual(
+                    [text[item.start : item.end] for item in records], [definition[:-1] for definition in definitions]
+                )
+                self.assertTrue(all(first.end <= second.start for first, second in pairwise(records)))
+                final = declarations.final_source(self.project, text)
+                self.assertIn(extern, final)
+                self.assertIn(body, final)
+                for declaration in (*forwards, *definitions):
+                    self.assertNotIn(declaration, final)
+
     def test_shared_header_edits_acquire_and_check_unselected_versions(self) -> None:
         for outcome in ("success", "missing", "compare", "scoped"):
             with self.subTest(outcome=outcome):
@@ -35,7 +64,7 @@ class DeclarationTests(MatchFixture):
                 if outcome == "missing":
                     self.project.build_link("eu").unlink()
                 elif outcome == "compare":
-                    self.fail.add(("alpha", "eu"))
+                    self.build_failures.add(("alpha", "eu"))
                 with patch.object(project_build, "build", wraps=self.build) as build:
                     receipts = match.run(self.project, self.policy)
                 header = self.root / "include" / "structs.h"
@@ -117,10 +146,10 @@ class DeclarationTests(MatchFixture):
             self.assertNotIn("struct Record", (tree / "src" / "alpha.c").read_text())
 
         self.on_build = inspect
-        self.fail.add(("alpha", "us"))
+        self.build_failures.add(("alpha", "us"))
         self.assertTrue(any("HELD(match)" in line for line in match.run(self.project, self.policy)))
         self.assertEqual(source.read_text(), text)
-        self.fail.clear()
+        self.build_failures.clear()
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
         self.assertEqual(self.matched()[0]["sha256"], digest)

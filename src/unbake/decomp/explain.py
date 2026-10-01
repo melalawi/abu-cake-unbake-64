@@ -6,6 +6,7 @@ import re
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import cast
 
 from unbake.decomp.trial_compare import Compare
 from unbake.families.gcc.schedule import Schedule
@@ -149,6 +150,7 @@ def render(allocation: Allocation) -> str:
             f"+0x{difference.target_offset:04X}: register {difference.draft_hard} wants "
             f"{difference.target_hard}; ambiguous={difference.ambiguous}"
         )
+        rows.extend(_flips(difference, by_number))
         for role, numbers in (("candidate", difference.candidates), ("holder", difference.holders)):
             for number in numbers:
                 p = by_number[number]
@@ -162,6 +164,26 @@ def render(allocation: Allocation) -> str:
     if not allocation.differences:
         rows.append("No aligned register differences; no register leverage found.")
     return "\n".join(rows)
+
+
+def _flips(difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list[str]:
+    """For globally allocated pairs, say which side wins first and the change that reverses it."""
+    from unbake.families.gcc.allocation import flip
+
+    rows = []
+    for candidate in (by_number[n] for n in difference.candidates):
+        for holder in (by_number[n] for n in difference.holders):
+            facts = [(p.number, p.rank, p.references, p.live_length) for p in (candidate, holder)]
+            ranked = [(n, r, refs, live) for n, r, refs, live in facts if None not in (r, refs, live)]
+            if len(ranked) != 2:
+                continue
+            first, second = sorted(ranked, key=lambda row: cast(int, row[1]))
+            rows.append(
+                f"  allocation order: pseudo {first[0]} (rank {first[1]}) before "
+                f"pseudo {second[0]} (rank {second[1]}); to put pseudo {second[0]} first: "
+                + flip((cast(int, second[2]), cast(int, second[3])), (cast(int, first[2]), cast(int, first[3])))
+            )
+    return rows
 
 
 def allocation(project: Project, policy: Policy, source: Path, version: str) -> Allocation:

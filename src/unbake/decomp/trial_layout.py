@@ -95,44 +95,85 @@ def target(version: Version, span: FunctionSpan) -> bytes:
     return data
 
 
-def rom_reader(version: Version, resident: Callable[[], list[dict[str, int]]]) -> Callable[[int, int], bytes]:
-    """Map split segments, then the project's explicit resident runtime copies of ROM spans.
+@dataclass(frozen=True)
+class MemorySpan:
+    address: int
+    end: int
+    offset: int
+    table_entry_bias: int
 
-    Resident copies are read only when an address lies outside every split segment.
-    """
-    _, _, segments = split.layout(version.split)
-    mappings = []
-    for segment in segments:
-        if "vram" not in segment.fields or "start" not in segment.fields or segment.fields.get("type") == "bss":
-            continue
-        end = segment.end
-        if end is None:
-            raise Held("try", f"{version.split}: mapped ROM end is missing")
-        start = split.number(segment.fields["start"], f"{version.split}: segment start")
-        vram = split.number(segment.fields["vram"], f"{version.split}: segment vram")
-        bss = [row.start for row in segment.rows if row.kind.lstrip(".") == "bss"]
-        if bss:
-            end = min(end, min(bss))
-        mappings.append((vram, vram + end - start, start))
-    copies: list[tuple[int, int, int]] = []
 
-    def read_memory(address: int, size: int) -> bytes:
-        matches = [row for row in mappings if row[0] <= address and address + size <= row[1]]
-        if not matches and not copies:
-            copies.extend(
-                (row["address"], row["address"] + row["end"] - row["start"], row["start"]) for row in resident()
-            )
+class RomReader:
+    """Resolve one ROM span for both raw constants and biased table pointers."""
+
+    def __init__(self, version: Version, resident: Callable[[], list[dict[str, int]]]) -> None:
+        self.version = version
+        self.resident = resident
+        self.copies: list[MemorySpan] | None = None
+        self.mappings: list[MemorySpan] = []
+        _, _, self.segments = split.layout(version.split)
+        for segment in self.segments:
+            if "vram" not in segment.fields or "start" not in segment.fields or segment.fields.get("type") == "bss":
+                continue
+            end = segment.end
+            if end is None:
+                raise Held("try", f"{version.split}: mapped ROM end is missing")
+            start = split.number(segment.fields["start"], f"{version.split}: segment start")
+            vram = split.number(segment.fields["vram"], f"{version.split}: segment vram")
+            bss = [row.start for row in segment.rows if row.kind.lstrip(".") == "bss"]
+            if bss:
+                end = min(end, min(bss))
+            self.mappings.append(MemorySpan(vram, vram + end - start, start, 0))
+
+    def span(self, address: int, size: int) -> MemorySpan:
+        matches = [row for row in self.mappings if row.address <= address and address + size <= row.end]
         if not matches:
-            matches = [row for row in copies if row[0] <= address and address + size <= row[1]]
+            if self.copies is None:
+                self.copies = [
+                    MemorySpan(
+                        row["address"],
+                        row["address"] + row["end"] - row["start"],
+                        row["start"],
+                        row["table_entry_bias"],
+                    )
+                    for row in self.resident()
+                ]
+            matches = [row for row in self.copies if row.address <= address and address + size <= row.end]
         if size <= 0 or len(matches) != 1:
-            raise Held("try", f"{version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
-        start, _, offset = matches[0]
-        return target(version, FunctionSpan(address, offset + address - start, size, 1))
+            raise Held("try", f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
+        return matches[0]
 
-    return read_memory
+    def backing_row(self, address: int, size: int) -> tuple[int, split.Row]:
+        """Resolve a runtime span to its unique ROM-backed data split row."""
+        mapping = self.span(address, size)
+        offset = mapping.offset + address - mapping.address
+        rows = [
+            row
+            for segment in self.segments
+            for row in segment.rows
+            if row.kind.lstrip(".") in ("data", "rodata", "rdata", "bin")
+            and row.start <= offset
+            and offset + size <= split.end(row)
+        ]
+        if len(rows) != 1:
+            raise Held("rodata", f"0x{address:08X}+{size}: resident row is missing or ambiguous")
+        return offset, rows[0]
+
+    def __call__(self, address: int, size: int) -> bytes:
+        mapping = self.span(address, size)
+        return target(self.version, FunctionSpan(address, mapping.offset + address - mapping.address, size, 1))
+
+    def table_entry(self, address: int) -> int:
+        mapping = self.span(address, 4)
+        return (int.from_bytes(self(address, 4), "big") + mapping.table_entry_bias) & 0xFFFFFFFF
 
 
-def project_reader(project: Project, name: str) -> Callable[[int, int], bytes]:
+def rom_reader(version: Version, resident: Callable[[], list[dict[str, int]]]) -> RomReader:
+    """Map split segments, then explicit resident runtime copies of ROM spans."""
+    return RomReader(version, resident)
+
+
+def project_reader(project: Project, name: str) -> RomReader:
     """Read a VERSION's memory, including its configured resident copies of ROM spans."""
     from unbake.project import makefile
 

@@ -225,7 +225,18 @@ class RodataTests(unittest.TestCase):
                 "    subsegments:\n      - [0x0, c, func_80401D74]\n      - [0x20, rodata, pool]\n  - [0x40]\n"
             )
             layout.write_text(before)
-            project = SimpleNamespace(version=lambda v: SimpleNamespace(split=layout, symbols=symbols))
+            # The pool row's ROM bytes are also copied to a resident runtime address.
+            (root / "config.toml").write_text(
+                '[build]\nld = "ld"\nobjcopy = "objcopy"\nsplat = "splat"\nas = "as"\nasflags = []\n'
+                "[build.resident_mappings]\n"
+                "us = [{ address = 0x800C0000, start = 0x20, end = 0x40, table_entry_bias = 0x80000000 }]\n"
+            )
+            project = SimpleNamespace(
+                root=root,
+                versions=("us",),
+                compilers={},
+                version=lambda v: SimpleNamespace(split=layout, symbols=symbols),
+            )
             for shared in (True, False):
                 with self.subTest(shared=shared):
                     evidence = dict(
@@ -252,6 +263,9 @@ class RodataTests(unittest.TestCase):
                             rodata.resolve([dataclasses.replace(need, evidence=bad)], project, SimpleNamespace())
                     with self.assertRaisesRegex(Held, "complete section|resident split row"):
                         rodata.resolve([dataclasses.replace(need, address=0x80000080)], project, SimpleNamespace())
+                    # A pool reached at its resident copy needs no split edit, shared or not.
+                    resident = dataclasses.replace(need, address=0x800C0004, evidence={**evidence, "base": 0x800C0004})
+                    self.assertEqual(rodata.resolve([resident], project, SimpleNamespace()), [])
 
     def test_fragment_required_facts_and_selector(self) -> None:
         for section in (".rdata", ".rodata"):

@@ -67,9 +67,12 @@ def trial(args: argparse.Namespace, project: Project, policy: Policy, source: Pa
         raise Held("decomp", f"scratch {scratch} is inside project.root {project.root}")
     scratch.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=scratch))
-    generations = {v: project.build_link(v).resolve() for v in project.versions}
-    result = draft_trial.try_draft(project, policy, source, work, versions=versions)
-    store_trial(project, policy, source, work, result, generations)
+    from unbake.project.build import lock
+
+    with lock(project):
+        generations = {v: project.build_link(v).resolve() for v in project.versions}
+        result = draft_trial.try_draft(project, policy, source, work, versions=versions)
+        store_trial(project, policy, source, work, result, generations)
     receipt("decomp", [f"retained NON_MATCHING draft {result.function} {result.source_sha256}"])
 
 
@@ -139,10 +142,12 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
     elif args.verb == "draft":
         from unbake.decomp import m2c
         from unbake.decomp.trial_compile import run_tool
+        from unbake.project.build import lock
 
-        generation = project.build_link(args.version)
-        if not generation.is_symlink() or not (generation / f"{project.name}.elf").is_file():
-            print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
+        with lock(project):
+            generation = project.build_link(args.version)
+            if not generation.is_symlink() or not (generation / f"{project.name}.elf").is_file():
+                print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
         source = m2c.draft(project, policy, args.function, args.version, args.scratch)
         trial(args, project, policy, source, None)
     elif args.verb == "search":
@@ -185,7 +190,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
         if args.verb == "best":
             best = store.best(args.function)
             if best is None:
-                raise Held("decomp", f"best draft for function {args.function}: missing value")
+                raise Held("decomp", f"no draft recorded for function {args.function}")
             receipt("decomp", [best])
         else:
             paths = store.publish_all()

@@ -1,13 +1,35 @@
 """Separate trial section placement and differences from publication proof."""
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from unbake.decomp.trial_artifacts import Artifact
 from unbake.decomp.trial_compare import Compare, words
+from unbake.decomp.trial_layout import RomReader, project_reader
 from unbake.decomp.trial_link import SectionPlacement, inspect
-from unbake.layout import split
 from unbake.project.config import Held, Project
 from unbake.project_tools.rodata import placement
+
+
+def rodata_reader(reader: RomReader, obj: Any, bases: dict[str, int]) -> Callable[[int, int], bytes]:
+    """Normalize only relocated text pointers; preserve literal and padding bytes."""
+    pointers = []
+    text = obj.section(".text")
+    for section, base in bases.items():
+        for offset, kind, symbol in obj.relocations(obj.section(section)):
+            if kind == 2 and symbol["section"] == text:
+                pointers.append(base + offset)
+
+    def read_memory(address: int, size: int) -> bytes:
+        data = bytearray(reader(address, size))
+        for pointer in pointers:
+            if address <= pointer and pointer + 4 <= address + size:
+                offset = pointer - address
+                data[offset : offset + 4] = reader.table_entry(pointer).to_bytes(4, "big")
+        return bytes(data)
+
+    return read_memory
 
 
 def section_placements(project: Project, artifact: Artifact, function: str) -> list[SectionPlacement]:
@@ -26,24 +48,13 @@ def section_placements(project: Project, artifact: Artifact, function: str) -> l
 
 def pool_guidance(project: Project, artifact: Artifact) -> list[str]:
     constants = artifact["rodata"]
-    _, _, segments = split.layout(artifact["version"].split)
     tables = constants.family.jump_tables(constants.obj)
     result = []
+    reader = project_reader(project, artifact["version"].name)
     for table in tables:
         base, _ = placement(constants.obj, table.section, constants.target_words)
         address = base + table.offset
-        rows = [
-            row
-            for segment in segments
-            for row in segment.rows
-            if row.kind.lstrip(".") in ("data", "rodata", "rdata")
-            and split.address(row, artifact["version"].split) <= address
-            and address + table.size <= split.address(row, artifact["version"].split) + split.end(row) - row.start
-        ]
-        if len(rows) != 1:
-            raise Held("rodata", f"{table.section}: table resident row is missing or ambiguous")
-        row = rows[0]
-        offset = row.start + address - split.address(row, artifact["version"].split)
+        offset, row = reader.backing_row(address, table.size)
         result.append(
             f"jump table: {constants.function} owns {table.section} table 0x{address:08X} (jtbl_{address:08X}); "
             f"ROM offset 0x{offset:X}; size 0x{table.size:X}; resident {row.kind} {row.path}"

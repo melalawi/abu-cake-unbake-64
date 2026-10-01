@@ -69,8 +69,9 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
             address = int(generated[1], 16)
         entries = []
         # A table entry must identify an instruction in the complete split unit.
-        for offset in range(0, span.size * 4, 4):
-            target = int.from_bytes(read_memory(address + offset, 4), "big")
+        mapping = read_memory.span(address, 4)
+        for offset in range(0, min(span.size * 4, mapping.end - address), 4):
+            target = read_memory.table_entry(address + offset)
             if not span.address <= target < span.address + span.size or target % 4:
                 break
             entries.append(f".word .L{target:08X}")

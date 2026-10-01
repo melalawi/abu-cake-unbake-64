@@ -43,6 +43,7 @@ def rodata_object(
 ) -> TrialObject:
     from unbake.decomp.indexed import indexed_references
     from unbake.decomp.symbols import references
+    from unbake.decomp.trial_rodata import rodata_reader
     from unbake.families import family_for
     from unbake.layout import split
     from unbake.layout.rodata import TrialObject
@@ -103,6 +104,6 @@ def rodata_object(
         function,
         artifact["span"].address,
         aligned,
-        read_memory,
+        rodata_reader(read_memory, obj, bases),
         {key: tuple(sorted(names)) for key, names in owners.items()},
     )

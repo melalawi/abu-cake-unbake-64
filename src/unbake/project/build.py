@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +23,18 @@ class BuildResult:
     sha1_line: str
     log: Path
     generation: Path
+
+
+@contextmanager
+def lock(project: Project) -> Iterator[None]:
+    """Serialize project build writes with generation publication."""
+    path = project.root / "build" / ".lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise Held("build", f"{path}: build lock must not be a symlink")
+    with path.open("a+b") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield
 
 
 def current_generation(project: Project, v: str) -> Path:

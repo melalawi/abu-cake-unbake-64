@@ -25,7 +25,8 @@ def preflight(project: Project, policy: Policy, pending: list[needs.Need]) -> li
 
 def final_source(project: Project, text: str) -> str:
     """Move local aggregate definitions to their shared homes and remove draft markers."""
-    records = Parser(text).parse()
+    parser = Parser(text)
+    records = parser.parse()
     if records:
         headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
         destinations: dict[str, Path] = {}
@@ -46,16 +47,13 @@ def final_source(project: Project, text: str) -> str:
                 destination.relative_to(root).as_posix() for root in project.include if destination.is_relative_to(root)
             )
             includes.add(include)
-            start = record.start
-            prefix = text[:start]
-            typedef = re.search(r"\btypedef\s*$", prefix)
-            if typedef:
-                start = typedef.start()
-            end = text.find(";", record.end)
-            if end < 0:
-                structs.held(record.name, "missing declaration terminator")
-            spans.append((start, end + 1))
-        for start, end in sorted(spans, reverse=True):
+        names = {name for record in records for name in (record.name, *record.aliases)}
+        for declaration in parser.declarations:
+            base = declaration.base
+            name = base if isinstance(base, str) else base.name
+            if name in names and not declaration.operations:
+                spans.append((declaration.start, declaration.end))
+        for start, end in sorted(set(spans), reverse=True):
             text = text[:start] + text[end:]
         for include in sorted(includes):
             if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', text, re.M):

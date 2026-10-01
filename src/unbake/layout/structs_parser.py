@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import cast
 
 from unbake.layout.structs import Field, Layout, held
-from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Member, Operation
+from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Declaration, Member, Operation
 from unbake.project.config import Held
 
 _TOKEN = re.compile(
@@ -26,6 +26,7 @@ class Parser:
         self.index = 0
         self.types: dict[str, Aggregate | tuple[str | Aggregate, tuple[Operation, ...]]] = {}
         self.aggregates: list[Aggregate] = []
+        self.declarations: list[Declaration] = []
         self.cache: dict[int, Layout] = {}
 
     def peek(self) -> str:
@@ -119,6 +120,7 @@ class Parser:
             if self.peek() == "{":
                 if aggregate.complete:
                     held(key, "duplicate definition")
+                aggregate.start = begin
                 self.take("{")
                 aggregate.body_start = self.tokens[self.index - 1].end()
                 while self.peek() and self.peek() != "}":
@@ -213,8 +215,7 @@ class Parser:
                     base.aliases.append(name)
                     if not base.name:
                         base.name = name
-            else:
-                result.append(Member(name, base, tuple(operations), begin, 0, declaration, bits))
+            result.append(Member(name, base, tuple(operations), begin, 0, declaration, bits))
             if self.peek() != ",":
                 break
             self.take(",")
@@ -228,16 +229,20 @@ class Parser:
 
     def parse(self) -> list[Layout]:
         while self.peek():
+            begin = self.position()
             if self.peek() == "typedef":
                 self.take()
                 # Non-aggregate typedefs (including compile-time size checks) are
                 # retained as type expressions and evaluated only when used.
-                self.declaration(typedef=True)
+                members = self.declaration(typedef=True)
+                end = self.tokens[self.index - 1].end()
+                self.declarations.extend(Declaration(item.base, item.operations, begin, end) for item in members)
             elif self.peek() in ("struct", "union"):
                 saved = self.index
                 base = self.specifier()
                 if self.peek() == ";":
                     self.take()
+                    self.declarations.append(Declaration(base, (), begin, self.tokens[self.index - 1].end()))
                 else:
                     self.index = saved
                     self.skip_external()

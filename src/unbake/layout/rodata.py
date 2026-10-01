@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from unbake.decomp.needs import Need, RodataNeed, register_deriver, register_resolver
 from unbake.layout import split
+from unbake.project import makefile
 from unbake.project.config import Held
 from unbake.project_tools.rodata import fragment, placement, relocated
 
@@ -147,14 +148,29 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
         before, lines, segments = split.layout(path)
         changes: dict[int, tuple[Any, list[tuple[RodataNeed, str]]]] = {}
         for need in selected:
-            candidates = [
+            rows = [
                 row
                 for segment in segments
                 for row in segment.rows
                 if row.kind in ("rodata", ".rodata", "rdata", ".rdata")
-                and split.address(row, path) <= need.address
+            ]
+            candidates = [
+                row
+                for row in rows
+                if split.address(row, path) <= need.address
                 and need.address + need.size <= split.address(row, path) + split.end(row) - row.start
             ]
+            if not candidates:
+                # A pool inside a resident runtime copy of ROM needs no split edit: the build links the
+                # draft's constants over the copied bytes and proves them byte for byte.
+                copies = [
+                    copy
+                    for copy in makefile.recipe(project).resident_mappings.get(need.version, [])
+                    if copy["address"] <= need.address
+                    and need.address + need.size <= copy["address"] + copy["end"] - copy["start"]
+                ]
+                if len(copies) == 1:
+                    continue
             if len(candidates) != 1:
                 raise Held(
                     "rodata", f"{need.version}.{need.section}@0x{need.address:08X}: required one resident split row"

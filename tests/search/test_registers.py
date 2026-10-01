@@ -1,4 +1,3 @@
-import math
 import time
 import unittest
 from types import SimpleNamespace
@@ -7,6 +6,7 @@ from unbake.decomp.explain import Allocation, align, annotate, function_dump, le
 from unbake.decomp.trial_compare import compare_words
 from unbake.families.gcc.allocation import allocation as gcc
 from unbake.families.gcc.allocation import dump_flags as gcc_flags
+from unbake.families.gcc.allocation import flip, global_priority
 from unbake.families.ido.allocation import allocation as ido
 from unbake.families.ido.allocation import dump_flags as ido_flags
 from unbake.project.config import Held
@@ -38,7 +38,7 @@ class RegistersTests(unittest.TestCase):
                 result = family(dumps)
                 self.assertEqual(result.hard_registers, hard)
                 if family is gcc:
-                    self.assertAlmostEqual(result.pseudos[0].priority, math.log2(270) * 270 / 2490)
+                    self.assertEqual(result.pseudos[0].priority, 8674)
                     self.assertEqual(result.pseudos[2].rank, 0)
                 else:
                     self.assertFalse(result.pseudos)
@@ -99,6 +99,19 @@ class RegistersTests(unittest.TestCase):
         self.assertEqual(result.pseudos[1].live_range, (2, 48))
         self.assertEqual(result.pseudos[1].rejections, ((19, "live over 2-48"),))
 
+    def test_global_priority_matches_gcc_and_names_the_flip(self) -> None:
+        # RageWars func_8044D408: k (17 refs over 144 insns) is allocated just before the slot
+        # pointer (11 refs over 70 insns), so the pointer loses s7. Real log2 would rank them the
+        # other way round; GCC uses floor_log2.
+        self.assertEqual((global_priority(17, 144), global_priority(11, 70)), (4722, 4714))
+        self.assertEqual(
+            flip((11, 70), (17, 144)),
+            "candidate live_length <= 69; candidate references >= 12; holder live_length >= 145",
+        )
+        self.assertEqual(flip((1, 5), (17, 144)), "candidate references >= 3")
+        with self.assertRaisesRegex(Held, "priority"):
+            global_priority(0, 5)
+
     def test_function_sections(self) -> None:
         for text, name, expected in [
             (";; Function a\nX\n;; Function b\nY\n", "b", "Y"),
@@ -125,6 +138,7 @@ class RegistersTests(unittest.TestCase):
                     self.assertEqual(result.differences[0].candidates, (80,))
                     self.assertFalse(result.differences[0].ambiguous)
                     self.assertIn("holder pseudo", render(result))
+                    self.assertIn("allocation order: pseudo", render(result))
                 else:
                     self.assertIn("No aligned", render(result))
 

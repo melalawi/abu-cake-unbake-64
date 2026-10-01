@@ -32,6 +32,15 @@ class Member:
 
 Operation: TypeAlias = tuple[str, int | str | None]
 
+
+@dataclass(frozen=True)
+class Declaration:
+    base: str | Aggregate
+    operations: tuple[Operation, ...]
+    start: int
+    end: int
+
+
 # The target ABI fixes these widths independently of the host running the parser.
 SCALARS = {
     "char": (1, 1),

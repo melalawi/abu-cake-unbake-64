@@ -67,7 +67,7 @@ class PublicationTests(MatchFixture):
 
     def test_failure_is_bisected_and_passing_remainder_is_rebuilt(self) -> None:
         self.queue("alpha", "beta", "gamma")
-        self.fail.add(("beta", "eu"))
+        self.build_failures.add(("beta", "eu"))
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any(line.startswith("HELD(match): beta:") and "eu" in line for line in receipts))
         self.assertEqual(self.calls[0], ("alpha", "beta", "gamma"))
@@ -88,7 +88,7 @@ class PublicationTests(MatchFixture):
 
     def test_all_build_failures_leave_live_tree_untouched(self) -> None:
         self.queue("alpha", "beta")
-        self.fail.update({("alpha", "us"), ("beta", "eu")})
+        self.build_failures.update({("alpha", "us"), ("beta", "eu")})
         receipts = match.run(self.project, self.policy)
         self.assertEqual(len(receipts), 2)
         self.assertTrue(all(line.startswith("HELD(match):") for line in receipts))
