@@ -12,7 +12,7 @@ from typing import Any, cast
 
 from unbake.layout import split
 from unbake.project import build, makefile
-from unbake.project.config import Held, Project
+from unbake.project.config import Held, Policy, Project, load_policy
 from unbake.project.flow import WorkManifest
 
 
@@ -109,12 +109,24 @@ def compilation_project(project: Project, source: Path) -> Project:
 
 
 def identity(
-    project: Project, source: Path, versions: list[str], *, pinned: dict[str, tuple[Path, Path]] | None = None
+    project: Project,
+    source: Path,
+    versions: list[str],
+    *,
+    pinned: dict[str, tuple[Path, Path]] | None = None,
+    policy: Policy | None = None,
 ) -> WorkManifest:
     """Capture exact inputs, including generation and every holding target."""
     overlay_inputs = overlay_data(project, source)
     configured = project.compiler_for(project.src / source.name)
-    compiler_files = [configured.cc, configured.as_, configured.sha256]
+    assembler = configured.as_
+    if str(assembler).startswith("policy:"):
+        selected_policy = policy if policy is not None else load_policy()
+        assembler = Path(makefile.host_executable(selected_policy, str(assembler), "as"))
+    compiler_files = [configured.cc, assembler, configured.sha256]
+    for field, path in zip(("cc", "as", "sha256"), compiler_files, strict=True):
+        if not path.is_file():
+            raise Held("try", f"trial.compiler.{configured.id}.{field}: missing {path}")
     compiler_hash = digest(
         encoded(
             {
@@ -169,7 +181,11 @@ def identity(
                 }
             )
         )
-    for path in (project.build / "setup/layout.json", project.root / "docs/setup/layout.json"):
+    for path in (
+        project.build / "setup/layout.json",
+        project.root / "docs/setup/layout.json",
+        project.build / "types/database.json",
+    ):
         if path.is_file():
             layouts[str(path.relative_to(project.root))] = {"sha256": digest(path.read_bytes())}
     destination = source if source.is_relative_to(project.root) else project.drafts / source.stem / source.name

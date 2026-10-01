@@ -17,6 +17,10 @@ def command(root: Path | None, phase: str) -> str:
 
 
 def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
+    if root is not None and missing is not None and missing.startswith(("types.", "map.")):
+        phase = "map" if missing.startswith("map.") else "solve"
+        tokens = shlex.split(retry)
+        return shlex.join([*tokens[:-1], phase])
     if missing == "setup.compiler_confirmation" and root is not None:
         path = config.load_pending(root).build / "setup/proposal.json"
         if path.is_file():

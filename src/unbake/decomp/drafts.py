@@ -82,6 +82,7 @@ class Store:
             value = getattr(project, key, None)
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f-]{36}", value):
                 raise Held("drafts", f"project.{key}: required explicit UUID")
+        self.policy = policy
         self.project = project
         self.root = Path(state_root) / project.id / project.workspace_id / "drafts"
 
@@ -156,7 +157,7 @@ class Store:
         if not row["work"]:
             from unbake.decomp.work import identity as work_identity
 
-            row["work"] = dict(work_identity(self.project, Path(source).resolve(), list(compares)))
+            row["work"] = dict(work_identity(self.project, Path(source).resolve(), list(compares), policy=self.policy))
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             with (self.root / "trials.jsonl").open("a+", encoding="utf-8") as ledger:

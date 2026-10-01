@@ -183,7 +183,7 @@ def _best(
 
 def ranked(project: Project, policy: Policy) -> list[Row]:
     """Identical retained drafts first, then weakest fuzzy score, then size."""
-    reference, functions, bodies = inventory(project)
+    _, functions, bodies = inventory(project)
     store = drafts.Store(policy, project)
     history: dict[str, list[drafts.TrialRecord]] = {}
     for trial in store.history():
@@ -194,7 +194,7 @@ def ranked(project: Project, policy: Policy) -> list[Row]:
     for items in groups(functions, bodies):
         if all(item.kind == "c" for item in items):
             continue
-        canonical = next((item for item in items if item.version == reference), items[0])
+        canonical = min(items, key=lambda item: project.versions.index(item.version))
         aliases = tuple(sorted({name for item in items for name in (item.name, *item.aliases)}))
         versions = tuple(item.version for item in items)
         score, identical, draft = _best(store, history, aliases, versions)
@@ -273,7 +273,7 @@ def actionable(project: Project, policy: Policy) -> list[Row]:
     occupied = _occupied(assignments.Ledger(project, policy))
     output = []
     for row in ranked(project, policy):
-        if row.route != "drafter" or project.names_from not in row.versions or occupied.intersection(row.aliases):
+        if row.route != "drafter" or occupied.intersection(row.aliases):
             continue
         if any(row.names[v] != row.function for v in row.versions):
             continue

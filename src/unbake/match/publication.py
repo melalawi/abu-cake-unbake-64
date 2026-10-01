@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from unbake.decomp import checks
+from unbake.decomp import checks, drafts
 from unbake.match import staging
 from unbake.match.common import (
     Attempt,
@@ -19,7 +19,6 @@ from unbake.match.common import (
     queue_lock,
     queue_path,
     read,
-    sha,
     write_queue,
 )
 from unbake.project import build
@@ -72,7 +71,7 @@ def publish(
             for draft in candidates:
                 if draft.row not in rows:
                     held(f"{draft.function}: queue row changed or withdrawn during match build")
-                if sha(read(Path(draft.row["source"]))) != draft.row["source_sha256"]:
+                if drafts.source_identity(read(Path(draft.row["source"]))) != draft.row["source_sha256"]:
                     held(f"{draft.function}: source_sha256 changed during match build")
             writes = {}
             for edit in attempt.edits:

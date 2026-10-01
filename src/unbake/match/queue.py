@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from unbake.decomp import checks, drafts, features, needs
+from unbake.decomp import checks, drafts, features, needs, type_context
 from unbake.layout import split
 from unbake.match import common, declarations, proof
 from unbake.match import staging as stage
@@ -77,7 +77,10 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     findings = checks.run(text)
     blockers = [finding for finding in findings if finding.fakematch is None]
     if blockers:
-        held(f"{function}: " + "; ".join(f"{finding.rule}:{finding.line}: {finding.text}" for finding in blockers))
+        held(
+            f"{function}: "
+            + "; ".join(f"{source}:{finding.rule}:{finding.line}: {finding.text}" for finding in blockers)
+        )
     edits: list[split.Edit] = declarations.match_edits(project, function, text, versions)
     for edit in edits:
         relative(project, edit.path)
@@ -210,12 +213,19 @@ def run(project: Project, policy: Policy, *, function: str | None = None) -> lis
                         held("final build compare failed on " + "; ".join(attempt.diagnostics.values()))
                 publish(project, policy, attempt, candidates, current, fingerprint)
                 receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
-                receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
                 published = True
             collect(replace(project, versions=tuple(current)))
         receipts.extend(
             f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}" for draft in candidates
         )
+        receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
+        for draft in candidates:
+            source = project.src / (draft.function + ".c")
+            targets = dict(draft.row["work"]["target_sha256"])
+            try:
+                type_context.feedback(project, draft.function, source, draft.versions, targets, policy=policy)
+            except Held as error:
+                receipts.append(f"HELD(types): {draft.function} published; {error.reason}")
         return receipts
     except Held as error:
         receipts.extend(f"HELD(match): {draft.function}: {error.reason}" for draft in candidates)

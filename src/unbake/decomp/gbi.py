@@ -592,7 +592,8 @@ def install(project: Project) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists():
         destination.write_text(content)
-    return '#include "gbi.h"\n'
+    sdk_include = '#include "n64sdk.h"\n' if any((root / "n64sdk.h").is_file() for root in project.include) else ""
+    return sdk_include + '#include "gbi.h"\n'
 
 
 def canonical_types(project: Project, source: str) -> str:
@@ -603,7 +604,9 @@ def canonical_types(project: Project, source: str) -> str:
     spans = gfx_typedefs(source)
     if not spans:
         return source
-    sdk_types = typedefs(sdk.read_text())
+    shared_gfx = sdk.parent / "shared/gfx.h"
+    sdk_text = sdk.read_text() + ("\n" + shared_gfx.read_text() if shared_gfx.is_file() else "")
+    sdk_types = typedefs(sdk_text)
     source_types = typedefs(source)
     removals = []
     renames = {}

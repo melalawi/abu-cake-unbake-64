@@ -109,6 +109,8 @@ def _draft(
     scratch: Path,
     *,
     generation: Path | None = None,
+    type_context: str = "",
+    announce: bool = True,
 ) -> Path:
     if not isinstance(function, str) or not re.fullmatch(r"[A-Za-z_]\w*", function):
         raise Held("m2c", "function is required and must be a C identifier")
@@ -136,7 +138,7 @@ def _draft(
     # Shared headers own the types. Similar units' private declarations can
     # collide with canonical tags or leak typedefs unavailable to the draft's
     # include graph; retain those units in the similarity comments instead.
-    context.write_text(_context(headers, {path for path, _ in headers}), encoding="utf-8")
+    context.write_text(_context(headers, {path for path, _ in headers}) + type_context, encoding="utf-8")
     context.write_text(
         preprocess_context(context, project, policy, v, function) + "\n" + examples_context, encoding="utf-8"
     )
@@ -236,6 +238,14 @@ def _draft(
     output = address_arithmetic(output, declarations, function)
     commands = gbi.lower(output, gbi.microcode(project))
     output = commands.source
+    raw_lines = output.splitlines(keepends=True)
+    for item in commands.raw:
+        if 0 < item.line <= len(raw_lines):
+            reason = item.reason.replace("*/", "* /").replace("\n", " ")
+            raw_lines[item.line - 1] = raw_lines[item.line - 1].rstrip("\n") + f" /* GBI_RAW: {reason} */\n"
+    output = "".join(raw_lines)
+    if type_context and re.search(r"\btypedef\b|\b(?:struct|union)\s+\w*\s*\{", output):
+        raise Held("types", f"types.declaration: {function}: draft must reuse solved shared types")
     if commands.macros:
         includes += gbi.install(project)
     for item in commands.raw:
@@ -250,8 +260,9 @@ def _draft(
     prove(project, policy, function, v, candidate)
     source.write_text(content, encoding="utf-8")
     draft_work.save_overlay(original_project, work)
-    print(f"draft_path: {source}")
-    print(f"source filename: {function}.c (try identifies the function from the filename)")
+    if announce:
+        print(f"draft_path: {source}")
+        print(f"source filename: {function}.c (try identifies the function from the filename)")
     return source
 
 
@@ -263,10 +274,14 @@ def draft(
     scratch: Path,
     *,
     generation: Path | None = None,
+    type_context: str = "",
+    announce: bool = True,
 ) -> Path:
     """Name the selected function on every refusal from the draft boundary."""
     try:
-        return _draft(project, policy, function, v, scratch, generation=generation)
+        return _draft(
+            project, policy, function, v, scratch, generation=generation, type_context=type_context, announce=announce
+        )
     except Held as error:
         if function and not error.reason.startswith(function + ":"):
             raise Held(error.phase, f"{function}: {error.reason}") from error

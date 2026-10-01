@@ -6,7 +6,7 @@ from pathlib import Path
 from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
 from unbake.match import queue
-from unbake.project.config import Policy, Project, Unfinished
+from unbake.project.config import Policy, Project, Unfinished, load_policy
 
 
 def register(phases: Subparsers) -> None:
@@ -19,6 +19,9 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     if args.source.suffix == ".h":
         raise Unfinished("submit", "submit.struct")
+    local = project.tools / "clone-policy.toml"
+    if local.is_file():
+        policy = load_policy(local)
     lines = queue.publish_source(project, policy, args.source)
     suggest(command(project.root, "next"))
     return receipt("submit", lines)

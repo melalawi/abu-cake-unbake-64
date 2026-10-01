@@ -1,7 +1,4 @@
-"""Land matching published drafts for an explicitly selected VERSION.
-
-Run with python -m unbake.match.free --project ROOT --version VERSION.
-"""
+"""Internal batch selection requiring full current trial proof for every owner."""
 
 from __future__ import annotations
 
@@ -37,12 +34,12 @@ def land(
         for source in sources:
             step = perf_counter()
             try:
-                decisions = queue.submit(project, policy, source, versions=(version,))
+                decisions = queue.submit(project, policy, source)
                 queued += 1
                 for decision in decisions:
                     emit(f"{decision}; step=submit wall={perf_counter() - step:.3f}s")
             except Held as error:
-                if error.phase == "match" and "requires identical_everywhere=true" in error.reason:
+                if error.phase in ("match", "submit") and "requires identical_everywhere=true" in error.reason:
                     skipped += 1
                     emit(
                         f"OK(match): skipped {source.stem}: refused: {error.reason}; "

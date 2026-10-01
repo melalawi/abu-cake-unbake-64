@@ -61,7 +61,6 @@ def owning_versions(project: Project, function: str, versions: list[str] | None)
         project.version(version)
         rows = [row for row in split.functions(project, version) if function in row.aliases]
         if not rows:
-            print(f"ABSENT(try): {function} VERSION {version}: no owning text row")
             continue
         if len(rows) != 1:
             raise Held("try", f"{function} VERSION {version}: expected one owning text row, found {len(rows)}")

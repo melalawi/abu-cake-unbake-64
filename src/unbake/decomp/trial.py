@@ -90,13 +90,13 @@ def retain_draft(
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=directory))
     selected = owning_versions(project, source.stem, versions)
     with trial_inputs(project, source.stem, selected) as pinned:
-        before = draft_work.identity(project, source, selected, pinned=pinned)
+        before = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         result = (
             try_draft(project, policy, source, work, versions=versions, flags=True, pinned=pinned)
             if flags
             else try_draft(project, policy, source, work, versions=versions, pinned=pinned)
         )
-        after = draft_work.identity(project, source, selected, pinned=pinned)
+        after = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         if before != after:
             raise Held("try", "trial.inputs_changed: inputs changed during compilation; try again")
         result.work_identity = dict(after)
@@ -124,7 +124,7 @@ def try_draft(
     original_project = project
     project = draft_work.compilation_project(project, source)
     variants = compiler_variants(project, source) if flags else [()]
-    preconditions = [checks.message(finding) for finding in checks.run(text) if finding.fakematch is None]
+    preconditions = [f"{source}:{checks.message(finding)}" for finding in checks.run(text) if finding.fakematch is None]
     selected = owning_versions(project, source.stem, versions) if pinned is None else list(pinned)
     function = source.stem
     if pinned is None:

@@ -27,7 +27,7 @@ def ensure(project: Project, policy: Policy, source: Path, versions: tuple[str, 
         )
     if not latest["identical_everywhere"] or latest["preconditions"]:
         raise Held("submit", f"submit.exact: {source.stem} requires identical_everywhere=true and resolved needs")
-    current = work.identity(project, source, list(versions))
+    current = work.identity(project, source, list(versions), policy=policy)
     recorded = latest["work"]
     for key in (
         "schema",

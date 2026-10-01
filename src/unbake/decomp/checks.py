@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake.decomp.gbi_source import typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
 from unbake.project.config import Held
@@ -277,6 +278,30 @@ def _empty_loop(source: str, code: str) -> list[GuardFinding]:
     return _matches("empty-loop", r"\bdo\s*\{\s*\}\s*while\s*\(\s*0\s*\)", source, code)
 
 
+def _gfx(source: str, code: str) -> list[GuardFinding]:
+    findings = _matches("raw-gfx", r"(?:\.|->)\s*words\s*\.\s*w[01]\s*(?:[|&^+\-]?=|\+\+|--)", source, code)
+    lines = source.splitlines()
+    # Only the lowering boundary emits this per-line diagnostic for an
+    # independently unrepresentable packet; ordinary raw writes stay refused.
+    return [
+        finding for finding in findings if not re.search(r"/\*\s*GBI_RAW:\s*[^*\s][^*]*\*/", lines[finding.line - 1])
+    ]
+
+
+def _copies(source: str, code: str) -> list[GuardFinding]:
+    copies = []
+    for name, (start, _, _) in typedefs(code).items():
+        if re.fullmatch(r"[su](?:8|16|32|64)|f(?:32|64)|Gfx", name):
+            line = source.count("\n", 0, start) + 1
+            copies.append(GuardFinding("local-type-copy", line, source.splitlines()[line - 1].strip(), None))
+    return (
+        copies
+        + _matches("local-gbi-macro", r"^\s*#\s*define\s+(?:_SHIFTL|_SHIFTR|g(?:s)?[DS]P\w+)\b", source, code)
+        + _matches("invented-struct", r"\bstruct\s+(?:func_[A-Fa-f0-9]+_S\w*|Layout_\w+)\s*\{", source, code)
+        + _matches("symbol-alias", r"^\s*#\s*define\s+\w+\s+[^\n]*\b0[xX]8[0-9a-fA-F]{7}\b", source, code)
+    )
+
+
 RULES = [
     Rule("inline-asm", "code", _asm),
     Rule("volatile-storage", "code", _volatile),
@@ -285,6 +310,8 @@ RULES = [
     Rule("tool-comment", "comments", _comments),
     Rule("file-version-guard", "directives", _versions),
     Rule("empty-loop", "code", _empty_loop),
+    Rule("raw-gfx", "code", _gfx),
+    Rule("shared-declarations", "code", _copies),
 ]
 
 
