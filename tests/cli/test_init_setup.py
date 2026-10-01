@@ -87,9 +87,7 @@ class InitSetupTests(MainCase):
             )
             self.assertEqual(code, 1)
             self.assertIn("project.name", out)
-            code, out, _error = self.run_main(
-                ["--project", str(target), "setup", "--name", "pot"], load_project=False
-            )
+            code, out, _error = self.run_main(["--project", str(target), "setup", "--name", "pot"], load_project=False)
         self.assertEqual(code, 1)
         self.assertIn("layout.plan", out)
         self.assertNotIn("Supply project.names_from", out)

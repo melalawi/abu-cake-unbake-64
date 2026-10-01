@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from typing import Any
 
@@ -10,6 +11,14 @@ import toml  # type: ignore[import-untyped]
 from unbake.project import compiler_files, rom
 from unbake.project.census import Census
 from unbake.project.config import Held, PendingProject
+
+
+def version_macros(versions: tuple[str, ...]) -> dict[str, str]:
+    """Give generated version branches distinct, valid C identifiers."""
+    macros = {version: "VERSION_" + re.sub(r"[^A-Za-z0-9_]", "_", version).upper() for version in versions}
+    if len(set(macros.values())) != len(macros):
+        raise Held("setup", "project.versions: VERSION macro collision; supply distinct --version-name labels")
+    return macros
 
 
 def facts(project: PendingProject, census: Census, *, name: str | None, title: str | None) -> dict[str, Any]:
@@ -26,6 +35,7 @@ def facts(project: PendingProject, census: Census, *, name: str | None, title: s
         title = data["project"].get("title", reference.header.title)
     if not isinstance(title, str) or not title.strip():
         raise Held("setup", "project.title: supply --title TITLE")
+    macros = version_macros(census.versions)
     data["project"].update(name=name, title=title, names_from=census.names_from, versions=list(census.versions))
     data["version"] = {
         census.names[item.path]: {
@@ -33,7 +43,7 @@ def facts(project: PendingProject, census: Census, *, name: str | None, title: s
             "baserom_sha1": item.sha1,
             "split": f"versions/{census.names[item.path]}/{name}.yaml",
             "symbols": f"versions/{census.names[item.path]}/symbol_addrs.txt",
-            "macros": [],
+            "macros": [macros[census.names[item.path]]],
         }
         for item in census.cartridges
     }

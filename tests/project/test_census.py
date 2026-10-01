@@ -3,6 +3,7 @@
 import io
 import json
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
@@ -57,6 +58,9 @@ class CensusTests(unittest.TestCase):
         self.assertEqual(pending.id, self.project.id)
         self.assertEqual(pending.state, "awaiting-roms")
         self.assertNotIn("compiler", (self.root / "config.toml").read_text())
+        data = tomllib.loads((self.root / "config.toml").read_text())
+        self.assertEqual(data["version"]["us"]["macros"], ["VERSION_US"])
+        self.assertEqual(data["version"]["eu"]["macros"], ["VERSION_EU"])
         self.assertEqual(before, {path: path.read_bytes() for path in originals})
         with self.assertRaisesRegex(Held, "project.state"):
             config.load(self.root)
@@ -197,3 +201,12 @@ class CensusTests(unittest.TestCase):
         ):
             with self.subTest(fields=fields), self.assertRaisesRegex(Held, key):
                 setup_config.facts(self.project, result, **fields)
+
+    def test_generated_version_macros_are_valid_and_collisions_refuse(self) -> None:
+        self.assertEqual(
+            setup_config.version_macros(("us-rev1", "eu-x", "2.extra")),
+            {"us-rev1": "VERSION_US_REV1", "eu-x": "VERSION_EU_X", "2.extra": "VERSION_2_EXTRA"},
+        )
+        for versions in (("eu-x", "eu_x"), ("us", "US"), ("one.two", "one-two")):
+            with self.subTest(versions=versions), self.assertRaisesRegex(Held, "project.versions"):
+                setup_config.version_macros(versions)
