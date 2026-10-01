@@ -17,6 +17,15 @@ from unbake.project.config import Held
 class GuidanceTests(MainCase):
     real_guidance = True
 
+    def test_ready_next_does_not_create_an_absent_policy(self) -> None:
+        path = self.directory / "absent-operator/policy.toml"
+        with patch.dict(os.environ, UNBAKE_POLICY=str(path)):
+            code, out, error = self.run_main(self.args("next"), load_project=False)
+        self.assertEqual(code, 1)
+        self.assertIn("policy.path", out)
+        self.assertEqual(error, "")
+        self.assertFalse(path.parent.exists())
+
     def test_guidance_state_failure_preserves_the_completed_operation_receipt(self) -> None:
         with (
             patch("unbake.cli.setup.run", return_value=False),

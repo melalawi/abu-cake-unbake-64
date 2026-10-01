@@ -90,7 +90,10 @@ def main(argv: list[str] | None = None) -> int:
             tokens = shlex.split(retry)
             retry = shlex.join([*tokens[:-1], "--policy", str(args.policy.expanduser().absolute()), tokens[-1]])
         if phase == "next":
-            return int(next_command.run(args, config.load_pending(root)) or invocation.refused)
+            pending = config.load_pending(root)
+            if pending.state == "ready":
+                config.read_policy(args.policy)
+            return int(next_command.run(args, pending) or invocation.refused)
         if phase == "setup":
             return int(setup.run(args, config.load_pending(root)) or invocation.refused)
         project = config.load(root)
@@ -117,6 +120,10 @@ def main(argv: list[str] | None = None) -> int:
                 root = config.discover()
         missing = missing or invocation.missing_input
         try:
+            if missing is None and root is not None and not config.policy_path().is_file():
+                with suppress(Held):
+                    if config.load_pending(root).state == "ready":
+                        missing = "policy.path"
             if missing is not None:
                 action = guidance.resolve(root, missing=missing, retry=retry)
             else:
