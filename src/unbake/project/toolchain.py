@@ -171,25 +171,43 @@ def verify(directory: Path, spec: CompilerSpec) -> dict[str, str]:
     return dict(spec.pins)
 
 
-def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
+def _hashes(directory: Path, spec: CompilerSpec) -> dict[str, str]:
+    result = {}
+    for name in spec.pins:
+        path = directory / name
+        if any(parent.is_symlink() for parent in path.parents):
+            raise Held("setup", f"{path}: compiler parent is a symlink")
+        if path.exists() or path.is_symlink():
+            if not path.is_file():
+                raise Held("setup", f"{path}: expected regular compiler file")
+            result[name] = compiler_files.sha(path)
+    return result
+
+
+def _replaced(path: Path, old: str | None, new: str) -> None:
+    if old is not None and old != new:
+        print(f"REPLACED(setup): {path}: sha256 {old} -> {new}")
+
+
+def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: bool = False) -> Path:
     destination = cache / spec.id
     host = platform.system().lower() + "-" + platform.machine().lower()
     if host != spec.host:
         raise Held("setup", f"[compilers.{spec.id}].host: requires {spec.host}, found {host}")
     if destination.is_symlink():
         raise Held("setup", f"{destination}: host install must be a directory")
-    if destination.exists():
-        verify(destination, spec)
-        return destination
     with (cache / f".{spec.id}.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if destination.is_symlink():
             raise Held("setup", f"{destination}: host install must be a directory")
-        if destination.exists():
+        if destination.exists() and not destination.is_dir():
+            raise Held("setup", f"{destination}: host install must be a directory")
+        previous = _hashes(destination, spec)
+        if previous == spec.pins and not refresh:
             verify(destination, spec)
             return destination
         covered = {name for entry in spec.downloads for name in entry.files}
-        supplied = {name: pin for name, pin in spec.pins.items() if name not in covered}
+        supplied = {name: pin for name, pin in spec.pins.items() if name not in covered and previous.get(name) != pin}
         if supplied and source is None:
             raise Held(
                 "setup",
@@ -201,7 +219,11 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
         with tempfile.TemporaryDirectory(dir=cache, prefix=f".{spec.id}-") as temporary:
             stage = Path(temporary) / "install"
             stage.mkdir()
-            contents = {}
+            contents = {
+                pin: (destination / name).read_bytes()
+                for name, pin in spec.pins.items()
+                if name not in covered and previous.get(name) == pin
+            }
             for entry in spec.downloads:
                 wanted = {spec.pins[name] for name in entry.files}
                 contents.update(compiler_files.archive_files(compiler_files.download(entry, cache), wanted))
@@ -221,7 +243,16 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
                 target.write_bytes(contents[pin])
                 target.chmod(0o755)
             verify(stage, spec)
-            os.replace(stage, destination)
+            if destination.exists():
+                for name, pin in spec.pins.items():
+                    target = destination / name
+                    if previous.get(name) != pin or target.is_symlink():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(stage / name, target)
+                        _replaced(target, previous.get(name), pin)
+            else:
+                os.replace(stage, destination)
+            verify(destination, spec)
         return destination
 
 
@@ -272,7 +303,14 @@ def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
     sources = _supplies(project, override)
     cache = cache_root / "compilers"
     cache.mkdir(parents=True, exist_ok=True)
-    installs = {ident: _install(specs[ident], cache, sources.get(ident)) for ident in sorted(compilers)}
+    installs = {}
+    for ident in sorted(compilers):
+        project_directory = tools / ident
+        if project_directory.is_symlink():
+            raise Held("setup", f"{project_directory}: expected directory for compiler files")
+        previous = _hashes(project_directory, specs[ident])
+        refresh = any(pin != specs[ident].pins[name] for name, pin in previous.items())
+        installs[ident] = _install(specs[ident], cache, sources.get(ident), refresh=refresh)
     tools.mkdir(parents=True, exist_ok=True)
     manifest_path = tools / "compiler.sha256"
     if manifest_path.is_file():
@@ -300,13 +338,12 @@ def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
             if any(parent.is_symlink() for parent in target.parents):
                 raise Held("setup", f"{target}: compiler parent is a symlink")
             target.parent.mkdir(parents=True, exist_ok=True)
-            if (target.exists() or target.is_symlink()) and (not target.is_file() or compiler_files.sha(target) != pin):
-                raise Held("setup", f"{target}: differs from pinned compiler file {pin}")
-            if target.is_symlink():
-                target.unlink()
-            if not target.exists():
-                compiler_files.atomic_bytes(target, (directory / name).read_bytes())
-                target.chmod((directory / name).stat().st_mode & 0o777)
+            old = compiler_files.sha(target) if target.is_file() else None
+            if old != pin or target.is_symlink():
+                compiler_files.atomic_bytes(
+                    target, (directory / name).read_bytes(), mode=(directory / name).stat().st_mode & 0o777
+                )
+                _replaced(target, old, pin)
             manifest.append(f"{pin}  {(tools_relative / ident / name).as_posix()}\n")
         verify(project_directory, specs[ident])
     manifest_path = tools / "compiler.sha256"

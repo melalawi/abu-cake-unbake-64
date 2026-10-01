@@ -37,8 +37,8 @@ def sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def atomic_bytes(path: Path, content: bytes) -> None:
-    if path.exists() and path.read_bytes() == content:
+def atomic_bytes(path: Path, content: bytes, *, mode: int | None = None) -> None:
+    if not path.is_symlink() and path.exists() and path.read_bytes() == content:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".write-", delete=False) as stream:
@@ -46,6 +46,8 @@ def atomic_bytes(path: Path, content: bytes) -> None:
         try:
             stream.write(content)
             stream.close()
+            if mode is not None:
+                temporary.chmod(mode)
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)

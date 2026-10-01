@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import tempfile
 import unittest
@@ -49,6 +50,31 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(result.read_bytes(), b"object bytes")
         self.source.write_bytes(b"updated source")
         self.assertEqual(result.read_bytes(), b"object bytes")
+
+    def test_get_allows_atomic_publication_after_missing_stat(self) -> None:
+        target = self.cache.path("cc", self.identity)
+        original_stat = Path.stat
+        missing = True
+
+        def publish(path: Path, *args: Any, **kwargs: Any) -> Any:
+            nonlocal missing
+            if path == target and missing:
+                missing = False
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"published object")
+                raise FileNotFoundError(errno.ENOENT, "No such file", str(path))
+            return original_stat(path, *args, **kwargs)
+
+        with patch.object(Path, "stat", publish):
+            self.assertIsNone(self.cache.get("cc", self.identity))
+        self.assertEqual(self.cache.get("cc", self.identity), target)
+        self.assertEqual(target.read_bytes(), b"published object")
+
+    def test_get_still_refuses_directory_artifacts(self) -> None:
+        target = self.cache.path("cc", self.identity)
+        target.mkdir(parents=True)
+        with self.assertRaisesRegex(Held, "expected cached file"):
+            self.cache.get("cc", self.identity)
 
     def test_put_publishes_complete_copy_via_atomic_replace(self) -> None:
         from unbake.project import cache

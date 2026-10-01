@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -133,21 +134,101 @@ class ToolchainTests(unittest.TestCase):
         with patch.object(toolchain.urllib.request, "urlopen", side_effect=AssertionError("network")):
             self.assertEqual(toolchain.ensure(self.project, self.policy), manifest)
 
-    def test_host_tampering_is_refused_every_call(self) -> None:
+    def test_stale_cache_is_replaced_from_verified_archive(self) -> None:
         self.compiler()
         toolchain.ensure(self.project, self.policy)
-        (self.policy.cache_root / "compilers/fixture/cc").write_bytes(b"changed")
-        with self.assertRaisesRegex(Held, "cc: sha256 expected"):
+        cached = self.policy.cache_root / "compilers/fixture/cc"
+        cached.write_bytes(b"changed")
+        with redirect_stdout(io.StringIO()) as output:
             toolchain.ensure(self.project, self.policy)
+        self.assertEqual(cached.read_bytes(), b"compiler")
+        self.assertIn(
+            f"REPLACED(setup): {cached}: sha256 {digest(b'changed')} -> {digest(b'compiler')}", output.getvalue()
+        )
 
-    def test_project_copy_tampering_is_refused(self) -> None:
+    def test_stale_project_copy_is_replaced(self) -> None:
         self.compiler()
         toolchain.ensure(self.project, self.policy)
         link = self.project.tools / "fixture/cc"
         link.unlink()
         link.write_bytes(b"changed")
-        with self.assertRaisesRegex(Held, "cc: differs from pinned"):
+        with redirect_stdout(io.StringIO()) as output:
             toolchain.ensure(self.project, self.policy)
+        self.assertEqual(link.read_bytes(), b"compiler")
+        self.assertIn(
+            f"REPLACED(setup): {link}: sha256 {digest(b'changed')} -> {digest(b'compiler')}", output.getvalue()
+        )
+
+    def repin(self, **kwargs: Any) -> dict[str, str]:
+        self.entries.clear()
+        self.config_entries.clear()
+        _, pins = self.compiler(files={"cc": b"new compiler", "as": b"new assembler"}, **kwargs)
+        return pins
+
+    def test_changed_registry_pins_replace_cache_and_project_atomically(self) -> None:
+        self.compiler()
+        manifest = toolchain.ensure(self.project, self.policy)
+        old = {"cc": b"compiler", "as": b"assembler"}
+        pins = self.repin()
+        original_replace = os.replace
+        replacements = []
+
+        def replace(source: Any, destination: Any) -> None:
+            target = Path(destination)
+            if target.name in pins:
+                self.assertEqual(target.read_bytes(), old[target.name])
+                self.assertEqual(compiler_files.sha(Path(source)), pins[target.name])
+                self.assertTrue(Path(source).stat().st_mode & 0o111)
+                replacements.append(target)
+            original_replace(source, destination)
+
+        with redirect_stdout(io.StringIO()) as output, patch.object(toolchain.os, "replace", side_effect=replace):
+            toolchain.ensure(self.project, self.policy)
+        self.assertEqual(len(replacements), 4)
+        self.assertEqual(output.getvalue().count("REPLACED(setup):"), 4)
+        for directory in (self.project.tools / "fixture", self.policy.cache_root / "compilers/fixture"):
+            self.assertEqual(toolchain.verify(directory, toolchain.specification("fixture")), pins)
+            self.assertEqual({path.name for path in directory.iterdir()}, set(pins))
+        self.assertEqual(
+            manifest.read_text(), "".join(f"{pins[name]}  tools/fixture/{name}\n" for name in sorted(pins))
+        )
+        with patch.object(toolchain.urllib.request, "urlopen", side_effect=AssertionError("network")):
+            toolchain.ensure(self.project, self.policy)
+
+    def test_wrong_download_hash_preserves_stale_cache_project_and_manifest(self) -> None:
+        self.compiler()
+        manifest = toolchain.ensure(self.project, self.policy)
+        paths = [manifest, self.project.tools / "fixture/cc", self.policy.cache_root / "compilers/fixture/cc"]
+        before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths]
+        self.repin(archive_digest="0" * 64)
+        with redirect_stdout(io.StringIO()) as output, self.assertRaisesRegex(Held, "archive sha256 expected"):
+            toolchain.ensure(self.project, self.policy)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(before, [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths])
+        self.assertEqual(list((self.policy.cache_root / "compilers").glob(".fixture-*")), [])
+
+    def test_wrong_member_pin_verifies_all_files_before_replacing_any(self) -> None:
+        self.compiler()
+        manifest = toolchain.ensure(self.project, self.policy)
+        paths = [manifest, self.project.tools / "fixture/cc", self.policy.cache_root / "compilers/fixture/cc"]
+        before = [path.read_bytes() for path in paths]
+        archive = self.archive("bad-update.tar.gz", {"cc": b"new compiler", "as": b"wrong assembler"})
+        self.repin(archive=archive)
+        with redirect_stdout(io.StringIO()) as output, self.assertRaisesRegex(Held, "pins.as: missing"):
+            toolchain.ensure(self.project, self.policy)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(before, [path.read_bytes() for path in paths])
+
+    def test_stale_project_requires_verified_archive_even_with_valid_cache(self) -> None:
+        archive, _ = self.compiler()
+        toolchain.ensure(self.project, self.policy)
+        target = self.project.tools / "fixture/cc"
+        target.write_bytes(b"changed")
+        downloaded = self.policy.cache_root / "compilers/downloads" / digest(archive.read_bytes())
+        downloaded.write_bytes(b"wrong archive")
+        with self.assertRaisesRegex(Held, "sha256 expected"):
+            toolchain.ensure(self.project, self.policy)
+        self.assertEqual(target.read_bytes(), b"changed")
 
     def test_correct_project_copy_is_preserved(self) -> None:
         self.compiler()
@@ -208,6 +289,37 @@ class ToolchainTests(unittest.TestCase):
         self.compiler(source="mixed", supplied=source, downloaded=("cc",))
         toolchain.ensure(self.project, self.policy)
         self.assertEqual((self.project.tools / "fixture/as").read_bytes(), b"assembler")
+
+    def test_mixed_replacement_preserves_verified_supplied_file_without_source(self) -> None:
+        source = self.root / "supplied"
+        source.mkdir()
+        supplied = source / "as"
+        supplied.write_bytes(b"assembler")
+        self.compiler(source="mixed", supplied=source, downloaded=("cc",))
+        toolchain.ensure(self.project, self.policy)
+        supplied.unlink()
+        self.entries.clear()
+        self.config_entries.clear()
+        self.compiler(source="mixed", downloaded=("cc",), files={"cc": b"new compiler", "as": b"assembler"})
+        with redirect_stdout(io.StringIO()):
+            toolchain.ensure(self.project, self.policy)
+        self.assertEqual((self.project.tools / "fixture/cc").read_bytes(), b"new compiler")
+        self.assertEqual((self.project.tools / "fixture/as").read_bytes(), b"assembler")
+
+    def test_changed_supplied_pin_still_requires_exact_supplied_content(self) -> None:
+        source = self.root / "supplied"
+        source.mkdir()
+        (source / "cc").write_bytes(b"compiler")
+        (source / "as").write_bytes(b"assembler")
+        self.compiler(source="supplied", supplied=source)
+        manifest = toolchain.ensure(self.project, self.policy)
+        before = manifest.read_bytes()
+        self.repin(source="supplied", supplied=source)
+        with self.assertRaisesRegex(Held, "pins.cc: missing"):
+            toolchain.ensure(self.project, self.policy)
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual((self.project.tools / "fixture/cc").read_bytes(), b"compiler")
+        self.assertEqual((self.policy.cache_root / "compilers/fixture/cc").read_bytes(), b"compiler")
 
     def test_missing_supply_names_value_and_files(self) -> None:
         self.compiler(source="supplied")
