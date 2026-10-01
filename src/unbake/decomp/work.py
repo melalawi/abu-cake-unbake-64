@@ -185,6 +185,7 @@ def identity(
         project.build / "setup/layout.json",
         project.root / "docs/setup/layout.json",
         project.build / "types/database.json",
+        *(project.root / "docs/setup" / (version + ".json") for version in versions),
     ):
         if path.is_file():
             layouts[str(path.relative_to(project.root))] = {"sha256": digest(path.read_bytes())}

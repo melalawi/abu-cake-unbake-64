@@ -17,6 +17,7 @@ from unbake.decomp.draft_input import (
     canonical_entry,
     header_types,
     jump_tables,
+    private_constants,
     stack_locals,
     version_for,
     whole_body,
@@ -196,7 +197,8 @@ def _draft(
     body = re.sub(
         r"\$(\d+)\b", lambda match: "$" + registers[int(match[1])] if int(match[1]) < len(registers) else match[0], body
     )
-    body = delay_slots(jump_tables(project, v, function, body), function)
+    body = private_constants(project, v, function, jump_tables(project, v, function, body), generation=generation)
+    body = delay_slots(body, function)
     assembly.write_text(register_pairs(body, compiler.cflags, function), encoding="utf-8")
     output = run_tool(
         [

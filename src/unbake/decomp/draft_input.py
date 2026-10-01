@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
 import shlex
+import struct
 from pathlib import Path
 
 from unbake.layout import split
@@ -135,6 +139,80 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
         if count != 1:
             raise Held("m2c", f"{function}: jump table target 0x{target:08X} requires one instruction, found {count}")
     return assembly + ("\n.section .rodata\n" + "\n".join(tables) + "\n" if tables else "")
+
+
+def private_constants(
+    project: Project, version: str, function: str, assembly: str, *, generation: Path | None = None
+) -> str:
+    """Expose only byte-pinned, sole-owner immutable literals to m2c."""
+    manifest = project.root / "docs/setup" / (version + ".json")
+    if not manifest.is_file():
+        return assembly
+    try:
+        providers = json.loads(manifest.read_bytes())["providers"]
+        configured = project.version(version)
+        from unbake.decomp.rom import symbol_values
+
+        values = symbol_values(configured.symbols)
+        build = project.build_link(version) if generation is None else generation
+        symbols = build / "splat_symbols.csv"
+        if symbols.is_file():
+            discovered = discovered_symbols(symbols, {})
+            for name, value in discovered.items():
+                if name in values and values[name] != value:
+                    raise ValueError(f"conflicting symbol {name}")
+                values[name] = value
+        addresses = build / "symbol-addresses.txt"
+        if addresses.is_file():
+            for line in addresses.read_text().splitlines():
+                name, address, *_ = line.split()
+                value = int(address, 0)
+                if name in values and values[name] != value:
+                    raise ValueError(f"conflicting symbol {name}")
+                values[name] = value
+        referenced = set(re.findall(r"%hi\(([A-Za-z_]\w*)\)", assembly))
+        additions = []
+        with configured.baserom.open("rb") as rom:
+            for row in providers:
+                evidence = row.get("evidence", {})
+                kind = evidence.get("kind")
+                if (
+                    row.get("kind") != "private"
+                    or row.get("owners") != [function]
+                    or not evidence.get("safe_sole_candidate")
+                    or evidence.get("writes")
+                    or kind not in ("float", "double", "string")
+                ):
+                    continue
+                names = sorted(name for name in referenced if values.get(name) == row.get("address"))
+                names = [
+                    name for name in names if not re.search(rf"^\s*(?:glabel\s+{name}|{name}:)\s*$", assembly, re.M)
+                ]
+                if not names:
+                    continue
+                start, end = row["start"], row["end"]
+                if not isinstance(start, int) or not isinstance(end, int) or not 0 <= start < end:
+                    raise ValueError("invalid private ROM span")
+                rom.seek(start)
+                data = rom.read(end - start)
+                if len(data) != end - start or hashlib.sha256(data).hexdigest() != evidence["sha256"]:
+                    raise ValueError(f"private bytes changed: {names[0]}")
+                if kind == "string":
+                    if not data.endswith(b"\0") or b"\0" in data[:-1]:
+                        raise ValueError(f"invalid string span: {names[0]}")
+                    directive = ".asciz " + json.dumps(data[:-1].decode("ascii"))
+                else:
+                    width, code = (4, "f") if kind == "float" else (8, "d")
+                    if len(data) % width:
+                        raise ValueError(f"invalid {kind} span: {names[0]}")
+                    numbers = struct.unpack(">" + code * (len(data) // width), data)
+                    if not all(math.isfinite(number) for number in numbers):
+                        raise ValueError(f"nonfinite {kind} literal: {names[0]}")
+                    directive = "." + kind + " " + ", ".join(repr(number) for number in numbers)
+                additions.append("\n".join("glabel " + name for name in names) + "\n" + directive)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Held("m2c", f"draft.private_constants: {manifest}: {error}") from error
+    return assembly + ("\n.section .rodata\n" + "\n".join(additions) + "\n" if additions else "")
 
 
 def stack_locals(output: str, context: str, function: str, assembly: str = "") -> str:

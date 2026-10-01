@@ -70,3 +70,82 @@ class DraftInputTests(unittest.TestCase):
         self.assertIn("bnez $v0, .L_tail", body)
         self.assertIn(".L_tail:\njr $ra\nnop", body)
         self.assertNotIn("endlabel", body)
+
+    def test_private_constants_require_sole_owner_and_exact_rom_bytes(self) -> None:
+        import hashlib
+        import json
+        import struct
+
+        from unbake.decomp.draft_input import private_constants
+        from unbake.project.config import Held
+
+        rom = self.project.version("us").baserom
+        start = len(rom.read_bytes())
+        data = struct.pack(">f", 1.5)
+        rom.write_bytes(rom.read_bytes() + data)
+        self.project.version("us").symbols.write_text("alpha = 0x80001000;\nliteral = 0x80003000;\n")
+        row = {
+            "kind": "private",
+            "owners": ["alpha"],
+            "address": 0x80003000,
+            "start": start,
+            "end": start + 4,
+            "evidence": {
+                "kind": "float",
+                "safe_sole_candidate": True,
+                "writes": [],
+                "sha256": hashlib.sha256(data).hexdigest(),
+            },
+        }
+        manifest = self.project.root / "docs/setup/us.json"
+        manifest.parent.mkdir(parents=True)
+        body = "glabel alpha\nlui $t0, %hi(literal)\nlwc1 $f0, %lo(literal)($t0)\n"
+        manifest.write_text(json.dumps({"providers": [row]}))
+        self.assertIn("glabel literal\n.float 1.5", private_constants(self.project, "us", "alpha", body))
+        self.project.version("us").symbols.write_text("alpha = 0x80001000;\n")
+        (self.project.build_link("us") / "splat_symbols.csv").write_text("name,vram_start\nliteral,80003000\n")
+        self.assertIn("glabel literal\n.float 1.5", private_constants(self.project, "us", "alpha", body))
+        row["owners"] = ["alpha", "beta"]
+        manifest.write_text(json.dumps({"providers": [row]}))
+        self.assertEqual(private_constants(self.project, "us", "alpha", body), body)
+        row["owners"] = ["alpha"]
+        row["evidence"]["writes"] = ["store"]
+        manifest.write_text(json.dumps({"providers": [row]}))
+        self.assertEqual(private_constants(self.project, "us", "alpha", body), body)
+        row["evidence"]["writes"] = []
+        manifest.write_text(json.dumps({"providers": [row]}))
+        rom.write_bytes(rom.read_bytes()[:-4] + struct.pack(">f", 2.0))
+        with self.assertRaisesRegex(Held, "draft.private_constants.*private bytes changed"):
+            private_constants(self.project, "us", "alpha", body)
+
+    def test_private_string_bytes_use_existing_symbol_and_escaped_text(self) -> None:
+        import hashlib
+        import json
+
+        from unbake.decomp.draft_input import private_constants
+
+        rom = self.project.version("us").baserom
+        start = len(rom.read_bytes())
+        data = b'quote: "hello"\n\0'
+        rom.write_bytes(rom.read_bytes() + data)
+        self.project.version("us").symbols.write_text("alpha = 0x80001000;\nmessage = 0x80004000;\n")
+        row = {
+            "kind": "private",
+            "owners": ["alpha"],
+            "address": 0x80004000,
+            "start": start,
+            "end": start + len(data),
+            "evidence": {
+                "kind": "string",
+                "safe_sole_candidate": True,
+                "writes": [],
+                "sha256": hashlib.sha256(data).hexdigest(),
+            },
+        }
+        manifest = self.project.root / "docs/setup/us.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"providers": [row]}))
+        body = "glabel alpha\nlui $a0, %hi(message)\n"
+        actual = private_constants(self.project, "us", "alpha", body)
+        self.assertIn('glabel message\n.asciz "quote: \\"hello\\"\\n"', actual)
+        self.assertEqual(private_constants(self.project, "us", "alpha", "glabel alpha\n"), "glabel alpha\n")

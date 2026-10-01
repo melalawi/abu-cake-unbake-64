@@ -59,6 +59,17 @@ class CurrentTrialTests(MatchFixture):
         with self.assertRaisesRegex(Held, "trial.source_sha256"):
             proof.ensure(changed, self.policy, source, self.versions)
 
+    def test_changed_private_provider_evidence_requires_another_trial(self) -> None:
+        manifest = self.project.root / "docs/setup/us.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('{"providers": []}\n')
+        source = self.draft("alpha")
+        manifest.write_text('{"providers": [{"kind": "private"}]}\n')
+        with self.assertRaisesRegex(Held, "submit.layout_sha256"):
+            proof.ensure(self.project, self.policy, source, self.versions)
+        self.assertEqual(self.queued(), [])
+        self.assert_untouched()
+
     def test_type_feedback_failure_preserves_truthful_publication_receipts(self) -> None:
         source = self.draft("alpha")
         with patch("unbake.decomp.type_context.feedback", side_effect=Held("types", "types.conflict: named conflict")):
