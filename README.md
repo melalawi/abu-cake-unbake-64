@@ -7,10 +7,38 @@ Tools to help unbake a cake!
 ## Install
 
 ```sh
-python3 -m pip install .
+python3 -m pip install git+https://github.com/melalawi/abu-cake-unbake-64
 ```
 
+## New project
+
+```sh
+unbake init NAME
+```
+
+Init creates the named repo and prints its ROM folder.
+Put your ROMs there.
+Run these commands inside the repo.
+
+```sh
+unbake setup
+```
+
+Setup asks which version names the functions.
+It shows compiler evidence and asks for confirmation.
+It proves every version before the project is ready.
+Setup prints the policy path and names any missing input.
 Machine paths go in `~/.config/unbake/policy.toml`.
+
+## Next command
+
+```sh
+unbake next
+```
+
+Every command ends with the next command to run.
+`unbake next` prints it again.
+Follow it through `draft` then `try` then `submit`.
 
 ## Dependencies
 
@@ -23,19 +51,7 @@ Machine paths go in `~/.config/unbake/policy.toml`.
 - [decomp-permuter](https://github.com/simonlindholm/decomp-permuter) at `059609d4aec73eb0650726772954e1ad575825f8`
 - [objdiff](https://github.com/encounter/objdiff) CLI version 3.8.1
 
-`unbake setup` downloads each game's compilers from the registry in `src/unbake/project/compilers.toml` and checks every archive and file by SHA-256. SN64 toolchains run their pinned cc1 through AbuMasN64 v0.1.0 and the GNU MIPS assembler named in the policy. The `gcc-2.8.1-sn64` compiler is downloaded from the public gcc-papermario Linux release; only its pinned cc1 is installed.
-
-## Workflow
-
-1. `init` creates a project from ROMs.
-2. `split` cuts and names functions.
-3. `decomp` drafts and searches for C.
-4. `match` lands identical C.
-5. `report` updates progress.
-
-## Development
-
-Run checks with `ci/check`. GitLab users set the CI file path to `ci/gitlab.yml`.
+Setup checks compiler downloads against pinned SHA-256 hashes.
 
 ## License
 

@@ -1,25 +1,49 @@
 # Contributing to @TITLE@
 
-Install Python 3, splat, GNU Make, SHA checksum utilities, and the MIPS binutils
-named in the Makefile. Supply the compiler files under `@TOOLS@` and verify them
-against `@PINS@`.
+## Install
 
-Place your own big-endian cartridge dump at `baserom.<version>.z64` in this
-repository. Supported versions: @VERSIONS@.
+```sh
+python3 -m pip install git+https://github.com/melalawi/abu-cake-unbake-64
+```
 
-Plain `make` and `make check` build and verify every VERSION. Pass
-`VERSION=<version>` to build just one.
+## New project
 
-- `make setup VERSION=<version>` verifies your dump and compiler.
-- `make extract VERSION=<version>` splits the dump once.
-- `make VERSION=<version>` builds and checks the cartridge SHA-1.
-- `make check VERSION=<version>` checks the rebuilt cartridge SHA-1.
-- `make clean VERSION=<version>` removes that version's build.
-- `make distclean` removes every build and the extracted assembly.
+Run these commands inside this repo.
+Put your own ROM dumps at these paths.
 
-`BUILD=<directory>` selects a separate output directory. `COMPARE=0` skips
-comparison; use the default `COMPARE=1` to prove a match. Each function has its
-own C or assembly object, selected by that version's split file.
+@ROM_INPUTS@
 
-Unmatched drafts live in `src/` under `#ifdef NON_MATCHING`. Run
-`make NON_MATCHING=1` to build those drafts with comparison disabled.
+```sh
+unbake setup --names-from @NAMES_FROM@
+```
+
+Setup shows compiler evidence and asks for confirmation.
+It prints the policy path and names any missing input.
+It checks every ROM before the project is ready.
+
+```sh
+make check
+```
+
+Plain `make` and `make check` cover every version.
+Use `VERSION=<version>` to select one version.
+Compiler files live in `@TOOLS@`.
+Their hashes are recorded in `@PINS@`.
+
+## Next command
+
+```sh
+unbake next
+unbake draft FUNCTION
+unbake try FILE
+unbake submit FILE
+```
+
+Use the function suggested by `next`.
+Use the file printed by `draft`.
+Edit that file and run `try` again.
+Submit the exact file after it matches every holding version.
+Submit proves the ROMs before it publishes the C.
+
+Every command ends with the next command to run.
+`unbake next` prints it again.
