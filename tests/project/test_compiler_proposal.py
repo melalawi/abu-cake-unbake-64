@@ -150,6 +150,43 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(measured["prologue_words"][0], {"rom_offset": 0x1000, "word": "0x00801021"})
         self.assertIn("evidence_engine", proposal["inputs_sha256"])
 
+    def add_version(self, census: Census, layout: LayoutManifest, body: bytes, name: str) -> Census:
+        data = cartridge(revision=1, instructions=body)
+        path = self.project.roms / "baserom.us-rev1.z64"
+        path.write_bytes(data)
+        image = rom.Rom(path, data, header.parse(data, BOOTCODES), hashlib.sha1(data).hexdigest())
+        layout["rom_sha1"]["us-rev1"] = image.sha1
+        layout["versions"]["us-rev1"] = {
+            "functions": [
+                {"name": name, "start": 0x1000, "end": 0x1000 + len(body), "address": 0x80001000, "evidence": {}}
+            ],
+            "providers": [],
+            "loaded_spans": [],
+            "evidence": {},
+        }
+        return Census((*census.cartridges, image), {**census.names, path: "us-rev1"}, "us", {}, {}, census.manifest)
+
+    def test_item_absent_from_naming_version_still_gets_compiler_evidence(self) -> None:
+        census, layout = self.layout(SN64)
+        census = self.add_version(census, layout, SN64, "only_rev1")
+        proposal = self.propose(census, layout)
+        self.assertEqual(proposal["assignments"], {"f0": "gcc-2.8.1-sn64", "only_rev1": "gcc-2.8.1-sn64"})
+        self.assertEqual(proposal["unresolved"], [])
+        self.accept(census, layout, proposal, self.token())
+        self.unchanged()
+
+    def test_conflicting_holding_versions_need_an_explicit_unit_choice(self) -> None:
+        census, layout = self.layout(SN64)
+        census = self.add_version(census, layout, GCC, "f0")
+        proposal = self.propose(census, layout)
+        self.assertIn("unit:f0:mixed", proposal["unresolved"])
+        self.assertNotIn("f0", proposal["assignments"])
+        with self.assertRaisesRegex(config.Held, "setup.compiler_mixed:"):
+            self.accept(census, layout, proposal, self.token())
+        reviewed = self.propose(census, layout, {"f0": "gcc-2.8.1-sn64"})
+        self.accept(census, layout, reviewed, self.token())
+        self.unchanged()
+
     def test_explicit_choices_persist_and_digest_covers_exact_utf8_bytes(self) -> None:
         census, layout = self.layout(IDO)
         chosen = self.propose(census, layout, {"us:ido": "ido-7.1"})
