@@ -294,6 +294,20 @@ class ProposalTests(unittest.TestCase):
             self.propose(census, layout)
         self.unchanged()
 
+    def test_missing_layout_inputs_are_named_before_proposal_writes(self) -> None:
+        for key in ("schema", "inputs_sha256"):
+            with self.subTest(key=key):
+                census, layout = self.layout(SN64)
+                del layout[key]
+                with self.assertRaisesRegex(config.Held, f"setup.compiler_proposal: layout.{key}: missing input"):
+                    self.propose(census, layout)
+        census, layout = self.layout(SN64)
+        del layout["versions"]["us"]["functions"][0]["address"]
+        with self.assertRaisesRegex(config.Held, "setup.compiler_proposal:.*functions.0.address: missing input"):
+            self.propose(census, layout)
+        self.assertFalse(compiler_proposal.proposal_path(self.project).exists())
+        self.unchanged()
+
     def test_profiles_retain_pin_flags_source_and_relocation_only_masks(self) -> None:
         profiles, _ = compiler_profiles.read()
         self.assertEqual(set(profiles), set(toolchain.registry()))

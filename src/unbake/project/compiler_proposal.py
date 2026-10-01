@@ -68,6 +68,9 @@ def _inputs(
 
 
 def _verify_identity(project: PendingProject, census: Census, layout: LayoutManifest) -> dict[str, str]:
+    for key in ("schema", "project_id", "workspace_id", "rom_sha1", "versions", "names_from", "inputs_sha256"):
+        if key not in layout:
+            raise Held("setup", f"setup.compiler_proposal: layout.{key}: missing input")
     hashes = {census.names[rom.path]: rom.sha1 for rom in census.cartridges}
     if (
         layout["schema"] != 1
@@ -132,9 +135,22 @@ def propose_compilers(
     clues = {}
     for rom in census.cartridges:
         version = census.names[rom.path]
+        if "functions" not in layout["versions"][version]:
+            raise Held("setup", f"setup.compiler_proposal: layout.versions.{version}.functions: missing input")
         functions = layout["versions"][version]["functions"]
+        if not isinstance(functions, list):
+            raise Held("setup", f"setup.compiler_proposal: layout.versions.{version}.functions: expected array")
         if not functions:
             raise Held("setup", f"setup.compiler_proposal: {version}: layout functions missing")
+        for index, function in enumerate(functions):
+            for key in ("start", "end", "address", "name"):
+                if key not in function:
+                    raise Held(
+                        "setup",
+                        f"setup.compiler_proposal: layout.versions.{version}.functions.{index}.{key}: missing input",
+                    )
+            if type(function["start"]) is not int:
+                raise Held("setup", f"setup.compiler_proposal: {version}: functions.{index}.start: expected integer")
         clues[version] = evidence(rom)
         previous_end = -1
         names = set()
