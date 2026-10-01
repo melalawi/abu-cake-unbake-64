@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 import struct
 import subprocess
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
 from unbake.decomp.score import objdiff_cli
+from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 from unbake.report import files, readme_layout
 from unbake.report import units as report_units
@@ -212,32 +215,42 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
     before, block, after = readme_layout.section(template)
     if not reports:
         raise Held("report", "reports: missing VERSION values")
-    # Reconcile a uniquely renamed VERSION while retaining the established layout.
-    labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|$", block, re.MULTILINE)
+    # A unique configured rename selects the matching report, while the live
+    # table description and summary label remain the owner's text.
+    labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|\r?$", block, re.MULTILINE)
     missing = set(reports) - set(labels)
     obsolete = set(labels) - set(reports)
     if len(missing) == len(obsolete) == 1:
         old, new = next(iter(obsolete)), next(iter(missing))
-        block = re.sub(r"(?m)^(\| )" + re.escape(old) + r"(?= \()", lambda m: m[1] + new, block)
-
-        def rename_summary(match: re.Match[str]) -> str:
-            width = len(old) + len(match[1])
-            return new + " " * max(1, width - len(new)) + "["
-
-        block = re.sub(r"(?<=<code>)" + re.escape(old) + r"( +)\[", rename_summary, block)
+        reports = {old if version == new else version: document for version, document in reports.items()}
     descriptions = {}
     matches = []
     for version in reports:
-        match = re.search(r"^\| (" + re.escape(version) + r" \([^\n|]+) \|$", block, re.MULTILINE)
+        match = re.search(r"^\| (" + re.escape(version) + r" \([^\n|]+) \|(?=\r?$)", block, re.MULTILINE)
         if match is None:
             raise Held("report", f"readme.descriptions.{version}: missing value")
         descriptions[version] = match[1]
         matches.append((version, match))
     if "<pre>" not in block:
-        return before + progress(reports, descriptions) + "\n" + after
+        # Init supplies empty tables. Insert their generated rows into the live
+        # layout; descriptions, whitespace and prose belong to the owner.
+        newline = "\r\n" if before.endswith("\r\n") else "\n"
+        ordered = sorted(matches, key=lambda item: item[1].start())
+        generated = progress({version: reports[version] for version, _ in ordered}, descriptions).split("\n\n")
+        rows = generated[-len(reports) :]
+        for (_, match), row in reversed(list(zip(ordered, rows, strict=True))):
+            delimiter = re.match(r"\r?\n\|---\|", block[match.end() :])
+            position = match.end() + delimiter.end() if delimiter else match.end()
+            generated_row = row.split("\n")[-1]
+            if delimiter is None:
+                generated_row = "|---|" + newline + generated_row
+            block = block[:position] + newline + generated_row + block[position:]
+        if len(reports) > 1:
+            block = generated[0] + newline * 2 + block
+        return before + block + after
     replacements = []
     for version, match in matches:
-        following = re.search(r"^\| [\w-]+ \([^\n|]+ \|$", block[match.end() :], re.MULTILINE)
+        following = re.search(r"^\| [\w-]+ \([^\n|]+ \|\r?$", block[match.end() :], re.MULTILINE)
         limit = match.end() + following.start() if following else len(block)
         figures = re.search(r"<pre>(.*?)</pre>", block[match.end() : limit], re.DOTALL)
         if figures is None:
@@ -265,30 +278,50 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
     return before + block + after
 
 
-def measure(project: Project, policy: Policy, version: str) -> dict[str, Any]:
+def measure(project: Project, policy: Policy, version: str, *, generation: Path | None = None) -> dict[str, Any]:
     """Generate native totals from the current split and build without publishing them."""
-    from unbake.project.build import current_generation
-
+    if generation is None:
+        with ExitStack() as holds:
+            with build.lock(project):
+                generation = holds.enter_context(build.pin(build.current_generation(project, version)))
+            return measure(project, policy, version, generation=generation)
     tool = objdiff_cli(policy, "report")
     try:
-        generation = current_generation(project, version)
-        workspace = generation / "report"
-        workspace.mkdir(parents=True, exist_ok=True)
-        units = report_units.units(project, policy, version, generation, workspace)
-        config = generation / "objdiff.json"
-        files.write(
-            config,
-            (json.dumps({"build_base": False, "build_target": False, "units": units}, indent=2) + "\n").encode(),
-        )
-        with tempfile.TemporaryDirectory(dir=workspace, prefix="generate-") as temporary:
-            output = Path(temporary) / "report.json"
+        reports = generation / "report"
+        reports.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=reports, prefix="generate-") as temporary:
+            workspace = Path(temporary)
+            units = report_units.units(project, policy, version, generation, workspace)
+            for unit in units:
+                for field in ("base_path", "target_path"):
+                    if field not in unit:
+                        continue
+                    path = (generation / unit[field]).resolve()
+                    if path.is_relative_to(workspace):
+                        content = path.read_bytes()
+                        durable = reports / "objects" / (hashlib.sha256(content).hexdigest() + ".o")
+                        files.write(durable, content)
+                        unit[field] = str(durable.relative_to(generation))
+            configuration = {"build_base": False, "build_target": False, "units": units}
+            files.write(generation / "objdiff.json", (json.dumps(configuration, indent=2) + "\n").encode())
+            # Each invocation scores its own configuration, even if another
+            # report atomically replaces the public objdiff.json meanwhile.
+            private_units = [
+                {
+                    k: str((generation / v).resolve()) if k in ("base_path", "target_path") else v
+                    for k, v in unit.items()
+                }
+                for unit in units
+            ]
+            files.write(workspace / "objdiff.json", json.dumps({**configuration, "units": private_units}).encode())
+            output = workspace / "report.json"
             result = subprocess.run(
                 [
                     str(tool),
                     "report",
                     "generate",
                     "--project",
-                    str(generation),
+                    str(workspace),
                     "--output",
                     str(output),
                     "--format",
@@ -330,20 +363,31 @@ def findings(project: Project, policy: Policy) -> list[str]:
     return lines
 
 
-def write(project: Project, policy: Policy) -> list[Path]:
+def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
     if not project.versions:
         raise Held("report", "project.versions is missing")
+    if reports is None:
+        with ExitStack() as holds:
+            with build.lock(project):
+                generations = {
+                    v: holds.enter_context(build.pin(build.current_generation(project, v))) for v in project.versions
+                }
+            reports = {v: measure(project, policy, v, generation=g) for v, g in generations.items()}
+            with build.lock(project):
+                for version, generation in generations.items():
+                    if build.current_generation(project, version) != generation:
+                        raise Held("report", f"VERSION {version}: generation changed during report; retry")
+                return write(project, policy, reports=reports)
     readme = project.root / "README.md"
     try:
-        original = readme.read_text(encoding="utf-8")
-        reports = {version: measure(project, policy, version) for version in project.versions}
-        rendered = render(readme_layout.restore(original, project.root), reports)
+        original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
+        rendered = render(original, reports)
         written: list[Path] = []
         for version, document in reports.items():
             destination = project.root / "versions" / version / "report.json"
             files.write(destination, (json.dumps(document, indent=2) + "\n").encode())
             written.extend((project.build_link(version) / "objdiff.json", destination))
-        files.write(readme, rendered.encode())
+        files.write(readme, rendered.encode("utf-8", errors="surrogateescape"))
         written.append(readme)
     except OSError as error:
         raise Held("report", f"report file/tool: {error}") from error

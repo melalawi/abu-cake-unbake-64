@@ -1,0 +1,5 @@
+BattleTanx.md: README.md from BattleTanx HEAD 0c46e96827bc9d638be4f0d8b161181e894ae6a4.
+RageWars.md: README.md from RageWars HEAD a67de96434c5380661ed2cad0e2e82ac4661d423.
+Captured with git show HEAD:README.md, without newline conversion.
+The owner prose section is replaced by a neutral Notes section. Everything else is byte-exact.
+Setup/report regression uses these complete files, including that owner section.

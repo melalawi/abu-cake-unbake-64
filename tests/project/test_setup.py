@@ -1,6 +1,8 @@
 import hashlib
 import io
+import json
 import os
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -13,6 +15,7 @@ from tests.project.test_config import write_policy
 from unbake.cli.main import make_parser
 from unbake.cli.setup import run as setup_command
 from unbake.project import config, setup
+from unbake.report import progress
 
 
 class SetupTests(unittest.TestCase):
@@ -51,6 +54,45 @@ class SetupTests(unittest.TestCase):
         before = [path.stat().st_mtime_ns for path in paths]
         setup.run(self.project, self.policy)
         self.assertEqual(before, [path.stat().st_mtime_ns for path in paths])
+
+    def test_real_game_readmes_preserve_every_owner_byte_across_setup_and_report(self) -> None:
+        references = Path(__file__).parents[1] / "report"
+        # Independently mask only generated bar art, percentages and counters.
+        figures = re.compile(
+            rb"\[(?:[#\-]|\xe2\x96[\x88\x92\x91]){20}\] +[0-9]+\.[0-9]+%"
+            rb"(?: \(~[0-9]+\.[0-9]+%\))? +[0-9,]+ of [0-9,]+"
+        )
+        readme = self.root / "README.md"
+        for game in ("BattleTanx", "RageWars"):
+            head = (references / "readme" / f"{game}.md").read_bytes()
+            reports = json.loads((references / f"{game.lower()}-measures.json").read_bytes())
+            versions = tuple(reports)
+            project = replace(
+                self.project,
+                versions=versions,
+                version_map={name: replace(self.project.version("us"), name=name) for name in versions},
+            )
+            # Exercise both the exact HEAD snapshot and live owner edits with CRLF.
+            edited = (
+                head.replace(b"## Progress\n\n", b"## Progress\n\nOwner progress notes: caf\xc3\xa9.\n\n").replace(
+                    b"\n", b"\r\n"
+                )
+                + b"Owner footer: legacy byte \xff, without a final newline."
+            )
+            for variant, original in (("HEAD", head), ("owner CRLF", edited)):
+                with self.subTest(game=game, variant=variant):
+                    readme.write_bytes(original)
+                    setup.run(project, self.policy)
+                    self.assertEqual(readme.read_bytes(), original)
+                    progress.write(project, self.policy, reports=reports)
+                    rendered = readme.read_bytes()
+                    progress.write(project, self.policy, reports=reports)
+                    self.assertNotEqual(rendered, original)
+                    self.assertEqual(figures.sub(b"<generated>", rendered), figures.sub(b"<generated>", original))
+                    self.assertEqual(readme.read_bytes(), rendered)
+                    self.assertIn(b"## Notes", rendered)
+                    self.assertIn(b"### Workflow", rendered)
+                    self.assertIn(b"### Personal Thoughts", rendered)
 
     def test_bad_compiler_and_missing_pin_refused(self) -> None:
         (self.root / "tools/fixture/cc").write_text("wrong")

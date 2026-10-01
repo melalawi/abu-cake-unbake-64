@@ -6,7 +6,9 @@ import os
 import struct
 import subprocess
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +24,6 @@ from unbake.project.config import Held, Policy, Project
 from unbake.project.header import Header
 from unbake.project.rom import Rom
 from unbake.report import progress as report
-from unbake.report import readme_layout
 from unbake.report import units as report_units
 
 
@@ -51,12 +52,10 @@ class RenderTests(unittest.TestCase):
                 with self.assertRaisesRegex(Held, "unexpected label"):
                     report.render(original, {version: document(7200, 10000, 0, 77.6)})
 
-    def test_history_restores_complete_layout_and_preserves_live_prose(self) -> None:
+    def test_incomplete_live_layout_is_refused_without_rebuilding_from_history(self) -> None:
         root = Path(__file__).parent
         for stem in ("battletanx", "ragewars"):
             with self.subTest(project=stem):
-                reference = (root / f"{stem}-reference.golden").read_text()
-                golden = (root / f"{stem}-progress.golden").read_text()
                 reports = json.loads((root / f"{stem}-measures.json").read_text())
                 reduced = "\n\n".join(
                     f"| {version} (release) |\n|---|\n| <pre><code>{version} "
@@ -64,23 +63,28 @@ class RenderTests(unittest.TestCase):
                     for version in reports
                 )
                 live = "live intro\n## Progress\n\n" + reduced + "\n\n## End\nlive footer\n"
-                committed = "old intro\n## Progress\n\n" + reference + "\n## End\nold footer\n"
-                responses = [
-                    SimpleNamespace(returncode=0, stdout="reduced\ncomplete\n"),
-                    SimpleNamespace(returncode=0, stdout=live),
-                    SimpleNamespace(returncode=0, stdout=committed),
-                ]
-                with patch("unbake.report.readme_layout.subprocess.run", side_effect=responses) as history:
-                    restored = readme_layout.restore(live, root)
-                self.assertEqual(history.call_count, 3)
-                expected = "live intro\n## Progress\n\n" + golden + "\n## End\nlive footer\n"
-                rendered = report.render(restored, reports)
-                self.assertEqual(rendered, expected)
-                self.assertTrue(readme_layout.complete(readme_layout.section(rendered)[1]))
-                with patch("unbake.report.readme_layout.subprocess.run") as history:
-                    self.assertEqual(readme_layout.restore(rendered, root), rendered)
+                with patch("subprocess.run") as history, self.assertRaisesRegex(Held, "unexpected label"):
+                    report.render(live, reports)
                 history.assert_not_called()
-                self.assertEqual(report.render(rendered, reports), rendered)
+
+    def test_empty_tables_preserve_owner_text_inside_progress(self) -> None:
+        original = (
+            "intro\r\n## Progress\r\n\r\nOwner introduction.\r\n\r\n"
+            "| us (live description) |\r\n|---|\r\n\r\nOwner notes.\r\n"
+            "\r\n## End\r\nfooter"
+        )
+        reports = {"us": document(1, 10, 10, 10)}
+        generated = report.progress(reports, {"us": "us (live description)"}).split("\n")[-1]
+        rendered = report.render(original, reports)
+        self.assertEqual(rendered, original.replace("|---|", "|---|\r\n" + generated))
+        self.assertEqual(report.render(rendered, reports), rendered)
+
+    def test_empty_tables_keep_version_order_when_reports_are_reversed(self) -> None:
+        original = "## Progress\n\n| us (first) |\n\n| eu (second) |\n\n## End\n"
+        reports = {"eu": document(1, 10, 10, 10), "us": document(2, 10, 20, 20)}
+        rendered = report.render(original, reports)
+        self.assertLess(rendered.index("<code>us "), rendered.index("<code>eu "))
+        self.assertEqual(report.render(rendered, reports), rendered)
 
     def test_reference_layout_goldens_and_idempotence(self) -> None:
         for stem in ("battletanx", "ragewars"):
@@ -88,6 +92,8 @@ class RenderTests(unittest.TestCase):
                 root = Path(__file__).parent
                 reference = (root / f"{stem}-reference.golden").read_text()
                 golden = (root / f"{stem}-progress.golden").read_text()
+                if stem == "ragewars":
+                    golden = golden.replace("| eu-x (", "| eu-mul (").replace("eu-x    [", "eu-mul  [")
                 reports = json.loads((root / f"{stem}-measures.json").read_text())
                 template = "intro\n## Progress\n\n" + reference + "\n## End\nfooter\n"
                 expected = template.replace(reference, golden)
@@ -279,13 +285,60 @@ class ReportTest(unittest.TestCase):
         configuration = json.loads((self.generation / "objdiff.json").read_text())
         units = configuration["units"]
         self.assertEqual([unit["metadata"]["complete"] for unit in units], [True, False, False])
-        self.assertEqual((self.generation / units[1]["base_path"]).resolve(), self.report_partial)
+        self.assertTrue((self.generation / units[1]["base_path"]).is_file())
+        self.assertTrue((self.generation / units[1]["base_path"]).is_relative_to(self.generation / "report/objects"))
         self.assertNotIn("base_path", units[2])
         self.assertEqual((self.generation / units[1]["target_path"]).resolve(), self.generation / "obj/asm/draft.o")
         destination = self.project.root / "versions/us/report.json"
         result = json.loads(destination.read_text())
         self.assertEqual(result["measures"]["complete_units"], 1)
         self.assertEqual(result["measures"]["total_units"], 3)
+
+    def test_concurrent_measurements_compile_without_writer_lock_or_shared_outputs(self) -> None:
+        import fcntl
+
+        barrier = threading.Barrier(2)
+        outputs = []
+
+        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            barrier.wait(timeout=10)
+            with (project.root / "build/.lock").open("a+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            outputs.append(out)
+            self.object(out, source.stem)
+            return out
+
+        with patch.object(report_units, "compile_object", side_effect=compile_source), ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(report.measure, self.project, self.policy, "us") for _ in range(2)]
+            documents = [future.result(timeout=10) for future in futures]
+        self.assertEqual(documents[0]["measures"], documents[1]["measures"])
+        self.assertEqual(len(set(outputs)), 2)
+
+    def test_report_refuses_generation_swap_before_publishing_totals(self) -> None:
+        from unbake.match import publication
+        from unbake.project import build
+
+        before = self.readme.read_bytes()
+
+        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            self.object(out, source.stem)
+            with build.lock(project):
+                replacement = self.generation.with_name("us.2")
+                replacement.mkdir()
+                publication.swap(project.build_link(version), replacement)
+            publication.collect(project)
+            self.assertTrue(self.generation.is_dir())
+            return out
+
+        with (
+            patch.object(report_units, "compile_object", side_effect=compile_source),
+            self.assertRaisesRegex(Held, "generation changed during report"),
+        ):
+            report.write(self.project, self.policy)
+        self.assertEqual(self.readme.read_bytes(), before)
+        self.assertFalse((self.project.root / "versions/us/report.json").exists())
+        publication.collect(self.project)
+        self.assertFalse(self.generation.exists())
         self.assertFalse((self.project.root / "data").exists())
         self.assertTrue(self.readme.read_text().startswith("Project introduction\n\n## Progress\n"))
         self.assertTrue(self.readme.read_text().endswith("## Contributions\nGuide\n"))
@@ -342,7 +395,9 @@ class ReportTest(unittest.TestCase):
         def compile_source(project: Project, policy: Policy, prepared: Path, version: str, out: Path) -> Path:
             self.assertEqual(prepared.read_bytes(), b"#define NON_MATCHING 1\n" + original)
             self.assertFalse(prepared.is_symlink())
-            self.assertEqual(out, self.report_partial)
+            self.assertTrue(out.is_relative_to(self.generation / "report"))
+            self.assertEqual(out.name, "draft.o")
+            out.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(
                 [tool("mips-linux-gnu-as"), "-EB", "-mips3", "--no-pad-sections", "-o", str(out)],
                 input=(
@@ -368,7 +423,10 @@ class ReportTest(unittest.TestCase):
                     report.write(self.project, self.policy)
                     configuration = json.loads((self.generation / "objdiff.json").read_text())
                     unit = configuration["units"][1]
-                    self.assertEqual((self.generation / unit["base_path"]).resolve(), self.report_partial)
+                    self.assertTrue((self.generation / unit["base_path"]).is_file())
+                    self.assertTrue(
+                        (self.generation / unit["base_path"]).is_relative_to(self.generation / "report/objects")
+                    )
                     self.assertFalse(unit["metadata"]["complete"])
                     self.assertEqual(source.read_bytes(), original)
                     self.assertEqual(list((self.generation / "report/partial").glob("*.elf")), [])
@@ -433,7 +491,14 @@ class ReportTest(unittest.TestCase):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text("existing report")
         before = self.readme.read_bytes()
+
+        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(self.partial.read_bytes())
+            return out
+
         with (
+            patch.object(report_units, "compile_object", side_effect=compile_source),
             patch(
                 "unbake.report.progress.subprocess.run",
                 return_value=SimpleNamespace(returncode=1, stderr="invalid report input", stdout=""),
