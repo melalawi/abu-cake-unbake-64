@@ -61,7 +61,7 @@ class DraftInputTests(unittest.TestCase):
         self.assertTrue(source.is_file())
         self.assertEqual(source.name, "alpha.c")
         self.assertIn(f"draft_path: {source}", output.getvalue())
-        self.assertIn("source filename: alpha.c", output.getvalue())
+        self.assertIn("source function: alpha", output.getvalue())
 
     def test_internal_function_markers_preserve_the_complete_body(self) -> None:
         assembly = "glabel alpha\nbnez $v0, tail\nendlabel alpha\nglabel tail\njr $ra\nnop\nendlabel tail\n"

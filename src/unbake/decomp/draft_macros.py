@@ -51,12 +51,20 @@ def calls(source: str, name: str, replace: Callable[[list[str]], str]) -> str:
 
 def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
     """Use declared unknown scalar types and preserve lvalue bit reinterpretation."""
+    incoming = re.search(r"\bsaved_reg_([A-Za-z0-9]+)\b", re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S))
+    if incoming:
+        raise Held(
+            "m2c", f"incoming saved register ${incoming[1]} has no declared C parameter or dominating definition"
+        )
+
+    helpers: dict[str, str] = {}
 
     def bitwise(args: list[str]) -> str:
         if len(args) != 2 or not re.fullmatch(r"[A-Za-z_]\w*(?:\s*\*)*", args[0]):
             raise Held("m2c", "unresolved M2C_BITWISE(" + ", ".join(args) + ")")
         target, value = args
         typedefs = "\n".join(f"typedef int {name};" for name in sorted(_typedefs(context)))
+        expression = None
         try:
             tree = c_parser.CParser().parse(typedefs + "\nvoid __m2c_value(void) { " + value + "; }")
             expression = tree.ext[-1].body.block_items[0]
@@ -66,6 +74,27 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
         except (c_parser.ParseError, AttributeError, IndexError):
             addressable = False
         if not addressable:
+            if (
+                target in ("f32", "float")
+                and isinstance(expression, c_ast.FuncCall)
+                and isinstance(expression.name, c_ast.ID)
+            ):
+                signature = re.search(
+                    r"\b(?:s32|u32|int|signed int|unsigned int|long|unsigned long)\s+"
+                    + re.escape(expression.name.name)
+                    + r"\s*\([^;{}]*\)\s*;",
+                    context,
+                )
+                if signature:
+                    helper = "m2c_bits_to_" + target
+                    while re.search(r"\b" + helper + r"\b", source + context):
+                        helper += "_"
+                    helpers[helper] = (
+                        f"static {target} {helper}(unsigned int bits) {{\n"
+                        f"    union {{ unsigned int bits; {target} value; }} word;\n"
+                        "    word.bits = bits;\n    return word.value;\n}\n"
+                    )
+                    return f"{helper}({value})"
             raise Held("m2c", "unresolved M2C_BITWISE(" + ", ".join(args) + "): requires addressable value")
         return f"(*(({target} *)&({value})))"
 
@@ -79,4 +108,4 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
                 continue
             line = source.count("\n", 0, token.start()) + 1
             raise Held("m2c", f"unresolved {token[0]} at line {line}: {source.splitlines()[line - 1].strip()}")
-    return source
+    return "".join(helpers.values()) + source

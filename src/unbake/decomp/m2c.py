@@ -7,10 +7,10 @@ import tempfile
 from pathlib import Path
 
 from unbake.decomp import gbi, similar
-from unbake.decomp.draft_asm import delay_slots
+from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
 from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
-from unbake.decomp.draft_fp import register_pairs
+from unbake.decomp.draft_fp import command, register_pairs
 from unbake.decomp.draft_input import (
     assembly_source,
     canonical_entry,
@@ -22,6 +22,7 @@ from unbake.decomp.draft_input import (
 )
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
+from unbake.decomp.draft_signatures import declarations as callee_declarations
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
@@ -150,11 +151,15 @@ def _draft(
     body = whole_body(
         canonical_entry(project, v, function, address, read_text(assembly_path, "m2c"), generation=generation), function
     )
-    body = delay_slots(jump_tables(project, v, function, body), function)
+    body = delay_slots(local_targets(jump_tables(project, v, function, saved_returns(body))), function)
+    signatures = callee_declarations(project, policy, v, body, context.read_text())
+    if signatures:
+        with context.open("a") as stream:
+            stream.write("\n" + signatures + "\n")
     assembly.write_text(register_pairs(body, compiler.cflags, function), encoding="utf-8")
     output = run_tool(
         [
-            executable_path,
+            *command(executable_path, assembly.read_text()),
             "-t",
             targets[compiler.kind],
             "--valid-syntax",
@@ -192,7 +197,7 @@ def _draft(
     includes = context.read_text()
     declarations = preprocess_context(context, project, policy, v, function)
     context.write_text(declarations, encoding="utf-8")
-    output = lower(output, declarations)
+    output = lower(output, declarations + "\n" + signatures)
     output = address_arithmetic(output, declarations, function)
     commands = gbi.lower(output, gbi.microcode(project))
     output = commands.source
@@ -202,7 +207,7 @@ def _draft(
         print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}")
     content = (
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
-        f"{includes.rstrip()}\n\n{output.rstrip()}\n"
+        f"{includes.rstrip()}\n\n{signatures}\n\n{output.rstrip()}\n"
     )
     candidate = work / "compile-proof" / (function + ".c")
     candidate.parent.mkdir()
