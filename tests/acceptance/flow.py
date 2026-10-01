@@ -267,7 +267,11 @@ class Proof:
 
     def verify(self, project: Path) -> None:
         config = read_config(project)
-        result = self.run(["make", "check"], project)
+        with (self.root / "policy.toml").open("rb") as stream:
+            cores = tomllib.load(stream).get("cores")
+        require(type(cores) is int and cores > 0, "policy.cores: explicit positive core count required")
+        make = ["make", "-j", str(cores), "check"]
+        result = self.run(make, project)
         require(result.returncode == 0, "make.check: ROM proof failed")
         inputs = json.loads((self.logs / (project.name + ".inputs.json")).read_text())["roms"]
         require(set(config["project"]["versions"]) == set(inputs), "setup.versions: wrong header labels")
@@ -306,7 +310,7 @@ class Proof:
         )
         standalone["PYTHON"] = str(self.python)
         require(shutil.which("unbake", path=standalone["PATH"]) is None, "make.standalone: unbake remains on PATH")
-        result = self.run(["make", "check"], project, env=standalone)
+        result = self.run(make, project, env=standalone)
         require(result.returncode == 0, "make.standalone: proof failed with unbake removed from PATH")
 
     def refusals(self, rom: str, other_rom: Path, policy: Path) -> None:
