@@ -307,8 +307,13 @@ def derive_trial(context: TrialContext) -> list[Need]:
             for offset, kind, symbol in pending
             if not symbol["section"] and symbol["name"] not in settled
         )
+        # Out-of-row accesses have no label to declare, including fields of a settled base.
         pooled = {offset for offset, _, symbol in pending if symbol["section"]}
-        placed = {values[name] for name in settled} | {ref.address for ref in refs if ref.offset in pooled}
+        placed = {values[name] for name in settled} | {
+            ref.address
+            for ref in refs
+            if ref.offset in pooled or not any(row.start <= ref.address < row.end for row in rows)
+        }
         bindings = []
         for name, address in values.items():
             matches = [ref for ref in refs if ref.address == address]

@@ -211,6 +211,14 @@ class InitTests(unittest.TestCase):
         self.assertFalse(list(self.root.glob("result.init-*")))
         self.assertNotIn("git init", self.log.read_text())
 
+    def test_fresh_init_ignores_every_configured_compiler(self) -> None:
+        init.run(self.target, sorted(self.inputs.iterdir()), self.forced())
+        project = config.load(self.target)
+        content = (self.target / ".gitignore").read_text()
+        for ident in project.compilers:
+            self.assertIn(f"/tools/{ident}/\n", content)
+        self.assertIn("/.splat/\n", content)
+
     def test_fresh_project_readme_supports_progress_rendering(self) -> None:
         init.run(self.target, sorted(self.inputs.iterdir()), self.forced())
         readme = (self.target / "README.md").read_text()

@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from unbake.layout import shared
-from unbake.project import compiler_files, makefile, toolchain
+from unbake.project import compiler_files, hygiene, makefile, toolchain
 from unbake.project.config import Held, Policy, Project
 from unbake.project_tools.host import resolve_tool
 
@@ -83,6 +83,7 @@ def run(project: Project, policy: Policy, *, new_rom: Path | None = None) -> lis
                 raise Held("setup", f"policy.{name}: {error}") from error
             config_text = re.sub(rf"^{field}\s*=.*$", f"{field} = {json.dumps(portable)}", config_text, flags=re.M)
     files = makefile.render(project)
+    files[".gitignore"] = hygiene.ignore_text(project)
     toolchain.ensure(project, policy)
     verify_compiler(project)
     receipts = []

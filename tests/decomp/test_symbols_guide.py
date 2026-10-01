@@ -4,14 +4,17 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Sequence
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from unbake.decomp import guide, needs, symbols, symbols_edits, trial
 from unbake.decomp.needs import LabelNeed, SymbolNeed
 from unbake.decomp.trial_artifacts import TrialContext
 from unbake.decomp.trial_compare import Compare
+from unbake.decomp.trial_layout import FunctionSpan
 from unbake.decomp.trial_link import inspect
 from unbake.families import Family, family_for
 from unbake.project.config import Compiler, Held, Policy, Project, Version
@@ -27,15 +30,19 @@ def need(
     return SymbolNeed(version, name, address, 0, ".rodata", type_, size, "fixture")
 
 
+def mips_tool(name: str) -> Path:
+    executable = shutil.which(f"mips-linux-gnu-{name}")
+    assert executable is not None
+    return Path(executable)
+
+
 def project_for(symbols_path: Path) -> Project:
     root = symbols_path.parent
     versions = {
         name: Version(name, root / f"baserom.{name}.z64", "0" * 40, root / "game.yaml", symbols_path, ())
         for name in ("us", "eu")
     }
-    compiler = Compiler(
-        "ido-7.1", "ido", root / "cc", Path(shutil.which("mips-linux-gnu-as")), (), root / "compiler.sha256"
-    )
+    compiler = Compiler("ido-7.1", "ido", root / "cc", mips_tool("as"), (), root / "compiler.sha256")
     return Project(
         root,
         "fixture",
@@ -68,13 +75,13 @@ class SymbolTests(unittest.TestCase):
             objdiff_sha256="0" * 64,
             m2c=root / "m2c",
             splat=root / "splat",
-            mips_ld=Path(shutil.which("mips-linux-gnu-ld")),
-            mips_objdump=Path(shutil.which("mips-linux-gnu-objdump")),
-            mips_readelf=Path(shutil.which("mips-linux-gnu-readelf")),
+            mips_ld=mips_tool("ld"),
+            mips_objdump=mips_tool("objdump"),
+            mips_readelf=mips_tool("readelf"),
             init_same_game_similarity=0.1,
             init_split="functions",
             init_probe_count=1,
-            mips_as=Path(shutil.which("mips-linux-gnu-as")),
+            mips_as=mips_tool("as"),
             mips_objcopy=root / "objcopy",
             cpp=root / "cpp",
             asflags=(),
@@ -100,7 +107,9 @@ class SymbolTests(unittest.TestCase):
         )
         for function, addresses in cases:
             with self.subTest(function=function):
-                target, draft, relocations = [], [], []
+                target: list[int] = []
+                draft: list[int] = []
+                relocations: list[symbols.Relocation] = []
                 for address in addresses:
                     offset = len(target) * 4
                     target.extend(pair(address))
@@ -180,7 +189,8 @@ class SymbolTests(unittest.TestCase):
                 draft = (0x3C020000, 0x3C020000, 0xC4440000)
                 rels = (hi, hi2, symbols.Relocation(8, 6, "a"))
                 obj = symbols.TrialElf(draft, rels, (), self.rows, None, family, frozenset())
-                self.assertEqual(symbols.derive(obj, target, "us")[0].address, 0x800C8000)
+                inferred = next(n for n in symbols.derive(obj, target, "us") if isinstance(n, SymbolNeed))
+                self.assertEqual(inferred.address, 0x800C8000)
 
     def test_gp_relocation_and_missing_pair_refusals(self) -> None:
         target = (0xC7840004,)
@@ -188,7 +198,8 @@ class SymbolTests(unittest.TestCase):
             (0xC7840000,), (symbols.Relocation(0, 7, "value"),), (), self.rows, 0x800C8000, self.family, frozenset()
         )
         found = symbols.derive(obj, target, "us")
-        self.assertEqual(found[0].address, 0x800C8004)
+        inferred = next(n for n in found if isinstance(n, SymbolNeed))
+        self.assertEqual(inferred.address, 0x800C8004)
         cases = (
             (replace(obj, gp=None), target, "value.gp"),
             (replace(obj, relocations=(symbols.Relocation(0, 6, "value"),)), target, "LO16"),
@@ -216,7 +227,7 @@ class SymbolTests(unittest.TestCase):
             (pair(0x800CFFFC, 0x35), "us", "crosses data row"),
         ):
             with self.subTest(reason=reason), self.assertRaisesRegex(Held, reason):
-                symbols.derive(obj, target, version)
+                symbols.derive(obj, cast(Sequence[int], target), version)
         self.assertEqual(symbols.derive(obj, (), "us"), [])
         self.assertEqual(symbols.references((0x3C02800C, 0x8C420004, 0xC4440000), None)[0].address, 0x800C0004)
         # A load destroys its destination register's constant value.
@@ -231,7 +242,7 @@ class SymbolTests(unittest.TestCase):
             path = Path(temporary) / "symbol_addrs.txt"
             path.write_text("hudGlobals = 0x800C76EC; // ignore:false\n")
             project = project_for(path)
-            pending = [
+            pending: list[needs.Need] = [
                 need("hudGlobals", 0x800C76EC),
                 need(),
                 LabelNeed("us", "D_800C7C94", 0x800C7C94, "pool", "fixture"),
@@ -246,7 +257,7 @@ class SymbolTests(unittest.TestCase):
             self.assertEqual(symbols_edits.resolve([pending[-1]], project, self.policy), [])
 
     def test_resolver_conflicts_and_named_refusals(self) -> None:
-        cases = (
+        cases: tuple[tuple[str, list[needs.Need], str], ...] = (
             ("", [need(), replace(need(), address=0x800C7C98)], "two-addresses"),
             ("D_800C7C94 = 0x800C7C98;\n", [need()], "placed-elsewhere"),
             ("", [replace(need(), address=0x800C7C98)], "address-named"),
@@ -270,7 +281,7 @@ class SymbolTests(unittest.TestCase):
             with self.assertRaisesRegex(Held, "project.names_from"):
                 symbols_edits.resolve([], replace(project, names_from=""), self.policy)
             with self.assertRaisesRegex(Held, "policy"):
-                symbols_edits.resolve([], project, None)
+                symbols_edits.resolve([], project, cast(Policy, None))
             path.unlink()
             with self.assertRaisesRegex(Held, "symbol_addrs"):
                 symbols_edits.resolve([need()], project, self.policy)
@@ -341,9 +352,69 @@ class SymbolTests(unittest.TestCase):
                 self.policy,
                 project.src / "alpha.c",
                 proof,
-                {"us": {"unit": unit, "target_words": target, "version": version}},
+                {
+                    "us": {
+                        "unit": unit,
+                        "layout": unit,
+                        "span": FunctionSpan(0x800C0000, 0x40, len(target) * 4, 4),
+                        "work": root,
+                        "target_words": list(target),
+                        "version": version,
+                    }
+                },
             )
             self.assertEqual([n for n in symbols.derive_trial(context) if isinstance(n, SymbolNeed)], [])
+
+    def test_out_of_row_fields_and_undeclared_constants_need_no_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = project_for(root / "symbols")
+            version = project.version("us")
+            version.symbols.write_text("resident = 0x800E0000; // absolute:True\n")
+            version.split.write_text(
+                "segments:\n  - name: main\n    type: code\n    start: 0x40\n"
+                "    vram: 0x800C0000\n    subalign: 4\n    end: 0x50\n"
+                "    subsegments:\n      - [0x40, asm, alpha]\n      - [0x48, rodata, pool]\n"
+            )
+            # The external base is accessed only through +4. The following constant has
+            # no declaration; the final access still needs a label inside the data row.
+            target = (0x3C03800E, 0x24630000, 0xAC620004, *pair(0x800F0010), *pair(0x800C000C))
+            assembly = root / "alpha.s"
+            assembly.write_text(
+                ".set noreorder\n.text\n"
+                "lui $3, %hi(resident)\naddiu $3, $3, %lo(resident)\nsw $2, 4($3)\n"
+                "lui $2, 0x800f\nlwc1 $f4, 0x10($2)\n"
+                "lui $2, 0x800c\nlwc1 $f4, 0xc($2)\n"
+            )
+            output = root / "alpha.o"
+            subprocess.run(
+                [str(self.policy.mips_as), "-EB", "-mips3", "--no-pad-sections", "-o", str(output), str(assembly)],
+                check=True,
+                capture_output=True,
+            )
+            unit = inspect(output, str(self.policy.mips_readelf), root)
+            proof = trial.Trial("alpha", "0" * 64, {"us": Compare("us", 7, 7, {}, [])}, [], "", [])
+            context = TrialContext(
+                project,
+                self.policy,
+                project.src / "alpha.c",
+                proof,
+                {
+                    "us": {
+                        "unit": unit,
+                        "layout": unit,
+                        "span": FunctionSpan(0x800C0000, 0x40, len(target) * 4, 4),
+                        "work": root,
+                        "target_words": list(target),
+                        "version": version,
+                    }
+                },
+            )
+            derived = symbols.derive_trial(context)
+            self.assertEqual(
+                [(n.name, n.address) for n in derived if isinstance(n, SymbolNeed)], [("D_800C000C", 0x800C000C)]
+            )
+            self.assertEqual([n.name for n in derived if isinstance(n, LabelNeed)], ["D_800C000C"])
 
     def test_real_elf_deriver_registration_and_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -373,7 +444,16 @@ class SymbolTests(unittest.TestCase):
                 self.policy,
                 project.src / "alpha.c",
                 proof,
-                {"us": {"unit": unit, "layout": unit, "target_words": target, "version": version}},
+                {
+                    "us": {
+                        "unit": unit,
+                        "layout": unit,
+                        "span": FunctionSpan(0x800C0000, 0x40, len(target) * 4, 4),
+                        "work": root,
+                        "target_words": list(target),
+                        "version": version,
+                    }
+                },
             )
             derived = symbols.derive_trial(context)
             self.assertEqual(
@@ -386,8 +466,8 @@ class SymbolTests(unittest.TestCase):
                 [(SymbolNeed, 10), (LabelNeed, 20)],
             )
             with redirect_stdout(io.StringIO()):
-                output = guide.run(project, "alpha", "us")
-            self.assertIn("extern f32 D_800C000C;", output)
+                guidance = guide.run(project, "alpha", "us")
+            self.assertIn("extern f32 D_800C000C;", guidance)
             for n in derived:
                 self.assertEqual(needs.decode(needs.encode(n)), n)
 

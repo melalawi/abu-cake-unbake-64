@@ -267,16 +267,20 @@ def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
     for ident, directory in installs.items():
         project_directory = tools / ident
         if project_directory.is_symlink():
-            raise Held("setup", f"{project_directory}: expected directory for compiler file links")
+            raise Held("setup", f"{project_directory}: expected directory for compiler files")
         project_directory.mkdir(parents=True, exist_ok=True)
         for name, pin in sorted(specs[ident].pins.items()):
             target = project_directory / name
+            if any(parent.is_symlink() for parent in target.parents):
+                raise Held("setup", f"{target}: compiler parent is a symlink")
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists() or target.is_symlink():
-                if not target.is_file() or compiler_files.sha(target) != pin:
-                    raise Held("setup", f"{target}: differs from pinned compiler file {pin}")
-            else:
-                target.symlink_to(directory / name)
+            if (target.exists() or target.is_symlink()) and (not target.is_file() or compiler_files.sha(target) != pin):
+                raise Held("setup", f"{target}: differs from pinned compiler file {pin}")
+            if target.is_symlink():
+                target.unlink()
+            if not target.exists():
+                compiler_files.atomic_bytes(target, (directory / name).read_bytes())
+                target.chmod((directory / name).stat().st_mode & 0o777)
             manifest.append(f"{pin}  {(tools_relative / ident / name).as_posix()}\n")
         verify(project_directory, specs[ident])
     manifest_path = tools / "compiler.sha256"
@@ -294,7 +298,7 @@ def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
 
 
 def ensure(project: Project, policy: Policy, *, supply: Path | None = None) -> Path:
-    """Install every declared compiler, verify every pin, link files and return manifest."""
+    """Install every declared compiler, verify every pin, copy files and return manifest."""
     try:
         return _ensure(project, policy, supply)
     except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile, urllib.error.URLError) as error:

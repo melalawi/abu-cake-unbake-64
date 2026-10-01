@@ -3,17 +3,21 @@
 import argparse
 
 from unbake.cli.common import Subparsers, receipt
+from unbake.project import hygiene
 from unbake.project.config import Policy, Project
 
 
 def register(phases: Subparsers) -> None:
-    phases.add_parser("check", phase="check", help="Check C sources and report FAKEMATCH evidence.")
+    parser = phases.add_parser("check", phase="check", help="Check repository hygiene and C source evidence.")
+    parser.add_argument("--hygiene", action="store_true", help="Check only tracked repository hygiene.")
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.decomp import checks
 
-    lines = []
+    lines = hygiene.tracked_findings(project, policy)
+    if lines or getattr(args, "hygiene", False):
+        return receipt("check", lines)
     for source in sorted(project.src.rglob("*.c")):
         for finding in checks.run(source):
             location = f"{source.relative_to(project.root)}:{finding.line}: {finding.rule}: {finding.text}"

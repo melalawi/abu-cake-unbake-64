@@ -90,7 +90,7 @@ class ToolchainTests(unittest.TestCase):
         self.project.compilers[ident] = SimpleNamespace(id=ident, kind="ido")
         return archive, pins
 
-    def test_download_links_and_project_relative_manifest(self) -> None:
+    def test_download_copies_and_project_relative_manifest(self) -> None:
         _, pins = self.compiler()
         manifest = toolchain.ensure(self.project, self.policy)
         self.assertEqual(manifest, self.project.tools / "compiler.sha256")
@@ -99,9 +99,22 @@ class ToolchainTests(unittest.TestCase):
         )
         for name in pins:
             link = self.project.tools / "fixture" / name
-            self.assertTrue(link.is_symlink())
-            self.assertEqual(link.resolve(), self.policy.cache_root / "compilers/fixture" / name)
+            self.assertFalse(link.is_symlink())
+            self.assertEqual(link.read_bytes(), (self.policy.cache_root / "compilers/fixture" / name).read_bytes())
         self.assertFalse((self.project.tools / "fixture").is_symlink())
+
+    def test_existing_verified_symlink_is_replaced_without_changing_cache(self) -> None:
+        self.compiler()
+        toolchain.ensure(self.project, self.policy)
+        target = self.project.tools / "fixture/cc"
+        cached = self.policy.cache_root / "compilers/fixture/cc"
+        before = cached.stat().st_mtime_ns
+        target.unlink()
+        target.symlink_to(cached)
+        toolchain.ensure(self.project, self.policy)
+        self.assertFalse(target.is_symlink())
+        self.assertEqual(target.read_bytes(), b"compiler")
+        self.assertEqual(cached.stat().st_mtime_ns, before)
 
     def test_warm_install_never_fetches(self) -> None:
         archive, _ = self.compiler()
@@ -151,7 +164,7 @@ class ToolchainTests(unittest.TestCase):
         )
         with patch.object(toolchain.urllib.request, "urlopen", side_effect=AssertionError("network")):
             toolchain.ensure(project, self.policy)
-        self.assertEqual((other / "tools/ido/cc").resolve(), (self.project.tools / "ido/cc").resolve())
+        self.assertEqual((other / "tools/ido/cc").read_bytes(), (self.project.tools / "ido/cc").read_bytes())
 
     def test_supplied_directory_finds_pins_despite_renamed_files(self) -> None:
         source = self.root / "supply/nested"
@@ -329,7 +342,7 @@ class ToolchainTests(unittest.TestCase):
         self.assertIn("cc", toolchain.status(self.policy)[0][1])
         toolchain.ensure(self.project, self.policy)
         self.assertEqual(toolchain.status(self.policy), [("fixture", "installed; pins verified")])
-        (self.project.tools / "fixture/as").write_bytes(b"changed")
+        (self.policy.cache_root / "compilers/fixture/as").write_bytes(b"changed")
         self.assertIn("sha256 expected", toolchain.status(self.policy)[0][1])
 
     def test_registry_exposes_fingerprint_metadata(self) -> None:

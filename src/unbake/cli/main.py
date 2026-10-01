@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from unbake.cli import check, decomp, init, match, report, setup, split
+from unbake.cli import check, clone, decomp, init, match, report, setup, split
 from unbake.cli.common import Parser
 from unbake.project import config
 from unbake.project.config import Held, Policy, Project
@@ -16,7 +16,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", type=Path, metavar="DIR")
     parser.add_argument("--policy", type=Path, metavar="FILE")
     phases = parser.add_subparsers(dest="phase", required=True)
-    for command in (setup, init, split, decomp, match, report, check):
+    for command in (setup, init, split, decomp, match, report, check, clone):
         command.register(phases)
     return parser
 
@@ -25,7 +25,14 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
     if args.phase == "decomp":
         decomp.run(args, project, policy)
         return False
-    commands = {"setup": setup.run, "split": split.run, "match": match.run, "report": report.run, "check": check.run}
+    commands = {
+        "clone": clone.run,
+        "setup": setup.run,
+        "split": split.run,
+        "match": match.run,
+        "report": report.run,
+        "check": check.run,
+    }
     return commands[args.phase](args, project, policy)
 
 

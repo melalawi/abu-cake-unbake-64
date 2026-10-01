@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import cast
 
 from unbake.layout import split, split_create, split_partition
-from unbake.project import build, config, fingerprint, init_config, init_proof, rom
+from unbake.project import build, compiler_files, config, fingerprint, hygiene, init_config, init_proof, rom
 from unbake.project.config import Held, Policy, Project
 from unbake.project.toolchain import CompilerSpec
 
@@ -338,9 +338,7 @@ def run(target: Path, roms: list[Path], forced: Forced) -> list[str]:
         project = config.load(work)
         _install(project, policy, forced.supply)
         setup.run(project, policy)
-        ignored = ["__pycache__/", "*.py[cod]", "baserom.*", "build/", "asm/"]
-        ignored.extend(f"tools/{ident}/" for ident in dict.fromkeys(assignments.values()))
-        (work / ".gitignore").write_text("\n".join(ignored) + "\n")
+        compiler_files.atomic_bytes(work / ".gitignore", hygiene.ignore_text(project).encode())
         for cartridge in cartridges:
             version = names[cartridge.path]
             init_proof.proof(work, name, version, cartridge.data, policy.cores)
