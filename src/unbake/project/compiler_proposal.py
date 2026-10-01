@@ -382,7 +382,7 @@ def confirm_proposal(
     except OSError as error:
         raise Held("setup", f"setup.proposal_stale: persisted proposal missing: {error}") from error
     token = hashlib.sha256(content).hexdigest()
-    choices = cast(dict[str, str], proposal.get("choices", {}))
+    choices = proposal.get("choices", {})
     current = _inputs(project, layout, policy, choices)
     if (
         content != encoded(proposal)
