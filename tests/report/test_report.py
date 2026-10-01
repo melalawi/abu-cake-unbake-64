@@ -198,6 +198,13 @@ class ReportTest(unittest.TestCase):
         self.partial = self.project.root / "build/us.nonmatching/obj/src/draft.o"
         self.object(self.partial, "draft")
         self.project.build_link("us").symlink_to(self.generation.name)
+        self.report_partial = self.generation / "report/partial/obj/src/draft.o"
+
+        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            self.object(out, source.stem)
+            return out
+
+        patch.object(report_units, "compile_object", side_effect=compile_source).start()
         score.verified.clear()
         self.addCleanup(score.verified.clear)
 
@@ -249,7 +256,7 @@ class ReportTest(unittest.TestCase):
         configuration = json.loads((self.generation / "objdiff.json").read_text())
         units = configuration["units"]
         self.assertEqual([unit["metadata"]["complete"] for unit in units], [True, False, False])
-        self.assertEqual((self.generation / units[1]["base_path"]).resolve(), self.partial)
+        self.assertEqual((self.generation / units[1]["base_path"]).resolve(), self.report_partial)
         self.assertNotIn("base_path", units[2])
         self.assertEqual((self.generation / units[1]["target_path"]).resolve(), self.generation / "obj/asm/draft.o")
         destination = self.project.root / "versions/us/report.json"
@@ -274,6 +281,9 @@ class ReportTest(unittest.TestCase):
         project.build_link("eu").symlink_to(self.generation.name)
 
         def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            if source.stem == "draft":
+                self.object(out, "draft")
+                return out
             self.assertEqual(source, project.src / "matched.c")
             self.assertEqual(version, "us")
             self.assertEqual(policy, self.policy)
@@ -300,29 +310,46 @@ class ReportTest(unittest.TestCase):
                         self.assertNotIn("base_path", rows[2])
                         if not complete:
                             self.object(base, "matched")
-            self.assertEqual(compiler.call_count, 2)
+            self.assertEqual(compiler.call_count, 6)
 
-    def test_partial_report_measures_objects_without_linking_undefined_drafts(self) -> None:
-        subprocess.run(
-            [tool("mips-linux-gnu-as"), "-EB", "-mips3", "--no-pad-sections", "-o", str(self.partial)],
-            input=(
-                ".text\n.set noreorder\n.globl draft\n.type draft,@function\ndraft:\n"
-                "lui $v0,%hi(undefined_draft_symbol)\njr $ra\n"
-                "addiu $v0,$v0,%lo(undefined_draft_symbol)\n.size draft,.-draft\n"
-            ),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        partial_build = self.partial.parents[2]
-        self.assertEqual(list(partial_build.glob("*.elf")), [])
-        report.write(self.project, self.policy)
-        configuration = json.loads((self.generation / "objdiff.json").read_text())
-        self.assertEqual((self.generation / configuration["units"][1]["base_path"]).resolve(), self.partial)
-        self.assertEqual(list(partial_build.glob("*.elf")), [])
-        self.partial.unlink()
-        with self.assertRaisesRegex(Held, r"make -j4 VERSION=us NON_MATCHING=1 build/us.nonmatching/obj/src/draft.o"):
-            report.write(self.project, self.policy)
+    def test_partial_report_compiles_guarded_drafts_without_preexisting_objects(self) -> None:
+        source = self.project.src / "draft.c"
+        original = source.read_bytes()
+
+        def compile_source(project: Project, policy: Policy, prepared: Path, version: str, out: Path) -> Path:
+            self.assertEqual(prepared.read_bytes(), b"#define NON_MATCHING 1\n" + original)
+            self.assertFalse(prepared.is_symlink())
+            self.assertEqual(out, self.report_partial)
+            subprocess.run(
+                [tool("mips-linux-gnu-as"), "-EB", "-mips3", "--no-pad-sections", "-o", str(out)],
+                input=(
+                    ".text\n.set noreorder\n.globl draft\n.type draft,@function\ndraft:\n"
+                    "lui $v0,%hi(undefined_draft_symbol)\njr $ra\n"
+                    "addiu $v0,$v0,%lo(undefined_draft_symbol)\n.size draft,.-draft\n"
+                ),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+            return out
+
+        with patch.object(report_units, "compile_object", side_effect=compile_source) as compiler:
+            for stale_present in (False, True):
+                with self.subTest(stale_present=stale_present):
+                    if stale_present:
+                        self.object(self.partial, "draft")
+                    else:
+                        self.partial.unlink()
+                    self.report_partial.parent.mkdir(parents=True, exist_ok=True)
+                    self.report_partial.unlink(missing_ok=True)
+                    report.write(self.project, self.policy)
+                    configuration = json.loads((self.generation / "objdiff.json").read_text())
+                    unit = configuration["units"][1]
+                    self.assertEqual((self.generation / unit["base_path"]).resolve(), self.report_partial)
+                    self.assertFalse(unit["metadata"]["complete"])
+                    self.assertEqual(source.read_bytes(), original)
+                    self.assertEqual(list((self.generation / "report/partial").glob("*.elf")), [])
+            self.assertEqual(compiler.call_count, 2)
 
     def test_report_publishes_in_project_without_state_writes(self) -> None:
         state = self.policy.state_root
@@ -370,10 +397,7 @@ class ReportTest(unittest.TestCase):
                 report.target_object(name, code)
 
     def test_missing_build_objects_are_named(self) -> None:
-        for path, field in (
-            (self.generation / "obj/src/matched.o", "matched.*linked src object"),
-            (self.partial, "partial src object.*NON_MATCHING=1"),
-        ):
+        for path, field in ((self.generation / "obj/src/matched.o", "matched.*linked src object"),):
             with self.subTest(path=path):
                 content = path.read_bytes()
                 path.unlink()

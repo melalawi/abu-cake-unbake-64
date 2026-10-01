@@ -182,7 +182,7 @@ class BootstrapTests(unittest.TestCase):
                 [call[3] for call in calls], [{"existing": candidates[0].id, "probe": c.id} for c in candidates]
             )
 
-    def test_report_uses_existing_partial_object_without_compiling(self) -> None:
+    def test_report_refreshes_existing_partial_object_in_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "project"
             shutil.copytree(Path(__file__).parents[1] / "fixture", root)
@@ -200,12 +200,28 @@ class BootstrapTests(unittest.TestCase):
             target = root / "generation/obj/asm/alpha.o"
             target.parent.mkdir(parents=True)
             target.write_bytes(partial.read_bytes())
-            with patch.object(build, "compile_object", autospec=True) as compile_object:
-                units = report_units.units(project, policy(root), "us", root / "generation", root / "state")
-            compile_object.assert_not_called()
+            original = source.read_bytes()
+            stale = partial.read_bytes()
+            generation = root / "generation"
+            workspace = generation / "report"
+            refreshed = report.target_object("alpha", bytes.fromhex("2402000203e0000800000000"))
+
+            def compile_source(selected: Any, settings: Any, prepared: Path, version: str, out: Path) -> Path:
+                self.assertEqual(prepared.read_bytes(), b"#define NON_MATCHING 1\n" + original)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(refreshed)
+                return out
+
+            with patch.object(report_units, "compile_object", side_effect=compile_source, autospec=True) as compiler:
+                units = report_units.units(project, policy(root), "us", generation, workspace)
+            compiler.assert_called_once()
             unit = next(unit for unit in units if unit["name"] == "alpha")
             self.assertFalse(unit["metadata"]["complete"])
-            self.assertEqual((root / "generation" / unit["base_path"]).resolve(), partial.resolve())
+            base = (generation / unit["base_path"]).resolve()
+            self.assertTrue(base.is_relative_to(workspace))
+            self.assertEqual(base.read_bytes(), refreshed)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(partial.read_bytes(), stale)
 
     def test_report_refuses_missing_values_by_name(self) -> None:
         fields = ("complete_code", "total_code", "complete_units", "total_units", "fuzzy_match_percent")

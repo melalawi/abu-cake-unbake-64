@@ -172,18 +172,13 @@ def units(project: Project, policy: Policy, version: str, generation: Path, work
         else:
             source = project.src / (row.path + ".c")
             base = None
-            if row.kind == "asm" and row.path in partial_paths:
-                base = project.root / "build" / (version + ".nonmatching") / "obj" / "src" / (row.path + ".o")
-                if not base.is_file():
-                    raise Held(
-                        "report",
-                        f"draft {source} partial src object {base} is missing; "
-                        f"run make -j4 VERSION={version} NON_MATCHING=1 "
-                        f"{base.relative_to(project.root)}",
-                    )
-            elif row.kind == "asm" and source.is_file():
+            if row.kind == "asm" and source.is_file():
                 base = workspace / "partial" / "obj" / "src" / (row.path + ".o")
-                compile_object(project, policy, source, version, base)
+                prepared = source
+                if row.path in partial_paths:
+                    prepared = workspace / "partial" / "src" / (row.path + ".c")
+                    files.write(prepared, b"#define NON_MATCHING 1\n" + source.read_bytes())
+                compile_object(project, policy, prepared, version, base)
         if base is not None:
             unit["base_path"] = os.path.relpath(base, generation)
             unit["metadata"]["source_path"] = os.path.relpath(source, project.root)
