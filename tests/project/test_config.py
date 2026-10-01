@@ -297,3 +297,9 @@ class ConfigTests(unittest.TestCase):
         self.assertNotIn("cache_root", values)
         self.assertIn("# splat = <required value>", text)
         self.assertNotIn("init_split", text)
+
+    def test_guidance_policy_read_does_not_create_a_template(self) -> None:
+        path = self.directory / "absent-operator/policy.toml"
+        with self.assertRaisesRegex(config.Held, "policy.path"):
+            config.read_policy(path)
+        self.assertFalse(path.parent.exists())

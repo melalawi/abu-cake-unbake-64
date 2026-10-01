@@ -6,7 +6,7 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 
 POLICY_PATH = Path(__file__).with_name("policy.toml")
 
@@ -504,8 +504,19 @@ def load_policy(path: Path | None = None, *, stage: Literal["setup"]) -> SetupPo
 
 
 def load_policy(path: Path | None = None, *, stage: str = "all") -> Policy | CensusPolicy | SetupPolicy:
+    return _load_policy(path, stage=stage, create_template=True)
+
+
+def read_policy(path: Path | None = None) -> Policy:
+    """Read work policy for guidance without creating an absent host template."""
+    return cast(Policy, _load_policy(path, stage="all", create_template=False))
+
+
+def _load_policy(path: Path | None, *, stage: str, create_template: bool) -> Policy | CensusPolicy | SetupPolicy:
     path = policy_path(path)
     if not path.exists():
+        if not create_template:
+            raise Held("config", f"policy.path: supply host policy at {path}; run unbake setup")
         policy_template(path)
     data = {**_read(POLICY_PATH), **_read(path)}
 
