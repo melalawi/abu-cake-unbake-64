@@ -1,6 +1,7 @@
 """The split command arguments and execution."""
 
 import argparse
+from pathlib import Path
 
 from unbake.cli.common import Subparsers, integer, receipt
 from unbake.project.config import Policy, Project
@@ -16,6 +17,9 @@ def register(phases: Subparsers) -> None:
         verb.add_argument("--start", type=integer, required=True, help="Inclusive ROM offset.")
         verb.add_argument("--end", type=integer, required=True, help="Exclusive ROM offset.")
         verb.add_argument("--apply", action="store_true")
+    boundary_map = split_verbs.add_parser("boundary-map", phase="split", help="Apply a byte-pinned bulk boundary map.")
+    boundary_map.add_argument("map", type=Path, help="JSON list of version/function/action/sha256/evidence records.")
+    boundary_map.add_argument("--apply", action="store_true")
     classify = split_verbs.add_parser("classify", phase="split", help="Type measured in-text data runs.")
     classify.add_argument("--version", required=True, metavar="V")
     classify.add_argument("--apply", action="store_true")
@@ -44,6 +48,16 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.layout import split_apply, split_edits, split_partition
 
+    if args.verb == "boundary-map":
+        from unbake.layout import boundary_map
+
+        changes = boundary_map.read(args.map)
+        edits = boundary_map.plan(project, changes)
+        if not args.apply:
+            print(split_apply.diff(edits), end="")
+            return receipt("split", [f"preview {len(changes)} boundary changes in {len(edits)} VERSION splits"])
+        results = boundary_map.apply(project, policy, changes)
+        return receipt("split", [f"{result.version}: {result.sha1_line}" for result in results] or ["no edits"])
     if args.verb == "data-symbol":
         from unbake.decomp.symbols_edits import data_symbol
         from unbake.layout.data_symbols import correspondence

@@ -177,7 +177,7 @@ def apply(project: Project, policy: Policy, edits: Iterable[split.Edit], *, stag
             else:
                 Path(edit.path).unlink(missing_ok=True)
         for generation in generations.values():
-            shutil.rmtree(generation, ignore_errors=True)
+            build.discard_generation(generation)
         raise
 
 
