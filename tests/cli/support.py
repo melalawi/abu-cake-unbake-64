@@ -96,9 +96,12 @@ class MainCase(unittest.TestCase):
                         pinned[v] = (holds.enter_context(build.pin(directory)), target)
                 yield pinned
 
-        def try_draft(project: Any, policy: Any, source: Any, scratch: Any, *, versions: Any, pinned: Any) -> Any:
+        def try_draft(
+            project: Any, policy: Any, source: Any, scratch: Any, *, versions: Any, pinned: Any, function: Any = None
+        ) -> Any:
             captured["scratch"] = scratch
             captured["versions"] = versions
+            captured["function"] = function or source.stem
             result.generations = {v: g for v, (g, _) in pinned.items()}
             if not omit_artifact:
                 version_dir = scratch / "alpha.unique/us"

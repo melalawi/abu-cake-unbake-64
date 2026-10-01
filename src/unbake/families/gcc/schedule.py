@@ -7,6 +7,8 @@ from pathlib import Path
 
 from unbake.project.config import Held
 
+_INSTRUCTION = r"\((insn|jump_insn|call_insn)(?:/[a-z]+)*(?::[A-Z][A-Z0-9]*)?\s+(\d+)\b"
+
 
 @dataclass(frozen=True)
 class Instruction:
@@ -65,16 +67,19 @@ def _forms(text: str, name: str) -> list[tuple[int, int, str]]:
 
 def _read(text: str, name: str) -> tuple[tuple[Instruction, ...], tuple[tuple[int, ...], ...]]:
     instructions, sequences = [], []
-    for start, _end, rtl in _forms(text, name):
-        match = re.match(r"\((insn|jump_insn|call_insn)(?:/[a-z]+)?\s+(\d+)\b", rtl)
+    forms = _forms(text, name)
+    slots = [(start, end) for start, end, rtl in forms if re.match(r"\(sequence\b", rtl)]
+    standalone = []
+    for start, _end, rtl in forms:
+        match = re.match(_INSTRUCTION, rtl)
         if match:
             instructions.append(Instruction(int(match[2]), match[1], text.count("\n", 0, start) + 1, rtl))
+            if not re.search(r"\(sequence\b", rtl) and not any(first < start < last for first, last in slots):
+                standalone.append(int(match[2]))
         elif re.match(r"\((?:insn|jump_insn|call_insn)\b", rtl):
             raise Held("schedule", f"{name}: instruction.uid is required")
         if re.match(r"\(sequence\b", rtl):
-            members = tuple(
-                int(uid) for uid in re.findall(r"\((?:insn|jump_insn|call_insn)(?:/[a-z]+)?\s+(\d+)\b", rtl)
-            )
+            members = tuple(int(match[2]) for match in re.finditer(_INSTRUCTION, rtl))
             if len(members) < 2:
                 raise Held("schedule", f"{name}: sequence.delay_slot is required")
             sequences.append(members)
@@ -82,7 +87,9 @@ def _read(text: str, name: str) -> tuple[tuple[Instruction, ...], tuple[tuple[in
     emitted = tuple(item for item in instructions if not re.search(r"\(sequence\b", item.rtl))
     if not emitted:
         raise Held("schedule", f"{name}: instructions are required")
-    if len({item.uid for item in emitted}) != len(emitted):
+    # GCC reorg can copy an instruction into several delay sequences while
+    # retaining its UID. Its dump line identifies each emitted occurrence.
+    if len(set(standalone)) != len(standalone):
         raise Held("schedule", f"{name}: duplicate instruction.uid")
     return emitted, tuple(sequences)
 

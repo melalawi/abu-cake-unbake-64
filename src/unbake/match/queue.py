@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.decomp import checks, drafts, features, needs
+from unbake.decomp.source_function import select
 from unbake.layout import split
 from unbake.match import common, declarations, proof, xver
 from unbake.match import staging as stage
@@ -95,13 +96,20 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
 
 
 def submit(
-    project: Project, policy: Policy, source: str | Path | None, *, versions: tuple[str, ...] | None = None
+    project: Project,
+    policy: Policy,
+    source: str | Path | None,
+    *,
+    versions: tuple[str, ...] | None = None,
+    function_name: str | None = None,
 ) -> list[str]:
     """Enqueue canonical source bytes judged by their latest explicit trial."""
     if source is None:
         held("source: missing value")
     features.load()
-    source = proof.source(project, Path(source).resolve())
+    source = Path(source).resolve()
+    name = select(source, read(source).decode("utf-8"), function_name, phase="match")
+    source = proof.source(project, source, name)
     selected = holding_versions(project, function(source.stem)) if versions is None else versions
     for version in selected:
         project.version(version)

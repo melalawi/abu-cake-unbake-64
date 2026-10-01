@@ -33,6 +33,13 @@ Machine paths go in `~/.config/unbake/policy.toml`.
 4. `match` lands identical C.
 5. `report` updates progress.
 
+`decomp try FILE --scratch DIR` selects the source's single function definition, regardless of filename.
+Use `--function NAME` when the file defines several functions; the same selection is accepted by `match submit`.
+`decomp search --method list` lists the registered methods (`registers`, `order`, and `permute`).
+Search accepts comma-separated method names; `permute` also requires its VERSION, target object, and budget.
+`decomp explain order FILE --version V` reads the selected compiler's scheduling and delay-slot evidence.
+Trial and match commands use the same selected policy and retained source identity.
+
 ## Development
 
 Run checks with `ci/check`. GitLab users set the CI file path to `ci/gitlab.yml`.

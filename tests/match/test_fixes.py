@@ -19,6 +19,24 @@ from unbake.project.config import Held
 
 
 class MatchFixTests(MatchFixture):
+    def test_submit_infers_function_and_retains_arbitrary_source_name(self) -> None:
+        original = self.draft("alpha")
+        source = self.sources / "draft-variant.input"
+        source.write_bytes(original.read_bytes())
+        cli_match.run(argparse.Namespace(verb="submit", source=source), self.project, self.policy)
+        rows = self.queued()
+        self.assertEqual(rows[0]["function"], "alpha")
+        retained = Path(rows[0]["source"])
+        self.assertEqual(retained.name, "alpha.c")
+        self.assertEqual(retained.read_bytes(), source.read_bytes())
+
+    def test_submit_uses_selected_trial_policy_even_when_clone_policy_exists(self) -> None:
+        source = self.draft("alpha")
+        self.project.tools.joinpath("clone-policy.toml").write_text(isolated_policy(self.policy, self.root))
+        with patch("unbake.project.config.load_policy", side_effect=AssertionError("policy changed")):
+            cli_match.run(argparse.Namespace(verb="submit", source=source), self.project, self.policy)
+        self.assertEqual([row["function"] for row in self.queued()], ["alpha"])
+
     def test_submit_refuses_missing_trial_without_running_one(self) -> None:
         source = self.sources / "alpha.c"
         source.write_text("#ifdef NON_MATCHING\nint alpha(void) { return 1; }\n#endif\n")

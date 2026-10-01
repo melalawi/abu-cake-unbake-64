@@ -141,7 +141,7 @@ class MatchTests(MatchFixture):
             with self.subTest(rule=rule):
                 source = self.draft("alpha", content)
                 with self.assertRaisesRegex(Held, rule):
-                    match.submit(self.project, self.policy, source)
+                    match.submit(self.project, self.policy, source, function_name="alpha")
         self.assertEqual(self.calls, [])
 
     def test_guarded_submission_requires_exact_proof_then_strips_only_wrapper(self) -> None:

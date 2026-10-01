@@ -9,14 +9,15 @@ from unbake.match.common import atomic, held, queue_path, read, sha
 from unbake.project.config import Policy, Project
 
 
-def source(project: Project, path: Path) -> Path:
+def source(project: Project, path: Path, function: str | None = None) -> Path:
     """Preserve published draft bytes outside their NON_MATCHING wrapper."""
     content = read(path)
     text = content.decode("utf-8")
-    if not drafts.is_partial(text):
+    if not drafts.is_partial(text) and (function is None or path.name == function + ".c"):
         return path
     content = drafts.canonical_source(content)
-    retained = queue_path(project).parent / "match-sources" / sha(content) / path.name
+    filename = function + ".c" if function else path.name
+    retained = queue_path(project).parent / "match-sources" / sha(content) / filename
     atomic(retained, content)
     return retained
 

@@ -120,7 +120,7 @@ def annotate_divergence(
         comparison.lines[first] += "; source unavailable for missing draft word"
         return
     try:
-        compiler = project.compiler_for(source)
+        compiler = project.compiler_for(copied)
         if not compiler.id.startswith("gcc-"):
             comparison.lines[first] += "; source unavailable for this compiler's debug format"
             return
@@ -131,10 +131,10 @@ def annotate_divergence(
         run_tool([str(policy.mips_as), "-EB", "-mips3", "--gdwarf-2", "-o", str(debug), str(assembly)], work, "try")
         actual, diagnostic = Object(unit), Object(debug)
         entry = next(
-            symbol for symbols in actual.symbols.values() for symbol in symbols if symbol["name"] == source.stem
+            symbol for symbols in actual.symbols.values() for symbol in symbols if symbol["name"] == copied.stem
         )
         diagnostic_entry = next(
-            symbol for symbols in diagnostic.symbols.values() for symbol in symbols if symbol["name"] == source.stem
+            symbol for symbols in diagnostic.symbols.values() for symbol in symbols if symbol["name"] == copied.stem
         )
         actual_body = actual.content(entry["section"])[entry["value"] : entry["value"] + entry["size"]]
         diagnostic_body = diagnostic.content(diagnostic_entry["section"])[
@@ -167,7 +167,7 @@ def annotate_divergence(
         if location is None:
             # Compiler prologues can precede the first debug line. Attribute only
             # that entry prefix to the source function declaration.
-            entry_match = re.search(rf"\b{re.escape(source.stem)}\s*\([^;{{}}]*\)\s*{{", source.read_text())
+            entry_match = re.search(rf"\b{re.escape(copied.stem)}\s*\([^;{{}}]*\)\s*{{", source.read_text())
             if entry_match is not None and (not debug_locations(listing) or address < min(debug_locations(listing))):
                 number = source.read_text().count("\n", 0, entry_match.start()) + 1
                 comparison.lines[first] += f"; source {source}:{number}; function entry"

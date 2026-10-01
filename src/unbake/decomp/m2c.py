@@ -210,7 +210,7 @@ def _draft(
     prove(project, policy, function, v, candidate)
     source.write_text(content, encoding="utf-8")
     print(f"draft_path: {source}")
-    print(f"source filename: {function}.c (decomp try identifies the function from the filename)")
+    print(f"source function: {function} (decomp try selects a single definition or --function NAME)")
     return source
 
 
