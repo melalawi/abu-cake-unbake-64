@@ -7,11 +7,14 @@ import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
 from unbake.decomp import guide, m2c
+from unbake.decomp.draft_context import preprocess_context
 from unbake.decomp.draft_input import whole_body
+from unbake.project.config import Policy
 
 
 class DraftInputTests(unittest.TestCase):
@@ -26,16 +29,22 @@ class DraftInputTests(unittest.TestCase):
         self.policy.m2c.chmod(0o755)
 
     def test_duplicate_typedef_dependencies_are_expanded_once(self) -> None:
+        (self.project.include[0] / "types.h").write_text("#ifndef TYPES_H\n#define TYPES_H\ntypedef int s32;\n#endif\n")
         for name in ("one", "two"):
             (self.project.include[0] / f"{name}.h").write_text(f'#include "types.h"\nstruct {name} {{ s32 v; }};\n')
         self.policy.m2c.write_text(
             '#!/bin/sh\nprintf "typedef int s32;\\n'
             'int alpha(struct one *a, struct two *b) { return a->v + b->v; }\\n"\n'
         )
-        source = m2c.draft(self.project, self.policy, "alpha", "us", self.root / "draft")
-        self.assertEqual(source.read_text().count("typedef int s32;"), 1)
-        self.assertIn("struct one", source.read_text())
-        self.assertIn("struct two", source.read_text())
+        source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.root / "draft")
+        self.assertEqual(
+            preprocess_context(source, self.project, cast(Policy, self.policy), "us", "alpha").count(
+                "typedef int s32;"
+            ),
+            1,
+        )
+        self.assertIn('#include "one.h"', source.read_text())
+        self.assertIn('#include "two.h"', source.read_text())
 
     def test_guide_labels_all_selected_versions(self) -> None:
         project = replace(self.project, versions=("us", "eu"))
@@ -48,7 +57,7 @@ class DraftInputTests(unittest.TestCase):
 
     def test_draft_announces_function_filename_and_written_path(self) -> None:
         with redirect_stdout(io.StringIO()) as output:
-            source = m2c.draft(self.project, self.policy, "alpha", "us", self.root / "draft")
+            source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.root / "draft")
         self.assertTrue(source.is_file())
         self.assertEqual(source.name, "alpha.c")
         self.assertIn(f"draft_path: {source}", output.getvalue())

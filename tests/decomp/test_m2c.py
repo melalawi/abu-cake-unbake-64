@@ -1,6 +1,8 @@
 """Configured m2c invocation and context, using an executable fixture."""
 
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,6 +12,7 @@ from typing import cast
 
 from tests.decomp.support import SCRATCH_ROOT, fixture
 from unbake.decomp import m2c
+from unbake.decomp.draft_context import preprocess_context
 from unbake.project.config import Held, Policy
 
 
@@ -34,11 +37,13 @@ class M2cTests(unittest.TestCase):
         self.policy.m2c = self.tool
 
     def test_draft_uses_version_asm_and_project_headers(self) -> None:
+        compiler = self.project.compilers["ido-7.1"]
+        self.project = replace(self.project, compilers={compiler.id: replace(compiler, cflags=("-non_shared",))})
         source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
         self.assertTrue(source.is_relative_to(self.scratch))
         self.assertEqual(source.name, "alpha.c")
         self.assertIn("NON_MATCHING", source.read_text())
-        self.assertIn("typedef int s32;", source.read_text())
+        self.assertIn('#include "types.h"', source.read_text())
         self.assertIn("int alpha(void)", source.read_text())
         invocation = json.loads((source.parent / "invocation.json").read_text())
         self.assertIn("mips-ido-c", invocation["argv"])
@@ -52,6 +57,68 @@ class M2cTests(unittest.TestCase):
             (source.parent / "alpha.s").read_bytes(),
             (self.project.asm / "us" / "nonmatchings" / "alpha.s").read_bytes(),
         )
+
+    def test_draft_compiles_with_live_sdk_include_graph_and_make_flags(self) -> None:
+        from unbake.decomp.draft_input import stack_locals
+
+        include = self.project.include[0]
+        (include / "types.h").write_text(
+            "#ifndef TYPES_H\n#define TYPES_H\ntypedef int s32;\ntypedef unsigned int u32;\n#endif\n"
+        )
+        (include / "sdk.h").write_text(
+            '#ifndef SDK_H\n#define SDK_H\n#include "types.h"\n'
+            "typedef union { struct { u32 w0, w1; } words; u32 alignment; } Gfx;\n#endif\n"
+        )
+        (include / "render.h").write_text(
+            '#include "sdk.h"\n#if !defined(USE_SDK)\n#include "unavailable.h"\n#endif\n'
+            "#define COMMAND 1\nextern Gfx *commands;\n"
+        )
+        config = self.project.root / "config.toml"
+        config.write_text(config.read_text() + '[build.unit_cflags]\nalpha=["-DUSE_SDK"]\n')
+        compiler = self.project.compilers["ido-7.1"]
+        project = replace(
+            self.project,
+            compilers={compiler.id: replace(compiler, kind="sn64", cflags=("-include", "include/types.h"))},
+        )
+        self.tool.write_text(
+            f"#!{sys.executable}\nprint('typedef int s32;\\n"
+            "s32 alpha(void) { return commands->words.w0 + COMMAND; }')\n"
+        )
+        source = m2c.draft(project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+        self.assertIn('#include "render.h"', source.read_text())
+        self.assertNotIn("typedef int s32;", source.read_text())
+        self.assertNotIn("typedef union", source.read_text())
+        # An edit after generation must reach the trial through the real header.
+        render = include / "render.h"
+        render.write_text(render.read_text().replace("COMMAND 1", "COMMAND 7"))
+        expanded = preprocess_context(source, project, cast(Policy, self.policy), "us", "alpha")
+        self.assertEqual(expanded.count("typedef int s32;"), 1)
+        self.assertEqual(expanded.count("} Gfx;"), 1)
+        self.assertIn("commands->words.w0 + 7", expanded)
+        # m2c's stack template supplies read-only slots omitted from its locals.
+        stack_output = (
+            "struct _m2c_stack_beta { s32 sp10; s32 sp14; };\n"
+            "s32 beta(void) {\n    s32 sp10;\n\n    sp10 = 1;\n    return sp10 + sp14;\n}\n"
+        )
+        locals_output = stack_locals(stack_output, expanded, "beta")
+        self.assertEqual(locals_output.count("s32 sp10;"), 1)
+        self.assertEqual(locals_output.count("s32 sp14;"), 1)
+        read_only = stack_locals(
+            "struct _m2c_stack_gamma { s32 sp18; };\ns32 gamma(void) {\n    return sp18;\n}\n",
+            expanded,
+            "gamma",
+        )
+        self.assertIn("s32 sp18;", read_only)
+        host_cc = shutil.which("cc")
+        self.assertIsNotNone(host_cc)
+        compiled = subprocess.run(
+            [str(host_cc), "-std=c89", "-pedantic-errors", "-fsyntax-only", "-x", "c", "-"],
+            input=expanded + "\n" + locals_output + "\n" + read_only,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(compiled.returncode, 0, compiled.stderr)
 
     def test_sn64_target(self) -> None:
         project = replace(self.project, compilers={"ido-7.1": replace(self.project.compilers["ido-7.1"], kind="sn64")})
@@ -78,8 +145,9 @@ class M2cTests(unittest.TestCase):
                 )
                 source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
                 # Both the actual m2c input and the standalone candidate must parse.
-                c_parser.CParser().parse(source.read_text().split("*/", 1)[1])
-                self.assertLess(source.read_text().index(f"}} {name};"), source.read_text().index("} Game;"))
+                expanded = preprocess_context(source, self.project, cast(Policy, self.policy), "us", "alpha")
+                c_parser.CParser().parse(expanded)
+                self.assertLess(expanded.index(f"}} {name};"), expanded.index("} Game;"))
 
     def test_nested_headers_are_deduplicated_in_context(self) -> None:
         nested = self.project.include[0] / "nested"
@@ -98,7 +166,7 @@ class M2cTests(unittest.TestCase):
 
     def test_missing_context_include_is_named(self) -> None:
         (self.project.include[0] / "types.h").write_text('#include "missing.h"\n', encoding="utf-8")
-        with self.assertRaisesRegex(Held, "context header missing.h"):
+        with self.assertRaisesRegex(Held, "missing.h"):
             m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
 
     def test_selected_headers_keep_include_only_dependencies(self) -> None:
@@ -108,8 +176,9 @@ class M2cTests(unittest.TestCase):
         (include / "value.h").write_text('#include "types.h"\ntypedef struct { s32 value; } Value;\n')
         self.tool.write_text(f"#!{sys.executable}\nprint('s32 alpha(Value *v) {{ return v->value; }}')\n")
         source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
-        self.assertEqual(source.read_text().count("typedef int s32;"), 1)
-        self.assertIn("} Value;", source.read_text())
+        expanded = preprocess_context(source, self.project, cast(Policy, self.policy), "us", "alpha")
+        self.assertEqual(expanded.count("typedef int s32;"), 1)
+        self.assertIn("} Value;", expanded)
 
     def test_current_split_source_excludes_stale_assembly(self) -> None:
         original = self.project.asm / "us" / "nonmatchings" / "alpha.s"
@@ -141,7 +210,7 @@ class M2cTests(unittest.TestCase):
             ("alpha_auto", "80001004", "expected one entry label.*found 0"),
         ):
             with self.subTest(label=label, address=address):
-                original.write_text(f"glabel {label}\nbnez $v0, tail\nglabel tail\njr $ra\nnop\n")
+                original.write_text(f"glabel {label}\nbnez $v0, tail\nnop\nglabel tail\njr $ra\nnop\n")
                 dump.write_text(f"name,vram_start\n{label},{address}\ntail,80001004\n")
                 if expected:
                     with self.assertRaisesRegex(Held, expected):

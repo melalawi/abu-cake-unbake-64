@@ -54,8 +54,9 @@ def share(project: Project, function: str, output: str, context: str) -> tuple[s
             if offset > cursor:
                 members.append(f"char padding_{cursor:X}[0x{offset - cursor:X}];")
             declaration = f"{type_name} field_{offset:X};"
-            member = layouts(context + "\nstruct MeasuredField { " + declaration + " };")[-1].fields[0]
-            if offset % member.size and not type_name.endswith("*"):
+            field_layout = layouts(context + "\nstruct MeasuredField { " + declaration + " };")[-1]
+            member = field_layout.fields[0]
+            if offset % field_layout.alignment:
                 raise Held("m2c", f"{base}+0x{offset:X}: unaligned {type_name} field")
             members.append(declaration)
             cursor = offset + member.size

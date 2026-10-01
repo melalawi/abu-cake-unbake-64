@@ -32,12 +32,14 @@ def assembly_source(project: Project, version: str, function: str) -> tuple[Path
     return path, row.address
 
 
-def canonical_entry(project: Project, version: str, function: str, address: int, assembly: str) -> str:
+def canonical_entry(
+    project: Project, version: str, function: str, address: int, assembly: str, *, generation: Path | None = None
+) -> str:
     """Use the build's discovered symbol placements to name the entry."""
     labels = re.findall(r"^\s*glabel\s+(\S+)\s*$", assembly, re.M)
     if function in labels or re.search(rf"^\s*{re.escape(function)}:\s*$", assembly, re.M):
         return assembly
-    dump = project.build_link(version) / "splat_symbols.csv"
+    dump = (project.build_link(version) if generation is None else generation) / "splat_symbols.csv"
     try:
         values = discovered_symbols(dump, {})
     except (OSError, ValueError, KeyError) as error:
@@ -133,3 +135,49 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
         if count != 1:
             raise Held("m2c", f"{function}: jump table target 0x{target:08X} requires one instruction, found {count}")
     return assembly + ("\n.section .rodata\n" + "\n".join(tables) + "\n" if tables else "")
+
+
+def stack_locals(output: str, context: str, function: str, assembly: str = "") -> str:
+    """Retain m2c's inferred types for stack loads that have no preceding store."""
+    from unbake.layout.structs import layouts
+
+    if "_m2c_stack_" + function not in output:
+        return output
+    prefix = context + "\n"
+    template = next((record for record in layouts(prefix + output) if record.name == "_m2c_stack_" + function), None)
+    if template is None:
+        return output
+    from unbake.decomp.draft_stack import overlay
+
+    measured = overlay(output, template, len(prefix), function, assembly)
+    if measured is not None:
+        return measured
+    start, end = template.start - len(prefix), template.end - len(prefix)
+    trailing = re.match(r"\s*;", output[end:])
+    if trailing:
+        end += trailing.end()
+    output = output[:start] + output[end:]
+    entry = re.search(rf"\b{re.escape(function)}\s*\([^;{{}}]*\)\s*{{", output)
+    if entry is None:
+        raise Held("m2c", f"{function}: missing body for inferred stack declarations")
+    body = output[entry.end() :]
+    locals_text = body.split("\n\n", 1)[0]
+    declared = set(
+        re.findall(
+            r"^[ \t]*(?!(?:return|goto|break|continue)\b)(?:[A-Za-z_]\w*[ \t]+)+"
+            r"\**[ \t]*([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*;",
+            locals_text,
+            re.M,
+        )
+    )
+    missing = [
+        field.declaration.strip()
+        for field in template.fields
+        if field.name not in declared
+        and re.search(rf"\b{re.escape(field.name)}\b", body)
+        and not field.name.startswith("pad")
+    ]
+    if missing:
+        declarations = "\n" + "\n".join("    " + declaration for declaration in missing)
+        output = output[: entry.end()] + declarations + output[entry.end() :]
+    return output

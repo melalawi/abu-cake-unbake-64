@@ -3,6 +3,9 @@
 import re
 from collections.abc import Callable
 
+from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
+
+from unbake.decomp.draft_context import _typedefs
 from unbake.project.config import Held
 
 _TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', re.S)
@@ -46,21 +49,34 @@ def calls(source: str, name: str, replace: Callable[[list[str]], str]) -> str:
     return "".join(result) + source[cursor:]
 
 
-def lower(source: str, context: str) -> str:
+def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
     """Use declared unknown scalar types and preserve lvalue bit reinterpretation."""
 
     def bitwise(args: list[str]) -> str:
         if len(args) != 2 or not re.fullmatch(r"[A-Za-z_]\w*(?:\s*\*)*", args[0]):
             raise Held("m2c", "unresolved M2C_BITWISE(" + ", ".join(args) + ")")
         target, value = args
-        if not re.fullmatch(r"[A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*|\[[^\]]+\])*", value):
+        typedefs = "\n".join(f"typedef int {name};" for name in sorted(_typedefs(context)))
+        try:
+            tree = c_parser.CParser().parse(typedefs + "\nvoid __m2c_value(void) { " + value + "; }")
+            expression = tree.ext[-1].body.block_items[0]
+            addressable = isinstance(expression, (c_ast.ID, c_ast.ArrayRef, c_ast.StructRef)) or (
+                isinstance(expression, c_ast.UnaryOp) and expression.op == "*"
+            )
+        except (c_parser.ParseError, AttributeError, IndexError):
+            addressable = False
+        if not addressable:
             raise Held("m2c", "unresolved M2C_BITWISE(" + ", ".join(args) + "): requires addressable value")
         return f"(*(({target} *)&({value})))"
 
-    source = calls(source, "M2C_BITWISE", bitwise)
+    if not allow_fields:
+        # A field placeholder is an lvalue only after share lowers it.
+        source = calls(source, "M2C_BITWISE", bitwise)
     known = set(re.findall(r"\btypedef\b[^;]*\b(M2C_UNK\d*)\s*;", context + "\n" + source))
     for token in _TOKEN.finditer(source):
         if re.fullmatch(r"M2C_\w+", token[0]) and token[0] not in known:
+            if allow_fields and token[0] in ("M2C_FIELD", "M2C_BITWISE"):
+                continue
             line = source.count("\n", 0, token.start()) + 1
             raise Held("m2c", f"unresolved {token[0]} at line {line}: {source.splitlines()[line - 1].strip()}")
     return source

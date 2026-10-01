@@ -6,20 +6,25 @@ import re
 import tempfile
 from pathlib import Path
 
-from unbake.decomp import similar
-from unbake.decomp.draft_context import ordered_headers, required_headers
+from unbake.decomp import gbi, similar
+from unbake.decomp.draft_asm import delay_slots
+from unbake.decomp.draft_compile import prove
+from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
+from unbake.decomp.draft_fp import register_pairs
 from unbake.decomp.draft_input import (
     assembly_source,
     canonical_entry,
     header_types,
     jump_tables,
+    stack_locals,
     version_for,
     whole_body,
 )
+from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
+from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
-from unbake.layout.structs import preprocess
 from unbake.project.config import Held, Policy, Project
 
 
@@ -51,29 +56,59 @@ def _context(headers: list[tuple[Path, str]], selected: set[Path]) -> str:
         if relative in relative_paths and relative_paths[relative] != path:
             raise Held("m2c", f"paths.include has ambiguous header {relative}")
         relative_paths[relative] = path
-    expanded = set()
-
-    def expand(path: Path) -> str:
-        if path in expanded:
-            return ""
-        expanded.add(path)
-        lines = [f"/* {path} */"]
-        for line in contents[path].splitlines():
+    # Include root headers in dependency order without copying their bodies.
+    # Only unconditional includes can cover another selected root.
+    graph: dict[Path, set[Path]] = {}
+    for path, text in contents.items():
+        graph[path] = set()
+        clean = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
+        guard = re.match(r"\s*#\s*ifndef\s+(\w+)\s*\n\s*#\s*define\s+\1\b", clean)
+        depth = 0
+        for line in clean.splitlines():
+            directive = re.match(r"\s*#\s*(if|ifdef|ifndef|endif)\b", line)
+            if directive:
+                depth += -1 if directive[1] == "endif" else 1
             include = re.match(r'^\s*#\s*include\s*["<]([^">]+)[">]', line)
-            if include:
+            if include and depth == (1 if guard else 0):
                 local = (path.parent / include[1]).resolve()
                 target = local if local in paths else relative_paths.get(include[1])
-                if target is None:
-                    raise Held("m2c", f"{path}: context header {include[1]} is missing from paths.include")
-                lines.append(expand(target))
-            else:
-                lines.append(line)
-        return "\n".join(lines) + "\n"
+                if target is not None:
+                    graph[path].add(target)
 
-    return "\n".join(expand(path) for path in ordered_headers(contents) if path in selected)
+    def closure(path: Path, visited: set[Path]) -> set[Path]:
+        if path in visited:
+            return set()
+        visited.add(path)
+        return {path} | set().union(*(closure(child, visited) for child in graph[path]))
+
+    covered = {path: closure(path, set()) for path in selected}
+    dependencies = set().union(*(value - {path} for path, value in covered.items()))
+    roots = selected - dependencies
+    ordered = ordered_headers(contents)
+    # Guarded include cycles still need one entry root.
+    for path in ordered:
+        if path in selected and not any(path in covered[root] for root in roots):
+            roots.add(path)
+    names = dict(headers)
+    emitted: set[Path] = set()
+    lines = []
+    for dependency in ordered:
+        for path in ordered:
+            if path in roots and path not in emitted and dependency in covered[path]:
+                lines.append(f'#include "{names[path]}"\n')
+                emitted.add(path)
+    return "".join(lines)
 
 
-def draft(project: Project, policy: Policy, function: str | None, v: str | None, scratch: Path) -> Path:
+def _draft(
+    project: Project,
+    policy: Policy,
+    function: str | None,
+    v: str | None,
+    scratch: Path,
+    *,
+    generation: Path | None = None,
+) -> Path:
     if not isinstance(function, str) or not re.fullmatch(r"[A-Za-z_]\w*", function):
         raise Held("m2c", "function is required and must be a C identifier")
     v = version_for(project, v, "m2c")
@@ -95,11 +130,13 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     examples = similar.retrieve(project, function, v)
     examples_context = similar.context(examples)
     (work / "similar-context.txt").write_text(examples_context, encoding="utf-8")
-    # Headers are expanded once above; includes in landed units would repeat
-    # them. Preserve their definitions and macros for the context preprocessor.
-    landed = "\n".join(re.sub(r"^\s*#\s*include[^\n]*", "", item.c, flags=re.M) for item in examples)
-    context.write_text(_context(headers, {path for path, _ in headers}) + "\n" + landed, encoding="utf-8")
-    context.write_text(preprocess(context, project, policy, v) + "\n" + examples_context, encoding="utf-8")
+    # Shared headers own the types. Similar units' private declarations can
+    # collide with canonical tags or leak typedefs unavailable to the draft's
+    # include graph; retain those units in the similarity comments instead.
+    context.write_text(_context(headers, {path for path, _ in headers}), encoding="utf-8")
+    context.write_text(
+        preprocess_context(context, project, policy, v, function) + "\n" + examples_context, encoding="utf-8"
+    )
     print(
         "similar context used: "
         + (
@@ -110,14 +147,18 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
         )
     )
     assembly = work / (function + ".s")
-    body = whole_body(canonical_entry(project, v, function, address, read_text(assembly_path, "m2c")), function)
-    assembly.write_text(jump_tables(project, v, function, body), encoding="utf-8")
+    body = whole_body(
+        canonical_entry(project, v, function, address, read_text(assembly_path, "m2c"), generation=generation), function
+    )
+    body = delay_slots(jump_tables(project, v, function, body), function)
+    assembly.write_text(register_pairs(body, compiler.cflags, function), encoding="utf-8")
     output = run_tool(
         [
             executable_path,
             "-t",
             targets[compiler.kind],
             "--valid-syntax",
+            "--stack-structs",
             "--context",
             str(context),
             "--function",
@@ -130,26 +171,64 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     if not output.strip():
         raise Held("m2c", f"policy.m2c {executable_path} produced no draft for {function}")
     source = work / (function + ".c")
+    output = normalize(output, context.read_text())
+    if "second half of f64" in output:
+        raise Held("m2c", f"{function}: unresolved second half of f64 in decompiler output")
+    output = stack_locals(output, context.read_text(), function, assembly.read_text())
     output = header_types(output, context.read_text())
-    source.write_text(output, encoding="utf-8")
-    print(f"draft_path: {source}")
-    print(f"source filename: {function}.c (decomp try identifies the function from the filename)")
+    # Reject unsupported instructions/register reads before changing headers.
+    output = lower(output, context.read_text(), allow_fields=True)
     selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
     context.write_text(_context(headers, selected), encoding="utf-8")
-    context.write_text(preprocess(context, project, policy, v), encoding="utf-8")
+    context.write_text(preprocess_context(context, project, policy, v, function), encoding="utf-8")
     output, shared = share(project, function, output, context.read_text())
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:
         headers.append((shared.resolve(), shared.relative_to(project.include[0]).as_posix()))
     if shared is not None:
         selected.add(shared.resolve())
-    # A single expansion also handles unguarded dependency headers included by
-    # multiple roots. Keep the draft standalone without repeating their types.
+    # The draft and trial compile the same includes as a normal source unit.
+    # Expanded declarations are only for m2c and layout/macro analysis.
     context.write_text(_context(headers, selected), encoding="utf-8")
-    declarations = preprocess(context, project, policy, v)
+    includes = context.read_text()
+    declarations = preprocess_context(context, project, policy, v, function)
+    context.write_text(declarations, encoding="utf-8")
     output = lower(output, declarations)
-    source.write_text(
+    output = address_arithmetic(output, declarations, function)
+    commands = gbi.lower(output, gbi.microcode(project))
+    output = commands.source
+    if commands.macros:
+        includes += gbi.install(project)
+    for item in commands.raw:
+        print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}")
+    content = (
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
-        f"{declarations.rstrip()}\n\n{output.rstrip()}\n",
-        encoding="utf-8",
+        f"{includes.rstrip()}\n\n{output.rstrip()}\n"
     )
+    candidate = work / "compile-proof" / (function + ".c")
+    candidate.parent.mkdir()
+    candidate.write_text(content, encoding="utf-8")
+    prove(project, policy, function, v, candidate)
+    source.write_text(content, encoding="utf-8")
+    print(f"draft_path: {source}")
+    print(f"source filename: {function}.c (decomp try identifies the function from the filename)")
     return source
+
+
+def draft(
+    project: Project,
+    policy: Policy,
+    function: str | None,
+    v: str | None,
+    scratch: Path,
+    *,
+    generation: Path | None = None,
+) -> Path:
+    """Name the selected function on every refusal from the draft boundary."""
+    try:
+        return _draft(project, policy, function, v, scratch, generation=generation)
+    except Held as error:
+        if function and not error.reason.startswith(function + ":"):
+            raise Held(error.phase, f"{function}: {error.reason}") from error
+        raise
+    except (OSError, UnicodeError) as error:
+        raise Held("m2c", f"{function}: draft input/output: {error}") from error
