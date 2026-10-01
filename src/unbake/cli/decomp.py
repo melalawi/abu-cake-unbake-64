@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 
@@ -35,22 +34,9 @@ def register(phases: Subparsers) -> None:
     selection.add_argument("--function")
     release = decomp_verbs.add_parser("release", phase="decomp")
     release.add_argument("assignment_id")
-    draft = decomp_verbs.add_parser("draft", phase="decomp")
-    draft.add_argument("function")
-    draft.add_argument("--version", required=True, metavar="V")
-    draft.add_argument("--scratch", type=Path, required=True, metavar="DIR")
     gbi = decomp_verbs.add_parser("gbi", phase="decomp", help="Rewrite proven Gfx word pairs as standard GBI macros.")
     gbi.add_argument("files", type=Path, nargs="*", metavar="FILE")
     gbi.add_argument("--all", action="store_true", dest="all_files")
-    trial = decomp_verbs.add_parser(
-        "try", phase="decomp", help="Compare a C draft and explain its first divergence and object score."
-    )
-    trial.add_argument("source", type=Path, metavar="FILE")
-    trial.add_argument("--scratch", type=Path, required=True, metavar="DIR")
-    trial.add_argument("--version", action="append", metavar="V", help="Repeat to select VERSIONs.")
-    trial.add_argument(
-        "--flags", action="store_true", help="Rank the source compiler's registry flag variants per VERSION."
-    )
     search = decomp_verbs.add_parser("search", phase="decomp")
     search.add_argument("source", type=Path, metavar="FILE")
     search.add_argument("--method", required=True)
@@ -63,15 +49,6 @@ def register(phases: Subparsers) -> None:
     best.add_argument("function")
     publish = decomp_verbs.add_parser("publish", phase="decomp")
     publish.add_argument("--all", required=True, action="store_true")
-
-
-def trial(args: argparse.Namespace, project: Project, policy: Policy, source: Path, versions: list[str] | None) -> None:
-    from unbake.decomp import trial as draft_trial
-
-    result = draft_trial.retain_draft(
-        project, policy, source, args.scratch, versions=versions, flags=args.verb == "try" and args.flags
-    )
-    receipt("decomp", [f"retained NON_MATCHING draft {result.function} {result.source_sha256}"])
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
@@ -105,19 +82,6 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
         from unbake.decomp import guide
 
         print(guide.run(project, args.function, args.version))
-    elif args.verb == "draft":
-        from unbake.decomp import m2c
-        from unbake.decomp.trial_compile import run_tool
-        from unbake.project import build
-
-        with ExitStack() as holds:
-            with build.lock(project):
-                generation = project.build_link(args.version)
-                if not generation.is_symlink() or not (generation / f"{project.name}.elf").is_file():
-                    print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
-                generation = holds.enter_context(build.pin(build.current_generation(project, args.version)))
-            source = m2c.draft(project, policy, args.function, args.version, args.scratch, generation=generation)
-        trial(args, project, policy, source, None)
     elif args.verb == "gbi":
         from unbake.decomp import gbi
 
@@ -153,8 +117,6 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
                 raise Held("search", "--permute-version/--permute-target/--permute-budget: require method permute")
             generators = methods(args.method)
         search_run(project, policy, args.source, generators, args.out, args.budget_seconds)
-    elif args.verb == "try":
-        trial(args, project, policy, args.source, args.version)
     else:
         from unbake.decomp.drafts import Store
 

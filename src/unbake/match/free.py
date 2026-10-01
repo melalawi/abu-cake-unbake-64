@@ -5,13 +5,11 @@ Run with python -m unbake.match.free --project ROOT --version VERSION.
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Callable
-from pathlib import Path
 from time import perf_counter
 
 from unbake.match import queue
-from unbake.project.config import Held, Policy, Project, load, load_policy
+from unbake.project.config import Held, Policy, Project
 
 
 def land(
@@ -72,24 +70,3 @@ def land(
             f"accepted={matched} skipped={skipped} refused={refused}; wall={perf_counter() - started:.3f}s"
         )
     return messages
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--policy", type=Path)
-    args = parser.parse_args()
-    try:
-        messages = land(
-            load(args.project), load_policy(args.policy), args.version, report=lambda line: print(line, flush=True)
-        )
-        refused = any(line.startswith("HELD(") for line in messages)
-    except Held as error:
-        print(f"HELD({error.phase}): {error.reason}", flush=True)
-        raise SystemExit(1) from error
-    raise SystemExit(int(refused))
-
-
-if __name__ == "__main__":
-    main()

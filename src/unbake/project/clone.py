@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import fields
 from pathlib import Path
+from uuid import uuid4
 
 from unbake.project import build, compiler_files, config, hygiene, makefile, setup, toolchain
 from unbake.project.config import Held, Policy, Project
@@ -121,9 +122,7 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
             generations = {}
             for name in versions:
                 generation = build.current_generation(project, name)
-                if generation.parent != project.root / "build" or not re.fullmatch(
-                    re.escape(name) + r"\.\d+", generation.name
-                ):
+                if generation.parent != project.build or not re.fullmatch(re.escape(name) + r"\.\d+", generation.name):
                     raise Held("clone", f"{generation}: required build/{name}.N generation")
                 generations[name] = pins.enter_context(build.pin(generation))
         with tempfile.TemporaryDirectory(prefix=".clone-", dir=destination.parent) as temporary:
@@ -171,7 +170,7 @@ def _create(
         if actual != version.baserom_sha1:
             raise Held("clone", f"{version.baserom}: sha1 expected {version.baserom_sha1}, found {actual}")
         generation = generations[name]
-        if generation.parent != project.root / "build" or not re.fullmatch(re.escape(name) + r"\.\d+", generation.name):
+        if generation.parent != project.build or not re.fullmatch(re.escape(name) + r"\.\d+", generation.name):
             raise Held("clone", f"{generation}: required build/{name}.N generation")
         for filename in (".split.mk", ".extract-key", project.name + ".elf", f"{project.name}.{name}.z64"):
             require(generation / filename)
@@ -200,14 +199,22 @@ def _create(
         version = project.version(name)
         for path in (version.baserom, version.split, version.symbols, project.asm / name):
             copy_regular(path, destination / project_relative(project, path))
-        target = destination / "build" / generation.name
+        target = destination / project.build.relative_to(project.root) / generation.name
         copy_regular(generation, target)
-        link = destination / "build" / name
+        link = destination / project.build.relative_to(project.root) / name
         if link.is_symlink():
             link.unlink()
         elif link.exists():
             shutil.rmtree(link)
         link.symlink_to(target.name, target_is_directory=True)
+    config_path = destination / "config.toml"
+    text = config_path.read_text()
+    text, count = re.subn(
+        r'(\[workspace\]\s*\nid\s*=\s*)"[^"\n]+"', lambda match: match[1] + '"' + str(uuid4()) + '"', text
+    )
+    if count != 1:
+        raise Held("clone", "workspace.id: required one explicit workspace identity")
+    config_path.write_text(text)
     cloned = config.load(destination)
     for path in (cloned.src, cloned.tools, cloned.asm, *cloned.include):
         project_relative(cloned, path)
@@ -219,7 +226,7 @@ def _create(
     # The existing Makefile includes these ignored, clone-local build graphs.
     # Keep policy selection out of every tracked game file.
     for generation in generations.values():
-        graph = destination / "build" / generation.name / ".split.mk"
+        graph = destination / project.build.relative_to(project.root) / generation.name / ".split.mk"
         original_stat = graph.stat()
         graph.write_bytes(
             (
@@ -240,7 +247,7 @@ def _create(
         # A replaced compiler invalidates warm code even when its path/flags
         # stay identical. Cache service updates alone do not affect object bytes.
         for generation in generations.values():
-            for receipt in (destination / "build" / generation.name).rglob("*.built"):
+            for receipt in (destination / project.build.relative_to(project.root) / generation.name).rglob("*.built"):
                 receipt.unlink()
     refresh_checksums(cloned)
     return cloned

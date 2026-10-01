@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from unbake.decomp import checks, drafts
+from unbake.decomp import work as draft_work
 from unbake.decomp.commands import prefix
 from unbake.decomp.score import diff
 from unbake.decomp.trial_compare import Compare, compare_object
@@ -31,6 +32,7 @@ class Trial:
     next_command: str
     flag_results: list[FlagResult] = field(default_factory=list)
     generations: dict[str, Path] = field(default_factory=dict)
+    work_identity: dict[str, object] = field(default_factory=dict)
 
     @property
     def identical_everywhere(self) -> bool:
@@ -49,7 +51,7 @@ def render(trial: Trial) -> str:
     if trial.flag_results:
         lines.extend(ranking(trial.flag_results, list(trial.compares)))
     lines.extend(f"precondition: {line}" for line in trial.preconditions)
-    lines.append(f"next_command: {trial.next_command}")
+
     return "\n".join(lines)
 
 
@@ -88,12 +90,21 @@ def retain_draft(
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=directory))
     selected = owning_versions(project, source.stem, versions)
     with trial_inputs(project, source.stem, selected) as pinned:
+        before = draft_work.identity(project, source, selected, pinned=pinned)
         result = (
             try_draft(project, policy, source, work, versions=versions, flags=True, pinned=pinned)
             if flags
             else try_draft(project, policy, source, work, versions=versions, pinned=pinned)
         )
+        after = draft_work.identity(project, source, selected, pinned=pinned)
+        if before != after:
+            raise Held("try", "trial.inputs_changed: inputs changed during compilation; try again")
+        result.work_identity = dict(after)
+        draft_work.persist(project, after)
         store_trial(project, policy, source, result)
+    from unbake.cli.common import suggest
+
+    suggest(result.next_command)
     return result
 
 
@@ -110,13 +121,15 @@ def try_draft(
     directory = scratch_directory(project, scratch, "try")
     source = Path(source).resolve()
     content, text = _source_content(source)
+    original_project = project
+    project = draft_work.compilation_project(project, source)
     variants = compiler_variants(project, source) if flags else [()]
     preconditions = [checks.message(finding) for finding in checks.run(text) if finding.fakematch is None]
     selected = owning_versions(project, source.stem, versions) if pinned is None else list(pinned)
     function = source.stem
     if pinned is None:
-        with trial_inputs(project, function, selected) as pinned:
-            return try_draft(project, policy, source, scratch, versions, flags=flags, pinned=pinned)
+        with trial_inputs(original_project, function, selected) as pinned:
+            return try_draft(original_project, policy, source, scratch, versions, flags=flags, pinned=pinned)
     for name, (_, target) in pinned.items():
         require_symbol_boundary(project, function, name, target)
     trial = Trial(function, drafts.source_identity(content), {}, preconditions, "")
@@ -174,18 +187,15 @@ def try_draft(
                     annotate_divergence(project, policy, copied, source, name, version_work, candidate, comparison)
                 comparison.lines.insert(1, f"target object {target}; generation {generation}")
                 trial.compares[name] = comparison
-    command = [*prefix(project), "decomp", "try", str(source), "--scratch", str(directory)]
-    if versions is not None:
-        for name in selected:
-            command.extend(["--version", name])
+    command = [*prefix(original_project), "try", str(source)]
     if flags:
         command.append("--flags")
     trial.next_command = shlex.join(command)
     if trial.identical_everywhere and not preconditions:
         trial.next_command = shlex.join(
-            [*prefix(project), "match", "submit", str(source)]
-            if set(selected) == set(project.versions)
-            else [*prefix(project), "decomp", "try", str(source), "--scratch", str(directory)]
+            [*prefix(original_project), "submit", str(source)]
+            if set(selected) == set(owning_versions(original_project, function, None))
+            else [*prefix(original_project), "try", str(source)]
         )
     (work / "report.txt").write_text(render(trial) + "\n", encoding="utf-8")
     print(render(trial))

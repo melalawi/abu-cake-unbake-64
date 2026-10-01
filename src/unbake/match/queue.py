@@ -11,7 +11,7 @@ from typing import Any
 
 from unbake.decomp import checks, drafts, features, needs
 from unbake.layout import split
-from unbake.match import common, declarations, proof, xver
+from unbake.match import common, declarations, proof
 from unbake.match import staging as stage
 from unbake.match.common import (
     Draft,
@@ -22,7 +22,6 @@ from unbake.match.common import (
     queue_path,
     read,
     relative,
-    sha,
     write_queue,
 )
 from unbake.match.publication import collect, publish
@@ -66,19 +65,11 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     sha = drafts.source_identity(content)
     if sha != row["source_sha256"]:
         held(f"{function}: {source} source_sha256 changed since submit")
-    records = drafts.Store(policy, project).rows(function)
-    proof = [record for record in records if record.get("source_sha256") == sha]
-    if not proof:
-        held(f"{function}: drafts.Store trial row missing source_sha256 {sha}")
-    latest = proof[-1]
-    if latest.get("identical_everywhere") is not True:
-        held(f"{function}: trial source_sha256 {sha} requires identical_everywhere=true")
     holding = holding_versions(project, function)
     versions = tuple(row.get("versions", holding))
-    if not versions or any(v not in holding for v in versions):
-        held(f"{function}: queue VERSIONs must select holding VERSIONs")
-    if not isinstance(latest.get("compares"), dict) or not all(v in latest["compares"] for v in versions):
-        held(f"{function}: trial compares missing VERSION proof for {', '.join(versions)}")
+    if versions != holding:
+        held("submit.versions: submission must cover every holding version")
+    manifest = proof.ensure(project, policy, source, holding)
     try:
         text = content.decode("utf-8")
     except UnicodeError as error:
@@ -91,6 +82,7 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     for edit in edits:
         relative(project, edit.path)
     pending: list[needs.Need] = list(findings)
+    row["work"] = manifest
     return Draft(row, content, versions, pending)
 
 
@@ -106,7 +98,11 @@ def submit(
     for version in selected:
         project.version(version)
     proof.ensure(project, policy, source, selected)
-    row: dict[str, Any] = {"function": function(source.stem), "source": str(source), "source_sha256": sha(read(source))}
+    row: dict[str, Any] = {
+        "function": function(source.stem),
+        "source": str(source),
+        "source_sha256": drafts.source_identity(read(source)),
+    }
     if versions is not None:
         row["versions"] = list(versions)
     stage.compile_fold(project, policy, validate(project, policy, row))
@@ -138,7 +134,7 @@ def status(*, project: Project, policy: Policy | None = None) -> list[str]:
 
 @contextmanager
 def runner(project: Project) -> Iterator[Path]:
-    staging = project.root / "build" / "match"
+    staging = project.build / "match"
     staging.mkdir(parents=True, exist_ok=True)
     yield staging
 
@@ -162,20 +158,22 @@ class _Generations(dict[str, Path]):
         return generation
 
 
-def run(project: Project, policy: Policy) -> list[str]:
+def run(project: Project, policy: Policy, *, function: str | None = None) -> list[str]:
     """Build outside build/.lock, isolate failures, then publish verified files."""
     features.load()
     receipts: list[str] = []
     with queue_lock(project):
         rows = queue(project)
+    if function is not None:
+        rows = [row for row in rows if row["function"] == function]
     candidates = []
     for row in rows:
         try:
-            candidates.append(xver.expand(project, validate(project, policy, row), receipts))
+            candidates.append(validate(project, policy, row))
         except Held as error:
             receipts.append(f"HELD(match): {row['function']}: {error.reason}")
     if not candidates:
-        if not rows and (project.root / "build").is_dir():
+        if not rows and (project.build).is_dir():
             with runner(project):
                 collect(project)
         return receipts
@@ -188,8 +186,8 @@ def run(project: Project, policy: Policy) -> list[str]:
                 current = _Generations(project, holds)
                 workspace = Path(tempfile.mkdtemp(prefix="run-", dir=staging))
                 base = workspace / "base"
-                copy_tree(project.root, base)
-                fingerprint = stage.fingerprint(base)
+                copy_tree(project, project.root, base)
+                fingerprint = stage.fingerprint(project, base)
                 attempt = stage.attempt(project, policy, base, workspace, current, candidates)
                 if attempt.failures:
                     if len(candidates) == 1:
@@ -212,6 +210,7 @@ def run(project: Project, policy: Policy) -> list[str]:
                         held("final build compare failed on " + "; ".join(attempt.diagnostics.values()))
                 publish(project, policy, attempt, candidates, current, fingerprint)
                 receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
+                receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
                 published = True
             collect(replace(project, versions=tuple(current)))
         receipts.extend(
@@ -230,3 +229,9 @@ def run(project: Project, policy: Policy) -> list[str]:
             attempt.discard()
         if workspace is not None:
             shutil.rmtree(workspace, ignore_errors=True)
+
+
+def publish_source(project: Project, policy: Policy, source: Path) -> list[str]:
+    """Publish only the requested file, with one transactional all-owner proof."""
+    submit(project, policy, source)
+    return run(project, policy, function=source.stem)

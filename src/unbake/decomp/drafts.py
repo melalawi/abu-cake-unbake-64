@@ -39,6 +39,7 @@ class TrialRecord(TypedDict):
     next_command: str
     identical_everywhere: bool
     at: str
+    work: dict[str, Any]
 
 
 def rank(row: TrialRecord) -> tuple[bool, int, int, float]:
@@ -77,8 +78,12 @@ class Store:
         name = getattr(project, "name", None)
         if not isinstance(name, str) or not name or Path(name).name != name or name in (".", ".."):
             raise Held("drafts", "project.name must be a single directory name")
+        for key in ("id", "workspace_id"):
+            value = getattr(project, key, None)
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f-]{36}", value):
+                raise Held("drafts", f"project.{key}: required explicit UUID")
         self.project = project
-        self.root = Path(state_root) / name / "drafts"
+        self.root = Path(state_root) / project.id / project.workspace_id / "drafts"
 
     def add(self, trial: Trial, source: Path, score: dict[str, float]) -> str:
         function = _function(_required(trial, "function"))
@@ -146,7 +151,12 @@ class Store:
             "next_command": next_command,
             "identical_everywhere": identical_everywhere,
             "at": datetime.now(UTC).isoformat(),
+            "work": dict(_required(trial, "work_identity")),
         }
+        if not row["work"]:
+            from unbake.decomp.work import identity as work_identity
+
+            row["work"] = dict(work_identity(self.project, Path(source).resolve(), list(compares)))
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             with (self.root / "trials.jsonl").open("a+", encoding="utf-8") as ledger:
@@ -198,9 +208,16 @@ class Store:
                         "next_command",
                         "identical_everywhere",
                         "at",
+                        "work",
                     ):
                         if name not in row:
                             raise Held("drafts", f"{path}:{number}: {name} is missing")
+                    if (row["work"].get("schema"), row["work"].get("project_id"), row["work"].get("workspace_id")) != (
+                        1,
+                        self.project.id,
+                        self.project.workspace_id,
+                    ):
+                        raise Held("drafts", f"{path}:{number}: trial.identity: incompatible work record")
                     _function(row["function"])
                     sha = row["sha256"]
                     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):

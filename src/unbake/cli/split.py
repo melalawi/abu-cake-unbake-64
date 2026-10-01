@@ -45,7 +45,6 @@ def register(phases: Subparsers) -> None:
     port.add_argument("--version", action="append", required=True, metavar="V")
     port.add_argument("--measure", type=Path, metavar="CSV", help="Write candidate inventory without compiling.")
     port.add_argument("--all-identical", action="store_true")
-    port.add_argument("--scratch", type=Path)
     port.add_argument("--apply", action="store_true", help="Stage rows after target-version object proofs.")
     twins = split_verbs.add_parser("twins", phase="split")
     twins.add_argument("function")
@@ -76,8 +75,6 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             return receipt("port", [f"measured {len(rows)} candidate version rows in {args.measure}"])
         if bool(args.functions) == bool(args.all_identical):
             raise Held("port", "select function names or --all-identical")
-        if args.scratch is None:
-            raise Held("port", "--scratch is required for target-version proofs")
         if args.all_identical:
             rows = [row for row in rows if row.identity in ("identical", "relocations")]
         else:
@@ -85,7 +82,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             if missing:
                 raise Held("port", f"no source-C/target-ASM candidates: {', '.join(sorted(missing))}")
             rows = [row for row in rows if row.function in args.functions]
-        return receipt("port", port.port(project, policy, rows, args.scratch, apply=args.apply))
+        return receipt("port", port.port(project, policy, rows, project.work, apply=args.apply))
     if args.verb == "data-symbol":
         from unbake.decomp.symbols_edits import data_symbol
         from unbake.layout.data_symbols import correspondence

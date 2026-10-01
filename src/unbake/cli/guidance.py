@@ -1,5 +1,7 @@
 """Read-only state guidance shared by the terminal receipt and next command."""
 
+import hashlib
+import json
 import shlex
 from pathlib import Path
 
@@ -15,6 +17,31 @@ def command(root: Path | None, phase: str) -> str:
 
 
 def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
+    if missing == "setup.compiler_confirmation" and root is not None:
+        path = config.load_pending(root).build / "setup/proposal.json"
+        if path.is_file():
+            proposal = path.read_bytes()
+            if not json.loads(proposal).get("unresolved"):
+                return retry + " --confirm " + hashlib.sha256(proposal).hexdigest()
+    if root is not None and missing in {
+        "trial.source_sha256",
+        "submit.source_sha256",
+        "submit.overlay_sha256",
+        "submit.generation_sha256",
+        "submit.target_sha256",
+        "submit.flags",
+        "submit.compiler_sha256",
+        "submit.layout_sha256",
+        "submit.exact",
+        "submit.versions",
+        "draft.source",
+    }:
+        try:
+            from unbake.cli.workflow import select
+
+            return select(config.load(root), config.load_policy())[0]
+        except (Held, OSError, ValueError):
+            pass
     if missing is not None:
         return f"Supply {missing}. Then run {retry}."
     if root is None:
@@ -28,4 +55,10 @@ def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unba
         if project.roms.is_dir() and next(project.roms.iterdir(), None) is not None:
             return setup
         return f"Put ROMs in {project.roms}. Then run {setup}."
-    return command(root, "next")
+    try:
+        from unbake.cli.workflow import select
+
+        return select(config.load(root), config.load_policy())[0]
+    except (Held, OSError, ValueError) as error:
+        reason = error.reason if isinstance(error, Held) else str(error)
+        return f"Supply {reason.split(chr(58), 1)[0]}. Then run {command(root, 'next')}."

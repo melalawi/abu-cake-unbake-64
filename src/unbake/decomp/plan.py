@@ -192,7 +192,7 @@ def ranked(project: Project, policy: Policy) -> list[Row]:
     output = []
     priorities = {"boundary": 0, "table": 1, "asm": 2, "merge": 3, "drafter": 4}
     for items in groups(functions, bodies):
-        if any(item.kind == "c" for item in items):
+        if all(item.kind == "c" for item in items):
             continue
         canonical = next((item for item in items if item.version == reference), items[0])
         aliases = tuple(sorted({name for item in items for name in (item.name, *item.aliases)}))
@@ -200,6 +200,8 @@ def ranked(project: Project, policy: Policy) -> list[Row]:
         score, identical, draft = _best(store, history, aliases, versions)
         classifications = [classify(bodies[item.version, item.name]) for item in items]
         route = min((route for route, evidence in classifications), key=priorities.__getitem__)
+        if any(item.kind == "c" for item in items):
+            route = "port"
         output.append(
             Row(
                 canonical.name,
@@ -264,3 +266,18 @@ def assign(
     if not records:
         raise Held("plan", "count: no unassigned unmatched functions")
     return records
+
+
+def actionable(project: Project, policy: Policy) -> list[Row]:
+    """Keep supported naming-version functions whose unheld owners are assembly."""
+    occupied = _occupied(assignments.Ledger(project, policy))
+    output = []
+    for row in ranked(project, policy):
+        if row.route != "drafter" or project.names_from not in row.versions or occupied.intersection(row.aliases):
+            continue
+        if any(row.names[v] != row.function for v in row.versions):
+            continue
+        if project.compiler_for(project.src / (row.function + ".c")).kind not in ("sn64", "ido"):
+            continue
+        output.append(row)
+    return output

@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from unbake.decomp import needs
+from unbake.decomp import needs, work
 from unbake.layout import split, split_apply
 from unbake.match import declarations
 from unbake.match.common import (
@@ -27,14 +27,18 @@ from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
-_OUTPUTS = frozenset({"build", ".git", "artifacts", ".unbake", ".splat", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
+_OUTPUTS = frozenset({".git", "artifacts", ".unbake", ".splat", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
 
 
-def project_input(path: Path) -> bool:
+def project_input(project: Project, path: Path) -> bool:
     """Classify a project-relative path for both staging and publication checks."""
     return (
         bool(path.parts)
         and path.parts[0] not in _OUTPUTS
+        and not any(
+            path.is_relative_to(root.relative_to(project.root))
+            for root in (project.build, project.work, project.drafts)
+        )
         and path != QUEUE_PATH
         and not any(part in {"__pycache__", ".venv", "venv"} for part in path.parts)
         and path.name != "clone-policy.toml"
@@ -80,28 +84,28 @@ def compare_failure(project: Project, version: str, result: build.BuildResult) -
     )
 
 
-def copy_tree(source: Path, destination: Path) -> None:
+def copy_tree(project: Project, source: Path, destination: Path) -> None:
 
     def ignore(directory: str, names: list[str]) -> list[str]:
-        return [name for name in names if not project_input((Path(directory) / name).relative_to(source))]
+        return [name for name in names if not project_input(project, (Path(directory) / name).relative_to(source))]
 
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
 
 
-def fingerprint(root: Path) -> dict[str, str]:
+def fingerprint(project: Project, root: Path) -> dict[str, str]:
     result = {}
     for directory, names, files in os.walk(root, followlinks=True):
         parent = Path(directory).relative_to(root)
-        names[:] = [name for name in names if project_input(parent / name)]
+        names[:] = [name for name in names if project_input(project, parent / name)]
         for name in files:
             path = Path(directory) / name
-            if project_input(path.relative_to(root)):
+            if project_input(project, path.relative_to(root)):
                 result[str(path.relative_to(root))] = sha(read(path))
     return result
 
 
 def generation(project: Project, version: str, current: Path, holds: ExitStack) -> Path:
-    parent = project.root / "build"
+    parent = project.build
     number = 1
     prefix = version + "."
     for path in parent.iterdir():
@@ -161,6 +165,10 @@ def project_at(project: Project, tree: Path) -> Project:
         root=tree,
         tools=relocated(project.tools),
         asm=relocated(project.asm),
+        roms=relocated(project.roms),
+        build=relocated(project.build),
+        work=relocated(project.work),
+        drafts=relocated(project.drafts),
         compilers={
             ident: replace(
                 compiler, cc=relocated(compiler.cc), as_=relocated(compiler.as_), sha256=relocated(compiler.sha256)
@@ -172,6 +180,7 @@ def project_at(project: Project, tree: Path) -> Project:
         version_map={
             v: replace(
                 project.version(v),
+                baserom=relocated(project.version(v).baserom),
                 split=tree / relative(project, project.version(v).split),
                 symbols=tree / relative(project, project.version(v).symbols),
             )
@@ -198,11 +207,16 @@ def attempt(
 
         def apply(staged: Project, policy: Policy, edits: Iterable[split.Edit]) -> None:
             edits = list(edits)
-            split_apply.apply(staged, policy, edits, staged=True)
+            write_staged(staged, edits)
             applied.extend(edits)
 
         resolved = needs.resolve([need for draft in candidates for need in draft.needs], staged_project, policy, apply)
         for draft in candidates:
+            manifest = draft.row["work"]
+            overlays = [
+                replace(edit, path=tree / relative(project, edit.path)) for edit in work.header_edits(project, manifest)
+            ]
+            apply(staged_project, policy, overlays)
             apply(
                 staged_project,
                 policy,
@@ -228,8 +242,17 @@ def attempt(
                 held(f"build.build VERSION {version}: unexpected generation {result.generation}")
             if not result.ok:
                 failures.append(version)
-                diagnostics[version] = compare_failure(staged_project, version, result)
-        return Attempt(tree, generations, failures, applied, resolved, diagnostics, holds)
+                diagnostics[version] = f"submit.sha1.{version}: " + compare_failure(staged_project, version, result)
+        return Attempt(
+            tree,
+            generations,
+            failures,
+            applied,
+            resolved,
+            diagnostics,
+            holds,
+            {v: results[v].sha1_line for v in versions if results[v].ok},
+        )
     except BaseException:
         Attempt(tree, generations, [], holds=holds).discard()
         raise
@@ -261,13 +284,19 @@ def bisect(
 
 def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
     """Compile the publication form before writing any queue state."""
-    with tempfile.TemporaryDirectory(prefix="match-submit-") as temporary:
+    project.work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="match-submit-", dir=project.work) as temporary:
         workspace = Path(temporary)
         tree = workspace / "tree"
-        copy_tree(project.root, tree)
+        copy_tree(project, project.root, tree)
         staged = project_at(project, tree)
+        overlays = [
+            replace(edit, path=tree / relative(project, edit.path))
+            for edit in work.header_edits(project, draft.row["work"])
+        ]
+        write_staged(staged, overlays)
         edits = declarations.folded_edits(staged, policy, draft.function, draft.content.decode("utf-8"), draft.versions)
-        split_apply.apply(staged, policy, edits, staged=True)
+        write_staged(staged, edits)
         for version in draft.versions:
             try:
                 build.compile_object(
@@ -279,3 +308,8 @@ def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
                 )
             except (Held, OSError) as error:
                 held(f"{draft.function}: folded source compile failed on VERSION {version}: {error}")
+
+
+def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
+    """Apply pre-proof edits only inside a private tree, with rollback on error."""
+    split_apply._write_staging(project, edits)

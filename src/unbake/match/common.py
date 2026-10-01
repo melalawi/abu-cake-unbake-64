@@ -43,6 +43,7 @@ class Attempt:
     resolved: list[str] = field(default_factory=list)
     diagnostics: dict[str, str] = field(default_factory=dict)
     holds: ExitStack = field(default_factory=ExitStack)
+    sha1: dict[str, str] = field(default_factory=dict)
 
     def discard(self) -> None:
         self.holds.close()

@@ -47,7 +47,7 @@ def require_symbol_boundary(project: Project, function: str, version: str, targe
         "try",
         f"precondition split-boundary: {function} VERSION {version}: target function symbol covers "
         f"0x{entry['size']:X} bytes of owning text row 0x{size:X}; remaining bytes belong to {names}; "
-        "resolve the split boundary with split boundary-map before decomp try",
+        "resolve the split boundary with split boundary-map before try",
     )
 
 

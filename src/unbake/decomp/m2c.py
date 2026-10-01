@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from unbake.decomp import gbi, similar
+from unbake.decomp import work as draft_work
 from unbake.decomp.draft_asm import delay_slots
 from unbake.decomp.draft_compile import prove
 from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
@@ -124,8 +125,10 @@ def _draft(
         raise Held(
             "m2c", f"compiler.kind {project.compiler_for(project.src / (function + '.c')).kind!r} has no m2c target"
         )
-    headers = _headers(project)
+    original_project = project
     work = Path(tempfile.mkdtemp(prefix=function + ".m2c.", dir=directory))
+    project = draft_work.overlay(project, work)
+    headers = _headers(project)
     context = work / "context.c"
     examples = similar.retrieve(project, function, v)
     examples_context = similar.context(examples)
@@ -149,6 +152,43 @@ def _draft(
     assembly = work / (function + ".s")
     body = whole_body(
         canonical_entry(project, v, function, address, read_text(assembly_path, "m2c"), generation=generation), function
+    )
+    registers = [
+        "zero",
+        "at",
+        "v0",
+        "v1",
+        "a0",
+        "a1",
+        "a2",
+        "a3",
+        "t0",
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t5",
+        "t6",
+        "t7",
+        "s0",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "t8",
+        "t9",
+        "k0",
+        "k1",
+        "gp",
+        "sp",
+        "fp",
+        "ra",
+    ]
+    body = re.sub(
+        r"\$(\d+)\b", lambda match: "$" + registers[int(match[1])] if int(match[1]) < len(registers) else match[0], body
     )
     body = delay_slots(jump_tables(project, v, function, body), function)
     assembly.write_text(register_pairs(body, compiler.cflags, function), encoding="utf-8")
@@ -209,8 +249,9 @@ def _draft(
     candidate.write_text(content, encoding="utf-8")
     prove(project, policy, function, v, candidate)
     source.write_text(content, encoding="utf-8")
+    draft_work.save_overlay(original_project, work)
     print(f"draft_path: {source}")
-    print(f"source filename: {function}.c (decomp try identifies the function from the filename)")
+    print(f"source filename: {function}.c (try identifies the function from the filename)")
     return source
 
 

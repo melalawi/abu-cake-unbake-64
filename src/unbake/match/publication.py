@@ -51,18 +51,22 @@ def publish(
         )
         for v in project.versions
     }
-    lock_path = project.root / "build" / ".lock"
+    lock_path = project.build / ".lock"
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         for version, generation in current.items():
             if build.current_generation(project, version).resolve() != generation:
                 held(f"VERSION {version}: current generation changed during match build")
-        latest = staging.fingerprint(project.root)
+        latest = staging.fingerprint(project, project.root)
         if latest != fingerprint:
             changed = sorted(
                 key for key in latest.keys() | fingerprint.keys() if latest.get(key) != fingerprint.get(key)
             )
             held(f"project build inputs changed during match build: {', '.join(changed)}")
+        from unbake.match import proof
+
+        for draft in candidates:
+            proof.ensure(project, policy, Path(draft.row["source"]), draft.versions)
         with queue_lock(project):
             rows = queue(project)
             for draft in candidates:
@@ -74,7 +78,7 @@ def publish(
             for edit in attempt.edits:
                 destination = project.root / Path(edit.path).relative_to(attempt.tree)
                 writes[destination] = read(edit.path)
-            ledger = Path(policy.state_root) / project.name / "receipts" / "match.jsonl"
+            ledger = Path(policy.state_root) / project.id / project.workspace_id / "receipts" / "match.jsonl"
             report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
             touched = set(writes) | {ledger, queue_path(project), project.root / "README.md"} | report_paths
             before = {path: read(path) if path.exists() else None for path in touched}
@@ -117,7 +121,7 @@ def collect(project: Project) -> None:
 
 
 def _collect(project: Project) -> None:
-    parent = project.root / "build"
+    parent = project.build
     for version in project.versions:
         live = build.current_generation(project, version).resolve()
         for generation in parent.glob(f"{version}.*"):

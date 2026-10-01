@@ -226,16 +226,7 @@ def for_version(project: Project, function: str, version: str) -> str:
     if needs:
         for need in needs:
             if isinstance(need, LayoutNeed):
-                command = [
-                    "python",
-                    "-m",
-                    "unbake.decomp.declarations",
-                    *prefix(project)[1:],
-                    "--source",
-                    need.source,
-                    "--version",
-                    version,
-                ]
+                command = [*prefix(project), "try", need.source]
                 commands.append("resolve: " + shlex.join(command))
     output = "\n".join(
         part
@@ -252,17 +243,6 @@ def for_version(project: Project, function: str, version: str) -> str:
         output = (
             f"{function}, VERSION {version}: no data or frame needs inferred; "
             "shared struct field accesses require declarations in paths.include; run "
-            + shlex.join(
-                [
-                    *prefix(project),
-                    "decomp",
-                    "draft",
-                    function,
-                    "--version",
-                    version,
-                    "--scratch",
-                    str(project.root.parent / (project.name + "-drafts")),
-                ]
-            )
+            + shlex.join([*prefix(project), "draft", function])
         )
     return output

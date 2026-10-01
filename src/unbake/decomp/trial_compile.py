@@ -16,8 +16,10 @@ def scratch_directory(project: Project, scratch: Path, phase: str) -> Path:
         raise Held(phase, "scratch is required")
     root = Path(project.root).resolve()
     directory = Path(scratch).resolve()
-    if directory.is_relative_to(root):
-        raise Held(phase, f"scratch {directory} is inside project.root {root}")
+    if directory.is_relative_to(root) and not directory.is_relative_to(project.work.resolve()):
+        raise Held(phase, f"paths.work: scratch {directory} is inside project.root {root} outside declared work")
+    if directory.is_relative_to(project.work.resolve()) and not project.work.resolve().is_relative_to(root):
+        raise Held(phase, "paths.work: resolved work path escapes project.root")
     try:
         directory.mkdir(parents=True, exist_ok=True)
     except OSError as error:
