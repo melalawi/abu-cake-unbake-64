@@ -222,7 +222,8 @@ class Permuter:
                 # branch mode cannot decode R_MIPS_PC16 relocations in assembly objects.
                 "--quiet",
             ]
-            finished = _run(command, work, environment, max(0, deadline - time.monotonic()), work / "permuter.log")
+            # Leave time to evaluate emitted candidates in the common search loop.
+            finished = _run(command, work, environment, max(0, deadline - time.monotonic()) / 2, work / "permuter.log")
             log = (work / "permuter.log").read_text(encoding="utf-8")
             baseline = re.findall(r"base score = (\d+)", log)
             if not finished and not baseline:

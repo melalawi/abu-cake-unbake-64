@@ -160,16 +160,21 @@ def run(
     cache: dict[str, _Candidate | None] = {}
     evaluated = 0
     deadline = time.monotonic() + budget_seconds
-    confirmation_seconds = 0.0
+    mutation_seconds = 0.0
     prepared: dict[tuple[str, str], tuple[str, explain.Allocation, tuple[int, ...]]] = {}
 
-    def evaluate(content: str, method: str, mutation: Mutation) -> _Candidate | None:
-        nonlocal evaluated, confirmation_seconds
+    def evaluate(
+        content: str, method: str, mutation: Mutation, version: str | None = None, incumbent: _Candidate | None = None
+    ) -> _Candidate | None:
+        nonlocal evaluated, mutation_seconds, deadline
         digest = hashlib.sha256(content.encode()).hexdigest()
         cached = digest in cache
         error = None
+        measured_score: int | None = None
+        confirmed = False
         if not cached:
             started = time.monotonic()
+            evaluation_deadline = deadline
             directory = out / digest
             directory.mkdir(exist_ok=True)
             path = directory / source.name
@@ -177,25 +182,56 @@ def run(
             scratch = directory / "trial"
             generations = {v: project.build_link(v).resolve() for v in project.versions}
             try:
-                result = trial.try_draft(project, policy, path, scratch)
+                result = (
+                    trial.try_draft(project, policy, path, scratch)
+                    if version is None
+                    else trial.try_draft(project, policy, path, scratch, versions=[version])
+                )
             except Held as failure:
                 error = failure.reason
                 cache[digest] = None
             else:
                 if not result.compares:
                     raise Held("search", "trial.compares: missing VERSION")
-                fuzzy = _retain(project, policy, path, scratch, result, generations)
-                cache[digest] = _Candidate(
-                    content, path, result, min(c.identical for c in result.compares.values()), fuzzy
-                )
+                measured_score = min(c.identical for c in result.compares.values())
+                cache[digest] = None
+                if version is None or (
+                    incumbent is not None and measured_score > incumbent.trial.compares[version].identical
+                ):
+                    if version is not None:
+                        confirmation_started = time.monotonic()
+                        try:
+                            result = trial.try_draft(project, policy, path, directory / "confirmation")
+                        except Held as failure:
+                            error = failure.reason
+                        else:
+                            confirmed = True
+                        deadline += time.monotonic() - confirmation_started
+                    else:
+                        confirmed = True
+                    if confirmed:
+                        fuzzy = _retain(
+                            project,
+                            policy,
+                            path,
+                            directory / "confirmation" if version else scratch,
+                            result,
+                            generations,
+                        )
+                        cache[digest] = _Candidate(
+                            content, path, result, min(c.identical for c in result.compares.values()), fuzzy
+                        )
             evaluated += 1
-            confirmation_seconds = max(confirmation_seconds, time.monotonic() - started)
+            if version is not None:
+                mutation_seconds = max(mutation_seconds, time.monotonic() - started - (deadline - evaluation_deadline))
         candidate = cache[digest]
         row = {
             "generator": method,
             "mutation": mutation.description,
             "kind": mutation.kind,
-            "score": candidate.score if candidate else None,
+            "score": candidate.score if candidate else measured_score,
+            "versions": list(candidate.trial.compares) if candidate else ([version] if version else []),
+            "confirmed": confirmed or (cached and candidate is not None),
             "fuzzy": candidate.fuzzy if candidate else None,
             "source_sha256": digest,
             "cached": cached,
@@ -205,9 +241,19 @@ def run(
             stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
         return candidate
 
-    best = evaluate(text, "initial", Mutation("initial", "starting source", text))
-    if best is None:
+    initial = evaluate(text, "initial", Mutation("initial", "starting source", text))
+    if initial is None:
         raise Held("search", f"source {source}: initial trial failed; see {steps}")
+    best = initial
+    # Baseline and initial compiler context are setup, outside the mutation budget.
+    representative = min(best.trial.compares, key=lambda v: (best.trial.compares[v].identical, v))
+    for generator in generators:
+        version = generator.version if isinstance(generator, Permuter) else representative
+        key = best.trial.source_sha256, version
+        expanded = preprocess(project, policy, best.path, version, time.monotonic() + budget_seconds)
+        allocation = explain.allocation(project, policy, best.path, version)
+        prepared[key] = expanded, allocation, _focus_lines(allocation, best.source, expanded)
+    deadline = time.monotonic() + budget_seconds
     beam = [best]
     stalls = 0
     while time.monotonic() < deadline and not best.trial.identical_everywhere:
@@ -215,19 +261,15 @@ def run(
         fresh = False
         previous = best.rank
         for parent in beam:
-            generator_deadline = deadline - confirmation_seconds
+            generator_deadline = deadline - mutation_seconds
             if time.monotonic() >= generator_deadline:
                 break
             parent_digest = parent.trial.source_sha256
             for generator in generators:
-                generator_deadline = deadline - confirmation_seconds
+                generator_deadline = deadline - mutation_seconds
                 if time.monotonic() >= generator_deadline:
                     break
-                version = (
-                    generator.version
-                    if isinstance(generator, Permuter)
-                    else min(parent.trial.compares, key=lambda v: (parent.trial.compares[v].identical, v))
-                )
+                version = generator.version if isinstance(generator, Permuter) else representative
                 key = parent_digest, version
                 if key not in prepared:
                     expanded = preprocess(project, policy, parent.path, version, generator_deadline)
@@ -237,7 +279,7 @@ def run(
                 context = Context(project, policy, out, parent.path, allocation, focus_lines, generator_deadline)
                 method = getattr(generator, "name", type(generator).__name__)
                 proposals = iter(generator.propose(expanded, parent.trial, context))
-                while time.monotonic() < deadline - confirmation_seconds:
+                while time.monotonic() < deadline - mutation_seconds:
                     try:
                         mutation = next(proposals)
                     except StopIteration:
@@ -248,16 +290,16 @@ def run(
                         raise Held("search", f"generator {method}.mutation: Mutation with source text required")
                     digest = hashlib.sha256(mutation.source.encode()).hexdigest()
                     fresh |= digest not in cache
-                    candidate = evaluate(mutation.source, method, mutation)
+                    candidate = evaluate(mutation.source, method, mutation, version, best)
                     if candidate:
                         pool[digest] = candidate
                         if candidate.rank > best.rank:
                             best = candidate
                         if best.trial.identical_everywhere:
                             break
-                if best.trial.identical_everywhere or time.monotonic() >= deadline - confirmation_seconds:
+                if best.trial.identical_everywhere or time.monotonic() >= deadline - mutation_seconds:
                     break
-            if best.trial.identical_everywhere or time.monotonic() >= deadline - confirmation_seconds:
+            if best.trial.identical_everywhere or time.monotonic() >= deadline - mutation_seconds:
                 break
         beam = sorted(pool.values(), key=lambda item: item.rank, reverse=True)[:width]
         stalls = 0 if best.rank > previous else stalls + 1
@@ -269,6 +311,10 @@ def run(
                 beam = [best]
             else:
                 break
+    mutations = evaluated - 1
+    if mutations == 0:
+        raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
+    print(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s")
     if best.trial.identical_everywhere:
         print(f"IDENTICAL {best.trial.function}: {best.path}")
     else:

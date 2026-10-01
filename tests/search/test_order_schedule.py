@@ -9,7 +9,7 @@ import unittest
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from unbake.decomp import explain, score, trial, trial_compile
@@ -25,11 +25,15 @@ from unbake.search.core import Context, Mutation
 
 def proposals(source: str, **context: Any) -> list[Mutation]:
     return list(
-        order.propose(source, SimpleNamespace(function="f"), SimpleNamespace(deadline=time.monotonic() + 30, **context))
+        order.propose(
+            source,
+            cast(trial.Trial, SimpleNamespace(function="f")),
+            cast(Context, SimpleNamespace(deadline=time.monotonic() + 30, **context)),
+        )
     )
 
 
-def project_fixture(root: Path) -> SimpleNamespace:
+def project_fixture(root: Path) -> Any:
     with Path(os.environ["UNBAKE_POLICY"]).open("rb") as stream:
         cpp = tomllib.load(stream)["cpp"]
     (root / "include").mkdir(parents=True)
@@ -71,7 +75,7 @@ class SearchIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project = project_fixture(root / "project")
-            policy = SimpleNamespace(state_root=root / "state", search_beam=2, stall_trials=2)
+            policy: Any = SimpleNamespace(state_root=root / "state", search_beam=2, stall_trials=2)
             source = root / "f.c"
             source.write_text(
                 '#include "types.h"\n/* FAKEMATCH: measured lifetime. */\nWord f(void){return VALUE+UNIT_VALUE;}\n'
@@ -85,15 +89,17 @@ class SearchIntegrationTests(unittest.TestCase):
                     self.assertNotIn("#include", expanded)
             allocation = Allocation((), (), (), ())
 
-            def compile_trial(project: Project, policy: Policy, path: Path, scratch: Path) -> trial.Trial:
+            def compile_trial(
+                project: Project, policy: Policy, path: Path, scratch: Path, versions: list[str] | None = None
+            ) -> trial.Trial:
                 words = [0x03E00008, 0]
                 comparisons = {
                     version: compare_words(
                         version, words, words if "confirmed" in path.read_text() else [0x03E00008, 1]
                     )
-                    for version in project.versions
+                    for version in (project.versions if versions is None else versions)
                 }
-                for version in project.versions:
+                for version in comparisons:
                     work = scratch / version
                     work.mkdir(parents=True)
                     (work / "trial.elf").write_bytes(b"ELF")
@@ -131,7 +137,7 @@ class SearchIntegrationTests(unittest.TestCase):
             project = project_fixture(root / "project")
             source = root / "f.c"
             source.write_text("void f(void){}")
-            policy = SimpleNamespace(state_root=root / "state")
+            policy: Any = SimpleNamespace(state_root=root / "state")
             for family in ("gcc", "ido"):
                 with self.subTest(family=family):
                     compiler = project.compiler_for(source)
@@ -166,7 +172,7 @@ class SearchIntegrationTests(unittest.TestCase):
             source.write_text("int f(int a){return a;}")
             compiler = project.compiler_for(source)
             compiler.id = "gcc-2.8.1-sn64"
-            policy = SimpleNamespace(state_root=root / "state", cpp=Path("/usr/bin/cpp"))
+            policy: Any = SimpleNamespace(state_root=root / "state", cpp=Path("/usr/bin/cpp"))
             commands: list[list[str]] = []
 
             def tools(command: list[str], work: Path, phase: str) -> str:
@@ -186,7 +192,7 @@ class SearchIntegrationTests(unittest.TestCase):
                 patch.object(trial_compile, "run_tool", side_effect=tools),
                 patch.object(trial, "try_draft", return_value=proof),
             ):
-                result = explain.allocation(project, policy, source, "us")  # type: ignore[arg-type]
+                result = explain.allocation(project, policy, source, "us")
             self.assertEqual([p.hard for p in result.pseudos], [2])
             self.assertEqual(commands[0][0], "/usr/bin/cpp")
             self.assertEqual(commands[1][0], str(compiler.cc))
@@ -340,7 +346,7 @@ int main(void) {
         )
         for source, result, context, value in cases:
             with self.subTest(value=value), self.assertRaisesRegex(Held, value.replace(".", r"\.")):
-                list(order.propose(source, result, context))
+                list(order.propose(source, cast(trial.Trial, result), cast(Context, context)))
 
 
 class ScheduleTests(unittest.TestCase):
@@ -355,7 +361,7 @@ class ScheduleTests(unittest.TestCase):
             b.write_text(self.delay)
             for first, last in [(self.sched, self.delay), (a, b)]:
                 with self.subTest(path=isinstance(first, Path)):
-                    result = schedule({"sched2": first, "dbr": last})
+                    result = schedule({"sched2": cast(str | Path, first), "dbr": cast(str | Path, last)})
                     self.assertEqual(tuple(row.uid for row in result.sched2), (9, 4))
                     self.assertEqual(tuple(row.uid for row in result.dbr), (9, 4))
                     self.assertEqual(result.delay_slots, ((9, 4),))
@@ -385,7 +391,7 @@ class ScheduleTests(unittest.TestCase):
         ]
         for dumps, name in cases:
             with self.subTest(value=name), self.assertRaisesRegex(Held, name.replace(".", r"\.")):
-                schedule(dumps)
+                schedule(cast(Any, dumps))
 
     def test_ido_blind_capability_is_explicit(self) -> None:
         result = ido_schedule(None)

@@ -3,23 +3,27 @@
 import hashlib
 import json
 import tempfile
+import time
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 
 from tests.match import test_match
 from tests.support import tool
 from unbake.cli.decomp import run
 from unbake.cli.main import make_parser
-from unbake.decomp import needs, score, trial
+from unbake.decomp import explain, features, needs, score, trial
 from unbake.decomp.drafts import Store
+from unbake.decomp.trial_artifacts import TrialContext
 from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.families import Family, family_for
 from unbake.layout.split import Edit
+from unbake.match import queue as match
 from unbake.project.config import Compiler, Held, Policy, Project, Version
-from unbake.search import core, methods, register
+from unbake.search import core, methods, permute, register
 
 
 class CoreTests(unittest.TestCase):
@@ -27,14 +31,14 @@ class CoreTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.enterContext(patch.object(test_match.match.features, "load"))
+        self.enterContext(patch.object(features, "load"))
         self.enterContext(patch.dict(needs.RESOLVERS, {}, clear=True))
         derivers: list[needs.Deriver] = []
         self.enterContext(patch.object(needs, "derivers", return_value=derivers))
         self.enterContext(patch.object(needs, "register_deriver", side_effect=derivers.append))
 
     def test_evidence_roundtrip_and_named_refusals(self) -> None:
-        cases = [
+        cases: list[needs.Need] = [
             needs.SymbolNeed("us", "D_800C7C94", 0x800C7C94, -32768, ".data", "f32", 4, "3c01800d"),
             needs.LabelNeed("us", "inner", 0x80001004, "data", "3f800000"),
             needs.LayoutNeed("us", "Player", [["team", 3, "u8", 1]], "function.c", "offset"),
@@ -46,13 +50,15 @@ class CoreTests(unittest.TestCase):
             with self.subTest(kind=type(need).__name__):
                 self.assertEqual(needs.decode(json.loads(json.dumps(needs.encode(need)))), need)
                 with self.assertRaisesRegex(Held, needs.name(need)):
-                    needs.resolve([need], None, None, lambda *args: self.fail("write before refusal"))
+                    needs.resolve(
+                        [need], cast(Project, None), cast(Policy, None), lambda *args: self.fail("write before refusal")
+                    )
                 row = needs.encode(need)
                 field = next(key for key in row if key != "need_type")
                 del row[field]
                 with self.assertRaisesRegex(Held, field):
                     needs.decode(row)
-        context = object()
+        context = cast(TrialContext, object())
         needs.register_deriver(lambda ctx: cases if ctx is context else [])
         self.assertEqual(needs.derive(context), cases)
 
@@ -69,7 +75,7 @@ class CoreTests(unittest.TestCase):
                 self.assertIn("-G0", family.probe_cflags())
         for value, refusal in [(None, "compiler.id"), ("absent", "absent")]:
             with self.subTest(value=value), self.assertRaisesRegex(Held, refusal):
-                family_for(value)
+                family_for(cast(str, value))
 
     def test_match_resolves_in_stage_and_refuses_unknown_before_build(self) -> None:
         for unresolved in (False, True):
@@ -77,14 +83,14 @@ class CoreTests(unittest.TestCase):
                 helper = test_match.MatchTests("runTest")
                 helper.setUp()
                 try:
-                    pending = [
+                    pending: list[needs.Need] = [
                         needs.LabelNeed("us", "inner", 0x80001004, "data", "word"),
                         needs.SymbolNeed("us", "literal", 0x80002000, 0, ".data", "f32", 4, "word"),
                     ]
                     if unresolved:
                         pending.append(needs.RodataNeed("us", "unresolved_pool", "literals", 0x80003000, 4, "word"))
                     source = helper.draft("alpha", pending=pending)
-                    calls = []
+                    calls: list[str] = []
 
                     def resolver(
                         batch: list[needs.Need],
@@ -104,8 +110,8 @@ class CoreTests(unittest.TestCase):
                     with patch.dict(needs.RESOLVERS, {}, clear=True):
                         needs.register_resolver(needs.LabelNeed, 20, resolver)
                         needs.register_resolver(needs.SymbolNeed, 10, resolver)
-                        test_match.match.submit(helper.project, helper.policy, source)
-                        receipts = test_match.match.run(helper.project, helper.policy)
+                        match.submit(helper.project, helper.policy, source)
+                        receipts = match.run(helper.project, helper.policy)
                     if unresolved:
                         self.assertEqual(helper.calls, [])
                         self.assertEqual(calls, [])
@@ -133,7 +139,7 @@ class CoreTests(unittest.TestCase):
             v: Version(v, project_root / v, "a" * 40, project_root / (v + ".yaml"), project_root / (v + ".txt"), ())
             for v in ("us", "eu")
         }
-        project = SimpleNamespace(
+        project: Any = SimpleNamespace(
             root=project_root,
             name="fixture",
             versions=("us", "eu"),
@@ -144,13 +150,15 @@ class CoreTests(unittest.TestCase):
             version=lambda v: configured[v],
             build_link=lambda v: project_root / v,
         )
-        policy = SimpleNamespace(search_beam=2, stall_trials=2, state_root=self.root / "state")
+        policy: Any = SimpleNamespace(search_beam=2, stall_trials=2, state_root=self.root / "state")
         source = self.root / "func_8041F2A0.c"
         source.write_text("start")
         calls = []
         words = bytes.fromhex("03e00008000000003c01800d")
 
-        def compile_trial(project: Project, policy: Policy, path: Path, scratch: Path) -> trial.Trial:
+        def compile_trial(
+            project: Project, policy: Policy, path: Path, scratch: Path, versions: list[str] | None = None
+        ) -> trial.Trial:
             content = path.read_text()
             calls.append(content)
             if content == "invalid":
@@ -158,6 +166,8 @@ class CoreTests(unittest.TestCase):
             counts = {"start": (293, 293), "lopsided": (294, 292), "better": (294, 294)}[content]
             comparisons = {}
             for version, count in zip(project.versions, counts, strict=False):
+                if versions is not None and version not in versions:
+                    continue
                 directory = scratch / version
                 directory.mkdir(parents=True)
                 (directory / "trial.elf").write_bytes(b"ELF")
@@ -195,7 +205,7 @@ class CoreTests(unittest.TestCase):
             with (
                 patch.object(trial, "try_draft", compile_trial),
                 patch.object(score, "fuzzy", return_value=98.0),
-                patch.object(core.explain, "allocation", return_value=SimpleNamespace(differences=[], pseudos=[])),
+                patch.object(explain, "allocation", return_value=SimpleNamespace(differences=[], pseudos=[])),
             ):
                 run(args, project, policy)
             rows = [json.loads(line) for line in (self.root / "out" / "steps.jsonl").read_text().splitlines()]
@@ -203,7 +213,7 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(rows[1]["cached"])
             self.assertEqual(calls.count("start"), 1)
             stored = Store(policy, project).rows(source.stem)
-            self.assertEqual(len(stored), 3)
+            self.assertEqual(len(stored), 2)
             self.assertTrue(stored[-1]["identical_everywhere"])
             with self.assertRaisesRegex(Held, "unknown"):
                 methods("unknown")
@@ -211,4 +221,82 @@ class CoreTests(unittest.TestCase):
             with self.subTest(missing=attribute):
                 incomplete = SimpleNamespace(**{key: value for key, value in vars(policy).items() if key != attribute})
                 with self.assertRaisesRegex(Held, attribute):
-                    core.run(project, incomplete, source, [Proposals()], self.root / "refused", 5)
+                    core.run(project, cast(Policy, incomplete), source, [Proposals()], self.root / "refused", 5)
+
+    def test_mutation_budget_excludes_setup_and_confirms_only_improvements(self) -> None:
+        for method in ("order", "permute", "empty"):
+            with self.subTest(method=method):
+                out = self.root / method
+                source = self.root / "f.c"
+                source.write_text("start")
+                project: Any = SimpleNamespace(
+                    root=self.root / "project",
+                    versions=("us", "eu", "de", "eu-x", "us-rev1"),
+                    build_link=lambda version: self.root / version,
+                )
+                policy: Any = SimpleNamespace(search_beam=2, stall_trials=2)
+                clock = [0.0]
+                calls: list[tuple[str, list[str] | None]] = []
+
+                def compile_trial(
+                    project: Project,
+                    policy: Policy,
+                    path: Path,
+                    scratch: Path,
+                    versions: list[str] | None = None,
+                    calls: list[tuple[str, list[str] | None]] = calls,
+                    clock: list[float] = clock,
+                ) -> trial.Trial:
+                    content = path.read_text()
+                    calls.append((content, versions))
+                    clock[0] += 60 if versions is None else 2
+                    count = {"start": 10, "loss": 9, "lopsided": 12, "better": 11}[content]
+                    compares = {
+                        version: Compare(
+                            version,
+                            8 if content == "lopsided" and version == "eu" else count,
+                            20,
+                            dict.fromkeys(TYPES, 0),
+                            [],
+                        )
+                        for version in (project.versions if versions is None else versions)
+                    }
+                    return trial.Trial("f", hashlib.sha256(path.read_bytes()).hexdigest(), compares, [], "try again")
+
+                def proposals(
+                    source: str, result: trial.Trial, ctx: core.Context, method: str = method
+                ) -> Iterator[core.Mutation]:
+                    for content in () if method == "empty" else ("loss", "lopsided", "better"):
+                        yield core.Mutation("replace", content, content)
+
+                generator: Any = SimpleNamespace(propose=proposals)
+                if method == "permute":
+                    generator = permute.Permuter("de", self.root / "target.o", 5)
+                with (
+                    patch.object(time, "monotonic", side_effect=lambda clock=clock: clock[0]),
+                    patch.object(core, "preprocess", side_effect=lambda *args: args[2].read_text()),
+                    patch.object(explain, "allocation", return_value=SimpleNamespace(differences=[], pseudos=[])),
+                    patch.object(core, "_retain", return_value=90.0),
+                    patch.object(trial, "try_draft", side_effect=compile_trial),
+                    patch.object(permute.Permuter, "propose", side_effect=proposals),
+                ):
+                    if method == "empty":
+                        with self.assertRaisesRegex(Held, "zero mutations evaluated"):
+                            core.run(cast(Project, project), cast(Policy, policy), source, [generator], out, 10)
+                        continue
+                    result = core.run(cast(Project, project), cast(Policy, policy), source, [generator], out, 10)
+                self.assertEqual(result.score, 11)
+                self.assertEqual(result.trials, 4)
+                self.assertEqual(
+                    calls,
+                    [
+                        ("start", None),
+                        ("loss", ["de"]),
+                        ("lopsided", ["de"]),
+                        ("lopsided", None),
+                        ("better", ["de"]),
+                        ("better", None),
+                    ],
+                )
+                self.assertEqual(clock[0] - 3 * 60, 6)
+                self.assertEqual(set(result.trial.compares), set(project.versions))
