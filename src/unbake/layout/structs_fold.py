@@ -69,7 +69,7 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
                 for name in (layout.name, *layout.aliases):
                     locations[name] = (path, layout, cursor)
         cursor += len(text) + 1
-    changes: dict[tuple[Path, int, int], tuple[Field, list[Field]]] = {}
+    changes: dict[tuple[Path, int, int], dict[str, tuple[Field, list[Field]]]] = {}
     insertions: dict[tuple[Path, int], dict[str, str]] = {}
     requested: dict[tuple[str, str], tuple[int, str, int]] = {}
     additions: dict[str, Layout] = {}
@@ -94,7 +94,12 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
                 old, old_offset = known[name]
                 if old_offset != offset:
                     held(f"{record.name}.{name}", "conflicting offset")
-                if (old.type, old.size) != (member.type, member.size):
+                if (old.type, old.size, old.bit_offset, old.bit_size) != (
+                    member.type,
+                    member.size,
+                    member.bit_offset,
+                    member.bit_size,
+                ):
                     held(f"{record.name}.{name}", "conflicting type or extent")
                 continue
             request_key = (target.name, name)
@@ -141,21 +146,36 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
                 continue
             container = containers[0]
             key = (path, container.start - origin, container.end - origin)
-            changes.setdefault(key, (container, []))[1].append(member)
+            changes.setdefault(key, {}).setdefault(container.name, (container, []))[1].append(member)
     replacements: dict[Path, list[tuple[int, int, str]]] = {}
-    for (path, start, end), (container, members) in changes.items():
-        cursor, lines = container.offset, []
-        unique = {member.name: member for member in members}
-        for member in sorted(unique.values(), key=lambda item: item.offset):
-            if member.offset < cursor:
-                held(member.name, "conflicting overlapping fields")
-            if member.offset > cursor:
-                lines.append(f"char pad_{cursor:X}[0x{member.offset - cursor:X}];")
-            lines.append(member.declaration.strip())
-            cursor = member.offset + member.size
-        if cursor < container.offset + container.size:
-            lines.append(f"char pad_{cursor:X}[0x{container.offset + container.size - cursor:X}];")
-        replacements.setdefault(path, []).append((start, end, "\n    ".join(lines)))
+    for (path, start, end), containers_by_name in changes.items():
+        rewritten = {}
+        for container_name, (container, members) in containers_by_name.items():
+            cursor, lines = container.offset, []
+            unique = {member.name: member for member in members}
+            for member in sorted(unique.values(), key=lambda item: item.offset):
+                if member.offset < cursor:
+                    held(member.name, "conflicting overlapping fields")
+                if member.offset > cursor:
+                    lines.append(f"char pad_{cursor:X}[0x{member.offset - cursor:X}];")
+                lines.append(member.declaration.strip())
+                cursor = member.offset + member.size
+            if cursor < container.offset + container.size:
+                lines.append(f"char pad_{cursor:X}[0x{container.offset + container.size - cursor:X}];")
+            rewritten[container_name] = "\n    ".join(lines)
+        # Replace a complete comma declaration once, preserving every sibling.
+        target = next(
+            layout
+            for candidate, layout, origin in locations.values()
+            if candidate == path and any(item.start - origin == start for item in layout.fields)
+        )
+        origin = locations[target.name][2]
+        declarations_for_span = [
+            rewritten.get(item.name, item.declaration.strip())
+            for item in target.fields
+            if item.start - origin == start and item.end - origin == end
+        ]
+        replacements.setdefault(path, []).append((start, end, "\n    ".join(declarations_for_span)))
     for (path, position), declarations in insertions.items():
         replacements.setdefault(path, []).append(
             (position, position, "\n        " + "\n        ".join(declarations.values()) + "\n    ")
@@ -195,6 +215,12 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
                 if name not in new_fields:
                     held(f"{old_layout.name}.{name}", "fold removes existing member")
                 replacement, new_offset = new_fields[name]
-                if (new_offset, replacement.type, replacement.size) != (offset, item.type, item.size):
+                if (new_offset, replacement.type, replacement.size, replacement.bit_offset, replacement.bit_size) != (
+                    offset,
+                    item.type,
+                    item.size,
+                    item.bit_offset,
+                    item.bit_size,
+                ):
                     held(f"{old_layout.name}.{name}", "fold changes existing layout")
     return edits

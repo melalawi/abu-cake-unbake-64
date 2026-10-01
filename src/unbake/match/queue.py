@@ -12,7 +12,7 @@ from typing import Any
 
 from unbake.decomp import checks, drafts, features, needs
 from unbake.layout import split
-from unbake.match import common, declarations, proof
+from unbake.match import common, declarations, proof, xver
 from unbake.match import staging as stage
 from unbake.match.common import (
     Draft,
@@ -160,13 +160,13 @@ def runner(project: Project) -> Iterator[Path]:
 def run(project: Project, policy: Policy) -> list[str]:
     """Build outside build/.lock, isolate failures, then publish verified files."""
     features.load()
-    receipts = []
+    receipts: list[str] = []
     with queue_lock(project, policy):
         rows = queue(project)
     candidates = []
     for row in rows:
         try:
-            candidates.append(validate(project, policy, row))
+            candidates.append(xver.expand(project, validate(project, policy, row), receipts))
         except Held as error:
             receipts.append(f"HELD(match): {row['function']}: {error.reason}")
     if not candidates:
@@ -192,6 +192,10 @@ def run(project: Project, policy: Policy) -> list[str]:
                 fingerprint = stage.fingerprint(base)
                 attempt = stage.attempt(project, policy, base, workspace, current, candidates)
                 if attempt.failures:
+                    if len(candidates) == 1:
+                        detail = "; ".join(attempt.diagnostics.values())
+                        receipts.append(f"HELD(match): {candidates[0].function}: build compare failed on {detail}")
+                        return receipts
                     attempt.discard()
                     attempt = None
                     middle = max(1, len(candidates) // 2)

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import re
+import struct
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.layout import split
+from unbake.layout import boundary, boundary_signatures, split
 
 if TYPE_CHECKING:
     from unbake.project.config import Project
@@ -26,11 +28,17 @@ class Finding:
 WORD = re.compile(r"/\*\s*([\da-fA-F]+)\s+[\da-fA-F]{8}\s+[\da-fA-F]{8}\s*\*/\s*([^\n]+)")
 
 
-def audit(project: Project, version: str) -> tuple[list[Finding], list[split.Edit]]:
+def audit(
+    project: Project, version: str, *, signatures: tuple[boundary_signatures.Signature, ...] | None = None
+) -> tuple[list[Finding], list[split.Edit]]:
     """Plan exact cuts, data typing, and local jump fragment classification."""
     from unbake.layout.split_partition import type_text
 
     config = project.version(version)
+    catalog = signatures
+    if catalog is None:
+        catalog = boundary_signatures.configured() if os.environ.get("UNBAKE_BOUNDARY_SIGNATURES") else ()
+    image = config.baserom.read_bytes() if catalog else b""
     before, lines, segments = split.layout(config.split)
     _, symbols = split.symbols(config.symbols)
     ordered_symbols = sorted((entry[0], name) for name, entry in symbols.items())
@@ -58,6 +66,9 @@ def audit(project: Project, version: str) -> tuple[list[Finding], list[split.Edi
                     else []
                 )
             }
+            if catalog:
+                for offset, signature in boundary_signatures.matches(image, row.start, stop, catalog).items():
+                    entries[offset] = signature.name
             selected_symbols = ordered_symbols[
                 bisect_right(addresses, vram) : bisect_left(addresses, vram + stop - row.start)
             ]
@@ -65,6 +76,31 @@ def audit(project: Project, version: str) -> tuple[list[Finding], list[split.Edi
                 offset = row.start + address - vram
                 if row.start < offset < stop and offset in instructions and not instructions[offset].startswith("."):
                     entries.setdefault(offset, name)
+            # A disassembler global jump label can still be part of this entry's
+            # reachable body. Keep independent calls, SDK matches and frames;
+            # do not turn every reachable jump destination into a function.
+            words = {
+                int(match[1], 16): int(match[2], 16)
+                for match in re.finditer(r"/\*\s*([\da-fA-F]+)\s+[\da-fA-F]{8}\s+([\da-fA-F]{8})\s*\*/", text)
+                if not instructions.get(int(match[1], 16), "").startswith(".")
+            }
+            reachable, _, _ = boundary.closure(words, row.start, stop, vram - row.start, set(entries))
+            packed = b"".join(struct.pack(">I", words.get(at, 0)) for at in range(row.start, stop, 4))
+            called = {
+                row.start + offset
+                for offset, sources in boundary.entries(packed, 0, len(packed), vram, ()).items()
+                if "jal-target" in sources
+            }
+            sdk = set(boundary_signatures.matches(image, row.start, stop, catalog)) if catalog else set()
+            entries = {
+                at: name
+                for at, name in entries.items()
+                if at == row.start
+                or at not in reachable
+                or at in called
+                or at in sdk
+                or "compiler-stack-prologue" in boundary.shape(words, at, at + 4)
+            }
             cuts = sorted(offset for offset in entries if row.start < offset < stop)
             boundaries = [row.start, *cuts, stop]
             rendered = []

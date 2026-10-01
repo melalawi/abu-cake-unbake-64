@@ -97,8 +97,10 @@ class Segment:
     end: int | None = None
 
 
-@dataclass
+@dataclass(eq=False)
 class Row:
+    """A split row is identified by its place in a parsed layout, never by value."""
+
     line: int
     start: int
     kind: str

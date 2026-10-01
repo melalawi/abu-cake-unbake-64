@@ -4,7 +4,6 @@ import copy
 import hashlib
 import json
 import os
-import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -194,23 +193,6 @@ class PlanningTests(unittest.TestCase):
         self.layout([("alpha", BODY + BODY, "asm", ())], version="eu")
         self.assertEqual(plan.ranked(self.project, self.policy)[0].route, "boundary")
 
-    def test_similarity_matches_opcode_sibling_and_excludes_self(self) -> None:
-        words = (0x27BDFFE0, 0xAFBF001C, 0x00801021, 0x8C820000, 0x24420001, 0x8FBF001C, 0x03E00008, 0x27BD0020)
-        target = struct.pack(">8I", *words)
-        sibling = struct.pack(">8I", *(word ^ 4 if index not in (2, 6) else word for index, word in enumerate(words)))
-        self.layout(
-            [
-                ("target", target, "asm", ()),
-                ("sibling", sibling, "c", ()),
-                ("unmatched", target, "asm", ()),
-                ("unrelated", bytes.fromhex("40026000") * 8, "c", ()),
-            ]
-        )
-        rows = plan.similar(self.project, "target")
-        self.assertEqual([(row.function, row.score) for row in rows], [("sibling", 1)])
-        self.layout([("target", BODY, "asm", ()), ("sibling", sibling, "c", ())])
-        self.assertEqual(plan.similar(self.project, "target"), [])
-
     def test_dealing_uses_ranking_and_skips_open_version_aliases(self) -> None:
         self.add("beta", {"us": 100, "eu": 100}, True)
         for claimed, expected in ((None, ["beta", "alpha"]), ("beta", ["alpha", "gamma"])):
@@ -253,16 +235,11 @@ class PlanningTests(unittest.TestCase):
         ):
             with self.subTest(label=label), self.assertRaisesRegex(Held, label):
                 plan.assign(self.project, self.policy, holder, tier, count=count)
-        for function in (None, "", "unknown"):
-            with self.subTest(function=function), self.assertRaisesRegex(Held, "function"):
-                plan.similar(self.project, function)
         self.layout([("alpha", BODY, "asm", ()), ("duplicate", BODY, "asm", ())], version="us")
         path = self.version("us").split
         path.write_text(path.read_text().replace(", duplicate]", ", folder/alpha]"))
         with self.assertRaisesRegex(Held, "ambiguous VERSION identity"):
             plan.ranked(self.project, self.policy)
-        with self.assertRaisesRegex(Held, "ambiguous VERSION identity"):
-            plan.similar(self.project, "alpha")
 
     def test_named_refusals_for_retained_evidence(self) -> None:
         baseline, path = self.add("alpha", {"us": 80, "eu": 75})

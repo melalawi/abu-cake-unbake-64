@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from unbake.decomp import drafts, needs
-from unbake.layout import shared, structs
+from unbake.layout import shared, split, structs
 from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
 from unbake.project.config import Policy, Project
@@ -66,11 +66,23 @@ def final_source(project: Project, text: str) -> str:
 def match_edits(project: Project, function: str, text: str, versions: Iterable[str]) -> list[Edit]:
     """Publish an assembly-backed source, including committed unguarded drafts."""
     path = project.src / f"{function}.c"
+    versions = tuple(versions)
+    assembly = []
+    for version in versions:
+        _, _, segments = split.layout(project.version(version).split)
+        rows = [row for segment in segments for row in segment.rows if Path(row.path).name == function]
+        if len(rows) == 1 and rows[0].kind == "c":
+            continue
+        assembly.append(version)
+    if not assembly:
+        return [Edit(path, path.read_text() if path.exists() else "", text, versions)]
     if not path.exists() or drafts.is_partial(path.read_text()):
-        return drafts.match_edits(project, function, text, versions)
+        edits = drafts.match_edits(project, function, text, assembly)
+        edits[0] = replace(edits[0], versions=versions)
+        return edits
     # Derive the same publication edits without treating an assembly-backed draft
     # as an already matched source. The selected split rows still require asm.
     unpublished = replace(project, src=project.src / ".match-unpublished")
-    edits = drafts.match_edits(unpublished, function, text, versions)
-    edits[0] = replace(edits[0], path=path, before=path.read_text())
+    edits = drafts.match_edits(unpublished, function, text, assembly)
+    edits[0] = replace(edits[0], path=path, before=path.read_text(), versions=versions)
     return edits

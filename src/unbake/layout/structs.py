@@ -24,6 +24,8 @@ class Field:
     fields: tuple[Field, ...] = ()
     start: int = 0
     end: int = 0
+    bit_offset: int | None = None
+    bit_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ def resolve(pending: list[Need], project: Any, policy: Any) -> list[Edit]:
 
     def member(row: dict[str, Any]) -> Field:
         for key in Field.__dataclass_fields__:
-            if key not in row:
+            if key not in row and key not in ("bit_offset", "bit_size"):
                 held(f"LayoutNeed.fields.{key}", "missing value")
         return Field(**{**row, "extent": tuple(row["extent"]), "fields": tuple(member(item) for item in row["fields"])})
 

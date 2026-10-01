@@ -3,7 +3,8 @@
 import struct
 import unittest
 
-from unbake.layout.split_create import complete_executable, copied_spans, executable_end, loaded_rows
+from unbake.layout.split_analysis import copied_spans, executable_end
+from unbake.layout.split_create import complete_executable, loaded_rows
 
 
 class LoadedTextTests(unittest.TestCase):

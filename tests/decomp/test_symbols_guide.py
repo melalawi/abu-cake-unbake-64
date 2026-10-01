@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 
-from unbake.decomp import guide, needs, symbols, trial
+from unbake.decomp import guide, needs, symbols, symbols_edits, trial
 from unbake.decomp.needs import LabelNeed, SymbolNeed
 from unbake.decomp.trial_artifacts import TrialContext
 from unbake.decomp.trial_compare import Compare
@@ -84,6 +84,24 @@ class SymbolTests(unittest.TestCase):
             permuter_sha256="0" * 64,
         )
         self.rows = (symbols.DataRow("pool", 0x800C0000, 0x800D0000, ".rodata"),)
+
+    def test_absolute_pointer_binding_invalidates_loaded_register(self) -> None:
+        address = 0x800FDFCC
+        target = (pair(address, 0x23)[0], pair(address, 0x23)[1] ^ (6 << 16), 0xAC400014, 0xAC400088)
+        relocations = (symbols.Relocation(0, 5, "external"), symbols.Relocation(4, 6, "external"))
+        binding = symbols.Binding("external", address, "ABS", "s32", 4)
+        obj = symbols.TrialElf(
+            (pair(0, 0x23)[0], pair(0, 0x23)[1] ^ (6 << 16), *target[2:]),
+            relocations,
+            (binding,),
+            (),
+            None,
+            self.family,
+        )
+        self.assertEqual([ref.address for ref in symbols.references(target, None)], [address])
+        self.assertEqual(symbols.derive(obj, target, "us"), [])
+        with self.assertRaisesRegex(Held, "placed-elsewhere"):
+            symbols.derive(replace(obj, bindings=(replace(binding, address=address + 4),)), target, "us")
 
     def test_named_function_float_fixtures(self) -> None:
         cases = (
@@ -229,14 +247,14 @@ class SymbolTests(unittest.TestCase):
                 need(),
                 LabelNeed("us", "D_800C7C94", 0x800C7C94, "pool", "fixture"),
             ]
-            edits = symbols.resolve(pending, project, self.policy)
+            edits = symbols_edits.resolve(pending, project, self.policy)
             self.assertEqual(len(edits), 1)
             self.assertIn("ignore:false type:f32 size:0x4", edits[0].after)
             self.assertIn("D_800C7C94 = 0x800C7C94; // type:f32 size:0x4", edits[0].after)
             self.assertNotEqual(path.read_text(), edits[0].after)
             path.write_text(edits[0].after)
-            self.assertEqual(symbols.resolve(pending, project, self.policy), [])
-            self.assertEqual(symbols.resolve([pending[-1]], project, self.policy), [])
+            self.assertEqual(symbols_edits.resolve(pending, project, self.policy), [])
+            self.assertEqual(symbols_edits.resolve([pending[-1]], project, self.policy), [])
 
     def test_resolver_conflicts_and_named_refusals(self) -> None:
         cases = (
@@ -259,14 +277,14 @@ class SymbolTests(unittest.TestCase):
             for before, pending, reason in cases:
                 with self.subTest(reason=reason), self.assertRaisesRegex(Held, reason):
                     path.write_text(before)
-                    symbols.resolve(pending, project, self.policy)
+                    symbols_edits.resolve(pending, project, self.policy)
             with self.assertRaisesRegex(Held, "project.names_from"):
-                symbols.resolve([], replace(project, names_from=""), self.policy)
+                symbols_edits.resolve([], replace(project, names_from=""), self.policy)
             with self.assertRaisesRegex(Held, "policy"):
-                symbols.resolve([], project, None)
+                symbols_edits.resolve([], project, None)
             path.unlink()
             with self.assertRaisesRegex(Held, "symbol_addrs"):
-                symbols.resolve([need()], project, self.policy)
+                symbols_edits.resolve([need()], project, self.policy)
 
     def test_cross_version_address_names_and_shared_file_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -274,10 +292,10 @@ class SymbolTests(unittest.TestCase):
             path.write_text("")
             project = project_for(path)
             self.assertEqual(
-                len(symbols.resolve([replace(need(), version="eu", address=0x800C2AD4)], project, self.policy)), 1
+                len(symbols_edits.resolve([replace(need(), version="eu", address=0x800C2AD4)], project, self.policy)), 1
             )
             with self.assertRaisesRegex(Held, "two-addresses"):
-                symbols.resolve([need(), replace(need(), version="eu", address=0x800C2AD4)], project, self.policy)
+                symbols_edits.resolve([need(), replace(need(), version="eu", address=0x800C2AD4)], project, self.policy)
 
     def test_data_rows_explicit_bss_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -329,7 +347,7 @@ class SymbolTests(unittest.TestCase):
                 self.policy,
                 project.src / "alpha.c",
                 proof,
-                {"us": {"unit": unit, "target_words": target, "version": version}},
+                {"us": {"unit": unit, "layout": unit, "target_words": target, "version": version}},
             )
             derived = symbols.derive_trial(context)
             self.assertEqual(
@@ -338,7 +356,7 @@ class SymbolTests(unittest.TestCase):
             self.assertIn("extern f32 value;", proof.compares["us"].lines)
             self.assertIn(symbols.derive_trial, needs.derivers())
             self.assertEqual(
-                [(kind, order) for kind, order, fn in needs.resolvers() if fn is symbols.resolve],
+                [(kind, order) for kind, order, fn in needs.resolvers() if fn is symbols_edits.resolve],
                 [(SymbolNeed, 10), (LabelNeed, 20)],
             )
             with redirect_stdout(io.StringIO()):

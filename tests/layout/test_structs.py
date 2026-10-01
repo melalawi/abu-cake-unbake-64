@@ -4,12 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 from unbake.decomp import needs
 from unbake.layout import split_apply, structs
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held
+from unbake.project.config import Held, Policy, Project
 
 
 class DeclarationTests(unittest.TestCase):
@@ -48,6 +49,22 @@ class DeclarationTests(unittest.TestCase):
                 self.assertEqual(layout.size, size)
                 self.assertEqual([item.offset for item in layout.fields], offsets)
 
+    def test_comma_members_preserve_each_declarator(self) -> None:
+        source = (
+            "struct Record { s16 x1, y1, x2, y2; u32 *p, a[2], (*cb)(int, int); unsigned a1:3, :2, a2:5; u8 tail; };"
+        )
+        record = layouts(source)[0]
+        self.assertEqual(record.size, 28)
+        self.assertEqual([item.offset for item in record.fields], [0, 2, 4, 6, 8, 12, 20, 24, 24, 24, 26])
+        self.assertEqual([(item.bit_offset, item.bit_size) for item in record.fields[7:10]], [(0, 3), (3, 2), (5, 5)])
+        rebuilt = layouts("struct Record {" + " ".join(item.declaration for item in record.fields) + "};")[0]
+        self.assertEqual(
+            [(item.name, item.offset, item.size) for item in rebuilt.fields],
+            [(item.name, item.offset, item.size) for item in record.fields],
+        )
+        with self.assertRaisesRegex(Held, r"bad.*line 2"):
+            layouts("struct Broken {\n u32 good, bad @;\n};")
+
     def test_union_and_typedef_order(self) -> None:
         source = (
             "typedef struct Later Later; typedef Later Alias; "
@@ -70,11 +87,10 @@ class DeclarationTests(unittest.TestCase):
             ("struct X { u8 bytes[MISSING]; };", "MISSING"),
             ("#define A B\n#define B A\nstruct X { u8 bytes[A]; };", "A"),
             ("struct X { Missing value; };", "Missing"),
-            ("struct X { u8 bytes[0]; };", "bytes"),
             ("struct X { u8 bytes[-1]; };", "bytes"),
             ("struct X { u8 bytes[1/0]; };", "1/0"),
             ("struct X { u8 bytes[call()]; };", "call()"),
-            ("struct X { u32 bits:3; };", "bits"),
+            ("struct X { u32 bits:33; };", "bits"),
             ("struct X { struct X value; };", "X"),
             ("struct X { void cb(void); };", "void"),
             ("struct X { u8 a;", "}"),
@@ -91,6 +107,7 @@ class DeclarationTests(unittest.TestCase):
     def test_project_preprocessing(self) -> None:
         cpp = shutil.which("cpp")
         self.assertIsNotNone(cpp, "cpp executable required")
+        assert cpp is not None
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             include = root / "include"
@@ -113,7 +130,7 @@ class DeclarationTests(unittest.TestCase):
             ]:
                 with self.subTest(missing=missing):
                     with self.assertRaises(Held) as caught:
-                        layouts(source, **kwargs)
+                        layouts(source, **cast(dict[str, Any], kwargs))
                     self.assertIn(missing, str(caught.exception))
 
 
@@ -139,7 +156,7 @@ class FoldTests(unittest.TestCase):
                 ),
                 src=root / "src",
             )
-            policy = SimpleNamespace(cpp=Path(shutil.which("cpp")), cppflags=("-undef", "-nostdinc"))
+            policy = SimpleNamespace(cpp=Path(cast(str, shutil.which("cpp"))), cppflags=("-undef", "-nostdinc"))
             context = SimpleNamespace(project=project, policy=policy, source=source, artifacts={"us": {}, "eu": {}})
             pending = [
                 needs.decode(row)
@@ -148,7 +165,7 @@ class FoldTests(unittest.TestCase):
             edits = structs.resolve(pending, project, policy)
             self.assertEqual(len(edits), 1)
             self.assertEqual(edits[0].versions, ("us", "eu"))
-            split_apply.apply(project, policy, edits, staged=True)
+            split_apply.apply(cast(Project, project), cast(Policy, policy), edits, staged=True)
             self.assertIn("unsigned int value;", header.read_text())
             self.assertEqual(structs.resolve(pending, project, policy), [])
 
@@ -182,6 +199,25 @@ class FoldTests(unittest.TestCase):
                 self.assertEqual(layouts(edits[0].after)[0].size, 0x1C)
                 header.write_text(edits[0].after)
                 self.assertEqual(fold(draft, root, versions=("us",)), [])
+
+    def test_fold_comma_list_keeps_siblings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "record.h"
+            header.write_text("struct Record { char pad[4], tail[4]; };")
+            draft = layouts("struct Record { u16 first, second; char tail[4]; };")
+            edits = fold(draft, root, versions=("us",))
+            parsed = layouts(edits[0].after)[0]
+            self.assertEqual(
+                [(item.name, item.offset) for item in parsed.fields], [("first", 0), ("second", 2), ("tail", 4)]
+            )
+            self.assertEqual(parsed.size, 8)
+            header.write_text("struct Record { char pad0[4], pad4[4], tail[4]; };")
+            edits = fold(layouts("struct Record { u32 a, b; char tail[4]; };"), root, versions=("us",))
+            self.assertEqual(
+                [(item.name, item.offset) for item in layouts(edits[0].after)[0].fields],
+                [("a", 0), ("b", 4), ("tail", 8)],
+            )
 
     def test_existing_union_and_forward_typedef_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,5 +1,6 @@
 """Split edits against small layouts and a fake compare/build boundary."""
 
+import dataclasses
 import json
 import os
 import shlex
@@ -12,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from unbake.layout import split, split_apply, split_create, split_edits, split_partition
+from unbake.layout import split, split_analysis, split_apply, split_create, split_edits, split_partition
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 from unbake.project.fingerprint import Counts, Region
@@ -402,7 +403,7 @@ class SplitTests(unittest.TestCase):
                 )
                 self.assertEqual(split_create.complete_executable(text, data), text)
                 self.assertEqual(
-                    split_create.executable_end(data, start, len(data), vram - start), (start + 8 + 15) // 16 * 16
+                    split_analysis.executable_end(data, start, len(data), vram - start), (start + 8 + 15) // 16 * 16
                 )
 
     def test_creation_headers_and_rollback(self) -> None:
@@ -440,6 +441,22 @@ class SplitTests(unittest.TestCase):
         for name, reason in [("code", "bss_size"), ("missing", "bss_end")]:
             with self.subTest(name=name), self.assertRaisesRegex(Held, reason):
                 split.bss_end(self.project, "us", name)
+
+
+class RowIdentityTests(unittest.TestCase):
+    def test_equal_rows_keep_their_own_boundaries(self) -> None:
+        # Rows are identified by position; equal-looking rows must not borrow each other's end.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "game.yaml"
+            path.write_text(
+                "segments:\n  - name: main\n    type: code\n    start: 0x40\n    vram: 0x80000400\n"
+                "    subalign: 4\n    subsegments:\n      - [0x40, asm, alpha]\n      - [0x48, asm, beta]\n"
+                "  - [0x60]\n"
+            )
+            _, _, segments = split.layout(path)
+            alpha, beta = segments[0].rows
+            self.assertEqual((split.end(alpha), split.end(beta)), (0x48, 0x60))
+            self.assertNotEqual(alpha, dataclasses.replace(alpha))
 
 
 if __name__ == "__main__":

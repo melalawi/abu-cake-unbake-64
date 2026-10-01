@@ -23,6 +23,9 @@ def register(phases: Subparsers) -> None:
     decomp_verbs.add_parser("plan", phase="decomp")
     similar = decomp_verbs.add_parser("similar", phase="decomp")
     similar.add_argument("function")
+    similar.add_argument("--version", metavar="V")
+    similar.add_argument("--top-k", type=count, default=5)
+    similar.add_argument("--bound", type=int, default=512)
     guide = decomp_verbs.add_parser("guide", phase="decomp")
     guide.add_argument("function")
     guide.add_argument("--version", metavar="V")
@@ -117,11 +120,18 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
         else:
             Ledger(project, policy).release(args.assignment_id)
             receipt("decomp", [f"released {args.assignment_id}"])
-    elif args.verb in ("plan", "similar"):
+    elif args.verb == "plan":
         from unbake.decomp import plan
 
-        ranked_rows = plan.ranked(project, policy) if args.verb == "plan" else plan.similar(project, args.function)
+        ranked_rows = plan.ranked(project, policy)
         receipt("decomp", [json.dumps(asdict(row), sort_keys=True, default=str) for row in ranked_rows])
+    elif args.verb == "similar":
+        from unbake.decomp import similar
+
+        examples = similar.retrieve(
+            project, args.function, args.version or project.names_from, top_k=args.top_k, bound=args.bound
+        )
+        receipt("decomp", [json.dumps(asdict(row), sort_keys=True, default=str) for row in examples])
     elif args.verb == "guide":
         from unbake.decomp import guide
 

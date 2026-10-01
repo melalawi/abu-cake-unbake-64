@@ -153,10 +153,15 @@ def link(
     if symbol.address != 0:
         raise Held("try", f"{unit.path}: {function} must start its text section; offset is 0x{symbol.address:X}")
     extra_functions = [
-        s.name for s in unit.symbols if s.kind == "FUNC" and s.section in unit.sections and s.name != function
+        s.name
+        for s in unit.symbols
+        if s.kind == "FUNC"
+        and s.section in unit.sections
+        and s.name != function
+        and (s.section != symbol.section or s.address <= 0)
     ]
     if extra_functions:
-        raise Held("try", f"{unit.path}: one draft function is required; extra functions: {', '.join(extra_functions)}")
+        raise Held("try", f"{unit.path}: functions outside the draft split span: {', '.join(extra_functions)}")
     placements: dict[str, int] = {}
     for need in pending:
         if isinstance(need, SectionPlacement):
@@ -235,7 +240,16 @@ def link(
     try:
         with linked.open("rb") as binary:
             binary.seek(text.offset)
-            size = text.size
+            # A translation unit may contain later split functions. Keep all
+            # residue in this span, stopping only at a defined function boundary.
+            following = [
+                entry.address - span.address
+                for entry in output.symbols
+                if entry.kind == "FUNC"
+                and entry.section == placed.section
+                and entry.address - span.address >= span.size
+            ]
+            size = min(text.size, min(following, default=text.size))
             if placed.size > text.size:
                 raise Held("try", f"{linked}: {function} symbol size exceeds its text section")
             data = binary.read(size)

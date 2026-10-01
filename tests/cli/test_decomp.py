@@ -7,13 +7,14 @@ from unbake.report import progress as report
 
 class DecompTests(MainCase):
     def test_guide_and_planner_dispatch(self) -> None:
-        from unbake.decomp import guide, plan
+        from unbake.decomp import guide, plan, similar
 
         for verb, operands, member, expected in (
             ("guide", ["alpha", "--version", "us"], "run", (self.project, "alpha", "us")),
             ("guide", ["alpha"], "run", (self.project, "alpha", None)),
             ("plan", [], "ranked", (self.project, self.policy)),
-            ("similar", ["alpha"], "similar", (self.project, "alpha")),
+            ("similar", ["alpha"], "retrieve", (self.project, "alpha", self.project.names_from)),
+            ("similar", ["alpha", "--version", "us"], "retrieve", (self.project, "alpha", "us")),
             (
                 "assign",
                 ["--holder", "person", "--tier", "manual", "--count", "2"],
@@ -24,7 +25,7 @@ class DecompTests(MainCase):
             with (
                 self.subTest(verb=verb),
                 patch.object(
-                    guide if verb == "guide" else plan,
+                    guide if verb == "guide" else similar if verb == "similar" else plan,
                     member,
                     autospec=True,
                     return_value="guide text" if verb == "guide" else [],
@@ -32,7 +33,10 @@ class DecompTests(MainCase):
             ):
                 code, _, error = self.run_main(self.args("decomp", verb, *operands))
                 self.assertEqual(code, 0, error)
-                operation.assert_called_once_with(*expected, **{"count": 2} if verb == "assign" else {})
+                operation.assert_called_once_with(
+                    *expected,
+                    **({"count": 2} if verb == "assign" else {"top_k": 5, "bound": 512} if verb == "similar" else {}),
+                )
 
     def test_search_constructs_explicit_permuter_and_refuses_missing_facts(self) -> None:
         from unbake.search import core

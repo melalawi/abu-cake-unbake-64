@@ -10,7 +10,19 @@ Tools to help unbake a cake!
 python3 -m pip install .
 ```
 
-It needs Python 3.11 or later along with make, MIPS binutils, splat, m2c and objdiff. Machine paths go in `~/.config/unbake/policy.toml`.
+Machine paths go in `~/.config/unbake/policy.toml`.
+
+## Dependencies
+
+- Python 3.11 or later
+- make
+- MIPS binutils (as, ld, objcopy) and a C preprocessor
+- [splat](https://github.com/ethteck/splat) version 0.50.0
+- [m2c](https://github.com/matt-kempster/m2c) at `708d2d2cb2698f091a92492b328f73b24209f72d`
+- [decomp-permuter](https://github.com/simonlindholm/decomp-permuter) at `059609d4aec73eb0650726772954e1ad575825f8`
+- [objdiff](https://github.com/encounter/objdiff) CLI version 3.8.1
+
+`unbake setup` downloads each game's compilers from the registry in `src/unbake/project/compilers.toml` and checks every archive and file by SHA-256.
 
 ## Workflow
 

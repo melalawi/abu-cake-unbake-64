@@ -5,83 +5,16 @@ from __future__ import annotations
 import ast
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import TypeAlias, cast
+from typing import cast
 
 from unbake.layout.structs import Field, Layout, held
+from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Member, Operation
+from unbake.project.config import Held
 
-
-@dataclass
-class _Aggregate:
-    kind: str
-    name: str
-    members: list[_Member] = field(default_factory=list)
-    aliases: list[str] = field(default_factory=list)
-    start: int = 0
-    end: int = 0
-    body_start: int = 0
-    body_end: int = 0
-    complete: bool = False
-
-
-@dataclass(frozen=True)
-class _Member:
-    name: str
-    base: str | _Aggregate
-    operations: tuple[Operation, ...]
-    start: int
-    end: int
-
-
-Operation: TypeAlias = tuple[str, int | str | None]
-
-# The target ABI fixes these widths independently of the host running the parser.
-_SCALARS = {
-    "char": (1, 1),
-    "signed char": (1, 1),
-    "unsigned char": (1, 1),
-    "short": (2, 2),
-    "short int": (2, 2),
-    "signed short": (2, 2),
-    "unsigned short": (2, 2),
-    "unsigned short int": (2, 2),
-    "int": (4, 4),
-    "signed": (4, 4),
-    "signed int": (4, 4),
-    "unsigned": (4, 4),
-    "unsigned int": (4, 4),
-    "long": (4, 4),
-    "long int": (4, 4),
-    "unsigned long": (4, 4),
-    "unsigned long int": (4, 4),
-    "long long": (8, 8),
-    "long long int": (8, 8),
-    "unsigned long long": (8, 8),
-    "float": (4, 4),
-    "double": (8, 8),
-    **{f"{sign}{bits}": (bits // 8, bits // 8) for sign in ("s", "u") for bits in (8, 16, 32, 64)},
-    "f32": (4, 4),
-    "f64": (8, 8),
-}
 _TOKEN = re.compile(
     r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|0[xX][\da-fA-F]+[uUlL]*|\d+[uUlL]*|[A-Za-z_]\w*|<<|>>|\S',
     re.S,
 )
-_QUALIFIERS = {
-    "const",
-    "volatile",
-    "restrict",
-    "__restrict",
-    "signed",
-    "unsigned",
-    "short",
-    "long",
-    "int",
-    "char",
-    "float",
-    "double",
-    "void",
-}
 
 
 class Parser:
@@ -91,8 +24,8 @@ class Parser:
         clean = re.sub(r"^\s*#[^\n]*", lambda match: " " * len(match[0]), source, flags=re.M)
         self.tokens = [match for match in _TOKEN.finditer(clean) if not match[0].startswith(("/*", "//"))]
         self.index = 0
-        self.types: dict[str, _Aggregate | tuple[str | _Aggregate, tuple[Operation, ...]]] = {}
-        self.aggregates: list[_Aggregate] = []
+        self.types: dict[str, Aggregate | tuple[str | Aggregate, tuple[Operation, ...]]] = {}
+        self.aggregates: list[Aggregate] = []
         self.cache: dict[int, Layout] = {}
 
     def peek(self) -> str:
@@ -111,7 +44,7 @@ class Parser:
     def expression(self, text: str, active: tuple[str, ...] = ()) -> int:
         text = re.sub(r"\b(0[xX][\da-fA-F]+|\d+)[uUlL]+\b", r"\1", text)
         text = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
-        text = re.sub(r"\b0([0-7]+)\b", r"0o\1", text)
+        text = re.sub(r"\b0([0-7]+)\b", r"0o\1", text).strip()
         try:
             node = ast.parse(text, mode="eval").body
         except SyntaxError:
@@ -170,15 +103,17 @@ class Parser:
                 return self.source[begin : self.tokens[self.index - 1].start()]
         held(opening, f"missing {closing}")
 
-    def specifier(self) -> str | _Aggregate:
+    def specifier(self) -> str | Aggregate:
+        while self.peek() in ("const", "volatile", "restrict", "__restrict"):
+            self.take()
         if self.peek() in ("struct", "union"):
             begin = self.position()
             kind = self.take()
             name = self.take() if re.fullmatch(r"[A-Za-z_]\w*", self.peek()) else ""
             key = f"{kind} {name}"
-            aggregate = cast(_Aggregate | None, self.types.get(key)) if name else None
+            aggregate = cast(Aggregate | None, self.types.get(key)) if name else None
             if aggregate is None:
-                aggregate = _Aggregate(kind, name, start=begin)
+                aggregate = Aggregate(kind, name, start=begin)
                 if name:
                     self.types[key] = aggregate
             if self.peek() == "{":
@@ -193,15 +128,24 @@ class Parser:
                 aggregate.end = self.tokens[self.index - 1].end()
                 aggregate.complete = True
                 self.aggregates.append(aggregate)
+            while self.peek() in ("const", "volatile", "restrict", "__restrict"):
+                self.take()
             return aggregate
         words = []
-        while self.peek() in _QUALIFIERS:
+        while self.peek() in QUALIFIERS:
             words.append(self.take())
         if not words or all(word in ("const", "volatile", "restrict", "__restrict") for word in words):
             if not re.fullmatch(r"[A-Za-z_]\w*", self.peek()):
                 held("type", f"missing declaration type at {self.position()}")
             words.append(self.take())
-        return " ".join(word for word in words if word not in ("const", "volatile", "restrict", "__restrict"))
+        while self.peek() in ("const", "volatile", "restrict", "__restrict"):
+            self.take()
+        words = [word for word in words if word not in ("const", "volatile", "restrict", "__restrict")]
+        if set(words) <= {"signed", "unsigned", "short", "long", "int", "char"}:
+            sign = "unsigned " if "unsigned" in words else "signed " if "char" in words and "signed" in words else ""
+            width = "char" if "char" in words else "short" if "short" in words else "long " * words.count("long")
+            return sign + (width.strip() or "int")
+        return " ".join(words)
 
     def declarator(self, deferred: bool = False) -> tuple[str, list[Operation]]:
         pointers: list[Operation] = []
@@ -221,8 +165,8 @@ class Parser:
         while self.peek() in ("[", "("):
             if self.peek() == "[":
                 expression = self.balanced("[", "]")
-                extent = expression if deferred else self.expression(expression)
-                if not deferred and cast(int, extent) <= 0:
+                extent = expression if deferred else self.expression(expression) if expression.strip() else 0
+                if not deferred and cast(int, extent) < 0:
                     held(name, f"positive extent required: {expression}")
                 operations.append(("array", extent))
             else:
@@ -230,35 +174,57 @@ class Parser:
                 operations.append(("function", re.sub(r"\s+", " ", arguments.strip())))
         return name, operations + pointers
 
-    def declaration(self, typedef: bool = False) -> list[_Member]:
+    def declaration(self, typedef: bool = False) -> list[Member]:
+        begin = self.position()
+        try:
+            return self.members(typedef)
+        except Held as error:
+            line = self.source.count("\n", 0, begin) + 1
+            held(error.reason, f"line {line}")
+
+    def members(self, typedef: bool = False) -> list[Member]:
         begin = self.position()
         base = self.specifier()
+        specifier = self.source[begin : self.position()].strip()
         result = []
         if self.peek() == ";":
             self.take()
-            if isinstance(base, _Aggregate) and base.complete:
-                result.append(_Member("", base, (), begin, self.tokens[self.index - 1].end()))
+            if isinstance(base, Aggregate) and base.complete:
+                result.append(Member("", base, (), begin, self.tokens[self.index - 1].end()))
             return result
         while True:
-            name, operations = self.declarator(typedef)
+            start = self.position()
+            name, operations = ("", []) if self.peek() == ":" else self.declarator(typedef)
+            bits = None
             if self.peek() == ":":
-                held(name, "bit-field layout requires explicit support")
+                self.take(":")
+                extent_start = self.position()
+                depth = 0
+                while self.peek() and (depth or self.peek() not in (",", ";")):
+                    token = self.take()
+                    depth += (token == "(") - (token == ")")
+                bits = self.expression(self.source[extent_start : self.position()])
+                if typedef or operations or bits < 0 or (name and bits == 0):
+                    held(name or "bit-field", "invalid bit-field declarator")
+            declaration = specifier + " " + self.source[start : self.position()].strip() + ";"
             if typedef:
                 self.types[name] = (base, tuple(operations))
-                if isinstance(base, _Aggregate) and not operations:
+                if isinstance(base, Aggregate) and not operations:
                     base.aliases.append(name)
                     if not base.name:
                         base.name = name
             else:
-                result.append(_Member(name, base, tuple(operations), begin, 0))
+                result.append(Member(name, base, tuple(operations), begin, 0, declaration, bits))
             if self.peek() != ",":
                 break
             self.take(",")
+        if self.peek() != ";":
+            held(name or "member", f"unparsed declarator token {self.peek()!r}")
         self.take(";")
         end = self.tokens[self.index - 1].end()
-        if len(result) > 1:
-            held(", ".join(item.name for item in result), "split member declarations required")
-        return [_Member(item.name, item.base, item.operations, begin, end) for item in result]
+        return [
+            Member(item.name, item.base, item.operations, begin, end, item.declaration, item.bits) for item in result
+        ]
 
     def parse(self) -> list[Layout]:
         while self.peek():
@@ -287,7 +253,7 @@ class Parser:
                     if not isinstance(next_type, tuple) or next_type[1]:
                         break
                     base = next_type[0]
-                if isinstance(base, _Aggregate):
+                if isinstance(base, Aggregate):
                     base.aliases.append(name)
         return [self.layout(item) for item in self.aggregates if item.name]
 
@@ -305,7 +271,7 @@ class Parser:
                 self.balanced("(", ")")
 
     def type_info(
-        self, base: str | _Aggregate, operations: tuple[Operation, ...], active: tuple[str | int, ...]
+        self, base: str | Aggregate, operations: tuple[Operation, ...], active: tuple[str | int, ...]
     ) -> tuple[int, int, tuple[Field, ...]]:
         # A pointer has a known target width even when its pointee is incomplete.
         children: tuple[Field, ...]
@@ -313,17 +279,17 @@ class Parser:
         if pointer is not None:
             size, alignment, children = 4, 4, ()
             operations = operations[:pointer]
-        elif isinstance(base, _Aggregate):
+        elif isinstance(base, Aggregate):
             nested = self.layout(base, active)
             size, alignment, children = nested.size, nested.alignment, nested.fields
-        elif base in _SCALARS:
-            size, alignment = _SCALARS[base]
+        elif base in SCALARS:
+            size, alignment = SCALARS[base]
             children = ()
         elif base in self.types:
             if base in active:
                 held(base, "cyclic by-value type")
             target = self.types[base]
-            if isinstance(target, _Aggregate):
+            if isinstance(target, Aggregate):
                 return self.type_info(target, operations, (*active, base))
             target_base, target_ops = target
             return self.type_info(target_base, (*operations, *target_ops), (*active, base))
@@ -332,19 +298,19 @@ class Parser:
         for kind, value in reversed(operations):
             if kind == "array":
                 extent = self.expression(value) if isinstance(value, str) else cast(int, value)
-                if extent <= 0:
+                if extent < 0:
                     held(str(base), "positive extent required")
                 size *= extent
             else:
                 held(str(base), "function member requires a pointer")
         return size, alignment, children
 
-    def type_name(self, base: str | _Aggregate, operations: tuple[Operation, ...], active: tuple[str, ...] = ()) -> str:
+    def type_name(self, base: str | Aggregate, operations: tuple[Operation, ...], active: tuple[str, ...] = ()) -> str:
         if isinstance(base, str) and base in self.types and base not in active:
             target = self.types[base]
             if isinstance(target, tuple):
                 return self.type_name(target[0], (*operations, *target[1]), (*active, base))
-        spelling = f"{base.kind} {base.name}".strip() if isinstance(base, _Aggregate) else base
+        spelling = f"{base.kind} {base.name}".strip() if isinstance(base, Aggregate) else base
         operations = tuple(
             (kind, self.expression(value) if kind == "array" and isinstance(value, str) else value)
             for kind, value in operations
@@ -354,7 +320,7 @@ class Parser:
             for kind, value in operations
         )
 
-    def layout(self, aggregate: _Aggregate, active: tuple[str | int, ...] = ()) -> Layout:
+    def layout(self, aggregate: Aggregate, active: tuple[str | int, ...] = ()) -> Layout:
         key = id(aggregate)
         if key in self.cache:
             return self.cache[key]
@@ -363,9 +329,34 @@ class Parser:
         if not aggregate.complete:
             held(aggregate.name, "missing aggregate definition")
         fields, size, alignment = [], 0, 1
+        bit_cursor = 0
         for member in aggregate.members:
-            width, align, children = self.type_info(member.base, member.operations, (*active, key))
-            offset = 0 if aggregate.kind == "union" else (size + align - 1) // align * align
+            try:
+                width, align, children = self.type_info(member.base, member.operations, (*active, key))
+            except Held as error:
+                line = self.source.count("\n", 0, member.start) + 1
+                held(f"{aggregate.name}.{member.name or '<anonymous>'}", f"{error.reason}; line {line}")
+            bit_offset = None
+            if member.bits is not None:
+                spelling = self.type_name(member.base, ())
+                if spelling not in SCALARS or spelling in ("float", "double", "f32", "f64") or member.bits > width * 8:
+                    line = self.source.count("\n", 0, member.start) + 1
+                    held(member.name or aggregate.name, f"invalid bit-field type or width; line {line}")
+                if aggregate.kind == "union":
+                    bit_cursor = 0
+                elif member.bits == 0 or bit_cursor % (align * 8) + member.bits > width * 8:
+                    bit_cursor = (bit_cursor + align * 8 - 1) // (align * 8) * (align * 8)
+                offset, bit_offset = divmod(bit_cursor, 8)
+                bit_cursor += member.bits
+                size = max(size, (bit_cursor + 7) // 8)
+                if member.name:
+                    alignment = max(alignment, align)
+                width = (bit_offset + member.bits + 7) // 8
+            else:
+                offset = 0 if aggregate.kind == "union" else (size + align - 1) // align * align
+                bit_cursor = (offset + width) * 8
+                size = max(size, offset + width)
+                alignment = max(alignment, align)
             fields.append(
                 Field(
                     member.name,
@@ -373,14 +364,14 @@ class Parser:
                     offset,
                     width,
                     tuple(cast(int, value) for kind, value in member.operations if kind == "array"),
-                    self.source[member.start : member.end],
+                    member.declaration or self.source[member.start : member.end],
                     children,
                     member.start,
                     member.end,
+                    bit_offset,
+                    member.bits,
                 )
             )
-            size = max(size, offset + width)
-            alignment = max(alignment, align)
         size = (size + alignment - 1) // alignment * alignment
         result = Layout(
             aggregate.name,

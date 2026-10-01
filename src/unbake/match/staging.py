@@ -114,6 +114,23 @@ def generation(project: Project, version: str, current: Path) -> Path:
         raise
 
 
+def chunk_stale_sources(generation: Path, tools: Path) -> None:
+    """Let the ordinary Make cold-chunk rule refresh outdated C receipts.
+
+    Keep objects and dependency files: the compiler still verifies their content
+    keys, while Make avoids starting one interpreter per stale source receipt.
+    """
+    recipe = tools / "build.json"
+    drivers = tuple(tools.glob("*.py"))
+    inputs = [path for path in (recipe, *drivers) if path.is_file()]
+    if not inputs:
+        return
+    newest = max(path.stat().st_mtime_ns for path in inputs)
+    for receipt in (generation / "obj" / "src").rglob("*.built"):
+        if not receipt.is_symlink() and receipt.stat().st_mtime_ns < newest:
+            receipt.unlink()
+
+
 def attempt(
     project: Project, policy: Policy, base: Path, workspace: Path, current: dict[str, Path], candidates: list[Draft]
 ) -> Attempt:
@@ -158,6 +175,7 @@ def attempt(
         versions = [v for v in project.versions if v in affected]
         for version in versions:
             generations[version] = generation(project, version, current[version])
+            chunk_stale_sources(generations[version], tree / relative(project, project.tools))
         results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
         failures = []
         diagnostics = {}

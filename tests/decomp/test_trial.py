@@ -282,6 +282,45 @@ class TrialTests(unittest.TestCase):
         self.assertIn("decomp try", result.next_command)
         self.assertIn("--version us", result.next_command)
 
+    def test_adjacent_function_within_split_span_is_compared(self) -> None:
+        for changed, outside in ((False, False), (True, False), (False, True)):
+            with self.subTest(changed=changed, outside=outside):
+                directory = self.directory / f"adjacent-{changed}-{outside}"
+                directory.mkdir()
+                project, policy, source = fixture(directory, words=[*self.words, 0x03E00008, 0])
+
+                def compiler(
+                    p: Project,
+                    policy: SimpleNamespace,
+                    source: Path,
+                    version: str,
+                    out: Path,
+                    changed: bool = changed,
+                    outside: bool = outside,
+                ) -> Path:
+                    tail = [0x03E00008, 1 if changed else 0]
+                    if outside:
+                        tail = [0x03E00008, 0, 0]
+                    built = assemble(out.parent, "compiled", assembly("alpha", self.words) + assembly("adjacent", tail))
+                    shutil.copyfile(built, out)
+                    return out
+
+                with patch.object(build, "compile_object", side_effect=compiler), redirect_stdout(io.StringIO()):
+                    result = trial.try_draft(project, cast(Policy, policy), source, self.scratch)
+                    self.assertEqual(result.identical_everywhere, not changed and not outside)
+                    self.assertEqual(result.compares["us"].of, 5)
+
+        def compile_next(p: Project, policy: SimpleNamespace, source: Path, version: str, out: Path) -> Path:
+            built = assemble(
+                out.parent, "compiled", assembly("alpha", self.words) + assembly("adjacent", [0x03E00008, 0])
+            )
+            shutil.copyfile(built, out)
+            return out
+
+        result, _, _ = self.attempt(compiler=compile_next)
+        self.assertTrue(result.identical_everywhere)
+        self.assertEqual(result.compares["us"].of, 3)
+
     def test_explicit_text_residue_participates_in_word_proof(self) -> None:
         (self.directory / "residue").mkdir()
         project, policy, source = fixture(self.directory / "residue", words=[*self.words, 0])

@@ -7,6 +7,7 @@ import shlex
 import tempfile
 from pathlib import Path
 
+from unbake.decomp import similar
 from unbake.decomp.commands import prefix
 from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.decomp.draft_input import header_types, jump_tables, version_for, whole_body
@@ -93,8 +94,23 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     headers = _headers(project)
     work = Path(tempfile.mkdtemp(prefix=function + ".m2c.", dir=directory))
     context = work / "context.c"
-    context.write_text(_context(headers), encoding="utf-8")
-    context.write_text(preprocess(context, project, policy, v), encoding="utf-8")
+    examples = similar.retrieve(project, function, v)
+    examples_context = similar.context(examples)
+    (work / "similar-context.txt").write_text(examples_context, encoding="utf-8")
+    # Headers are expanded once above; includes in landed units would repeat
+    # them. Preserve their definitions and macros for the context preprocessor.
+    landed = "\n".join(re.sub(r"^\s*#\s*include[^\n]*", "", item.c, flags=re.M) for item in examples)
+    context.write_text(_context(headers) + "\n" + landed, encoding="utf-8")
+    context.write_text(preprocess(context, project, policy, v) + "\n" + examples_context, encoding="utf-8")
+    print(
+        "similar context used: "
+        + (
+            ", ".join(
+                f"{item.function} (distance={item.distance:.6f}, edits={item.edit_distance})" for item in examples
+            )
+            or "none"
+        )
+    )
     assembly = work / (function + ".s")
     body = whole_body(read_text(paths[0], "m2c"), function)
     assembly.write_text(jump_tables(project, v, function, body), encoding="utf-8")

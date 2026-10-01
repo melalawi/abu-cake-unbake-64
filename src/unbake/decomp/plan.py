@@ -13,7 +13,6 @@ from unbake.decomp import assign as assignments
 from unbake.decomp import drafts
 from unbake.decomp.score import percent
 from unbake.layout import split
-from unbake.project import rom
 from unbake.project.config import Held, Policy, Project
 
 
@@ -29,14 +28,6 @@ class Row:
     draft: Path | None
     route: str
     evidence: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class Similarity:
-    function: str
-    version: str
-    score: float
-    size: int
 
 
 def _text(value: object, name: str) -> str:
@@ -235,36 +226,6 @@ def ranked(project: Project, policy: Policy) -> list[Row]:
             row.function,
         ),
     )
-
-
-def similar(project: Project, function: str) -> list[Similarity]:
-    """Rank matched C relatives by Jaccard overlap of eight-word shingles."""
-    function = _text(function, "function")
-    reference, functions, bodies = inventory(project)
-    targets = [item for item in functions if function in (item.name, *item.aliases)]
-    if not targets:
-        raise Held("plan", f"function {function}: no function row")
-    if len({item.version for item in targets}) != len(targets):
-        raise Held("plan", f"function {function}: ambiguous VERSION identity")
-    target_names = {name for item in targets for name in (item.name, *item.aliases)}
-    target_keys = [rom.shingles(bodies[item.version, item.name]) for item in targets]
-    relatives: dict[str, Similarity] = {}
-    for item in functions:
-        if item.kind != "c" or target_names.intersection((item.name, *item.aliases)):
-            continue
-        keys = rom.shingles(bodies[item.version, item.name])
-        overlaps = [len(keys & target) / len(keys | target) for target in target_keys if keys | target]
-        if not overlaps or max(overlaps) == 0:
-            continue
-        row = Similarity(item.name, item.version, max(overlaps), item.end - item.start)
-        existing = relatives.get(item.name)
-        if existing is None or (-row.score, row.version != reference, row.version) < (
-            -existing.score,
-            existing.version != reference,
-            existing.version,
-        ):
-            relatives[item.name] = row
-    return sorted(relatives.values(), key=lambda row: (-row.score, row.size, row.function, row.version))
 
 
 def _occupied(ledger: assignments.Ledger) -> set[str]:
