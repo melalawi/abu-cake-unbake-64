@@ -6,9 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 from unbake.decomp.drafts import Store
-from unbake.project.config import Held
+from unbake.project.config import Held, Policy, Project
 
 
 class DraftsTest(unittest.TestCase):
@@ -16,11 +17,11 @@ class DraftsTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.project = SimpleNamespace(
+        self.project: Any = SimpleNamespace(
             root=self.root / "project", name="fixture", src=self.root / "project/src", version=self.version
         )
-        self.policy = SimpleNamespace(state_root=self.root / "state")
-        self.store = Store(self.policy, self.project)
+        self.policy: Any = SimpleNamespace(state_root=self.root / "state")
+        self.store = Store(cast(Policy, self.policy), cast(Project, self.project))
         self.project.src.mkdir(parents=True)
 
     def version(self, name: str) -> SimpleNamespace:
@@ -36,7 +37,7 @@ class DraftsTest(unittest.TestCase):
         *,
         function: str = "sample",
         typed: dict[str, int] | None = None,
-    ) -> tuple[str, SimpleNamespace, Path]:
+    ) -> tuple[str, Any, Path]:
         source = self.root / f"{function}.c"
         source.write_text(content)
         differences = dict.fromkeys(
@@ -48,7 +49,7 @@ class DraftsTest(unittest.TestCase):
             v: SimpleNamespace(version=v, identical=count, of=10, typed=differences.copy(), lines=[])
             for v, count in zip(("us", "eu"), identical, strict=False)
         }
-        trial = SimpleNamespace(
+        trial: Any = SimpleNamespace(
             function=function,
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares=compares,
@@ -60,12 +61,31 @@ class DraftsTest(unittest.TestCase):
         )
         return self.store.add(trial, source, scores), trial, source
 
-    def test_rank_is_weakest_version_then_identical_words(self) -> None:
-        self.add("unbalanced", {"us": 100, "eu": 80}, (10, 10))
+    def test_rank_uses_exact_words_across_all_versions_before_objdiff(self) -> None:
+        sha, _, _ = self.add("unbalanced", {"us": 100, "eu": 80}, (10, 10))
         self.add("balanced", {"us": 90, "eu": 90}, (1, 1))
-        sha, _, _ = self.add("more identical", {"us": 90, "eu": 91}, (3, 4))
+        self.add("fewer identical", {"us": 90, "eu": 91}, (3, 4))
         self.assertEqual(self.store.best("sample"), self.store.root / sha / "sample.c")
-        self.assertEqual(self.store.best("sample").read_text(), "more identical")
+        selected = self.store.best("sample")
+        assert selected is not None
+        self.assertEqual(selected.read_text(), "unbalanced")
+
+    def test_rank_prefers_complete_identity_before_more_words(self) -> None:
+        sha, _, _ = self.add("complete", {"us": 100, "eu": 100}, (10, 10))
+        self.add("extra instruction", {"us": 100, "eu": 100}, (10, 10), typed={"inserted": 1})
+        self.assertEqual(self.store.best("sample"), self.store.root / sha / "sample.c")
+
+    def test_fewer_typed_differences_precede_objdiff_tiebreak(self) -> None:
+        self.add("extra instruction", {"us": 99, "eu": 99}, (9, 9), typed={"inserted": 1, "changed": 1})
+        sha, _, _ = self.add("fewer differences", {"us": 97, "eu": 98}, (9, 9), typed={"changed": 1})
+        self.assertEqual(self.store.best("sample"), self.store.root / sha / "sample.c")
+        self.assertEqual(self.store.publish_all()[0].read_text(), "#ifdef NON_MATCHING\nfewer differences\n#endif\n")
+
+    def test_publish_rejects_higher_objdiff_extra_instruction_variant(self) -> None:
+        self.add("extra instruction", {"us": 99, "eu": 99}, (8, 9), typed={"inserted": 1})
+        sha, _, _ = self.add("more exact words", {"us": 97, "eu": 96}, (10, 8), typed={"changed": 2})
+        self.assertEqual(self.store.best("sample"), self.store.root / sha / "sample.c")
+        self.assertEqual(self.store.publish_all()[0].read_text(), "#ifdef NON_MATCHING\nmore exact words\n#endif\n")
 
     def test_latest_trial_per_sha_and_all_history_survive_reopening(self) -> None:
         sha, trial, source = self.add("same draft", {"us": 95, "eu": 95})

@@ -167,10 +167,10 @@ def _best(
                     raise Held("plan", f"{label}: identical_everywhere disagrees with compares.{version}.typed")
                 if identical and comparison["identical"] != comparison["of"]:
                     raise Held("plan", f"{label}: identical_everywhere disagrees with compares.{version}")
-            candidates.append((not identical, -min(values[version] for version in versions), digest, function))
+            candidates.append((drafts.rank(row), digest, function, min(values[version] for version in versions)))
     if not candidates:
         return None, False, None
-    ordinary, negative_score, digest, function = min(candidates)
+    quality, digest, function, score = min(candidates)
     path = store.root / digest / f"{function}.c"
     try:
         content = path.read_bytes()
@@ -178,7 +178,7 @@ def _best(
         raise Held("plan", f"draft {function} source {path}: {error}") from error
     if hashlib.sha256(content).hexdigest() != digest:
         raise Held("plan", f"draft {function}: source_sha256 differs from {path}")
-    return -negative_score, not ordinary, path
+    return score, not quality[0], path
 
 
 def ranked(project: Project, policy: Policy) -> list[Row]:

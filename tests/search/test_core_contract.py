@@ -23,6 +23,44 @@ from unbake.search import core, methods, permute, register
 
 
 class CoreTests(unittest.TestCase):
+    def test_equal_words_with_fewer_differences_are_confirmed_and_selected(self) -> None:
+        source = self.root / "f.c"
+        source.write_text("start")
+        project: Any = SimpleNamespace(root=self.root / "project", versions=("us", "eu"))
+        policy: Any = SimpleNamespace(search_beam=1, stall_trials=1)
+        calls: list[list[str] | None] = []
+
+        def measure(
+            project: Project, policy: Policy, path: Path, scratch: Path, versions: list[str] | None = None
+        ) -> trial.Trial:
+            calls.append(versions)
+            better = path.read_text() == "fewer differences"
+            compares = {}
+            for version in versions or project.versions:
+                typed = dict.fromkeys(TYPES, 0)
+                typed["changed"] = 1 if better else 2
+                compares[version] = Compare(version, 10, 20, typed, [], 90.0 if better else 99.0, ())
+            return trial.Trial("f", hashlib.sha256(path.read_bytes()).hexdigest(), compares, [], "try again")
+
+        def propose(source: str, result: trial.Trial, ctx: core.Context) -> Iterator[core.Mutation]:
+            if source == "start":
+                yield core.Mutation("replace", "fewer typed differences", "fewer differences")
+
+        with (
+            patch.object(core, "preprocess", return_value="start"),
+            patch.object(explain, "allocation", return_value=SimpleNamespace(differences=[], pseudos=[])),
+            patch.object(
+                core,
+                "_retain",
+                side_effect=lambda p, q, s, result: min(c.match_percent for c in result.compares.values()),
+            ),
+            patch.object(trial, "try_draft", side_effect=measure),
+        ):
+            result = core.run(project, policy, source, [SimpleNamespace(propose=propose)], self.root / "out", 5)
+        self.assertEqual(result.source.read_text(), "fewer differences")
+        self.assertEqual(result.fuzzy, 90.0)
+        self.assertEqual(calls, [None, ["eu"], None])
+
     def test_permuter_without_improvements_retains_the_object_baseline(self) -> None:
         source = self.root / "f.c"
         source.write_text("int f(void) { return 1; }")
@@ -256,7 +294,9 @@ class CoreTests(unittest.TestCase):
                             core.run(cast(Project, project), cast(Policy, policy), source, [generator], out, 10)
                         continue
                     result = core.run(cast(Project, project), cast(Policy, policy), source, [generator], out, 10)
-                self.assertEqual(result.score, 11)
+                # 12 words in four versions plus 8 in EU beats 11 everywhere.
+                self.assertEqual(result.score, 8)
+                self.assertEqual(sum(row.identical for row in result.trial.compares.values()), 56)
                 self.assertEqual(result.trials, 4)
                 self.assertEqual(
                     calls,
@@ -266,8 +306,7 @@ class CoreTests(unittest.TestCase):
                         ("lopsided", ["de"]),
                         ("lopsided", None),
                         ("better", ["de"]),
-                        ("better", None),
                     ],
                 )
-                self.assertEqual(clock[0] - 3 * 60, 6)
+                self.assertEqual(clock[0] - 2 * 60, 6)
                 self.assertEqual(set(result.trial.compares), set(project.versions))

@@ -8,10 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from unbake.decomp import assign, drafts, plan
-from unbake.project.config import Held
+from unbake.project.config import Held, Policy, Project
 
 KINDS = ("register", "order", "immediate", "relocation", "inserted", "missing", "changed")
 BODY = bytes.fromhex("27bdffe0 afbf001c 00801021 8fbf001c 03e00008 27bd0020")
@@ -22,10 +22,10 @@ class PlanningTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.project = SimpleNamespace(
+        self.project: Any = SimpleNamespace(
             name="fixture", root=self.root / "project", versions=("us", "eu"), names_from="us", version=self.version
         )
-        self.policy = SimpleNamespace(state_root=self.root / "state", assignment_idle_hours=3)
+        self.policy: Any = SimpleNamespace(state_root=self.root / "state", assignment_idle_hours=3)
         self.versions = {}
         for version in self.project.versions:
             directory = self.project.root / "versions" / version
@@ -36,8 +36,8 @@ class PlanningTests(unittest.TestCase):
                 symbols=directory / "symbol_addrs.txt",
                 baserom=self.project.root / f"baserom.{version}.z64",
             )
-        self.store = drafts.Store(self.policy, self.project)
-        self.ledger = assign.Ledger(self.project, self.policy)
+        self.store = drafts.Store(cast(Policy, self.policy), cast(Project, self.project))
+        self.ledger = assign.Ledger(cast(Project, self.project), cast(Policy, self.policy))
         self.layout(
             [
                 (name, BODY + bytes(length - len(BODY)), "asm", ())
@@ -81,7 +81,7 @@ class PlanningTests(unittest.TestCase):
     ) -> tuple[dict[str, Any], Path]:
         source = self.root / f"{function}.c"
         source.write_text(f"int {function}(void) {{ return 0; }} /* {suffix} */\n")
-        trial = SimpleNamespace(
+        trial: Any = SimpleNamespace(
             function=function,
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares={
@@ -95,14 +95,14 @@ class PlanningTests(unittest.TestCase):
             identical_everywhere=identical,
         )
         digest = self.store.add(trial, source, scores)
-        return self.store.history()[-1], self.store.root / digest / f"{function}.c"
+        return cast(dict[str, Any], self.store.history()[-1]), self.store.root / digest / f"{function}.c"
 
     def history(self, rows: list[dict[str, Any]]) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)
         (self.store.root / "trials.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
 
     def test_ranking_retains_identical_history_and_uses_weakest_score(self) -> None:
-        cases = (
+        cases: tuple[tuple[list[tuple[str, dict[str, float], bool]], list[str]], ...] = (
             (
                 [("alpha", {"us": 99, "eu": 30}, False), ("beta", {"us": 75, "eu": 74}, False)],
                 ["beta", "alpha", "gamma"],
@@ -131,6 +131,7 @@ class PlanningTests(unittest.TestCase):
                 if entries and entries[0][2]:
                     self.assertTrue(rows[0].identical)
                     self.assertEqual(rows[0].score, 100)
+                    assert rows[0].draft is not None
                     self.assertIn(b"/* 0 */", rows[0].draft.read_bytes())
 
     def test_latest_trial_for_same_source_replaces_old_evidence(self) -> None:
@@ -142,6 +143,16 @@ class PlanningTests(unittest.TestCase):
         self.history([row, replacement])
         result = plan.ranked(self.project, self.policy)[0]
         self.assertEqual((result.function, result.score, result.identical, result.draft), ("beta", 10, False, path))
+
+    def test_plan_and_publish_select_the_same_exact_word_candidate(self) -> None:
+        extra, _ = self.add("alpha", {"us": 99, "eu": 99}, suffix="extra instruction")
+        exact, expected = self.add("alpha", {"us": 95, "eu": 94}, suffix="more words")
+        extra["compares"]["us"]["typed"]["inserted"] = 1
+        exact["compares"]["eu"]["identical"] = 6
+        self.history([extra, exact])
+        self.assertEqual(self.store.best("alpha"), expected)
+        selected = next(row for row in plan.ranked(self.project, self.policy) if row.function == "alpha")
+        self.assertEqual((selected.draft, selected.score), (expected, 94))
 
     def test_grouping_names_bytes_aliases_and_c_rows(self) -> None:
         for changed_words, matched, aliases in ((False, False, ()), (True, False, ("shared",)), (False, True, ())):
@@ -214,7 +225,7 @@ class PlanningTests(unittest.TestCase):
     def test_named_refusals_for_inputs_and_identity(self) -> None:
         for data in (b"", b"\0", b"\0" * 3, b"\0" * 5, None):
             with self.subTest(words=data), self.assertRaisesRegex(Held, "words"):
-                plan.classify(data)
+                plan.classify(cast(bytes, data))
         for field, value, label in (
             ("versions", (), "project.versions"),
             ("versions", ("us", "us"), "project.versions"),
@@ -233,7 +244,7 @@ class PlanningTests(unittest.TestCase):
             ("worker", "small", True, "count"),
         ):
             with self.subTest(label=label), self.assertRaisesRegex(Held, label):
-                plan.assign(self.project, self.policy, holder, tier, count=count)
+                plan.assign(self.project, self.policy, cast(str, holder), tier, count=count)
         self.layout([("alpha", BODY, "asm", ()), ("duplicate", BODY, "asm", ())], version="us")
         path = self.version("us").split
         path.write_text(path.read_text().replace(", duplicate]", ", folder/alpha]"))
@@ -242,7 +253,7 @@ class PlanningTests(unittest.TestCase):
 
     def test_named_refusals_for_retained_evidence(self) -> None:
         baseline, path = self.add("alpha", {"us": 80, "eu": 75})
-        cases = [
+        cases: list[tuple[str, Any, str]] = [
             ("function", None, "function"),
             ("source_sha256", "invalid", "source_sha256"),
             ("score", None, "score"),

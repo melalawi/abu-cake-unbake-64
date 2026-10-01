@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 from unbake.decomp import explain, trial
+from unbake.decomp.candidate_ranking import measured_candidate_rank
 from unbake.decomp.trial_compile import read_text, scratch_directory
 from unbake.project import makefile
 from unbake.project.config import Held, Policy, Project
@@ -60,8 +61,8 @@ class _Candidate:
     fuzzy: float
 
     @property
-    def rank(self) -> tuple[int, float]:
-        return self.score, self.fuzzy
+    def rank(self) -> tuple[bool, int, int, float]:
+        return measured_candidate_rank(self.trial.compares, self.fuzzy)
 
 
 def _positive(policy: Policy, name: str) -> int:
@@ -71,12 +72,10 @@ def _positive(policy: Policy, name: str) -> int:
     return value
 
 
-def _retain(
-    project: Project, policy: Policy, source: Path, scratch: Path, result: trial.Trial, generations: dict[str, Path]
-) -> float:
-    from unbake.cli.decomp import store_trial
+def _retain(project: Project, policy: Policy, source: Path, result: trial.Trial) -> float:
+    from unbake.decomp.trial import store_trial
 
-    store_trial(project, policy, source, scratch, result, generations)
+    store_trial(project, policy, source, result)
     from unbake.decomp.drafts import Store
 
     rows = Store(policy, project).rows(result.function)
@@ -180,7 +179,6 @@ def run(
             path = directory / source.name
             path.write_text(content, encoding="utf-8")
             scratch = directory / "trial"
-            generations = {v: project.build_link(v).resolve() for v in project.versions}
             try:
                 result = (
                     trial.try_draft(project, policy, path, scratch)
@@ -196,7 +194,9 @@ def run(
                 measured_score = min(c.identical for c in result.compares.values())
                 cache[digest] = None
                 if version is None or (
-                    incumbent is not None and measured_score > incumbent.trial.compares[version].identical
+                    incumbent is not None
+                    and measured_candidate_rank(result.compares)
+                    < measured_candidate_rank({version: incumbent.trial.compares[version]})
                 ):
                     if version is not None:
                         confirmation_started = time.monotonic()
@@ -210,14 +210,7 @@ def run(
                     else:
                         confirmed = True
                     if confirmed:
-                        fuzzy = _retain(
-                            project,
-                            policy,
-                            path,
-                            directory / "confirmation" if version else scratch,
-                            result,
-                            generations,
-                        )
+                        fuzzy = _retain(project, policy, path, result)
                         cache[digest] = _Candidate(
                             content, path, result, min(c.identical for c in result.compares.values()), fuzzy
                         )
@@ -293,7 +286,7 @@ def run(
                     candidate = evaluate(mutation.source, method, mutation, version, best)
                     if candidate:
                         pool[digest] = candidate
-                        if candidate.rank > best.rank:
+                        if candidate.rank < best.rank:
                             best = candidate
                         if best.trial.identical_everywhere:
                             break
@@ -301,8 +294,8 @@ def run(
                     break
             if best.trial.identical_everywhere or time.monotonic() >= deadline - mutation_seconds:
                 break
-        beam = sorted(pool.values(), key=lambda item: item.rank, reverse=True)[:width]
-        stalls = 0 if best.rank > previous else stalls + 1
+        beam = sorted(pool.values(), key=lambda item: item.rank)[:width]
+        stalls = 0 if best.rank < previous else stalls + 1
         if stalls >= stall_limit:
             beam = [best]
             stalls = 0

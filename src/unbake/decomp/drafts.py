@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
+from unbake.decomp.candidate_ranking import candidate_rank
 from unbake.decomp.score import percent, weakest
 from unbake.layout import split
 from unbake.project.config import Held, Policy, Project
@@ -38,6 +39,15 @@ class TrialRecord(TypedDict):
     next_command: str
     identical_everywhere: bool
     at: str
+
+
+def rank(row: TrialRecord) -> tuple[bool, int, int, float]:
+    return candidate_rank(
+        row["identical_everywhere"],
+        sum(item["identical"] for item in row["compares"].values()),
+        sum(sum(item["typed"].values()) for item in row["compares"].values()),
+        row["score"],
+    )
 
 
 def _function(value: object) -> str:
@@ -77,7 +87,8 @@ class Store:
         except (OSError, TypeError) as error:
             raise Held("drafts", f"source {source}: {error}") from error
         sha = hashlib.sha256(content).hexdigest()
-        if _required(trial, "source_sha256") != sha:
+        identity = source_identity(content)
+        if _required(trial, "source_sha256") != identity:
             raise Held("drafts", f"trial.source_sha256 does not match source {source}")
         compares = _required(trial, "compares")
         if not isinstance(compares, dict) or not compares:
@@ -127,7 +138,7 @@ class Store:
             raise Held("drafts", "trial.identical_everywhere differs from compares word counts/differences")
         row: TrialRecord = {
             "function": function,
-            "source_sha256": sha,
+            "source_sha256": identity,
             "sha256": sha,
             "compares": comparisons,
             "score": scores,
@@ -195,7 +206,12 @@ class Store:
                     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):
                         raise Held("drafts", f"{path}:{number}: sha256 is invalid")
                     if row["source_sha256"] != sha:
-                        raise Held("drafts", f"{path}:{number}: source_sha256 differs from sha256")
+                        content = (self.root / sha / f"{row['function']}.c").read_bytes()
+                        if (
+                            hashlib.sha256(content).hexdigest() != sha
+                            or source_identity(content) != row["source_sha256"]
+                        ):
+                            raise Held("drafts", f"{path}:{number}: source_sha256 differs from canonical source")
                     weakest(row["score"])
                     if not isinstance(row["compares"], dict) or set(row["compares"]) != set(row["score"]):
                         raise Held("drafts", f"{path}:{number}: compares VERSIONs differ from score")
@@ -213,15 +229,7 @@ class Store:
         if not rows:
             return None
         latest = {row["sha256"]: row for row in rows}
-        ranked = sorted(
-            latest.values(),
-            key=lambda row: (
-                -weakest(row["score"]),
-                -sum(item["identical"] for item in row["compares"].values()),
-                row["sha256"],
-            ),
-        )
-        sha = ranked[0]["sha256"]
+        sha = min(latest.values(), key=lambda row: (rank(row), row["sha256"]))["sha256"]
         path = self.root / sha / f"{function}.c"
         try:
             if hashlib.sha256(path.read_bytes()).hexdigest() != sha:
@@ -255,29 +263,53 @@ class Store:
             raise Held("drafts", f"publish drafts {destination}: {error}") from error
 
 
-def is_partial(source: str) -> bool:
-    """Recognize the complete publication wrapper, preserving nested directives."""
-    lines = source.splitlines()
-    if not lines or lines[0].strip() != "#ifdef NON_MATCHING":
-        return False
+def canonical_source(content: bytes) -> bytes:
+    """Remove only the complete publication wrapper; preserve all source bytes."""
+    text = content.decode("utf-8")
+    return unguard(text).encode("utf-8") if is_partial(text) else content
+
+
+def source_identity(content: bytes) -> str:
+    """Share exact source identity between trials and match submission."""
+    return hashlib.sha256(canonical_source(content)).hexdigest()
+
+
+def _partial_bounds(source: str) -> tuple[int, int] | None:
+    """Recognize a complete wrapper after comments/includes, preserving offsets."""
+    clean = re.sub(r"/\*.*?\*/|//[^\n]*", lambda match: "\n" * match[0].count("\n"), source, flags=re.S)
+    lines = clean.splitlines()
+    start = next((index for index, line in enumerate(lines) if line.strip() == "#ifdef NON_MATCHING"), None)
+    if start is None or any(line.strip() and not re.fullmatch(r"\s*#\s*include\b.*", line) for line in lines[:start]):
+        return None
     depth = 1
-    for index, line in enumerate(lines[1:], 1):
+    for index, line in enumerate(lines[start + 1 :], start + 1):
         directive = re.match(r"\s*#\s*(if|ifdef|ifndef|endif|else|elif)\b", line)
         if directive:
             kind = directive[1]
             if depth == 1 and kind in ("else", "elif"):
-                return False
+                return None
             depth += 1 if kind in ("if", "ifdef", "ifndef") else -1 if kind == "endif" else 0
             if depth == 0:
-                return index == len(lines) - 1 and line.strip() == "#endif"
-    return False
+                return (
+                    (start, index)
+                    if line.strip() == "#endif" and not any(tail.strip() for tail in lines[index + 1 :])
+                    else None
+                )
+    return None
+
+
+def is_partial(source: str) -> bool:
+    """Recognize the complete publication wrapper, preserving nested directives."""
+    return _partial_bounds(source) is not None
 
 
 def unguard(source: str) -> str:
     """Remove exactly the outer partial wrapper or refuse its malformed form."""
-    if not is_partial(source):
+    bounds = _partial_bounds(source)
+    if bounds is None:
         raise Held("drafts", "NON_MATCHING.guard is missing or invalid")
-    return "".join(source.splitlines(keepends=True)[1:-1])
+    start, end = bounds
+    return "".join(line for index, line in enumerate(source.splitlines(keepends=True)) if index not in (start, end))
 
 
 def match_edits(project: Project, function: str, source_text: str, versions: Iterable[str]) -> list[split.Edit]:
@@ -296,7 +328,7 @@ def match_edits(project: Project, function: str, source_text: str, versions: Ite
         before = path.read_text() if path.exists() else ""
         if before and not is_partial(before):
             raise Held("drafts", f"{function}: matched source already exists")
-        content = unguard(source_text) if source_text.startswith("#ifdef NON_MATCHING\n") else source_text
+        content = unguard(source_text) if is_partial(source_text) else source_text
         edits = [split.Edit(path, before, content, versions)]
         pattern = re.compile(
             r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)(asm|c)(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M
