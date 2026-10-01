@@ -443,8 +443,8 @@ class Proof:
     def clean_source(path: Path) -> None:
         text = path.read_text()
         for key, pattern in (
-            ("raw_gfx", r"\bwords\s*\.\s*w[01]\s*="),
-            ("local_macro", r"(?m)^\s*#\s*define\s+(?:_SHIFTL|g[sd]SP\w*|g[sd]DP\w*)\b"),
+            ("raw_gfx", r"\bwords\s*\.\s*w[01]\s*(?:[+\-*/&|^]|<<|>>)?=(?!=)"),
+            ("local_macro", r"(?m)^\s*#\s*define\s+(?:_SHIFT[LR]|g(?:s)?(?:SP|DP)\w*|G_[A-Z0-9_]+)\b"),
             ("local_type", r"\btypedef\b|\bfunc_\w+_S\d+\b"),
         ):
             require(not re.search(pattern, text), f"accept.{key}: {path}")
