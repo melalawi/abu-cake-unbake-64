@@ -10,11 +10,12 @@ if TYPE_CHECKING:
     from unbake.decomp.trial_artifacts import TrialContext
 import re
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from unbake.decomp.needs import LabelNeed, Need, SymbolNeed, register_deriver
 from unbake.families import Family, family_for
 from unbake.families.mips import relocation_value
+from unbake.layout.data_symbols import counterparts
 from unbake.project.config import Held
 
 
@@ -323,6 +324,21 @@ def derive_trial(context: TrialContext) -> list[Need]:
             raise Held("symbols", f"{version}.trial_elf: {error}") from error
         rows = data_rows(context.project, version)
         values = symbol_values(artifact["version"].symbols)
+        declared = dict(values)
+        correspondence: dict[str, str] = {}
+        source_values = symbol_values(context.project.version(context.project.names_from).symbols)
+        for _, kind, symbol in pending:
+            name = symbol["name"]
+            if kind in (0, 4, 10) or symbol["section"] or name in declared or name not in source_values:
+                continue
+            try:
+                # Resolve only this VERSION: another VERSION's missing evidence must
+                # not prevent an independently selected trial from being scored.
+                counterpart = counterparts(replace(context.project, versions=(version,)), name)[version]
+            except Held as error:
+                raise Held("symbols", f"{name}: VERSION {version}: {error.reason}") from error
+            declared[name] = values[counterpart]
+            correspondence[name] = counterpart
         refs = references(artifact["target_words"], values.get("_gp"))
         # Declared addresses outside data rows are settled by the symbol file; object-local
         # sections are owned by the constant-pool deriver.
@@ -362,7 +378,7 @@ def derive_trial(context: TrialContext) -> list[Need]:
                     matched.add(j)
         for relocation in relocations:
             if (
-                relocation.name not in values
+                relocation.name not in declared
                 and relocation.kind not in (0, 4, 10)
                 and relocation.offset // 4 not in matched
             ):
@@ -374,7 +390,14 @@ def derive_trial(context: TrialContext) -> list[Need]:
         object_evidence = TrialElf(
             draft, relocations, tuple(bindings), rows, values.get("_gp"), family, frozenset(placed)
         )
-        derived = derive(object_evidence, artifact["target_words"], version, values, aligned)
+        derived = derive(object_evidence, artifact["target_words"], version, declared, aligned)
+        for name, counterpart in correspondence.items():
+            if not any(isinstance(need, SymbolNeed) and need.name == name for need in derived):
+                address = declared[name]
+                section = next((row.section for row in rows if row.start <= address < row.end), "absolute")
+                derived.append(
+                    SymbolNeed(version, name, address, 0, section, "address", 0, f"data correspondence: {counterpart}")
+                )
         result.extend(derived)
         guidance = render(derived)
         if guidance:

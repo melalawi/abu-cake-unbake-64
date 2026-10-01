@@ -547,6 +547,93 @@ class SymbolTests(unittest.TestCase):
             for n in derived:
                 self.assertEqual(needs.decode(needs.encode(n)), n)
 
+    def test_names_from_correspondence_does_not_require_aligned_relocations(self) -> None:
+        cases = (
+            ("us", 0x800C0010, 0, "valid", None),
+            ("eu", 0x800C0010, 4, "valid", None),
+            ("eu", 0x800C0010, -4, "valid", None),
+            ("eu", 0x800E0010, 4, "valid", None),
+            ("eu", 0x800C0010, 0, "missing", "correspondence"),
+            ("eu", 0x800C0010, 0, "ambiguous", "missing or ambiguous"),
+            ("eu", 0x800C0010, 0, "unknown", "no aligned evidence"),
+        )
+        for selected, address, addend, mode, refusal in cases:
+            with (
+                self.subTest(version=selected, addend=addend, mode=mode, address=address),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                project = project_for(root / "symbols")
+                versions = {
+                    name: replace(version, symbols=root / f"{name}.symbols")
+                    for name, version in project.version_map.items()
+                }
+                # An unrelated VERSION lacks a symbol file altogether. Selected
+                # VERSIONs must not consult it when resolving correspondence.
+                project = replace(project, versions=("us", "eu", "de"), version_map=versions)
+                source_address = address - 4
+                versions["us"].symbols.write_text(
+                    f"left = 0x{source_address - 8:X};\n"
+                    + (f"value = 0x{source_address:X};\n" if mode != "unknown" else "")
+                    + f"right = 0x{source_address + 8:X};\n"
+                )
+                versions["eu"].symbols.write_text(
+                    f"left = 0x{address - 8:X};\nother = 0x{address:X};\n"
+                    + (f"right = 0x{address + 8:X};\n" if mode != "missing" else "")
+                    + (f"alias = 0x{address:X};\n" if mode == "ambiguous" else "")
+                )
+                version = versions[selected]
+                version.split.write_text(
+                    "segments:\n  - name: main\n    type: code\n    start: 0x40\n"
+                    "    vram: 0x800C0000\n    subalign: 4\n    end: 0x60\n"
+                    "    subsegments:\n      - [0x40, asm, alpha]\n      - [0x48, rodata, pool]\n"
+                )
+                assembly = root / "alpha.s"
+                assembly.write_text(
+                    f".set noreorder\n.text\nlui $3, %hi(value{addend:+d})\nlwc1 $f6, %lo(value{addend:+d})($3)\n"
+                )
+                output = root / "alpha.o"
+                subprocess.run(
+                    [
+                        str(self.policy.mips_as),
+                        "-EB",
+                        "-mips3",
+                        "--no-pad-sections",
+                        "-o",
+                        str(output),
+                        str(assembly),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+                unit = inspect(output, str(self.policy.mips_readelf), root)
+                target_address = source_address if selected == "us" else address
+                proof = trial.Trial("alpha", "0" * 64, {selected: Compare(selected, 0, 2, {}, [])}, [], "")
+                context = TrialContext(
+                    project,
+                    self.policy,
+                    project.src / "alpha.c",
+                    proof,
+                    {
+                        selected: {
+                            "unit": unit,
+                            "layout": unit,
+                            "work": root,
+                            "version": version,
+                            "span": FunctionSpan(0x800C0000, 0x40, 8, 4),
+                            "target_words": list(pair(target_address + addend)),
+                        }
+                    },
+                )
+                if refusal:
+                    with self.assertRaisesRegex(Held, f"value:.*{refusal}"):
+                        symbols.derive_trial(context)
+                else:
+                    derived = symbols.derive_trial(context)
+                    placed = [n for n in derived if isinstance(n, SymbolNeed) and n.name == "value"]
+                    self.assertEqual([n.address for n in placed], [target_address])
+                    self.assertEqual(version.symbols.read_text().count("value ="), int(selected == "us"))
+
     def test_exact_extern_extent_and_prologue(self) -> None:
         for type_, size, expected in (
             ("f32", 4, "extern f32 value;"),

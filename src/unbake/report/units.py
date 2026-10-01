@@ -12,6 +12,7 @@ from typing import Any
 from unbake.layout import split
 from unbake.project.config import Held, Policy, Project, Version
 from unbake.project_tools.elf import Object, Symbol
+from unbake.project_tools.extract import partial_rows
 from unbake.report import files
 
 
@@ -121,6 +122,13 @@ def units(project: Project, policy: Policy, version: str, generation: Path, work
     found = functions(cartridge)
     if not found:
         raise Held("report", f"VERSION {version} split {cartridge.split}: functions are missing")
+    try:
+        _, _, partial_segments = split.parse_layout(
+            cartridge.split, partial_rows(split.read(cartridge.split), project.src)
+        )
+    except (OSError, UnicodeError, ValueError) as error:
+        raise Held("report", f"VERSION {version} partial sources: {error}") from error
+    partial_paths = {row.path for segment in partial_segments for row in segment.rows if row.kind == "c"}
     linked_paths = sorted(generation.glob("*.elf"))
     if len(linked_paths) > 1:
         raise Held("report", f"VERSION {version}: exactly one linked ELF is required")
@@ -163,13 +171,14 @@ def units(project: Project, policy: Policy, version: str, generation: Path, work
         else:
             source = project.src / (row.path + ".c")
             base = None
-            if source.is_file():
+            if row.kind == "asm" and row.path in partial_paths:
                 base = project.root / "build" / (version + ".nonmatching") / "obj" / "src" / (row.path + ".o")
                 if not base.is_file():
                     raise Held(
                         "report",
                         f"draft {source} partial src object {base} is missing; "
-                        f"run make VERSION={version} NON_MATCHING=1",
+                        f"run make -j4 VERSION={version} NON_MATCHING=1 "
+                        f"{base.relative_to(project.root)}",
                     )
         if base is not None:
             unit["base_path"] = os.path.relpath(base, generation)

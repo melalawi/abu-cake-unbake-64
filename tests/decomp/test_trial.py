@@ -256,6 +256,28 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(before, self.snapshot())
         self.assertTrue(list(self.scratch.rglob("report.txt")))
 
+    def test_committed_nonmatching_draft_is_enabled_for_compile_and_layouts(self) -> None:
+        self.source = self.project.src / "alpha.c"
+        content = (
+            b"#ifdef NON_MATCHING\nstruct Draft { char pad[0x10 - sizeof(u32)]; };\n"
+            b"int alpha(void) { return 1; }\n#else\nint matching_only;\n#endif\n"
+        )
+        self.source.write_bytes(content)
+        before = self.snapshot()
+
+        def compiler(project: Project, policy: SimpleNamespace, source: Path, version: str, out: Path) -> Path:
+            preprocessed = trial_compile.run_tool([str(policy.cpp), "-P", str(source)], out.parent, "try")
+            self.assertIn("int alpha(void)", preprocessed)
+            self.assertNotIn("matching_only", preprocessed)
+            return self.compile(project, policy, source, version, out)
+
+        result, _, _ = self.attempt(compiler=compiler)
+        self.assertTrue(result.identical_everywhere)
+        draft = next(item for item in result.needs if isinstance(item, needs.LayoutNeed) and item.struct == "Draft")
+        self.assertEqual(cast(list[dict[str, object]], draft.fields)[0]["extent"], (12,))
+        self.assertEqual(result.source_sha256, hashlib.sha256(content).hexdigest())
+        self.assertEqual(before, self.snapshot())
+
     def test_generation_can_be_removed_after_snapshot_without_a_lock(self) -> None:
         generation = self.project.build_link("us").resolve()
         run_tool = trial_compile.run_tool

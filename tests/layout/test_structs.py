@@ -15,6 +15,30 @@ from unbake.project.config import Held, Policy, Project
 
 
 class DeclarationTests(unittest.TestCase):
+    def test_padding_extents_use_target_sizeof(self) -> None:
+        for expression, expected in [
+            ("0x10 - 0x4", 12),
+            ("0x10 - sizeof(u8)", 15),
+            ("0x10 - sizeof(unsigned long)", 12),
+            ("0x10 - sizeof(void *)", 12),
+            ("0x10 - sizeof(Bytes)", 13),
+            ("0x10 - sizeof(u16[3])", 10),
+            ("0x10 - sizeof(struct Pair)", 8),
+            ("0x10 - sizeof(Word)", 12),
+        ]:
+            with self.subTest(expression=expression):
+                records = layouts(
+                    "typedef u8 Bytes[3]; typedef u32 Word; struct Pair { u8 x; u32 y; };"
+                    f"struct Padded {{ char pad[{expression}]; u8 tail; }};"
+                )
+                padded = records[-1]
+                self.assertEqual(padded.fields[0].extent, (expected,))
+                self.assertEqual(padded.fields[1].offset, expected)
+                self.assertEqual(padded.size, expected + 1)
+        for expression, reason in [("sizeof(Missing)", "Missing"), ("sizeof(void)", "void")]:
+            with self.subTest(expression=expression), self.assertRaisesRegex(Held, reason):
+                layouts(f"struct Padded {{ char pad[{expression}]; }};")
+
     def test_integer_extents(self) -> None:
         for expression, count in [
             ("SLOT_COUNT", 8),

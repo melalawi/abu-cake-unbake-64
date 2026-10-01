@@ -82,7 +82,7 @@ def try_draft(
     trial = Trial(function, hashlib.sha256(content).hexdigest(), compares, preconditions, "")
     work = Path(tempfile.mkdtemp(prefix=f"{function}.", dir=directory))
     copied = work / source.name
-    copied.write_bytes(content)
+    copied.write_bytes(b"#define NON_MATCHING 1\n" + content)
     for name in selected:
         version = project.version(name)
         values = symbol_values(Path(version.symbols))
@@ -113,7 +113,7 @@ def try_draft(
         artifact["placements"] = section_placements(project, artifact, function)
         provisional = Compare(name, 0, len(expected) // 4, dict.fromkeys(TYPES, 0), pool_guidance(project, artifact))
         compares[name] = provisional
-        pending = evidence.derive(TrialContext(project, policy, source, trial, {name: artifact}))
+        pending = evidence.derive(TrialContext(project, policy, copied, trial, {name: artifact}))
         for need in pending:
             if need not in trial.needs:
                 trial.needs.append(need)

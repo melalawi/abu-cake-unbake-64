@@ -45,6 +45,7 @@ class Parser:
     def expression(self, text: str, active: tuple[str, ...] = ()) -> int:
         text = re.sub(r"\b(0[xX][\da-fA-F]+|\d+)[uUlL]+\b", r"\1", text)
         text = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
+        text = re.sub(r"\bsizeof\s*\(([^()]*)\)", lambda match: str(self.sizeof_type(match[1])), text)
         text = re.sub(r"\b0([0-7]+)\b", r"0o\1", text).strip()
         try:
             node = ast.parse(text, mode="eval").body
@@ -92,6 +93,16 @@ class Parser:
             held(text, "unsupported integer extent")
 
         return evaluate(node)
+
+    def sizeof_type(self, spelling: str) -> int:
+        """Resolve sizeof type operands using the same target declarator rules."""
+        declaration = spelling.replace("[", " __extent[", 1) if "[" in spelling else spelling + " __extent"
+        parser = Parser(declaration + ";")
+        parser.types = self.types
+        parser.defines = self.defines
+        parser.cache = self.cache
+        member = parser.declaration()[0]
+        return self.type_info(member.base, member.operations, ())[0]
 
     def balanced(self, opening: str, closing: str) -> str:
         self.take(opening)

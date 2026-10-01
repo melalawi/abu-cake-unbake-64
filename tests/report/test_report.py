@@ -261,6 +261,49 @@ class ReportTest(unittest.TestCase):
         self.assertTrue(self.readme.read_text().endswith("## Contributions\nGuide\n"))
         self.assertNotIn("old figures", self.readme.read_text())
 
+    def test_cross_version_c_is_not_an_assembly_versions_draft(self) -> None:
+        original = self.project.version("us")
+        other_split = self.root / "other.yaml"
+        other_split.write_text(original.split.read_text())
+        other = replace(original, name="eu", split=other_split)
+        project = replace(self.project, versions=("us", "eu"), version_map={"us": original, "eu": other})
+        original.split.write_text(original.split.read_text().replace("[0, c, matched]", "[0, asm, matched]"))
+        self.object(self.generation / "obj/asm/matched.o", "matched")
+        self.object(project.root / "build/eu.nonmatching/obj/src/draft.o", "draft")
+        stale = project.root / "build/us.nonmatching/obj/src/matched.o"
+        for stale_present in (False, True):
+            if stale_present:
+                self.object(stale, "matched")
+            for version, complete in (("us", False), ("eu", True)):
+                with self.subTest(version=version, stale_present=stale_present):
+                    rows = report_units.units(project, self.policy, version, self.generation, self.root / "report")
+                    self.assertEqual(rows[0]["metadata"]["complete"], complete)
+                    self.assertEqual("base_path" in rows[0], complete)
+                    self.assertIn("base_path", rows[1])
+                    self.assertNotIn("base_path", rows[2])
+
+    def test_partial_report_measures_objects_without_linking_undefined_drafts(self) -> None:
+        subprocess.run(
+            [tool("mips-linux-gnu-as"), "-EB", "-mips3", "--no-pad-sections", "-o", str(self.partial)],
+            input=(
+                ".text\n.set noreorder\n.globl draft\n.type draft,@function\ndraft:\n"
+                "lui $v0,%hi(undefined_draft_symbol)\njr $ra\n"
+                "addiu $v0,$v0,%lo(undefined_draft_symbol)\n.size draft,.-draft\n"
+            ),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        partial_build = self.partial.parents[2]
+        self.assertEqual(list(partial_build.glob("*.elf")), [])
+        report.write(self.project, self.policy)
+        configuration = json.loads((self.generation / "objdiff.json").read_text())
+        self.assertEqual((self.generation / configuration["units"][1]["base_path"]).resolve(), self.partial)
+        self.assertEqual(list(partial_build.glob("*.elf")), [])
+        self.partial.unlink()
+        with self.assertRaisesRegex(Held, r"make -j4 VERSION=us NON_MATCHING=1 build/us.nonmatching/obj/src/draft.o"):
+            report.write(self.project, self.policy)
+
     def test_report_publishes_in_project_without_state_writes(self) -> None:
         state = self.policy.state_root
         state.mkdir(parents=True)
