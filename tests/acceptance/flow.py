@@ -608,7 +608,9 @@ class Proof:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="Evidence and clean installed environment directory.")
-    parser.add_argument("--source-tree", type=Path, help="Explicit src directory for public source CLI follow-up proofs.")
+    parser.add_argument(
+        "--source-tree", type=Path, help="Explicit src directory for public source CLI follow-up proofs."
+    )
     phases = parser.add_subparsers(dest="phase", required=True)
     install = phases.add_parser("install", help="Create a clean venv and pip install an explicit immutable source.")
     install.add_argument("--install-spec", required=True, help="Pinned Git URL or immutable source directory.")
