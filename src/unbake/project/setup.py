@@ -10,7 +10,7 @@ import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from unbake.project import build, compiler_files, config, hygiene, makefile, setup_config, setup_proof, toolchain
 from unbake.project.config import Held, PendingProject, Policy, Project, SetupPolicy
@@ -201,6 +201,33 @@ def _copy_inputs(project: PendingProject | Project, tree: Path, fingerprint: dic
         shutil.copy2(project.root / relative, destination)
 
 
+def _seed_generations(project: Project, staged: Project) -> None:
+    """Copy pinned build caches; standalone make still proves every staged ROM."""
+    with build.lock(project):
+        for version in project.versions:
+            link = project.build_link(version)
+            if not link.is_symlink() or not (link / ".split.mk").is_file():
+                continue
+            current = build.current_generation(project, version)
+            with build.pin(current):
+                destination = staged.build / f"{version}.0"
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(current, destination, ignore=shutil.ignore_patterns(".inuse", "*.log"))
+                _relocate_generation(destination, project.root, staged.root)
+                staged.build_link(version).symlink_to(destination.name)
+        if project.asm.is_dir():
+            shutil.copytree(project.asm, staged.asm)
+
+
+def _relocate_generation(generation: Path, source: Path, destination: Path) -> None:
+    for path in generation.rglob("*"):
+        if path.is_file() and path.suffix in {".mk", ".d", ".ld", ".json", ".txt", ".flags"}:
+            content = path.read_bytes()
+            changed = content.replace(str(source).encode(), str(destination).encode())
+            if content != changed:
+                path.write_bytes(changed)
+
+
 def _write(tree: Path, relative: str, content: str) -> None:
     path = Path(relative)
     if path.is_absolute() or ".." in path.parts:
@@ -250,6 +277,38 @@ def layout_receipts(layout: LayoutManifest) -> list[str]:
     return lines
 
 
+def _ready_readme(project: PendingProject | Project, census: Census, layout: LayoutManifest, tree: Path) -> None:
+    from unbake.project import init
+    from unbake.project.header import DESTINATIONS
+    from unbake.report.progress import render
+
+    readme = project.root / "README.md"
+    if not readme.is_file() or readme.read_bytes() != init.readme_text(project.root).encode():
+        return
+    facts = setup_config.facts(config.load_pending(project.root), census, name=None, title=None)
+    descriptions = []
+    reports = {}
+    for cartridge in census.cartridges:
+        version = census.names[cartridge.path]
+        descriptions.append(
+            f"| {version} ({DESTINATIONS[cartridge.header.region]}, revision {cartridge.header.revision}) |"
+        )
+        functions = layout["versions"][version]["functions"]
+        reports[version] = {
+            "version": 2,
+            "measures": {
+                "complete_code": 0,
+                "total_code": sum(function["end"] - function["start"] for function in functions),
+                "complete_units": 0,
+                "total_units": len(functions),
+            },
+        }
+    template = (makefile.TEMPLATES / "README.ready.md").read_text()
+    template = template.replace("@TITLE@", facts["project"]["title"])
+    template = template.replace("@PROGRESS@", "\n\n".join(descriptions))
+    _write(tree, "README.md", render(template, reports))
+
+
 def _publish(
     project: PendingProject | Project,
     staged: Project,
@@ -265,12 +324,17 @@ def _publish(
         path = staged.root / relative
         if path.is_relative_to(staged.roms) and (project.root / relative).exists():
             continue
-        if not fresh and (
-            path.is_relative_to(staged.src)
-            or any(path.is_relative_to(directory) for directory in staged.include)
-            or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
-            or relative in {"README.md", "CONTRIBUTING.md", "config.toml"}
-            or relative.startswith("docs/")
+        shell_readme = relative == "README.md" and _read(project.root / relative) != path.read_bytes()
+        if (
+            not fresh
+            and not shell_readme
+            and (
+                path.is_relative_to(staged.src)
+                or any(path.is_relative_to(directory) for directory in staged.include)
+                or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
+                or relative in {"README.md", "CONTRIBUTING.md", "config.toml", ".gitignore"}
+                or relative.startswith("docs/")
+            )
         ):
             continue
         target = project.root / relative
@@ -333,12 +397,7 @@ def _publish(
                 moved.append(destination)
                 # Extraction dependencies normally use project-relative paths.
                 # Relocate explicit temporary paths in generated text receipts.
-                for path in destination.rglob("*"):
-                    if path.is_file() and path.suffix in {".mk", ".d", ".ld", ".json", ".txt"}:
-                        content = path.read_bytes()
-                        changed = content.replace(str(staged.root).encode(), str(project.root).encode())
-                        if content != changed:
-                            path.write_bytes(changed)
+                _relocate_generation(destination, staged.root, project.root)
             for target, (content, mode) in writes.items():
                 if target != config_path:
                     compiler_files.atomic_bytes(target, content, mode=mode)
@@ -442,6 +501,7 @@ def complete_setup(
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
         _layout_inputs(project, census, layout, tree)
+        _ready_readme(project, census, layout, tree)
         _write(
             tree,
             "config.toml",
@@ -500,6 +560,7 @@ def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
         staged = config.load(tree)
+        _seed_generations(project, staged)
         if supply is not None:
             restore_roms(staged, supply)
         manifest = project.build / "setup/roms.json"
@@ -507,5 +568,8 @@ def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None
             destination = staged.build / "setup/roms.json"
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(manifest, destination)
-            census.run(config.load_pending(tree), policy, names_from=project.names_from)
+            measured = census.run(config.load_pending(tree), policy, names_from=project.names_from)
+            layout_path = tree / "docs/setup/layout.json"
+            if layout_path.is_file():
+                _ready_readme(project, measured, cast("LayoutManifest", json.loads(layout_path.read_bytes())), tree)
         return _prove_publish(project, tree, policy, fingerprint, fresh=False, supply=supply)

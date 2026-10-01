@@ -87,5 +87,5 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
     # Compiler acquisition stays inside the confirmed staging transaction.
     return receipt(
         "setup",
-        setup.complete_setup(project, result, layout, proposal, policy, confirm=args.confirm, supply=args.supply),
+        flow.complete_setup(project, result, layout, proposal, policy, confirm=args.confirm, supply=args.supply),
     )

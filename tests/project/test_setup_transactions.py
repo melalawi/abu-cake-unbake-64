@@ -12,8 +12,9 @@ import toml
 
 from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_bootstrap import cartridge
-from unbake.project import config, fingerprint, setup, setup_proof
+from unbake.project import config, fingerprint, init, setup, setup_proof
 from unbake.project.census import Census
+from unbake.report import readme_layout
 
 
 class SetupTransactionTests(unittest.TestCase):
@@ -292,3 +293,45 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual((self.root / "docs/setup/compiler.json").read_bytes(), accepted)
         self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), rom.sha1 + "  roms/baserom.us.z64\n")
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
+
+    def test_ready_progress_readme_replaces_only_untouched_shell(self) -> None:
+        rom = cartridge(self.project.version("us").baserom, b"ABC")
+        census = Census((rom,), {rom.path: "us"}, "us", {}, {}, self.project.build / "setup/roms.json")
+        layout = {"versions": {"us": {"functions": [{"start": 0, "end": 3}]}}}
+        tree = self.project.build / "readme-stage"
+        tree.mkdir()
+        readme = self.root / "README.md"
+        owner = readme.read_bytes()
+        setup._ready_readme(self.project, census, layout, tree)
+        self.assertFalse((tree / "README.md").exists())
+        self.assertEqual(readme.read_bytes(), owner)
+        readme.write_text(init.readme_text(self.root))
+        setup._ready_readme(self.project, census, layout, tree)
+        generated = (tree / "README.md").read_text()
+        _before, block, _after = readme_layout.section(generated)
+        self.assertTrue(readme_layout.complete(block))
+        self.assertNotIn("@", generated)
+        self.assertIn("0 of 3", generated)
+        self.assertEqual(readme.read_text(), init.readme_text(self.root))
+
+    def test_seeded_generation_and_assembly_are_isolated_from_live_outputs(self) -> None:
+        current = self.project.build_link("us").resolve()
+        dependency = current / ".split.mk"
+        original = f"target: {self.project.root}/asm/us/example.s\n"
+        dependency.write_text(original)
+        (current / ".extract-key").write_text("content-key")
+        self.project.asm.mkdir()
+        (self.project.asm / "example.s").write_bytes(b"original assembly")
+        before = setup._inputs(self.project)
+        tree = self.project.build / "seed-stage"
+        setup._copy_inputs(self.project, tree, before)
+        staged = config.load(tree)
+        setup._seed_generations(self.project, staged)
+        copied = staged.build_link("us") / ".split.mk"
+        self.assertIn(str(tree), copied.read_text())
+        self.assertEqual(dependency.read_text(), original)
+        copied.write_text("stage-only edit")
+        (staged.asm / "example.s").write_bytes(b"stage-only assembly edit")
+        self.assertEqual(dependency.read_text(), original)
+        self.assertEqual((self.project.asm / "example.s").read_bytes(), b"original assembly")
+        self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
