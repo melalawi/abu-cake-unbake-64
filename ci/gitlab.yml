@@ -1,0 +1,11 @@
+image: python:3.11-bookworm
+check:
+  variables:
+    TMPDIR: $CI_PROJECT_DIR/.ci-work/tmp
+    UNBAKE_POLICY: $CI_PROJECT_DIR/.ci-work/policy.toml
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends binutils-mips-linux-gnu build-essential ripgrep git
+    - ci/setup "$CI_PROJECT_DIR/.ci-work" "$(uname -m)"
+  script:
+    - ci/check

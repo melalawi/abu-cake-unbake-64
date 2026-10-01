@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y binutils-mips-linux-gnu build-essential ripgrep
+      - run: ci/setup "$RUNNER_TEMP/unbake-ci" "$(uname -m)"
+      - run: ci/check
+        env:
+          TMPDIR: ${{ runner.temp }}/unbake-ci/tmp
+          UNBAKE_POLICY: ${{ runner.temp }}/unbake-ci/policy.toml

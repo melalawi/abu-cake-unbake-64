@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+# Install into the caller's Python environment. Both arguments are required.
+if [ "$#" -ne 2 ]; then echo 'usage: ci/setup SCRATCH OBJDIF_ARCH' >&2; exit 1; fi
+for tool in python3 git dirname mkdir; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "missing tool: $tool" >&2; exit 1; }
+done
+cd "$(dirname "$0")/.."
+case "$1" in
+    /*) ;;
+    *) echo 'SCRATCH must be an absolute path' >&2; exit 1 ;;
+esac
+mkdir -p "$1/tmp"
+export TMPDIR="$1/tmp"
+python3 -m pip --version >/dev/null 2>&1 || { echo 'missing tool: pip' >&2; exit 1; }
+python3 -m pip install '.[dev]' 'splat64==0.50.0' 'm2c @ git+https://github.com/matt-kempster/m2c.git@708d2d2cb2698f091a92492b328f73b24209f72d'
+exec ci/policy "$1" "$2"

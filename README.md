@@ -33,6 +33,10 @@ Machine paths go in `~/.config/unbake/policy.toml`.
 4. `match` lands identical C.
 5. `report` updates progress.
 
+## Development
+
+Run checks with `ci/check`. GitLab users set the CI file path to `ci/gitlab.yml`.
+
 ## License
 
 Released under [GNU GPL version 3 or later](LICENSE).

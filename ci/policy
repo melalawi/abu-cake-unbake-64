@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+
+# Generate a fully specified test policy from pinned tools and caller-owned scratch.
+command -v python3 >/dev/null 2>&1 || { echo 'missing tool: python3' >&2; exit 1; }
+exec python3 - "$@" <<'PY'
+import hashlib
+import json
+import os
+import shutil
+import sys
+import urllib.request
+from pathlib import Path
+
+if len(sys.argv) != 3:
+    sys.exit("usage: ci/policy SCRATCH OBJDIF_ARCH")
+root = Path(sys.argv[1])
+if not root.is_absolute():
+    sys.exit("SCRATCH must be an absolute path")
+digests = {
+    "x86_64": "c8290281e82114bcc1a06ff73061110d3902a177822e750337de2537188e358f",
+    "aarch64": "a84dc05de65eb981c97ca85890bbf2cf8e1def8a4ce062144ecc4d0d686a993a",
+    "i686": "fcde0f3029b4564d7ffb612904232cc2f912dbf1dbea251969c186dbcf204fec",
+}
+arch = sys.argv[2]
+if arch not in digests:
+    sys.exit(f"unsupported objdiff Linux architecture: {arch}")
+tools = {}
+for name in ("m2c", "splat", "cpp", "mips-linux-gnu-as", "mips-linux-gnu-ld", "mips-linux-gnu-objcopy", "mips-linux-gnu-objdump", "mips-linux-gnu-readelf"):
+    path = shutil.which(name)
+    if path is None:
+        sys.exit(f"missing tool: {name}")
+    tools[name] = str(Path(path).absolute())
+for directory in (root, root / "tmp", root / "cache", root / "state"):
+    directory.mkdir(parents=True, exist_ok=True)
+
+def download(url, name, digest):
+    path = root / name
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        with urllib.request.urlopen(url, timeout=60) as stream:
+            content = stream.read()
+        actual = hashlib.sha256(content).hexdigest()
+        if actual != digest:
+            sys.exit(f"{name}: SHA256 expected {digest}, found {actual}")
+        path.write_bytes(content)
+    return str(path)
+
+objdiff = download(f"https://github.com/encounter/objdiff/releases/download/v3.8.1/objdiff-cli-linux-{arch}", "objdiff-cli", digests[arch])
+Path(objdiff).chmod(0o755)
+permuter_sha = "2e4e0d991e4258df332c19d8dcf372212fe27f1b18e777d9e1eb25fc2c64a404"
+permuter = download("https://codeload.github.com/simonlindholm/decomp-permuter/tar.gz/059609d4aec73eb0650726772954e1ad575825f8", "permuter.tar.gz", permuter_sha)
+values = {
+    "cores": 2, "stall_trials": 5, "search_beam": 4, "assignment_idle_hours": 3,
+    "init_same_game_similarity": 0.1, "init_split": "functions", "init_probe_count": 20,
+    "cache_root": str(root / "cache"), "state_root": str(root / "state"),
+    "objdiff_cli": objdiff, "objdiff_sha256": digests[arch],
+    "m2c": tools["m2c"], "splat": tools["splat"], "cpp": tools["cpp"],
+    "mips_as": tools["mips-linux-gnu-as"], "mips_ld": tools["mips-linux-gnu-ld"],
+    "mips_objcopy": tools["mips-linux-gnu-objcopy"], "mips_objdump": tools["mips-linux-gnu-objdump"],
+    "mips_readelf": tools["mips-linux-gnu-readelf"],
+    "asflags": ["-march=vr4300", "-mabi=32", "-EB", "--no-pad-sections"],
+    "cppflags": ["-P", "-undef", "-nostdinc", "-D_LANGUAGE_C", "-DF3DEX_GBI_2", "-D__GNUC__=2"],
+    "sn64_asflags": ["-mips3"], "permuter_archive": permuter, "permuter_sha256": permuter_sha,
+}
+(root / "policy.toml").write_text("".join(f"{key} = {json.dumps(value)}\n" for key, value in values.items()))
+print(root / "policy.toml")
+PY
