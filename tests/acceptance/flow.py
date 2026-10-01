@@ -412,7 +412,7 @@ class Proof:
                 attempts.append(row["returncode"] == 0 and "retained " in text and "HELD(" not in text)
         sources = {path.stem for path in (project / config["paths"]["src"]).rglob("*.c")}
         items = facts["functions"]
-        matched = sources & items.keys()
+        matched = {name for name, item in items.items() if sources & {name, *item["aliases"]}}
         fuzzy = None if fuzzy_bar is None else sum(min(row["score"].values()) >= fuzzy_bar for row in trials.values())
         result = {
             "label": label,
