@@ -9,11 +9,15 @@ class MatchReportTests(MainCase):
         nested.mkdir()
         bad = nested / "bad.c"
         bad.write_text('void bad(void) { asm("nop"); }\n')
-        code, out, error = self.run_main(self.args("check"))
+        code, out, error = self.run_main(
+            self.args("check"), {"report": self.module("report", findings=Mock(return_value=[]))}
+        )
         self.assertEqual(code, 1, error)
         self.assertIn("src/nested/bad.c:1:", out)
         bad.write_text('/* FAKEMATCH: measured instruction required */\nvoid bad(void) { asm("nop"); }\n')
-        code, out, error = self.run_main(self.args("check"))
+        code, out, error = self.run_main(
+            self.args("check"), {"report": self.module("report", findings=Mock(return_value=[]))}
+        )
         self.assertEqual(code, 0, error)
         self.assertIn("FAKEMATCH: measured instruction required", out)
 

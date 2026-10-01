@@ -150,6 +150,24 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
     safety = _Safety(function, ast, tree)
     yield from loop_variants(function, ast, tree)
     for node in walk(function.body):
+        if (
+            isinstance(node, ast.BinaryOp)
+            and node.op == "+"
+            and safety.pure(node.left)
+            and safety.pure(node.right)
+            and any(
+                isinstance(operand, ast.ID)
+                and operand.name in safety.types
+                and isinstance(safety.types[operand.name].type, ast.PtrDecl)
+                for operand in (node.left, node.right)
+            )
+        ):
+
+            def operands(target: Any) -> None:
+                target.left, target.right = target.right, target.left
+
+            # In valid C, pointer addition's other operand is an integer.
+            yield node, "pointer addition operand order", operands
         if isinstance(node, ast.Compound):
             items = node.block_items or []
             for index, (left, right) in enumerate(pairwise(items)):

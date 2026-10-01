@@ -1,5 +1,6 @@
 """Native reports and the byte-exact project Progress format."""
 
+import argparse
 import json
 import os
 import struct
@@ -14,6 +15,7 @@ from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture
 from tests.support import test_policy, tool
+from unbake.cli import check
 from unbake.decomp import score
 from unbake.project import init
 from unbake.project.config import Held
@@ -36,6 +38,27 @@ def document(code: int, total: int, matched_percent: float, fuzzy_percent: float
 
 
 class RenderTests(unittest.TestCase):
+    def test_version_rows_preserve_layout_and_only_replace_figures(self) -> None:
+        for version, padding, old, complete, fuzzy, percent in (
+            ("us", " ", "2.11", 7200, 77.6, " 72.00"),
+            ("us", " ", "2.11", 10000, 100, " 100.00"),
+            ("us-rev1", "   ", "71.09", 10000, 100, " 100.00"),
+        ):
+            with self.subTest(version=version):
+                original = (
+                    "intro\n## Progress\n\n"
+                    f"| {version} (release description) |\n|---|\n"
+                    f"| <pre><code>{version}{padding}[{'░' * 20}]  {old}% (~0.00%)"
+                    "  0 of 10,000 bytes</code></pre> |\n\n## End\nfooter\n"
+                )
+                bar = "██████████████▒▒░░░░" if complete == 7200 else "█" * 20
+                expected = original.replace("░" * 20, bar).replace(
+                    f"  {old}% (~0.00%)  0", f"{percent}% (~{fuzzy:.2f}%)  {complete:,}"
+                )
+                reports = {version: document(complete, 10000, 0, fuzzy)}
+                self.assertEqual(report.render(original, reports), expected)
+                self.assertEqual(report.render(expected, reports), expected)
+
     def test_reference_layout_goldens_and_idempotence(self) -> None:
         for stem in ("battletanx", "ragewars"):
             with self.subTest(project=stem):
@@ -133,7 +156,7 @@ class RenderTests(unittest.TestCase):
             ("## Progress\n\nold\n## End\n", "descriptions.us"),
             ("## Progress\n\n<pre>summary</pre>\n| us (release) |\n\n## End\n", "progress block"),
             (
-                "## Progress\n\n| us (release) |\n| <pre><code>us ["
+                "## Progress\n\n| us (release) |\n| <pre><code>wrong ["
                 + "░" * 20
                 + "]  0.00% (~0.00%)  0 of 100 bytes</code></pre> |\n\n## End\n",
                 "unexpected label",
@@ -191,6 +214,32 @@ class ReportTest(unittest.TestCase):
             text=True,
             check=True,
         )
+
+    def test_check_refuses_stale_totals_without_publishing_and_report_repairs_them(self) -> None:
+        destination = self.project.root / "versions/us/report.json"
+        report.write(self.project, self.policy)
+        with patch("unbake.cli.check.hygiene.tracked_findings", side_effect=lambda *_args: []):
+            self.assertFalse(check.run(argparse.Namespace(hygiene=False), self.project, self.policy))
+            split = self.project.version("us").split
+            split.write_text(split.read_text().replace("[12, asm, draft]", "[12, c, draft]"))
+            self.object(self.generation / "obj/src/draft.o", "draft")
+            before = destination.read_bytes(), self.readme.read_bytes()
+            self.assertTrue(check.run(argparse.Namespace(hygiene=False), self.project, self.policy))
+            self.assertEqual(
+                report.findings(self.project, self.policy), ["HELD(check): stale report VERSION us: run unbake report"]
+            )
+            self.assertEqual((destination.read_bytes(), self.readme.read_bytes()), before)
+            report.write(self.project, self.policy)
+            self.assertFalse(check.run(argparse.Namespace(hygiene=False), self.project, self.policy))
+            current = destination.read_bytes()
+            for field in ("complete_code", "total_code", "complete_units", "total_units", "fuzzy_match_percent"):
+                with self.subTest(field=field):
+                    document = json.loads(current)
+                    document["measures"][field] += 1
+                    destination.write_text(json.dumps(document))
+                    self.assertIn("stale report VERSION us", report.findings(self.project, self.policy)[0])
+            destination.write_bytes(current)
+            self.assertEqual(report.findings(self.project, self.policy), [])
 
     def test_native_reports_use_partial_objects_and_project_versions(self) -> None:
         written = report.write(self.project, self.policy)

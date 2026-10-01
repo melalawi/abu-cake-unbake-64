@@ -19,6 +19,7 @@ from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
 from unbake.project import build
 from unbake.project.config import Compiler, Held, Policy, Project, Version
+from unbake.report import progress
 
 SCRATCH_ROOT = Path(tempfile.gettempdir())
 
@@ -114,6 +115,7 @@ class MatchFixture(unittest.TestCase):
         self.interactions: list[set[str]] = []
         self.on_build: Callable[[Path, Callable[[str], Path]], object] | None = None
         self.addCleanup(patch.stopall)
+        patch.object(progress, "write", return_value=[]).start()
         patch.object(build, "build", self.build, create=True).start()
         patch.object(build, "current_generation", self.current, create=True).start()
 

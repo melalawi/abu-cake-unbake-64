@@ -170,7 +170,8 @@ def _replace_figures(content: str, document: dict[str, Any], version: str, table
         functions = label == "functions"
         matched, total, percent, fuzzy = _figures(document, version, functions)
         width = len(match["percent_pad"]) + len(match["percent"])
-        percentage = f"{percent:.2f}".rjust(width)
+        percentage = f"{percent:.2f}"
+        percentage = percentage.rjust(max(width, len(percentage) + 1))
         fuzzy_text = "" if functions else f" (~{fuzzy:.2f}%)"
         return (
             f"{label}{match['pad']}[{_bar(percent, fuzzy)}]{percentage}%{fuzzy_text}"
@@ -199,7 +200,7 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
-    """Update only figures in the existing summary and bytes/functions tables."""
+    """Update only figures in existing summaries and VERSION or bytes/functions tables."""
     heading = "## Progress\n\n"
     if template.count(heading) != 1:
         raise Held("report", "readme.Progress: exactly one heading required")
@@ -242,7 +243,11 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
             raise Held("report", f"readme.Progress.{version}: progress block missing")
         start = match.end() + figures.start(1)
         stop = match.end() + figures.end(1)
-        replacements.append((start, stop, _replace_figures(figures[1], reports[version], version, table=True)))
+        code = re.fullmatch(r"<code>(.*?)</code>", figures[1], re.DOTALL)
+        figure = _FIGURE.fullmatch(code[1]) if code else None
+        version_row = figure is not None and figure["label"] == version
+        replacement = _replace_figures(figures[1], reports[version], version, table=not version_row)
+        replacements.append((start, stop, replacement))
     # Summary labels and their order belong to the template, including its all line.
     first_table = min(match.start() for _, match in matches)
     summary = block[:first_table]
@@ -260,65 +265,84 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
     return before + heading + block + body[end:]
 
 
-def write(project: Project, policy: Policy) -> list[Path]:
+def measure(project: Project, policy: Policy, version: str) -> dict[str, Any]:
+    """Generate native totals from the current split and build without publishing them."""
     from unbake.project.build import current_generation
 
     tool = objdiff_cli(policy, "report")
-    if not getattr(project, "versions", None):
+    try:
+        generation = current_generation(project, version)
+        workspace = generation / "report"
+        workspace.mkdir(parents=True, exist_ok=True)
+        units = report_units.units(project, policy, version, generation, workspace)
+        config = generation / "objdiff.json"
+        files.write(
+            config,
+            (json.dumps({"build_base": False, "build_target": False, "units": units}, indent=2) + "\n").encode(),
+        )
+        with tempfile.TemporaryDirectory(dir=workspace, prefix="generate-") as temporary:
+            output = Path(temporary) / "report.json"
+            result = subprocess.run(
+                [
+                    str(tool),
+                    "report",
+                    "generate",
+                    "--project",
+                    str(generation),
+                    "--output",
+                    str(output),
+                    "--format",
+                    "json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode:
+                raise Held("report", f"objdiff report generate VERSION {version}: {result.stderr.strip()}")
+            document = _json(output)
+            _native_counts(document, output)
+            reported_units = document.get("units")
+            if not isinstance(reported_units, list) or [unit.get("name") for unit in reported_units] != [
+                unit["name"] for unit in units
+            ]:
+                raise Held("report", f"objdiff report {output}.units differ from objdiff.json")
+            return document
+    except OSError as error:
+        raise Held("report", f"VERSION {version} report file/tool: {error}") from error
+
+
+def findings(project: Project, policy: Policy) -> list[str]:
+    """Name every VERSION whose saved native totals disagree with current inputs."""
+    lines = []
+    for version in project.versions:
+        destination = project.root / "versions" / version / "report.json"
+        try:
+            current = measure(project, policy, version)
+            saved = _json(destination)
+            _native_counts(saved, destination)
+            expected = _measures(current, version)
+            actual = _measures(saved, destination)
+            if any(actual.get(field, 0) != expected.get(field, 0) for field in actual.keys() | expected.keys()):
+                lines.append(f"HELD(check): stale report VERSION {version}: run unbake report")
+        except Held as error:
+            lines.append(f"HELD(check): report VERSION {version}: {error.reason}")
+    return lines
+
+
+def write(project: Project, policy: Policy) -> list[Path]:
+    if not project.versions:
         raise Held("report", "project.versions is missing")
     readme = project.root / "README.md"
     try:
         original = readme.read_text(encoding="utf-8")
-    except OSError as error:
-        raise Held("report", f"README {readme}: {error}") from error
-    reports: dict[str, dict[str, Any]] = {}
-    written: list[Path] = []
-    pending: list[tuple[Path, bytes]] = []
-    try:
-        for version in project.versions:
-            generation = current_generation(project, version)
-            workspace = generation / "report"
-            workspace.mkdir(parents=True, exist_ok=True)
-            units = report_units.units(project, policy, version, generation, workspace)
-            config = generation / "objdiff.json"
-            files.write(
-                config,
-                (json.dumps({"build_base": False, "build_target": False, "units": units}, indent=2) + "\n").encode(),
-            )
-            destination = project.root / "versions" / version / "report.json"
-            with tempfile.TemporaryDirectory(dir=workspace, prefix="generate-") as temporary:
-                output = Path(temporary) / "report.json"
-                result = subprocess.run(
-                    [
-                        str(tool),
-                        "report",
-                        "generate",
-                        "--project",
-                        str(generation),
-                        "--output",
-                        str(output),
-                        "--format",
-                        "json",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if result.returncode:
-                    raise Held("report", f"objdiff report generate VERSION {version}: {result.stderr.strip()}")
-                document = _json(output)
-                _native_counts(document, output)
-                reported_units = document.get("units")
-                if not isinstance(reported_units, list) or [unit.get("name") for unit in reported_units] != [
-                    unit["name"] for unit in units
-                ]:
-                    raise Held("report", f"objdiff report {output}.units differ from objdiff.json")
-                reports[version] = document
-                pending.append((destination, (json.dumps(document, indent=2) + "\n").encode()))
-            written.extend((project.build_link(version) / "objdiff.json", destination))
+        reports = {version: measure(project, policy, version) for version in project.versions}
         rendered = render(original, reports)
-        for destination, content in pending:
-            files.write(destination, content)
+        written: list[Path] = []
+        for version, document in reports.items():
+            destination = project.root / "versions" / version / "report.json"
+            files.write(destination, (json.dumps(document, indent=2) + "\n").encode())
+            written.extend((project.build_link(version) / "objdiff.json", destination))
         files.write(readme, rendered.encode())
         written.append(readme)
     except OSError as error:

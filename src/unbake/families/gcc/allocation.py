@@ -73,9 +73,17 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         dispositions[number] = hard
     ranked = re.search(r"^;; (\d+) regs to allocate:([^\n]*)", global_text, re.M)
     if ranked is None:
-        raise Held("explain", "dumps.greg.order: missing regs to allocate")
-    order = list(map(int, ranked[2].split()))
-    if len(order) != int(ranked[1]) or len(set(order)) != len(order):
+        # GCC omits this row when local allocation assigned every used pseudo.
+        if (
+            not usage.keys() <= dispositions.keys()
+            or re.search(r"^;; \d+ conflicts:", global_text, re.M)
+            or re.search(r"^;; allocno \d+", dumps.get("galloc", ""), re.M)
+        ):
+            raise Held("explain", "dumps.greg.order: missing regs to allocate")
+        order = []
+    else:
+        order = list(map(int, ranked[2].split()))
+    if ranked is not None and (len(order) != int(ranked[1]) or len(set(order)) != len(order)):
         raise Held("explain", "dumps.greg.order: inconsistent pseudo count")
     conflicts = {
         int(m[1]): tuple(map(int, m[2].split()))

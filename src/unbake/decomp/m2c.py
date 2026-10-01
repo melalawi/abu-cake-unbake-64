@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import re
-import shlex
 import tempfile
 from pathlib import Path
 
 from unbake.decomp import similar
-from unbake.decomp.commands import prefix
 from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.decomp.draft_input import (
     assembly_source,
@@ -18,6 +16,7 @@ from unbake.decomp.draft_input import (
     version_for,
     whole_body,
 )
+from unbake.decomp.draft_macros import lower
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
 from unbake.layout.structs import preprocess
@@ -147,13 +146,10 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     # multiple roots. Keep the draft standalone without repeating their types.
     context.write_text(_context(headers, selected), encoding="utf-8")
     declarations = preprocess(context, project, policy, v)
+    output = lower(output, declarations)
     source.write_text(
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
         f"{declarations.rstrip()}\n\n{output.rstrip()}\n",
         encoding="utf-8",
     )
-    unresolved = sorted(set(re.findall(r"\bM2C_\w+", output)))
-    if unresolved:
-        command = shlex.join([*prefix(project), "decomp", "guide", function, "--version", v])
-        raise Held("m2c", f"draft {source}: missing declarations for {', '.join(unresolved)}; resolve: {command}")
     return source

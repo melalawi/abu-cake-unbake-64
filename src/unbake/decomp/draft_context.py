@@ -78,6 +78,13 @@ def required_headers(contents: dict[Path, str], output: str) -> set[Path]:
     for path in ordered_headers(contents):
         text = _clean(contents[path])
         names = _typedefs(text) | set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)\s*\{", text))
+        for declaration in re.findall(r"\bextern\b([^;]+);", text):
+            declaration = re.sub(r"\[[^\]]*\]", "", declaration)
+            function = re.search(r"\b([A-Za-z_]\w*)\s*\(", declaration)
+            if function is not None:
+                names.add(function[1])
+            else:
+                names.update(re.findall(r"\b([A-Za-z_]\w*)\s*(?=,|$)", declaration))
         # Keep one primitive type prelude for standalone scalar drafts.
         if names and "{" not in text and not selected:
             selected.add(path)

@@ -4,13 +4,12 @@ import hashlib
 import re
 from pathlib import Path
 
+from unbake.decomp.draft_macros import calls
 from unbake.layout import shared, split_apply
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
+from unbake.layout.structs_parser import Parser
 from unbake.project.config import Held, Project
-
-_EXPRESSION = r"(?:[^(),]|\([^()]*\)|\((?:[^()]|\([^()]*\))*\))+?"
-_FIELD = re.compile(rf"M2C_FIELD\(\s*({_EXPRESSION})\s*,\s*([^,()]+\*)\s*,\s*(0[xX][\da-fA-F]+|\d+)\s*\)")
 
 
 def _base_name(base: str) -> str:
@@ -23,23 +22,26 @@ def _base_name(base: str) -> str:
 def share(project: Project, function: str, output: str, context: str) -> tuple[str, Path | None]:
     """Create shared declarations only for explicit, nonoverlapping typed fields."""
 
-    def arithmetic_load(match: re.Match[str]) -> str:
-        base, pointer, literal = match.groups()
-        if not re.fullmatch(r"[A-Za-z_]\w*", base.strip()):
-            return f"*({pointer.strip()})((char *)({base}) + {literal})"
-        return match[0]
-
-    # An arithmetic address does not establish an aggregate object identity.
-    output = _FIELD.sub(arithmetic_load, output)
     groups: dict[str, dict[int, str]] = {}
-    for match in _FIELD.finditer(output):
-        base, pointer, literal = match.groups()
+
+    def collect(args: list[str]) -> str:
+        if len(args) != 3:
+            raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
+        base, pointer, literal = args
+        if not pointer.endswith("*") or not re.fullmatch(r"[+-]?(?:0[xX][\da-fA-F]+|\d+)", literal):
+            raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
         offset = int(literal, 0)
-        type_name = pointer.strip()[:-1].strip()
+        if offset < 0 or not re.fullmatch(r"[A-Za-z_]\w*", base):
+            return f"*({pointer})((char *)({base}) + ({literal}))"
+        type_name = pointer[:-1].strip()
         fields = groups.setdefault(_base_name(base), {})
         if offset in fields and fields[offset] != type_name:
-            raise Held("m2c", f"{base}+{literal}: conflicting field types")
+            # Multiple typed views do not establish one aggregate layout.
+            return f"*({pointer})((char *)({base}) + ({literal}))"
         fields[offset] = type_name
+        return f"M2C_FIELD({base}, {pointer}, {literal})"
+
+    output = calls(output, "M2C_FIELD", collect)
     if not groups:
         return output, None
     declarations = []
@@ -58,11 +60,36 @@ def share(project: Project, function: str, output: str, context: str) -> tuple[s
             members.append(declaration)
             cursor = offset + member.size
         declarations.append(f"struct Layout_{function}_{base} {{\n    " + "\n    ".join(members) + "\n};")
-    names = {f"Layout_{function}_{base}" for base in groups}
+    existing = {
+        record.name: record
+        for record in Parser(
+            "\n".join(path.read_text() for root in project.include for path in sorted(Path(root).rglob("*.h")))
+        ).parse()
+    }
+    names_by_base: dict[str, str] = {}
+    for base, declaration in zip(groups, declarations, strict=True):
+        name = f"Layout_{function}_{base}"
+        previous = existing.get(name)
+        if previous is not None:
+            old = {member.name: (member.offset, member.type, member.size) for member in previous.fields}
+            measured_record = layouts(context + "\n" + declaration.replace(name, "MeasuredLayout", 1))[-1]
+            if any(
+                member.name in old and old[member.name] != (member.offset, member.type, member.size)
+                for member in measured_record.fields
+                if member.name.startswith("field_")
+            ):
+                name += "_" + hashlib.sha256(declaration.encode()).hexdigest()[:12]
+        names_by_base[base] = name
     for record in reversed(layouts(context)):
-        if record.name in names:
+        if record.name in set(names_by_base.values()):
             context = context[: record.start] + context[record.end :]
-    text = "\n\n".join(declarations) + "\n"
+    text = (
+        "\n\n".join(
+            declaration.replace(f"Layout_{function}_{base}", names_by_base[base], 1)
+            for base, declaration in zip(groups, declarations, strict=True)
+        )
+        + "\n"
+    )
     records = layouts(context + "\n" + text)[-len(groups) :]
     for record, fields in zip(records, groups.values(), strict=True):
         measured = {member.name: member.offset for member in record.fields}
@@ -75,8 +102,8 @@ def share(project: Project, function: str, output: str, context: str) -> tuple[s
             raise Held("m2c", f"{edit.path}: shared header must not be a symlink")
         split_apply.write(edit.path, edit.after)
 
-    def replace(match: re.Match[str]) -> str:
-        base, _pointer, literal = match.groups()
-        return f"((struct Layout_{function}_{_base_name(base)} *)({base}))->field_{int(literal, 0):X}"
+    def replace(args: list[str]) -> str:
+        base, _pointer, literal = args
+        return f"((struct {names_by_base[_base_name(base)]} *)({base}))->field_{int(literal, 0):X}"
 
-    return _FIELD.sub(replace, output), header
+    return calls(output, "M2C_FIELD", replace), header

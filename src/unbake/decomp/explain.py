@@ -144,6 +144,8 @@ def leverage(allocation: Allocation) -> tuple[Pseudo, ...]:
 
 def render(allocation: Allocation) -> str:
     rows = list(allocation.limitations)
+    if allocation.pseudos and all(p.allocator == "local" and p.rank is None for p in allocation.pseudos):
+        rows.append("Global allocation order is empty; no pseudos to rank.")
     by_number = {p.number: p for p in allocation.pseudos}
     for difference in allocation.differences:
         rows.append(

@@ -24,6 +24,7 @@ from unbake.match.common import (
 )
 from unbake.project import build
 from unbake.project.config import Policy, Project
+from unbake.report import progress
 
 
 def swap(link: Path, target: Path) -> None:
@@ -67,7 +68,8 @@ def publish(
                 destination = project.root / Path(edit.path).relative_to(attempt.tree)
                 writes[destination] = read(edit.path)
             ledger = Path(policy.state_root) / project.name / "receipts" / "match.jsonl"
-            touched = set(writes) | {ledger, queue_path(project)}
+            reports = {project.root / "versions" / version / "report.json" for version in project.versions}
+            touched = set(writes) | {ledger, queue_path(project), project.root / "README.md"} | reports
             before = {path: read(path) if path.exists() else None for path in touched}
             swapped = []
             try:
@@ -76,6 +78,7 @@ def publish(
                 for version, generation in attempt.generations.items():
                     swap(project.build_link(version), generation)
                     swapped.append(version)
+                progress.write(project, policy)
                 ledger.parent.mkdir(parents=True, exist_ok=True)
                 with ledger.open("a", encoding="utf-8") as output:
                     for draft in candidates:
