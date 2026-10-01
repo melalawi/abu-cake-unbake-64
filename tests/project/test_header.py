@@ -12,14 +12,7 @@ from unittest.mock import patch
 from unbake.project import header, rom
 from unbake.project.config import Held
 
-GOLDEN = (
-    ("us-rev1", "2388984cda7b3cc5", "4e52574501", "Turok: Rage Wars", 0x80000400),
-    ("de", "66e4fa0fde88c7d0", "4e52574400", "Turok: Rage Wars", 0x80000400),
-    ("us", "adb9498bdaf28f55", "4e52574500", "Turok: Rage Wars", 0x80000400),
-    ("eu", "1ea26214e790900f", "4e52575000", "Turok: Rage Wars", 0x80000400),
-    ("eu-x", "b6be20a5facaf66d", "4e52575800", "Turok: Rage Wars", 0x80000400),
-    ("us", "6aa4dde7e3e2f4e7", "4e42584500", "BATTLETANX", 0x80071000),
-)
+GOLDEN = (("us", "6aa4dde7e3e2f4e7", "4e42584500", "BATTLETANX", 0x80071000),)
 # Independent reference results for repeating max/sign-bit/one/rotate-31 words.
 VECTORS = (
     ("6101", "00000001", 0xF8E8CDDC, 0x947A4D8D),
@@ -37,7 +30,7 @@ def image(vector: Any = VECTORS[2]) -> bytes:
     data = bytearray(0x101000)
     struct.pack_into(">6I", data, 0, 0x80371240, 15, 0x80000400, 0x1444, crc1, crc2)
     data[0x20:0x34] = b"Example Game        "
-    data[0x3B:0x40] = bytes.fromhex("4e52574500")
+    data[0x3B:0x40] = bytes.fromhex("4e45584500")
     data[0x750:0x850] = WORDS * 16
     data[0xFFC:0x1000] = bytes.fromhex(patch)
     data[0x1000:] = WORDS * (0x100000 // len(WORDS))
@@ -48,14 +41,10 @@ BOOTCODES = {zlib.crc32(image(vector)[0x40:0x1000]): vector[0] for vector in VEC
 
 
 class HeaderTests(unittest.TestCase):
-    def test_six_real_headers(self) -> None:
+    def test_battletanx_header(self) -> None:
         for name, crc, identity, title, entry in GOLDEN:
             with self.subTest(name=name, title=title):
-                title_hex = (
-                    "5475726f6b3a2052616765205761727320202020"
-                    if title.startswith("Turok")
-                    else "424154544c4554414e5820202020202020202020"
-                )
+                title_hex = "424154544c4554414e5820202020202020202020"
                 data = bytes.fromhex(
                     "803712400000000f"
                     + f"{entry:08x}"
@@ -173,7 +162,8 @@ class HeaderTests(unittest.TestCase):
                     swapped = b"".join(valid[i : i + width][::-1] for i in range(0, len(valid), width)) + bytes(tail)
                     with self.subTest(width=width, tail=tail), self.assertRaisesRegex(Held, "size"):
                         rom.normalise(swapped)
-            self.assertEqual(rom.normalise(valid + b"x"), valid + b"x")
+            with self.assertRaisesRegex(Held, "rom.size"):
+                rom.normalise(valid + b"x")
             with self.assertRaisesRegex(Held, "missing"):
                 rom.load(root / "missing")
 

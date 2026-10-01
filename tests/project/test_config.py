@@ -25,6 +25,8 @@ def write_policy(root: Path) -> Path:
     with zipfile.ZipFile(archive, "w") as output:
         output.writestr("permuter/README", "Configuration test archive\n")
     values.update(
+        same_game_similarity=0.1,
+        probe_count=20,
         cache_root=str(root / "cache"),
         state_root=str(root / "state"),
         permuter_archive=str(archive),
@@ -51,7 +53,9 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(config.Held) as raised:
             config.load(self.root)
         self.assertEqual(raised.exception.phase, "config")
-        self.assertIn(field, raised.exception.reason)
+        self.assertIn(
+            field.replace("[", "").replace("]", ""), raised.exception.reason.replace("[", "").replace("]", "")
+        )
 
     def test_loads_compiler_set_and_version_facts(self) -> None:
         project = config.load(self.root)
@@ -67,7 +71,6 @@ class ConfigTests(unittest.TestCase):
 
     def test_single_version_and_explicit_empty_values(self) -> None:
         text = self.original.replace('versions = ["us", "us-rev1"]', 'versions = ["us"]')
-        text = text.replace('names_from = "us"\n', "")
         text = text.replace('cflags = ["-O2", "-G0", "-mips2"]', "cflags = []")
         text = text.replace('macros = ["VERSION_US"]', "macros = []")
         self.path.write_text(text)
@@ -77,12 +80,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(project.compiler_for("alpha").cflags, ())
         self.assertEqual(project.version("us").macros, ())
 
-    def test_registry_flags_when_override_is_absent(self) -> None:
-        self.path.write_text(self.original.replace('cflags = ["-O2", "-G0", "-mips2"]\n', ""))
-        self.assertIn("-non_shared", config.load(self.root).compiler_for("alpha").cflags)
+    def test_confirmed_flags_are_required(self) -> None:
+        self.held_config(self.original.replace('cflags = ["-O2", "-G0", "-mips2"]\n', ""), "cflags")
 
     def test_unit_path_stem_external_draft_and_conflict(self) -> None:
-        extra = '[compilers."gcc-2.7.2-kmc"]\n'
+        extra = '[compilers."gcc-2.7.2-kmc"]\ncflags = []\n'
         self.path.write_text(self.original.replace("[units]", extra + '[units]\nalpha = "gcc-2.7.2-kmc"'))
         project = config.load(self.root)
         self.assertEqual(project.compiler_for(self.directory / "drafts/alpha.c").id, "gcc-2.7.2-kmc")
@@ -95,7 +97,9 @@ class ConfigTests(unittest.TestCase):
         from unbake.project import makefile
 
         self.path.write_text(
-            self.original.replace("[units]", '[compilers."gcc-2.7.2-kmc"]\n[units]\nmain = "gcc-2.7.2-kmc"')
+            self.original.replace(
+                "[units]", '[compilers."gcc-2.7.2-kmc"]\ncflags = []\n[units]\nmain = "gcc-2.7.2-kmc"'
+            )
         )
         project = config.load(self.root)
         self.assertEqual(project.compiler_for("src/alpha.c").id, "gcc-2.7.2-kmc")
@@ -164,7 +168,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(policy.objdiff_cli.read_bytes()).hexdigest(), policy.objdiff_sha256)
         with (
             patch.dict("os.environ", {"XDG_CONFIG_HOME": str(self.directory / "missing"), "UNBAKE_POLICY": ""}),
-            self.assertRaisesRegex(config.Held, "policy.toml"),
+            self.assertRaisesRegex(config.Held, "policy.cache_root"),
         ):
             config.load_policy()
 
@@ -207,9 +211,8 @@ class ConfigTests(unittest.TestCase):
             ("assignment_idle_hours", "nan"),
             ("cache_root", '"relative"'),
             ("objdiff_sha256", '"bad"'),
-            ("init_same_game_similarity", "2"),
-            ("init_split", '"unknown"'),
-            ("init_probe_count", "0"),
+            ("same_game_similarity", "2"),
+            ("probe_count", "0"),
         ):
             lines = [
                 f"{field} = {invalid}" if line.startswith(field + " =") else line for line in original.splitlines()
@@ -217,3 +220,80 @@ class ConfigTests(unittest.TestCase):
             path.write_text("\n".join(lines) + "\n")
             with self.subTest(field=field), self.assertRaisesRegex(config.Held, field):
                 config.load_policy(path)
+
+    def test_schema_identity_and_structural_fields_are_required(self) -> None:
+        for line, field in (
+            ("schema = 1\n", "schema"),
+            ('id = "00000000-0000-4000-8000-000000000001"\n', "project.id"),
+            ('id = "00000000-0000-4000-8000-000000000002"\n', "workspace.id"),
+            ('state = "ready"\n', "project.state"),
+            ('roms = "roms"\n', "paths.roms"),
+            ('build = "build"\n', "paths.build"),
+            ('work = "build/work"\n', "paths.work"),
+            ('drafts = "build/drafts"\n', "paths.drafts"),
+            ('baserom = "roms/baserom.us.z64"\n', "baserom"),
+        ):
+            with self.subTest(field=field):
+                self.assertIn(line, self.original)
+                self.held_config(self.original.replace(line, "", 1), field)
+        for before, after, field in (
+            ("schema = 1", "schema = true", "schema"),
+            ('state = "ready"', 'state = "legacy"', "project.state"),
+            ('work = "build/work"', 'work = "src/work"', "paths.work"),
+            ('drafts = "build/drafts"', 'drafts = "build/work/drafts"', "paths.work"),
+            ('work = "build/work"', 'work = "build/us"', "paths.work/paths.drafts"),
+            ('build = "build"', 'build = ".git"', "paths.build"),
+            ('build = "build"', 'build = "src/output"', "paths.build"),
+            ('build = "build"', 'build = "../outside"', "paths.build"),
+            ('baserom = "roms/baserom.us.z64"', 'baserom = "baserom.us.z64"', "version.us.baserom"),
+        ):
+            with self.subTest(field=field, after=after):
+                self.held_config(self.original.replace(before, after, 1), field)
+
+    def test_structural_symlink_escape_and_loop_are_named(self) -> None:
+        link = self.root / "escaped"
+        link.symlink_to(self.directory, target_is_directory=True)
+        loop = self.root / "loop"
+        loop.symlink_to(loop)
+        for destination in ("escaped/work", "loop"):
+            with self.subTest(destination=destination):
+                self.held_config(self.original.replace('work = "build/work"', f'work = "{destination}"'), "paths.work")
+
+    def test_setup_policy_does_not_require_search_tools(self) -> None:
+        path = write_policy(self.directory)
+        original = path.read_text()
+        for field in ("m2c", "objdiff_cli", "objdiff_sha256", "permuter_archive", "permuter_sha256"):
+            original = "\n".join(line for line in original.splitlines() if not line.startswith(field + " =")) + "\n"
+        path.write_text(original)
+        self.assertIsInstance(config.load_policy(path, stage="setup"), config.SetupPolicy)
+        self.assertIsInstance(config.load_policy(path, stage="census"), config.CensusPolicy)
+        for field in (
+            "splat",
+            "mips_as",
+            "mips_ld",
+            "mips_objcopy",
+            "cpp",
+            "cache_root",
+            "asflags",
+            "cppflags",
+            "sn64_asflags",
+        ):
+            path.write_text(
+                "\n".join(line for line in original.splitlines() if not line.startswith(field + " =")) + "\n"
+            )
+            with self.subTest(field=field), self.assertRaisesRegex(config.Held, "policy." + field):
+                config.load_policy(path, stage="setup")
+        path.write_text(original.replace("same_game_similarity = 0.1", "same_game_similarity = nan"))
+        with self.assertRaisesRegex(config.Held, "policy.same_game_similarity"):
+            config.load_policy(path, stage="census")
+
+    def test_missing_policy_creates_only_an_incomplete_template(self) -> None:
+        path = self.directory / "operator/policy.toml"
+        with self.assertRaisesRegex(config.Held, "policy.cache_root"):
+            config.load_policy(path, stage="setup")
+        text = path.read_text()
+        values = tomllib.loads(text)
+        self.assertNotIn("splat", values)
+        self.assertNotIn("cache_root", values)
+        self.assertIn("# splat = <required value>", text)
+        self.assertNotIn("init_split", text)

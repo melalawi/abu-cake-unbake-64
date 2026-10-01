@@ -57,13 +57,11 @@ class HygieneTests(unittest.TestCase):
     def test_ignore_merge_deduplicates_root_spellings_and_is_byte_idempotent(self) -> None:
         path = self.root / ".gitignore"
         path.write_text(
-            "# Project rules\ncustom/\nbaserom.*\n/baserom.*\n__pycache__/\n/__pycache__/\n"
+            "# Project rules\ncustom/\nroms/\n/roms/\n__pycache__/\n/__pycache__/\n"
             "build/\n/build/\nasm/\n/asm/\n!custom/keep\n"
         )
         first = hygiene.ignore_text(self.project)
-        self.assertTrue(
-            first.startswith("# Project rules\ncustom/\nbaserom.*\n__pycache__/\nbuild/\nasm/\n!custom/keep\n")
-        )
+        self.assertTrue(first.startswith("# Project rules\ncustom/\nroms/\n__pycache__/\nbuild/\nasm/\n!custom/keep\n"))
         path.write_text(first)
         self.assertEqual(hygiene.ignore_text(self.project).encode(), path.read_bytes())
         for name in (".unbake/cache/output", ".unbake/state/output", "tools/clone-policy.toml"):

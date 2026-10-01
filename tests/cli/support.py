@@ -23,6 +23,7 @@ class MainCase(unittest.TestCase):
         self.root = self.directory / "project"
         shutil.copytree(Path(__file__).parents[1] / "fixture", self.root)
         self.project = config.load(self.root)
+        self.project.roms.mkdir(exist_ok=True)
         self.policy = policy(self.directory)
         self.scratch = self.directory / "scratch"
         self.source = self.root / "src/alpha.c"
@@ -60,7 +61,11 @@ class MainCase(unittest.TestCase):
                 stack.enter_context(patch.object(config, "load", return_value=self.project))
                 stack.enter_context(patch.object(config, "load_policy", return_value=self.policy))
             code = cli.main(args)
-        return (code, stdout.getvalue(), stderr.getvalue())
+        output, error = stdout.getvalue(), stderr.getvalue()
+        next_lines = [line for line in (output + error).splitlines() if line.startswith("Next: ")]
+        self.assertEqual(len(next_lines), 1, output + error)
+        self.assertTrue((error if "Next: " in error else output).splitlines()[-1].startswith("Next: "))
+        return (code, output, error)
 
     def args(self, *operands: str) -> list[str]:
         return ["--project", str(self.root), *operands]

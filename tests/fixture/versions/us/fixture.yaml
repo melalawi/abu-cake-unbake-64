@@ -1,7 +1,7 @@
 name: Synthetic fixture
 options:
   basename: fixture
-  target_path: ../../baserom.us.z64
+  target_path: ../../roms/baserom.us.z64
   base_path: ../..
   platform: n64
   compiler: IDO

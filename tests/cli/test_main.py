@@ -13,7 +13,7 @@ class MainTests(MainCase):
     def test_all_phases_and_verbs_parse(self) -> None:
         cases = (
             ("setup", ["setup"]),
-            ("setup", ["setup", "--new", "dump.z64"]),
+            ("setup", ["setup", "--names-from", "us"]),
             ("split", ["split", "cut", "alpha", "--version", "us", "--start", "0x40", "--end", "0x4c"]),
             ("split", ["split", "data-cut", "data", "--version", "us", "--start", "64", "--end", "76", "--apply"]),
             ("split", ["split", "rename", "alpha", "beta"]),
@@ -81,7 +81,7 @@ class MainTests(MainCase):
 
     def test_required_cli_values_name_the_missing_argument(self) -> None:
         cases = (
-            (["setup"], "config", "--project"),
+            (["setup"], "config", "project.root"),
             (self.args(), "config", "phase"),
             (self.args("split"), "split", "verb"),
             (self.args("split", "cut", "alpha"), "split", "--version"),
@@ -98,10 +98,11 @@ class MainTests(MainCase):
             with self.subTest(args=args):
                 code, out, error = self.run_main(args)
                 self.assertEqual(code, 1)
-                self.assertEqual(out, "")
-                self.assertTrue(error.startswith(f"HELD({phase}): "))
-                self.assertIn(field, error)
-                self.assertNotIn("usage:", error)
+                self.assertTrue(out.endswith("\n"))
+                self.assertEqual(error, "")
+                self.assertTrue(out.startswith(f"HELD({phase}): "))
+                self.assertIn(field, out)
+                self.assertNotIn("usage:", out)
 
     def test_bad_cli_values_and_conflicting_assignment_selectors(self) -> None:
         for operands in (
@@ -111,9 +112,9 @@ class MainTests(MainCase):
             ["setup", "--unexpected"],
         ):
             with self.subTest(operands=operands):
-                code, _out, error = self.run_main(self.args(*operands))
+                code, out, _error = self.run_main(self.args(*operands))
                 self.assertEqual(code, 1)
-                self.assertTrue(error.startswith("HELD("))
+                self.assertTrue(out.startswith("HELD("))
 
     def test_help_does_not_load_project_or_policy(self) -> None:
         with (
@@ -128,10 +129,10 @@ class MainTests(MainCase):
         policy.assert_not_called()
 
     def test_missing_config_formats_held_without_traceback(self) -> None:
-        code, _out, error = self.run_main(["--project", str(self.directory / "absent"), "setup"], load_project=False)
+        code, out, error = self.run_main(["--project", str(self.directory / "absent"), "setup"], load_project=False)
         self.assertEqual(code, 1)
-        self.assertIn("HELD(config):", error)
-        self.assertIn("config.toml", error)
+        self.assertIn("HELD(config):", out)
+        self.assertIn("config.toml", out)
         self.assertNotIn("Traceback", error)
 
     def test_missing_phase_module_is_held(self) -> None:
@@ -145,7 +146,7 @@ class MainTests(MainCase):
             return original_import(name, globals, locals, fromlist, level)
 
         with patch.object(builtins, "__import__", side_effect=import_module):
-            code, _out, error = self.run_main(self.args("setup"))
+            code, out, _error = self.run_main(self.args("setup"))
         self.assertEqual(code, 1)
-        self.assertIn("HELD(setup):", error)
-        self.assertIn("setup", error)
+        self.assertIn("HELD(setup):", out)
+        self.assertIn("setup", out)

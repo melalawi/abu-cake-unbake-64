@@ -20,6 +20,7 @@ def rom_bytes(version: str) -> bytes:
 
 
 def write_roms(output: Path) -> list[Path]:
+    output = output / "roms"
     output.mkdir(parents=True, exist_ok=True)
     paths = []
     for version in VERSIONS:

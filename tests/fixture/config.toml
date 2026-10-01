@@ -1,23 +1,36 @@
+schema = 1
+
 [project]
+id = "00000000-0000-4000-8000-000000000001"
+state = "ready"
 name = "fixture"
 title = "Synthetic three-function project"
 names_from = "us"
 versions = ["us", "us-rev1"]
 default_compiler = "ido-7.1"
 
+[workspace]
+id = "00000000-0000-4000-8000-000000000002"
+
 [paths]
+roms = "roms"
+build = "build"
+work = "build/work"
+drafts = "build/drafts"
 src = "src"
 include = ["include"]
 asm = "asm"
 tools = "tools"
 
 [version.us]
+baserom = "roms/baserom.us.z64"
 baserom_sha1 = "21758de98b69907bcac48b82f833f14833a5f7cc"
 split = "versions/us/fixture.yaml"
 symbols = "versions/us/symbol_addrs.txt"
 macros = ["VERSION_US"]
 
 [version.us-rev1]
+baserom = "roms/baserom.us-rev1.z64"
 baserom_sha1 = "eafd5564f7042dd6128314aadcb802dbb9ff8cfa"
 split = "versions/us-rev1/fixture.yaml"
 symbols = "versions/us-rev1/symbol_addrs.txt"
