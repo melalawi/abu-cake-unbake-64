@@ -1,0 +1,360 @@
+"""Conservative MIPS III value provenance across control flow and delay slots."""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any
+
+# Width describes the access, not the semantic C storage type.
+MEMORY = {
+    0x20: (1, True, "read"),
+    0x21: (2, True, "read"),
+    0x22: (4, None, "read"),
+    0x23: (4, True, "read"),
+    0x24: (1, False, "read"),
+    0x25: (2, False, "read"),
+    0x26: (4, None, "read"),
+    0x27: (4, False, "read"),
+    0x28: (1, None, "write"),
+    0x29: (2, None, "write"),
+    0x2A: (4, None, "write"),
+    0x2B: (4, None, "write"),
+    0x2C: (8, None, "write"),
+    0x2D: (8, None, "write"),
+    0x2E: (4, None, "write"),
+    0x30: (4, True, "read"),
+    0x31: (4, None, "read"),
+    0x34: (8, None, "read"),
+    0x35: (8, None, "read"),
+    0x37: (8, None, "read"),
+    0x38: (4, None, "write"),
+    0x39: (4, None, "write"),
+    0x3C: (8, None, "write"),
+    0x3D: (8, None, "write"),
+    0x3F: (8, None, "write"),
+    0x1A: (8, None, "read"),
+    0x1B: (8, None, "read"),
+}
+ARGUMENTS = (4, 5, 6, 7, 44, 46)
+RETURNS = (2, 3, 32, 34)
+
+
+@dataclass(frozen=True)
+class Value:
+    origins: tuple[tuple[str, int], ...] = ()
+    constant: int | None = None
+
+    def shift(self, offset: int) -> Value:
+        if self.constant is not None:
+            return Value(constant=(self.constant + offset) & 0xFFFFFFFF)
+        return Value(tuple((name, delta + offset) for name, delta in self.origins))
+
+    def merge(self, other: Value) -> Value:
+        if self == other:
+            return self
+        if not self.origins or not other.origins:
+            return UNKNOWN
+        origins = tuple(sorted(set(self.origins + other.origins)))
+        return Value(origins) if len(origins) <= 4 else UNKNOWN
+
+    def data(self) -> dict[str, Any]:
+        return {
+            "origins": [{"id": name, "offset": offset} for name, offset in self.origins],
+            "constant": self.constant,
+            "unknown": not self.origins and self.constant is None,
+        }
+
+
+UNKNOWN = Value()
+ZERO = Value(constant=0)
+
+
+def register(index: int) -> str:
+    return f"r{index}" if index < 32 else f"f{index - 32}"
+
+
+@dataclass
+class State:
+    registers: list[Value]
+    stack: dict[tuple[int, int], Value] = field(default_factory=dict)
+
+    def copy(self) -> State:
+        return State(self.registers.copy(), self.stack.copy())
+
+    def merge(self, other: State) -> State:
+        return State(
+            [left.merge(right) for left, right in zip(self.registers, other.registers, strict=True)],
+            {key: value.merge(other.stack.get(key, UNKNOWN)) for key, value in self.stack.items()},
+        )
+
+
+def control(word: int, pc: int) -> tuple[str, int | None, bool] | None:
+    op, rs, rt, fn = word >> 26, word >> 21 & 31, word >> 16 & 31, word & 63
+    if op in (2, 3):
+        return ("call" if op == 3 else "jump", ((pc + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2), False)
+    if op == 0 and fn in (8, 9):
+        return ("call" if fn == 9 else "return" if rs == 31 else "jump", None, False)
+    if op in (1, 4, 5, 6, 7, 20, 21, 22, 23) or (op == 17 and rs == 8):
+        offset = (word & 0x7FFF) - (word & 0x8000)
+        return (
+            "call" if op == 1 and rt in (16, 17, 18, 19) else "branch",
+            pc + 4 + offset * 4,
+            op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3, 18, 19)) or (op == 17 and bool(rt & 2)),
+        )
+    return None
+
+
+class Analysis:
+    def __init__(
+        self,
+        function: str,
+        version: str,
+        address: int,
+        rom_offset: int,
+        words: list[int],
+        targets: dict[int, str],
+        symbols: dict[int, list[str]],
+    ) -> None:
+        self.function, self.version, self.address, self.rom_offset = function, version, address, rom_offset
+        self.words, self.targets, self.symbols = words, targets, symbols
+        self.memory: dict[int, dict[str, Any]] = {}
+        self.calls: dict[int, dict[str, Any]] = {}
+        self.returns: dict[int, dict[str, Any]] = {}
+        self.inputs: set[str] = set()
+        self.outputs: set[str] = set()
+        self.uses: dict[str, set[int]] = {}
+        self.unknown: set[str] = set()
+
+    def provenance(self, index: int) -> dict[str, Any]:
+        return {
+            "function": self.function,
+            "version": self.version,
+            "instruction": self.address + index * 4,
+            "rom_offset": self.rom_offset + index * 4,
+        }
+
+    def use(self, value: Value, index: int, record: bool) -> None:
+        if record:
+            for origin, _ in value.origins:
+                if origin.startswith(f"param:{self.function}:"):
+                    self.inputs.add(origin.rsplit(":", 1)[1])
+                if origin.startswith("return:"):
+                    self.uses.setdefault(origin, set()).add(self.address + index * 4)
+
+    def step(self, state: State, index: int, record: bool) -> None:
+        word = self.words[index]
+        op, rs, rt, rd, fn = word >> 26, word >> 21 & 31, word >> 16 & 31, word >> 11 & 31, word & 63
+        immediate = (word & 0x7FFF) - (word & 0x8000)
+        regs = state.registers
+        rs_constant, rt_constant = regs[rs].constant, regs[rt].constant
+        destination: int | None = None
+        value = UNKNOWN
+        read: list[int] = []
+        if op in MEMORY:
+            width, signedness, direction = MEMORY[op]
+            read = [rs]
+            operand = rt + 32 if op in (0x31, 0x35, 0x39, 0x3D) else rt
+            base = regs[rs].shift(immediate)
+            slot = next((offset for origin, offset in base.origins if origin == f"stack:{self.function}"), None)
+            if record:
+                self.memory[index] = {
+                    **self.provenance(index),
+                    "opcode": op,
+                    "base_register": register(rs),
+                    "base": regs[rs].data(),
+                    "offset": immediate,
+                    "width": width,
+                    "signedness": signedness,
+                    "direction": direction,
+                    "value": regs[operand].data() if direction == "write" else None,
+                    "partial": op in (0x22, 0x26, 0x2A, 0x2E, 0x1A, 0x1B, 0x2C, 0x2D),
+                }
+            if direction == "read":
+                destination = operand
+                if slot is not None and len(base.origins) == 1:
+                    value = state.stack.get((slot, width), UNKNOWN)
+                elif base.constant is not None and len(self.symbols.get(base.constant, [])) == 1:
+                    value = Value((("global:" + self.symbols[base.constant][0], 0),))
+                else:
+                    value = Value(((f"memory:{self.function}:{self.version}:{index}", 0),))
+                if width == 8 and operand >= 32 and operand + 1 < 64:
+                    regs[operand + 1] = UNKNOWN
+            else:
+                read.append(operand)
+                if slot is not None and len(base.origins) == 1:
+                    # A write invalidates every overlapping spill, irrespective of width.
+                    state.stack = {
+                        key: old
+                        for key, old in state.stack.items()
+                        if key[0] + key[1] <= slot or slot + width <= key[0]
+                    }
+                    state.stack[slot, width] = regs[operand]
+                if op in (0x38, 0x3C):
+                    destination = rt
+        elif op == 15:
+            destination, value = rt, Value(constant=(word & 65535) << 16)
+        elif op in (9, 0x19):
+            read, destination, value = [rs], rt, regs[rs].shift(immediate)
+        elif op in (8, 10, 11, 12, 13, 14, 0x18):
+            read, destination = [rs], rt
+            if op == 13 and rs_constant is not None:
+                value = Value(constant=rs_constant | (word & 65535))
+        elif op == 0:
+            if fn in (0x20, 0x21, 0x2C, 0x2D, 0x25):
+                read, destination = [rs, rt], rd
+                if regs[rt] == ZERO:
+                    value = regs[rs]
+                elif regs[rs] == ZERO:
+                    value = regs[rt]
+                elif fn in (0x20, 0x21, 0x2C, 0x2D) and rt_constant is not None:
+                    value = regs[rs].shift(rt_constant)
+                elif fn in (0x20, 0x21, 0x2C, 0x2D) and rs_constant is not None:
+                    value = regs[rt].shift(rs_constant)
+            elif fn in (0, 2, 3, 0x38, 0x3A, 0x3B, 0x3C, 0x3E, 0x3F):
+                read, destination = [rt], rd
+                if word >> 6 & 31 == 0 and fn == 0:
+                    value = regs[rt]
+                elif fn == 0 and rt_constant is not None:
+                    value = Value(constant=(rt_constant << (word >> 6 & 31)) & 0xFFFFFFFF)
+            elif fn in (8, 9):
+                read = [rs]
+                destination = rd if fn == 9 else None
+            elif fn in (0x10, 0x12):
+                destination = rd
+            elif fn in (0x11, 0x13, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F):
+                read = [rs, rt]
+            elif fn not in (12, 13, 15):
+                read, destination = [rs, rt], rd
+        elif op == 17:
+            if rs in (0, 1, 2):
+                read, destination = [rd + 32], rt
+                value = regs[rd + 32] if rs == 0 else UNKNOWN
+            elif rs in (4, 5, 6):
+                read, destination = [rt], rd + 32
+                value = regs[rt] if rs == 4 else UNKNOWN
+            elif rs >= 16:
+                read, destination = [rd + 32, rt + 32], (word >> 6 & 31) + 32
+                if fn == 6:
+                    value = regs[rd + 32]
+                if fn >= 0x30:
+                    destination = None
+        elif op in (1, 4, 5, 6, 7, 20, 21, 22, 23):
+            read = [rs, rt] if op in (4, 5, 20, 21) else [rs]
+        elif op not in (2, 3, 0x2F):
+            if record:
+                self.unknown.add(f"instruction 0x{self.address + index * 4:X}: unsupported opcode 0x{op:X}")
+            # Unsupported coprocessor effects cannot retain stale register identities.
+            destination = rt
+        for item in read:
+            self.use(regs[item], index, record)
+        if destination:
+            regs[destination] = value
+            if record:
+                self.outputs.add(register(destination))
+        regs[0] = ZERO
+
+    def block(self, incoming: State, start: int, record: bool) -> list[tuple[int, State]]:
+        state = incoming.copy()
+        index = start
+        while index < len(self.words):
+            pc = self.address + index * 4
+            branch = control(self.words[index], pc)
+            if branch is None:
+                self.step(state, index, record)
+                index += 1
+                if index in self.leaders:
+                    return [(index, state)]
+                continue
+            kind, target, likely = branch
+            rs = self.words[index] >> 21 & 31
+            if target is None and kind in ("call", "jump"):
+                target = state.registers[rs].constant
+            self.step(state, index, record)
+            unslotted = state.copy()
+            if index + 1 < len(self.words):
+                self.step(state, index + 1, record)
+            elif record:
+                self.unknown.add(f"instruction 0x{pc:X}: missing delay slot")
+            next_index = index + 2
+            if kind == "return":
+                if record:
+                    self.returns[index] = {
+                        **self.provenance(index),
+                        "values": {register(r): state.registers[r].data() for r in RETURNS},
+                    }
+                return []
+            callee = self.targets.get(target) if target is not None else None
+            tail = kind == "jump" and callee is not None
+            if kind == "call" or tail:
+                if record:
+                    self.calls[index] = {
+                        **self.provenance(index),
+                        "target": target,
+                        "callee": callee,
+                        "tail": tail,
+                        "arguments": {register(r): state.registers[r].data() for r in ARGUMENTS},
+                        "return_use": [],
+                    }
+                if tail:
+                    return []
+                for r in (*range(1, 16), 24, 25, *range(32, 52)):
+                    state.registers[r] = UNKNOWN
+                for r in RETURNS:
+                    state.registers[r] = Value(((f"return:{self.function}:{self.version}:{index}:{register(r)}", 0),))
+                return [(next_index, state)] if next_index < len(self.words) else []
+            successors = []
+            if target is not None and self.address <= target < self.address + len(self.words) * 4:
+                successors.append(((target - self.address) // 4, state))
+            elif record:
+                self.unknown.add(f"instruction 0x{pc:X}: unresolved control target {target}")
+            if kind == "branch" and next_index < len(self.words):
+                successors.append((next_index, unslotted if likely else state))
+            return successors
+        return []
+
+    def run(self) -> dict[str, Any]:
+        self.leaders = {0}
+        for index, word in enumerate(self.words):
+            branch = control(word, self.address + index * 4)
+            if branch is not None:
+                target = branch[1]
+                self.leaders.add(index + 2)
+                if target is not None and self.address <= target < self.address + len(self.words) * 4:
+                    self.leaders.add((target - self.address) // 4)
+        registers = [Value(((f"param:{self.function}:{register(r)}", 0),)) for r in range(64)]
+        registers[0], registers[29] = ZERO, Value(((f"stack:{self.function}", 0),))
+        states = {0: State(registers)}
+        pending = deque([0])
+        while pending:
+            start = pending.popleft()
+            for successor, state in self.block(states[start], start, False):
+                previous = states.get(successor)
+                merged = previous.merge(state) if previous is not None else state
+                if previous != merged:
+                    states[successor] = merged
+                    pending.append(successor)
+        for start, state in sorted(states.items()):
+            self.block(state, start, True)
+        # Preserve base+offset facts even for unreachable/indirect-target blocks.
+        covered = set(self.memory)
+        for index, word in enumerate(self.words):
+            if word >> 26 in MEMORY and index not in covered:
+                self.step(State([ZERO, *([UNKNOWN] * 63)]), index, True)
+        for index, call in self.calls.items():
+            call["return_use"] = sorted(
+                set().union(
+                    *(
+                        self.uses.get(f"return:{self.function}:{self.version}:{index}:{register(r)}", set())
+                        for r in RETURNS
+                    )
+                )
+            )
+        return {
+            "register_inputs": sorted(self.inputs),
+            "register_outputs": sorted(self.outputs),
+            "calls": list(self.calls.values()),
+            "returns": list(self.returns.values()),
+            "memory": [self.memory[i] for i in sorted(self.memory)],
+            "unknown": sorted(self.unknown),
+        }

@@ -1,4 +1,4 @@
-"""Balanced macro lowering and variant-specific inferred layout recovery."""
+"""Balanced macro lowering preserves unknown accesses without inventing types."""
 
 import os
 import tempfile
@@ -37,7 +37,7 @@ class DraftMacroTests(unittest.TestCase):
             with self.assertRaisesRegex(Held, "requires addressable value"):
                 lower("M2C_BITWISE(float, bits + 1)", context)
 
-    def test_conflicting_inferred_layouts_have_distinct_repeatable_names(self) -> None:
+    def test_unrelated_local_base_does_not_create_or_change_shared_layout(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
             project, _, _ = fixture(Path(directory))
             header = project.include[0] / "structs.h"
@@ -45,9 +45,10 @@ class DraftMacroTests(unittest.TestCase):
             header.write_text(original)
             context = "typedef int s32;\n" + original
             output, shared = share(project, "alpha", "s32 alpha(void *p) { return M2C_FIELD(p, s32 *, 4); }", context)
-            self.assertEqual(shared, header)
-            self.assertIn(original.strip(), header.read_text())
-            self.assertIn("Layout_alpha_p_", output)
+            self.assertIsNone(shared)
+            self.assertEqual(original, header.read_text())
+            self.assertNotIn("Layout_alpha", output)
+            self.assertIn("*(s32 *)((char *)(p) + (4))", output)
             repeated, _ = share(
                 project,
                 "alpha",
@@ -56,3 +57,14 @@ class DraftMacroTests(unittest.TestCase):
             )
             self.assertEqual(output, repeated)
             c_parser.CParser().parse("typedef int s32;\n" + header.read_text() + output)
+
+    def test_declared_base_uses_an_existing_field_without_header_writes(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+            project, _, _ = fixture(Path(directory))
+            context = "typedef int s32; struct Existing { s32 value; };"
+            output, shared = share(
+                project, "alpha", "s32 alpha(struct Existing *p) { return M2C_FIELD(p, s32 *, 0); }", context
+            )
+            self.assertIn("(p)->value", output)
+            self.assertIsNone(shared)
+            self.assertEqual({path.name for path in project.include[0].glob("*.h")}, {"types.h"})
