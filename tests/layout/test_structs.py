@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -363,8 +364,8 @@ class FoldTests(unittest.TestCase):
         cases = [
             ("struct X { u32 value; };", "struct X { u16 value; };", "X.value"),
             ("struct X { u32 value; };", "struct X { char pad[4]; u32 value; };", "X.value"),
-            ("struct X { u32 value; };", "struct X { u32 other; };", "X.other"),
-            ("struct X { u32 value; };", "union X { u32 value; };", "X"),
+            ("struct X { u32 value; };", "struct X { f32 other; };", "X.other"),
+            ("struct X { u32 value; };", "union X { f32 value; };", "X"),
             ("struct X { u32 value; };", "struct Y { u32 value; };", "Y"),
         ]
         for header_text, draft, name in cases:
@@ -382,6 +383,140 @@ class FoldTests(unittest.TestCase):
             with self.assertRaises(Held) as caught:
                 fold([], root, versions=("us",))
             self.assertIn("headers", str(caught.exception))
+
+    def test_fold_subset_reuses_existing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "record.h"
+            text = "struct Record { u32 first; u32 second; u32 third; };"
+            header.write_text(text)
+            for draft in ("struct Record { u32 first; };", "struct Record { u32 inferred; };"):
+                self.assertEqual(fold(layouts(draft), root, versions=("us",)), [])
+            self.assertEqual(header.read_text(), text)
+
+    def test_fold_subset_extends_only_unused_padding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "record.h"
+            header.write_text("struct Record { u32 first; char pad[4]; u32 retained; };")
+            edits = fold(layouts("struct Record { u32 first; u32 second; };"), root, versions=("us",))
+            self.assertEqual(len(edits), 1)
+            fields = layouts(edits[0].after)[0].fields
+            self.assertEqual(
+                [(field.name, field.offset) for field in fields], [("first", 0), ("second", 4), ("retained", 8)]
+            )
+
+    def test_sdk_union_subset_and_duplicate_typedef_survive_additions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "n64sdk.h"
+            sdk_text = (
+                "typedef struct { u32 w0; u32 w1; } Gwords; typedef union { Gwords words; u64 force_alignment; } Gfx;"
+            )
+            sdk.write_text(sdk_text)
+            inferred = root / "view.h"
+            inferred_text = "typedef struct { u32 w0; u32 w1; } Gfx;"
+            inferred.write_text(inferred_text)
+            project = SimpleNamespace(include=(root,), versions=("us",))
+            subset = layouts("typedef struct { u32 w0; } Gwords; typedef struct { Gwords words; } Gfx;")
+            self.assertEqual(fold(subset, project), [])
+            edits = fold(subset + layouts("struct Added { int value; };"), project)
+            self.assertEqual([edit.path.name for edit in edits], ["structs.h"])
+            self.assertEqual(sdk.read_text(), sdk_text)
+            self.assertEqual(inferred.read_text(), inferred_text)
+
+    def test_fold_extends_implicit_gap_and_tail(self) -> None:
+        cases = [
+            (
+                "struct Record { u8 first; u32 retained; };",
+                "struct Record { u8 first; char pad[1]; u16 second; };",
+                8,
+                2,
+            ),
+            ("struct Record { u32 first; };", "struct Record { u32 first; u32 second; };", 8, 4),
+        ]
+        for existing, draft, size, offset in cases:
+            with self.subTest(draft=draft), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                header = root / "record.h"
+                header.write_text(existing)
+                edits = fold(layouts(draft), root, versions=("us",))
+                result = layouts(edits[0].after)[0]
+                self.assertEqual(result.size, size)
+                self.assertEqual(next(field.offset for field in result.fields if field.name == "second"), offset)
+                header.write_text(edits[0].after)
+                self.assertEqual(fold(layouts(draft), root, versions=("us",)), [])
+
+    def test_fold_conflict_names_both_members_and_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "n64sdk.h"
+            header.write_text("typedef union { u32 words; u64 alignment; } Gfx;")
+            draft_header = root / "draft.h"
+            draft_header.write_text("typedef struct { f32 inferred; } Gfx;")
+            records = [replace(record, source=str(draft_header)) for record in layouts(draft_header.read_text())]
+            # The draft is evidence, not an existing include header.
+            with self.assertRaises(Held) as caught:
+                fold(records, [header], versions=("us",))
+            message = str(caught.exception)
+            for value in ("Gfx.inferred", "Gfx.words", str(header), str(draft_header)):
+                self.assertIn(value, message)
+            self.assertIn("offset/type/size", message)
+
+    def test_fold_multiple_fields_in_one_implicit_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "record.h").write_text("struct Record { u8 first; u32 retained; };")
+            edits = fold(layouts("struct Record { u8 first; u8 second; u16 third; };"), root, versions=("us",))
+            self.assertEqual(
+                [(field.name, field.offset) for field in layouts(edits[0].after)[0].fields],
+                [("first", 0), ("second", 1), ("third", 2), ("retained", 4)],
+            )
+
+    def test_sdk_extension_uses_shared_tag_and_keeps_sdk_typedef(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = root / "n64sdk.h"
+            text = "typedef struct { unsigned int used; char pad[4]; } Sdk;"
+            sdk.write_text(text)
+            project = SimpleNamespace(include=(root,), versions=("us",))
+            draft = layouts("typedef struct { unsigned int used; unsigned int added; } Sdk;")
+            edits = fold(draft, project)
+            self.assertEqual([edit.path.name for edit in edits], ["structs.h"])
+            self.assertIn("struct Sdk {", edits[0].after)
+            self.assertNotIn("typedef struct Sdk Sdk;", edits[0].after)
+            self.assertEqual(sdk.read_text(), text)
+            edits[0].path.write_text(edits[0].after)
+            self.assertEqual(fold(draft, project), [])
+            compiler = shutil.which("cc")
+            assert compiler is not None
+            result = subprocess.run(
+                [compiler, "-std=c89", "-pedantic-errors", "-fsyntax-only", "-x", "c", "-"],
+                input=text + "\n" + edits[0].after + "\nSdk original; struct Sdk extended;\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fold_extends_nested_padding_without_removing_union_views(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            header = root / "record.h"
+            header.write_text(
+                "struct Record { u32 first; union { struct { u32 used; char pad[4]; } words; "
+                "u64 raw; } view; u32 retained; };"
+            )
+            draft = layouts(
+                "struct Record { u32 first; char pad4[4]; struct { struct { u32 used; u32 added; } words; } view; };"
+            )
+            edits = fold(draft, root, versions=("us",))
+            result = layouts(edits[0].after)[0]
+            self.assertEqual(result.size, 24)
+            self.assertIn("u64 raw;", edits[0].after)
+            self.assertIn("u32 retained;", edits[0].after)
+            self.assertEqual(result.fields[1].fields[0].fields[1].name, "added")
+            header.write_text(edits[0].after)
+            self.assertEqual(fold(draft, root, versions=("us",)), [])
 
     def test_cross_header_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
