@@ -11,11 +11,14 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 from tests.project.test_bootstrap import policy
+from unbake.cli import guidance
 from unbake.cli import main as cli
 from unbake.project import config
 
 
 class MainCase(unittest.TestCase):
+    real_guidance = False
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -60,6 +63,15 @@ class MainCase(unittest.TestCase):
             if load_project:
                 stack.enter_context(patch.object(config, "load", return_value=self.project))
                 stack.enter_context(patch.object(config, "load_policy", return_value=self.policy))
+                if not self.real_guidance:
+                    resolve = guidance.resolve
+
+                    def isolated(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
+                        if missing is not None:
+                            return resolve(root, missing=missing, retry=retry)
+                        return guidance.command(root, "next")
+
+                    stack.enter_context(patch.object(guidance, "resolve", side_effect=isolated))
             code = cli.main(args)
         output, error = stdout.getvalue(), stderr.getvalue()
         next_lines = [line for line in (output + error).splitlines() if line.startswith("Next: ")]
@@ -123,5 +135,6 @@ class MainCase(unittest.TestCase):
             "trial": self.module("trial", try_draft=Mock(side_effect=try_draft), trial_inputs=inputs),
             "score": self.module("score", fuzzy=fuzzy),
             "drafts": self.module("drafts", Store=Mock(return_value=store)),
+            "work": self.module("work", identity=Mock(return_value={"subject": "alpha"}), persist=Mock()),
         }
         return (modules, result, captured, target, fuzzy, store)

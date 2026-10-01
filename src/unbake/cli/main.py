@@ -113,13 +113,16 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     finally:
         if root is None:
-            with suppress(Held):
+            with suppress(Held, OSError, RuntimeError):
                 root = config.discover()
         missing = missing or invocation.missing_input
-        if missing is not None:
-            action = guidance.resolve(root, missing=missing, retry=retry)
-        else:
-            action = invocation.next_action or guidance.resolve(root, retry=retry)
+        try:
+            if missing is not None:
+                action = guidance.resolve(root, missing=missing, retry=retry)
+            else:
+                action = invocation.next_action or guidance.resolve(root, retry=retry)
+        except (Held, ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):
+            action = shlex.join(["unbake", "--project", str(root), "next"]) if root is not None else "unbake --help"
         common.finish(action, json_output=json_output)
 
 

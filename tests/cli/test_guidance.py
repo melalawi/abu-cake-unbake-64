@@ -15,6 +15,19 @@ from unbake.project.config import Held
 
 
 class GuidanceTests(MainCase):
+    real_guidance = True
+
+    def test_guidance_state_failure_preserves_the_completed_operation_receipt(self) -> None:
+        with (
+            patch("unbake.cli.setup.run", return_value=False),
+            patch("unbake.cli.guidance.resolve", side_effect=KeyError("source")),
+        ):
+            code, out, error = self.run_main(self.args("setup"))
+        self.assertEqual(code, 0)
+        self.assertEqual(error, "")
+        action = out.split("Next: ", 1)[1].strip()
+        self.assertEqual(shlex.split(action), ["unbake", "--project", str(self.root), "next"])
+
     def test_discovery_uses_nearest_config_in_nested_directories(self) -> None:
         shell = self.directory / "cake"
         init.run(shell)

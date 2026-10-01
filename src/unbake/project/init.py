@@ -9,6 +9,11 @@ from uuid import uuid4
 from unbake.project.config import SCHEMA_VERSION, Held
 
 
+def readme_text(target: Path) -> str:
+    """The exact untouched shell text used by first setup publication."""
+    return f"# {target.name}\n\nPut your ROMs in `roms/`. Run `unbake setup` in this repo.\n"
+
+
 def run(target: Path) -> list[str]:
     target = Path(target).expanduser().absolute()
     if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
@@ -41,9 +46,7 @@ def run(target: Path) -> list[str]:
         )
         (target / ".gitignore").write_text("/roms/\n/build/\n/asm/\n/.splat/\n__pycache__/\n*.py[cod]\n")
         (target / "roms").mkdir()
-        (target / "README.md").write_text(
-            f"# {target.name}\n\nPut your ROMs in `roms/`. Run `unbake setup` in this repo.\n"
-        )
+        (target / "README.md").write_text(readme_text(target))
         (target / "CONTRIBUTING.md").write_text(contributing)
     except BaseException:
         shutil.rmtree(target)

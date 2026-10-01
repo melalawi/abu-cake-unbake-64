@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from pathlib import Path
+from typing import Any, Literal, NotRequired, TypedDict
 
 from unbake.project.census import Census
 from unbake.project.config import PendingProject, SetupPolicy
@@ -54,6 +55,7 @@ class CompilerCandidate(TypedDict):
 
 
 class CompilerProposal(Identity):
+    choices: NotRequired[dict[str, str]]
     layout_sha256: str
     inputs_sha256: dict[str, str]
     default_compiler: str | None
@@ -109,8 +111,9 @@ def complete_setup(
     policy: SetupPolicy,
     *,
     confirm: str | None = None,
+    supply: Path | None = None,
 ) -> list[str]:
     """Confirm, stage, prove all versions, then publish readiness atomically."""
     from unbake.project.setup import complete_setup as implementation
 
-    return implementation(project, census, layout, proposal, policy, confirm=confirm)
+    return implementation(project, census, layout, proposal, policy, confirm=confirm, supply=supply)
