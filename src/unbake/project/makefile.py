@@ -226,10 +226,6 @@ def helpers(project: Project) -> dict[str, str]:
         names.extend(
             [
                 "sn64_cc.py",
-                "sn64_gnu_as.py",
-                "sn64_schedule.py",
-                "sn64_literals.py",
-                "sn64_macros.py",
                 "resolve_external_branches.py",
             ]
         )
@@ -273,10 +269,6 @@ def render(project: Project) -> dict[str, str]:
                 + (
                     [
                         "sn64_cc.py",
-                        "sn64_gnu_as.py",
-                        "sn64_schedule.py",
-                        "sn64_literals.py",
-                        "sn64_macros.py",
                         "resolve_external_branches.py",
                     ]
                     if any(c.kind == "sn64" for c in project.compilers.values())

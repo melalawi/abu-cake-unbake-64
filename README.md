@@ -15,6 +15,7 @@ Machine paths go in `~/.config/unbake/policy.toml`.
 ## Dependencies
 
 - Python 3.11 or later
+- [AbuMasN64](https://github.com/melalawi/abu-mas-n64) v0.1.0 at the commit pinned in `pyproject.toml`
 - make
 - MIPS binutils (as, ld, objcopy) and a C preprocessor
 - [splat](https://github.com/ethteck/splat) version 0.50.0
@@ -22,7 +23,7 @@ Machine paths go in `~/.config/unbake/policy.toml`.
 - [decomp-permuter](https://github.com/simonlindholm/decomp-permuter) at `059609d4aec73eb0650726772954e1ad575825f8`
 - [objdiff](https://github.com/encounter/objdiff) CLI version 3.8.1
 
-`unbake setup` downloads each game's compilers from the registry in `src/unbake/project/compilers.toml` and checks every archive and file by SHA-256. SN64 toolchains run their pinned cc1 through the shared assembly normalizer and the GNU MIPS assembler named in the policy. Supply cc1 for `gcc-2.8.1-sn64` with `setup --supply DIR` and the registry checks its SHA-256.
+`unbake setup` downloads each game's compilers from the registry in `src/unbake/project/compilers.toml` and checks every archive and file by SHA-256. SN64 toolchains run their pinned cc1 through AbuMasN64 v0.1.0 and the GNU MIPS assembler named in the policy. The `gcc-2.8.1-sn64` compiler is downloaded from the public gcc-papermario Linux release; only its pinned cc1 is installed.
 
 ## Workflow
 

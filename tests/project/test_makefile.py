@@ -103,7 +103,7 @@ class MakefileTests(unittest.TestCase):
     def test_sn64_recipe_flags_and_helpers(self) -> None:
         project, _ = fixture(self.root, "sn64")
         rendered = makefile.render(project)
-        self.assertIn("tools/sn64_gnu_as.py", rendered)
+        self.assertIn("tools/sn64_cc.py", rendered)
         self.assertIn("tools/resolve_external_branches.py", rendered)
         self.assertEqual(makefile.flags(project, "us", "src/middle.c"), ("-O2", "-Iinclude", "-DVERSION_US=1"))
         self.assertNotIn("unbake", rendered["Makefile"].replace(str(self.root), "PROJECT"))

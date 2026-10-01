@@ -10,7 +10,8 @@ readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)"]
 requires-python = ">=3.11"
-dependencies = ["pycparser", "toml==0.10.2"]
+# AbuMasN64 v0.1.0.
+dependencies = ["pycparser", "toml==0.10.2", "abu-mas-n64 @ git+https://github.com/melalawi/abu-mas-n64.git@21c6a7f16bdd8e0b18544407067822bb1ef2b57d"]
 
 [project.scripts]
 unbake = "unbake.cli.main:main"

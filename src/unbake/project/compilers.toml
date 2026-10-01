@@ -1,6 +1,6 @@
-# Linux x86_64 compiler registry. Fetched and measured 2026-09-30.
+# Linux x86_64 compiler registry. Fetched and measured 2026-10-01.
 # Downloads are pinned by archive and installed file SHA-256.
-# The KMC main asset is content-pinned despite its mutable release label.
+# KMC and SN64 assets are content-pinned despite mutable release labels.
 # SN64 cc1 is the native mips-nintendo-nu64 build, not cc1n64.exe.
 
 [compilers."ido-7.1"]
@@ -86,7 +86,7 @@ host = "linux-x86_64"
 cc = "cc1"
 as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-mgp32", "-mfp32", "-O2"]
-drivers = ["sn64_cc.py", "sn64_gnu_as.py", "sn64_schedule.py", "sn64_literals.py", "sn64_macros.py", "resolve_external_branches.py"]
+drivers = ["sn64_cc.py", "resolve_external_branches.py"]
 decompme = "gcc2.7.2kmc"
 
 [compilers."gcc-2.7.2-kmc".pins]
@@ -100,14 +100,18 @@ files = ["cc1"]
 [compilers."gcc-2.8.1-sn64"]
 kind = "sn64"
 family = "gcc"
-source = "supplied"
+source = "download"
 host = "linux-x86_64"
 cc = "cc1"
 as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float", "-mgp32", "-mfp64", "-mno-fix4300"]
-drivers = ["sn64_cc.py", "sn64_gnu_as.py", "sn64_schedule.py", "sn64_literals.py", "sn64_macros.py", "resolve_external_branches.py"]
+drivers = ["sn64_cc.py", "resolve_external_branches.py"]
 decompme = "gcc2.8.1sn"
 
 [compilers."gcc-2.8.1-sn64".pins]
-"cc1" = "83894592be24de2aa63bdff9322c35c170d96484ca0049a51c300a073e69bdc1"
+"cc1" = "d1ddfe21dfa61840a83f833c8bd45ed7e2f606c3d9c351d2ec732fb6e4f97c89"
 
+[[compilers."gcc-2.8.1-sn64".downloads]]
+url = "https://github.com/pmret/gcc-papermario/releases/download/master/linux.tar.gz"
+sha256 = "1156cf0d6a88a64c20e2a10fc9445d99cb9a38518f432b1669528dfa82ebb45f"
+files = ["cc1"]
