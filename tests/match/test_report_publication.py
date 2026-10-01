@@ -39,9 +39,15 @@ class ReportPublicationTests(MatchFixture):
         self.queue("alpha")
         original_write = files.write
 
-        def measure(project: Project, policy: Policy, version: str) -> dict[str, Any]:
+        def measure(project: Project, policy: Policy, version: str, *, generation: Path) -> dict[str, Any]:
             self.assertTrue((project.src / "alpha.c").is_file())
-            self.assertNotEqual(self.current(project, version), self.original[version])
+            self.assertNotEqual(generation, self.original[version])
+            import fcntl
+
+            with (self.root / "build/.lock").open("a+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with (self.root / ".unbake/state/match-queue.lock").open("a+b") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertIn(", c, alpha]", project.version(version).split.read_text())
             self.assertEqual(len(self.queued()), 1)
             self.assertEqual(self.matched(), [])

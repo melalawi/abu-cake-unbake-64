@@ -4,7 +4,7 @@ import io
 import shutil
 import tempfile
 import unittest
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -83,9 +83,23 @@ class MainCase(unittest.TestCase):
         )
         captured = {}
 
-        def try_draft(project: Any, policy: Any, source: Any, scratch: Any, *, versions: Any) -> Any:
+        @contextmanager
+        def inputs(project: Any, function: str, versions: list[str]) -> Any:
+            from unbake.project import build
+
+            with ExitStack() as holds:
+                with build.lock(project):
+                    pinned = {}
+                    for v in versions:
+                        directory = self.root / "build" / (v + ".1")
+                        directory.mkdir(exist_ok=True)
+                        pinned[v] = (holds.enter_context(build.pin(directory)), target)
+                yield pinned
+
+        def try_draft(project: Any, policy: Any, source: Any, scratch: Any, *, versions: Any, pinned: Any) -> Any:
             captured["scratch"] = scratch
             captured["versions"] = versions
+            result.generations = {v: g for v, (g, _) in pinned.items()}
             if not omit_artifact:
                 version_dir = scratch / "alpha.unique/us"
                 version_dir.mkdir(parents=True)
@@ -101,7 +115,7 @@ class MainCase(unittest.TestCase):
         fuzzy = Mock(return_value=88.5)
         store = SimpleNamespace(add=Mock(return_value=result.source_sha256))
         modules = {
-            "trial": self.module("trial", try_draft=Mock(side_effect=try_draft)),
+            "trial": self.module("trial", try_draft=Mock(side_effect=try_draft), trial_inputs=inputs),
             "score": self.module("score", fuzzy=fuzzy),
             "drafts": self.module("drafts", Store=Mock(return_value=store)),
         }

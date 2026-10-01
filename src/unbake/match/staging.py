@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterable
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -26,7 +27,7 @@ from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
-_OUTPUTS = frozenset({"build", ".git", "artifacts", ".unbake", ".splat"})
+_OUTPUTS = frozenset({"build", ".git", "artifacts", ".unbake", ".splat", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
 
 
 def project_input(path: Path) -> bool:
@@ -99,7 +100,7 @@ def fingerprint(root: Path) -> dict[str, str]:
     return result
 
 
-def generation(project: Project, version: str, current: Path) -> Path:
+def generation(project: Project, version: str, current: Path, holds: ExitStack) -> Path:
     parent = project.root / "build"
     number = 1
     prefix = version + "."
@@ -107,16 +108,18 @@ def generation(project: Project, version: str, current: Path) -> Path:
         suffix = path.name.removeprefix(prefix)
         if path.name.startswith(prefix) and suffix.isdigit():
             number = max(number, int(suffix) + 1)
-    while True:
-        generation = parent / f"{version}.{number}"
-        try:
-            generation.mkdir()
-            break
-        except FileExistsError:
-            number += 1
+    with build.lock(project):
+        while True:
+            generation = parent / f"{version}.{number}"
+            try:
+                generation.mkdir()
+                holds.enter_context(build.pin(generation))
+                break
+            except FileExistsError:
+                number += 1
     try:
         result = subprocess.run(
-            ["cp", "-a", "--reflink=auto", str(current) + "/.", str(generation)],
+            ["cp", "-a", "--reflink=auto", *(str(p) for p in current.iterdir() if p.name != ".inuse"), str(generation)],
             capture_output=True,
             text=True,
             check=False,
@@ -125,7 +128,8 @@ def generation(project: Project, version: str, current: Path) -> Path:
             held(f"VERSION {version}: cp {current} to {generation}: {result.stderr.strip()}")
         return generation
     except BaseException:
-        shutil.rmtree(generation, ignore_errors=True)
+        holds.close()
+        build.discard_generation(generation)
         raise
 
 
@@ -148,9 +152,21 @@ def chunk_stale_sources(generation: Path, tools: Path) -> None:
 
 def project_at(project: Project, tree: Path) -> Project:
     """Relocate mutable build inputs to an isolated tree."""
+
+    def relocated(path: Path) -> Path:
+        return tree / path.relative_to(project.root) if path.is_relative_to(project.root) else path
+
     return replace(
         project,
         root=tree,
+        tools=relocated(project.tools),
+        asm=relocated(project.asm),
+        compilers={
+            ident: replace(
+                compiler, cc=relocated(compiler.cc), as_=relocated(compiler.as_), sha256=relocated(compiler.sha256)
+            )
+            for ident, compiler in project.compilers.items()
+        },
         src=tree / relative(project, project.src),
         include=tuple(tree / relative(project, path) for path in project.include),
         version_map={
@@ -169,6 +185,7 @@ def attempt(
 ) -> Attempt:
     tree = workspace / uuid4().hex
     generations = {}
+    holds = ExitStack()
     try:
         shutil.copytree(base, tree, symlinks=True)
         # Clone Make graphs select this runtime configuration relative to their
@@ -196,7 +213,7 @@ def attempt(
         affected = {v for edit in applied for v in edit.versions}
         versions = [v for v in project.versions if v in affected]
         for version in versions:
-            generations[version] = generation(project, version, current[version])
+            generations[version] = generation(project, version, current[version], holds)
             chunk_stale_sources(generations[version], tree / relative(project, project.tools))
         results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
         failures = []
@@ -212,9 +229,9 @@ def attempt(
             if not result.ok:
                 failures.append(version)
                 diagnostics[version] = compare_failure(staged_project, version, result)
-        return Attempt(tree, generations, failures, applied, resolved, diagnostics)
+        return Attempt(tree, generations, failures, applied, resolved, diagnostics, holds)
     except BaseException:
-        Attempt(tree, generations, []).discard()
+        Attempt(tree, generations, [], holds=holds).discard()
         raise
 
 

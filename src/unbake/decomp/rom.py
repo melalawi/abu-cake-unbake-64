@@ -121,21 +121,22 @@ class RomReader:
                 end = min(end, min(bss))
             self.mappings.append(MemorySpan(vram, vram + end - start, start, 0))
 
+    def resident_spans(self) -> list[MemorySpan]:
+        """Load configured copies once, including pointer identity after migration."""
+        if self.copies is None:
+            self.copies = [
+                MemorySpan(
+                    row["address"], row["address"] + row["end"] - row["start"], row["start"], row["table_entry_bias"]
+                )
+                for row in self.resident()
+            ]
+        return self.copies
+
     def find_span(self, address: int, size: int) -> MemorySpan | None:
         """Find ROM backing, distinguishing absent bytes from ambiguous mappings."""
         matches = [row for row in self.mappings if row.address <= address and address + size <= row.end]
         if not matches:
-            if self.copies is None:
-                self.copies = [
-                    MemorySpan(
-                        row["address"],
-                        row["address"] + row["end"] - row["start"],
-                        row["start"],
-                        row["table_entry_bias"],
-                    )
-                    for row in self.resident()
-                ]
-            matches = [row for row in self.copies if row.address <= address and address + size <= row.end]
+            matches = [row for row in self.resident_spans() if row.address <= address and address + size <= row.end]
         if size <= 0 or len(matches) > 1:
             raise Held("try", f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
         return matches[0] if matches else None
@@ -168,7 +169,16 @@ class RomReader:
 
     def table_entry(self, address: int) -> int:
         mapping = self.span(address, 4)
-        return (int.from_bytes(self(address, 4), "big") + mapping.table_entry_bias) & 0xFFFFFFFF
+        # Migration can give a resident copy its own native split segment. The
+        # raw bytes then have a direct mapping, but their configured pointer bias
+        # still describes the same runtime table identity.
+        overrides = [row for row in self.resident_spans() if row.address <= address and address + 4 <= row.end]
+        if len(overrides) > 1 or any(
+            row.offset + address - row.address != mapping.offset + address - mapping.address for row in overrides
+        ):
+            raise Held("try", f"{self.version.name}.table_entry: conflicting resident backing at 0x{address:X}")
+        bias = overrides[0].table_entry_bias if overrides else mapping.table_entry_bias
+        return (int.from_bytes(self(address, 4), "big") + bias) & 0xFFFFFFFF
 
 
 def rom_reader(version: Version, resident: Callable[[], list[dict[str, int]]]) -> RomReader:

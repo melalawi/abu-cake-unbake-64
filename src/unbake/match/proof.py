@@ -1,14 +1,11 @@
-"""Retain missing trial evidence using the ordinary decomp trial path."""
+"""Select canonical source bytes and require retained trial evidence."""
 
 from __future__ import annotations
 
-import argparse
-import tempfile
 from pathlib import Path
 
-from unbake.cli.decomp import trial
 from unbake.decomp import drafts
-from unbake.match.common import atomic, queue_path, read, sha
+from unbake.match.common import atomic, held, queue_path, read, sha
 from unbake.project.config import Policy, Project
 
 
@@ -18,16 +15,15 @@ def source(project: Project, path: Path) -> Path:
     text = content.decode("utf-8")
     if not drafts.is_partial(text):
         return path
-    content = drafts.unguard(text).encode("utf-8")
+    content = drafts.canonical_source(content)
     retained = queue_path(project).parent / "match-sources" / sha(content) / path.name
     atomic(retained, content)
     return retained
 
 
 def ensure(project: Project, policy: Policy, source: Path, versions: tuple[str, ...]) -> None:
-    """Use existing evidence for these bytes, otherwise run and retain a trial."""
-    digest = sha(read(source))
+    """Require an explicit trial for these exact canonical bytes."""
+    digest = drafts.source_identity(read(source))
     if any(row["source_sha256"] == digest for row in drafts.Store(policy, project).rows(source.stem)):
         return
-    with tempfile.TemporaryDirectory(prefix="match-trial-") as directory:
-        trial(argparse.Namespace(scratch=Path(directory)), project, policy, source, list(versions))
+    held(f"{source.stem}: drafts.Store trial row missing source_sha256 {digest}; run decomp try {source}")

@@ -20,14 +20,45 @@ def control_context(text: str, line: int) -> str:
         text,
         flags=re.S,
     )
-    tokens = list(re.finditer(r"\b(?:for|while|do|if|switch)\b|[(){};]", clean))
+    tokens = list(
+        re.finditer(
+            r"^[ \t]*#\s*(?:if(?:def|ndef)?|elif|else|endif)\b[^\n]*|\b(?:for|while|do|if|switch)\b|[(){};]",
+            clean,
+            re.M,
+        )
+    )
     pairs: dict[int, int] = {}
-    stack: list[int] = []
+    stacks: set[tuple[int, ...]] = {()}
+    guards: list[tuple[set[tuple[int, ...]], set[tuple[int, ...]], bool]] = []
     for index, token in enumerate(tokens):
-        if token[0] in ("(", "{"):
-            stack.append(index)
-        elif token[0] in (")", "}") and stack:
-            pairs[stack.pop()] = index
+        value = token[0].strip()
+        if value.startswith("#"):
+            directive = re.match(r"#\s*(\w+)", value)
+            assert directive is not None
+            if directive[1] in ("if", "ifdef", "ifndef"):
+                guards.append((stacks.copy(), set(), False))
+            elif directive[1] in ("else", "elif") and guards:
+                initial, completed, _ = guards[-1]
+                completed.update(stacks)
+                guards[-1] = initial, completed, directive[1] == "else"
+                stacks = initial.copy()
+            elif directive[1] == "endif" and guards:
+                initial, completed, has_else = guards.pop()
+                stacks.update(completed)
+                if not has_else:
+                    stacks.update(initial)
+            continue
+        if value in ("(", "{"):
+            stacks = {(*stack, index) for stack in stacks}
+        elif value in (")", "}"):
+            updated = set()
+            for stack in stacks:
+                if stack and tokens[stack[-1]][0] == ("(" if value == ")" else "{"):
+                    pairs[stack[-1]] = index
+                    updated.add(stack[:-1])
+                else:
+                    updated.add(stack)
+            stacks = updated
     contexts = []
     for index, token in enumerate(tokens):
         kind = token[0]
@@ -38,13 +69,15 @@ def control_context(text: str, line: int) -> str:
             if body >= len(tokens) or tokens[body][0] != "(" or body not in pairs:
                 continue
             body = pairs[body] + 1
+        while body < len(tokens) and tokens[body][0].lstrip().startswith("#"):
+            body += 1
         if body >= len(tokens):
             continue
         end = pairs.get(body)
         if end is None:
             end = body
             while end < len(tokens) - 1 and tokens[end][0] != ";":
-                end = pairs.get(end, end) + 1
+                end = min(pairs.get(end, end) + 1, len(tokens) - 1)
         start_line = clean.count("\n", 0, token.start()) + 1
         end_line = clean.count("\n", 0, tokens[end].end()) + 1
         if start_line <= line <= end_line:

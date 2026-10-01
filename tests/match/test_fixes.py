@@ -1,48 +1,32 @@
-"""Regressions for automatic proof, bulk landing, and host queue locks."""
+"""Regressions for explicit proof, bulk landing, and host queue locks."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.cli import match as cli_match
-from unbake.decomp import drafts
+from unbake.decomp import drafts, trial
 from unbake.match import common, free, proof
 from unbake.match import queue as match
 from unbake.project.clone import isolated_policy
-from unbake.project.config import Policy, Project
+from unbake.project.config import Held
 
 
 class MatchFixTests(MatchFixture):
-    def test_submit_runs_trial_only_when_exact_bytes_have_no_record(self) -> None:
-        for partial in (False, True):
-            with self.subTest(partial=partial):
-                source = self.sources / "alpha.c"
-                text = f"int alpha(void) {{ return {int(partial)}; }}\n"
-                source.write_text("#ifdef NON_MATCHING\n" + text + "#endif\n" if partial else text)
-
-                def retain(
-                    args: argparse.Namespace,
-                    project: Project,
-                    policy: Policy,
-                    candidate: Path,
-                    versions: list[str],
-                    expected: str = text,
-                ) -> None:
-                    self.assertEqual(candidate.read_text(), expected)
-                    self.assertEqual(versions, list(self.versions))
-                    self.assertFalse(args.scratch.is_relative_to(self.root))
-                    self.prove(candidate)
-
-                with patch.object(proof, "trial", side_effect=retain) as tried:
-                    match.submit(self.project, self.policy, source)
-                    match.submit(self.project, self.policy, source)
-                    self.assertEqual(tried.call_count, 1)
-                self.assertEqual(len(self.queued()), 1)
+    def test_submit_refuses_missing_trial_without_running_one(self) -> None:
+        source = self.sources / "alpha.c"
+        source.write_text("#ifdef NON_MATCHING\nint alpha(void) { return 1; }\n#endif\n")
+        with patch.object(trial, "retain_draft") as tried:
+            with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
+                match.submit(self.project, self.policy, source)
+            tried.assert_not_called()
+        self.assertEqual(self.queued(), [])
 
     def test_one_version_lands_all_matching_partials_and_keeps_nonmatches(self) -> None:
         for name, identical in (("alpha", True), ("beta", True), ("gamma", False)):
@@ -82,17 +66,13 @@ class MatchFixTests(MatchFixture):
         shared = self.policy.state_root
         before = {path.relative_to(shared): path.read_bytes() for path in shared.rglob("*") if path.is_file()}
 
-        def retain(
-            args: argparse.Namespace, project: Project, policy: Policy, candidate: Path, versions: list[str]
-        ) -> None:
-            self.assertFalse(args.scratch.is_relative_to(self.root))
-            self.assertEqual(policy.state_root, self.root / ".unbake" / "state")
-            with patch.object(self, "store", drafts.Store(policy, project)):
-                self.prove(candidate, versions=versions)
-
-        with patch.object(proof, "trial", side_effect=retain) as tried:
+        clone_policy = replace(self.policy, state_root=self.root / ".unbake" / "state")
+        retained = proof.source(self.project, source)
+        with patch.object(self, "store", drafts.Store(clone_policy, self.project)):
+            self.prove(retained)
+        with patch.object(trial, "retain_draft") as tried:
             cli_match.run(argparse.Namespace(verb="submit", source=source), self.project, self.policy)
-            self.assertEqual(tried.call_count, 1)
+            tried.assert_not_called()
         rows = common.queue(self.project)
         self.assertEqual([row["function"] for row in rows], ["alpha"])
         retained = Path(rows[0]["source"])

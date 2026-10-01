@@ -114,17 +114,26 @@ class DecompTests(MainCase):
         self.assertEqual(code, 1)
         self.assertEqual(error, "HELD(decomp): no draft recorded for function alpha\n")
 
-    def test_draft_and_try_hold_project_build_lock(self) -> None:
+    def test_draft_preparation_holds_writer_lock_but_m2c_and_try_release_it(self) -> None:
         import fcntl
+        from contextlib import nullcontext
 
-        from unbake.cli import decomp
         from unbake.decomp import m2c, trial, trial_compile
         from unbake.project.config import Held
+
+        generation = self.root / "build/us.0"
+        generation.mkdir(parents=True)
+        self.project.build_link("us").symlink_to(generation.name)
 
         def assert_locked(*args: object, **kwargs: object) -> str:
             with (self.root / "build/.lock").open("a+b") as stream, self.assertRaises(BlockingIOError):
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
             raise Held("proof", "lock held")
+
+        def assert_unlocked(*args: object, **kwargs: object) -> str:
+            with (self.root / "build/.lock").open("a+b") as stream:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raise Held("proof", "lock free")
 
         for stage in ("make", "m2c", "try"):
             with self.subTest(stage=stage):
@@ -132,12 +141,13 @@ class DecompTests(MainCase):
                 operands = ["alpha", "--version", "us"] if verb == "draft" else [str(self.source)]
                 with (
                     patch.object(trial_compile, "run_tool", side_effect=assert_locked if stage == "make" else None),
-                    patch.object(trial, "try_draft", side_effect=assert_locked),
+                    patch.object(trial, "try_draft", side_effect=assert_unlocked),
+                    patch.object(trial, "trial_inputs", return_value=nullcontext({})),
                     patch.object(
-                        m2c, "draft", side_effect=assert_locked if stage == "m2c" else None, return_value=self.source
+                        m2c, "draft", side_effect=assert_unlocked if stage == "m2c" else None, return_value=self.source
                     ),
-                    patch.object(decomp, "store_trial"),
+                    patch.object(trial, "store_trial"),
                 ):
                     code, _, error = self.run_main(self.args("decomp", verb, *operands, "--scratch", str(self.scratch)))
                 self.assertEqual(code, 1)
-                self.assertIn("lock held", error)
+                self.assertIn("lock held" if stage == "make" else "lock free", error)

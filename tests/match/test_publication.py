@@ -206,6 +206,36 @@ class PublicationTests(MatchFixture):
             match.run(self.project, self.policy)
         self.assertEqual(observed, list(self.versions))
 
+    def test_collector_skips_unpublished_generations_during_build(self) -> None:
+        self.queue("alpha")
+
+        def collect_during_build(tree: Path, generation_for: Callable[[str], Path]) -> None:
+            generations = [generation_for(version) for version in self.versions]
+            publication.collect(self.project)
+            for generation in generations:
+                self.assertTrue(generation.is_dir())
+                with (generation / ".inuse").open("a+b") as lock, self.assertRaises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        self.on_build = collect_during_build
+        receipts = match.run(self.project, self.policy)
+        self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts), receipts)
+
+    def test_overlapping_match_builds_publish_once_without_a_long_runner_lock(self) -> None:
+        self.queue("alpha")
+        nested = []
+
+        def another_build(tree: Path, generation_for: Callable[[str], Path]) -> None:
+            self.on_build = None
+            nested.extend(match.run(self.project, self.policy))
+
+        self.on_build = another_build
+        receipts = match.run(self.project, self.policy)
+        self.assertTrue(any(line.startswith("OK(match): alpha") for line in nested), nested)
+        self.assertTrue(any("generation changed" in line for line in receipts), receipts)
+        self.assertEqual(len(self.matched()), 1)
+        self.assertEqual(self.queued(), [])
+
     def test_concurrent_input_edit_refuses_publication(self) -> None:
         self.queue("alpha")
         self.on_build = lambda tree, generation_for: (self.root / "include" / "types.h").write_text(
@@ -215,6 +245,21 @@ class PublicationTests(MatchFixture):
         self.assertTrue(any("inputs changed" in line and "include/types.h" in line for line in receipts))
         self.assert_untouched()
         self.assertEqual(len(self.queued()), 1)
+
+    def test_concurrent_analysis_cache_updates_allow_publication(self) -> None:
+        self.queue("alpha")
+
+        def during_build(tree: Path, generation_for: Callable[[str], Path]) -> None:
+            for directory in (".mypy_cache", ".ruff_cache", ".pytest_cache"):
+                cache = self.root / directory
+                cache.mkdir()
+                (cache / "changed.db").write_bytes(b"analysis output")
+
+        self.on_build = during_build
+        receipts = match.run(self.project, self.policy)
+        self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts), receipts)
+        self.assertEqual(len(self.matched()), 1)
+        self.assertEqual(self.queued(), [])
 
     def test_withdraw_during_build_prevents_publication(self) -> None:
         self.queue("alpha")

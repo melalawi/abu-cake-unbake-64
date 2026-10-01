@@ -26,19 +26,20 @@ class TrialTests(MainCase):
         code, _out, error = self.run_main(
             self.args("decomp", "draft", "alpha", "--version", "us", "--scratch", str(self.scratch)), modules
         )
-        draft.assert_called_once_with(self.project, self.policy, "alpha", "us", self.scratch)
+        draft.assert_called_once_with(
+            self.project, self.policy, "alpha", "us", self.scratch, generation=self.root / "build/us.1"
+        )
         self.assertEqual(captured["versions"], None)
         self.assertEqual(code, 0, error)
 
-    def test_try_refuses_changed_generation_before_scoring(self) -> None:
+    def test_try_retains_pinned_comparison_after_generation_changes(self) -> None:
         modules, _result, _captured, _target, fuzzy, store = self.trial_modules(change_generation=True)
         code, _out, error = self.run_main(
             self.args("decomp", "try", str(self.source), "--scratch", str(self.scratch)), modules
         )
-        self.assertEqual(code, 1)
-        self.assertIn("build/us: generation changed", error)
+        self.assertEqual(code, 0, error)
         fuzzy.assert_not_called()
-        store.add.assert_not_called()
+        store.add.assert_called_once()
 
     def test_try_refuses_project_scratch_before_calling_trial(self) -> None:
         operation = Mock()

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import re
 import shutil
 import tempfile
@@ -64,24 +63,21 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     if source.suffix != ".c" or source.stem != function:
         held(f"{function}: source {source} must be named {function}.c")
     content = read(source)
-    sha = common.sha(content)
+    sha = drafts.source_identity(content)
     if sha != row["source_sha256"]:
         held(f"{function}: {source} source_sha256 changed since submit")
     records = drafts.Store(policy, project).rows(function)
     proof = [record for record in records if record.get("source_sha256") == sha]
     if not proof:
         held(f"{function}: drafts.Store trial row missing source_sha256 {sha}")
-    identical = [record for record in proof if record.get("identical_everywhere") is True]
-    if not identical:
+    latest = proof[-1]
+    if latest.get("identical_everywhere") is not True:
         held(f"{function}: trial source_sha256 {sha} requires identical_everywhere=true")
     holding = holding_versions(project, function)
     versions = tuple(row.get("versions", holding))
     if not versions or any(v not in holding for v in versions):
         held(f"{function}: queue VERSIONs must select holding VERSIONs")
-    if not any(
-        isinstance(record.get("compares"), dict) and all(v in record["compares"] for v in versions)
-        for record in identical
-    ):
+    if not isinstance(latest.get("compares"), dict) or not all(v in latest["compares"] for v in versions):
         held(f"{function}: trial compares missing VERSION proof for {', '.join(versions)}")
     try:
         text = content.decode("utf-8")
@@ -101,7 +97,7 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
 def submit(
     project: Project, policy: Policy, source: str | Path | None, *, versions: tuple[str, ...] | None = None
 ) -> list[str]:
-    """Try an unproven draft, then enqueue its exact bytes with stored proof."""
+    """Enqueue canonical source bytes judged by their latest explicit trial."""
     if source is None:
         held("source: missing value")
     features.load()
@@ -144,12 +140,7 @@ def status(*, project: Project, policy: Policy | None = None) -> list[str]:
 def runner(project: Project) -> Iterator[Path]:
     staging = project.root / "build" / "match"
     staging.mkdir(parents=True, exist_ok=True)
-    with (staging / ".run-lock").open("a+b") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            held(f"{staging}: match run is already building")
-        yield staging
+    yield staging
 
 
 class _Generations(dict[str, Path]):
@@ -162,9 +153,8 @@ class _Generations(dict[str, Path]):
 
     def __missing__(self, version: str) -> Path:
         try:
-            generation = build.current_generation(self.project, version).resolve()
-            lock = self.holds.enter_context((generation / ".inuse").open("a+b"))
-            fcntl.flock(lock, fcntl.LOCK_SH)
+            with build.lock(self.project):
+                generation = self.holds.enter_context(build.pin(build.current_generation(self.project, version)))
         except (Held, OSError) as error:
             reason = error.reason if isinstance(error, Held) else str(error)
             held(f"VERSION {version}: cannot acquire generation: {reason}")
@@ -234,6 +224,8 @@ def run(project: Project, policy: Policy) -> list[str]:
     except OSError as error:
         held(str(error))
     finally:
+        if attempt is not None:
+            attempt.holds.close()
         if attempt is not None and (not published):
             attempt.discard()
         if workspace is not None:

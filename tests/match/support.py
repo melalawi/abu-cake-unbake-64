@@ -36,6 +36,10 @@ class MatchFixture(unittest.TestCase):
         self.sources.mkdir()
         self.src = self.root / "src"
         self.src.mkdir()
+        (self.root / "config.toml").write_text(
+            '[build]\nld="ld"\nobjcopy="objcopy"\nsplat="splat"\nas="as"\nasflags=[]\n'
+            'cpp="policy:cpp"\ncppflags=[]\nsn64_asflags=[]\n'
+        )
         self.versions = ("us", "eu")
         version_map = {}
         self.original = {}
@@ -117,6 +121,7 @@ class MatchFixture(unittest.TestCase):
         self.on_build: Callable[[Path, Callable[[str], Path]], object] | None = None
         self.addCleanup(patch.stopall)
         patch.object(progress, "write", return_value=[]).start()
+        patch.object(progress, "measure", return_value={}).start()
         patch.object(build, "compile_object", return_value=Path("unused.o")).start()
         patch.object(build, "build", self.build, create=True).start()
         patch.object(build, "current_generation", self.current, create=True).start()

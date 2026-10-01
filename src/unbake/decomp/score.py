@@ -5,13 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import subprocess
 import threading
+from contextlib import suppress
 from pathlib import Path
 from typing import cast
 
+from unbake.layout import data_symbols, split, xver
 from unbake.project.cache import Cache, key
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, load
 
 verified: set[tuple[Path, str]] = set()
 _verification_lock = threading.Lock()
@@ -131,27 +134,131 @@ def _read_score(path: Path, function: str) -> float:
     return _symbol_score(document, function)
 
 
-def diff(policy: Policy, version: str, function: str, target: Path, candidate: Path, output: Path) -> dict[str, object]:
+def relocation_addresses(generation: Path, version: str, names: list[str]) -> dict[str, int]:
+    """Read active-VERSION names and actual placements without requiring a link."""
+    addresses: dict[str, int] = {}
+    symbols = generation.parent.parent / "versions" / version / "symbol_addrs.txt"
+    if symbols.is_file():
+        with suppress(Held):
+            addresses.update({name: value[0] for name, value in split.symbols(symbols)[1].items()})
+    for path in sorted(generation.glob("*.map")):
+        for line in path.read_text().splitlines():
+            match = re.match(r"\s*(0[xX][\da-fA-F]+)\s+([A-Za-z_.$][\w.$]*)(?:\s|$)", line)
+            if match:
+                addresses[match[2]] = int(match[1], 16)
+            match = re.search(r"PROVIDE\s*\(\s*([A-Za-z_.$][\w.$]*)\s*=\s*(0[xX][\da-fA-F]+)\s*\)", line)
+            if match:
+                addresses.setdefault(match[1], int(match[2], 16))
+    # Existing correspondence resolves names_from aliases through two agreeing
+    # VERSION anchors. Unknown names retain their spelling; never guess from it.
+    with suppress(Held, OSError):
+        project = load(generation.parent.parent)
+        source = split.symbols(project.version(project.names_from).symbols)[1]
+        for name in dict.fromkeys(names):
+            if name not in addresses and name in source:
+                with suppress(Held):
+                    counterpart = data_symbols.counterparts(project, name)[version]
+                    if counterpart in addresses:
+                        addresses[name] = addresses[counterpart]
+                if name not in addresses:
+                    with suppress(Held):
+                        span = xver.locate(project, name).get(version)
+                        if span is not None and span.address in addresses.values():
+                            addresses[name] = span.address
+    return addresses
+
+
+def diff(
+    policy: Policy,
+    version: str,
+    function: str,
+    target: Path,
+    candidate: Path,
+    output: Path,
+    *,
+    generation: Path | None = None,
+) -> dict[str, object]:
     """Retain instruction rows from a real relocatable-object comparison."""
     tool = objdiff_cli(policy, "try")
-    result = subprocess.run(
-        [
-            str(tool),
-            "diff",
-            "-1",
-            str(target),
-            "-2",
-            str(candidate),
-            function,
-            "--format",
-            "json",
-            "--output",
-            str(output),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+
+    def compare_object(path: Path) -> dict[str, object]:
+        result = subprocess.run(
+            [
+                str(tool),
+                "diff",
+                "-1",
+                str(target),
+                "-2",
+                str(path),
+                function,
+                "--format",
+                "json",
+                "--output",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            raise Held("try", f"objdiff {function} VERSION {version}: {result.stderr.strip()}")
+        return cast(dict[str, object], json.loads(output.read_bytes()))
+
+    document = compare_object(candidate)
+    if generation is None:
+        generation = next(
+            (
+                path
+                for path in target.resolve().parents
+                if path.parent.name == "build" and (path / "objdiff.json").is_file()
+            ),
+            None,
+        )
+    names = [
+        str(symbol["name"])
+        for side in ("left", "right")
+        for symbol in cast(dict[str, list[dict[str, object]]], document[side])["symbols"]
+    ]
+    document["symbol_addresses"] = (
+        {} if generation is None else relocation_addresses(generation.resolve(), version, names)
     )
-    if result.returncode:
-        raise Held("try", f"objdiff {function} VERSION {version}: {result.stderr.strip()}")
-    return cast(dict[str, object], json.loads(output.read_bytes()))
+    if generation is not None:
+        from unbake.decomp.relocations import (
+            jump_table_differences,
+            paired_relocation_addresses,
+            placements,
+            resolve_literal_placement,
+            resolve_table_placement,
+        )
+
+        sections = placements(generation.resolve(), function, target)
+        addresses = cast(dict[str, int], document["symbol_addresses"])
+        placed, proved = resolve_literal_placement(
+            generation.resolve(), version, function, candidate, output, addresses
+        )
+        if proved:
+            document = compare_object(placed)
+            document["symbol_addresses"] = addresses
+            sections["right"].update(proved)
+            document["pool_placement"] = {"object": str(placed), "sections": proved}
+        complete_table = resolve_table_placement(document, function, placed, sections, addresses)
+        complete_table = complete_table or bool(proved)
+        document["section_addresses"] = sections
+        document["relocation_addresses"] = {
+            "left": paired_relocation_addresses(target, sections["left"], addresses),
+            "right": paired_relocation_addresses(placed, sections["right"], addresses),
+        }
+        document["jump_table_differences"] = [
+            difference
+            for section in (".rdata", ".rodata")
+            for difference in jump_table_differences(
+                generation,
+                version,
+                placed,
+                sections["right"],
+                addresses,
+                complete_table=complete_table,
+                section_name=section,
+            )
+        ]
+    return document

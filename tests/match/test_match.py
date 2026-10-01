@@ -1,11 +1,11 @@
 """Match behavior with stored trial proofs and a controlled build implementation."""
 
 import hashlib
-from unittest.mock import patch
+from collections.abc import Callable
+from pathlib import Path
 
 from tests.match.support import MatchFixture
-from unbake.decomp import needs
-from unbake.match import proof
+from unbake.decomp import drafts, needs
 from unbake.match import queue as match
 from unbake.project.config import Held
 
@@ -22,7 +22,7 @@ class MatchTests(MatchFixture):
         self.build_failures.add(("alpha", "us"))
         offset = 0x1012
 
-        def produce(tree, generation_for):
+        def produce(tree: Path, generation_for: Callable[[str], Path]) -> None:
             for version in self.versions:
                 produced = bytearray(expected)
                 if version == "us":
@@ -44,7 +44,7 @@ class MatchTests(MatchFixture):
     def test_failed_build_with_unchanged_rom_keeps_build_reason(self) -> None:
         self.build_failures.add(("alpha", "us"))
 
-        def produce(tree, generation_for):
+        def produce(tree: Path, generation_for: Callable[[str], Path]) -> None:
             for version in self.versions:
                 content = self.project.version(version).baserom.read_bytes()
                 (generation_for(version) / f"fixture.{version}.z64").write_bytes(content)
@@ -75,19 +75,45 @@ class MatchTests(MatchFixture):
         with self.assertRaisesRegex(Held, "alpha.*identical_everywhere"):
             match.submit(self.project, self.policy, source)
         self.remove_proofs("alpha")
-        with (
-            patch.object(proof, "trial", side_effect=Held("try", "alpha source_sha256 trial refused")),
-            self.assertRaisesRegex(Held, "alpha.*source_sha256"),
-        ):
+        with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
             match.submit(self.project, self.policy, source)
         self.draft("alpha")
         source.write_text("int alpha(void) { return 2; }\n")
-        with (
-            patch.object(proof, "trial", side_effect=Held("try", "alpha source_sha256 trial refused")),
-            self.assertRaisesRegex(Held, "alpha.*source_sha256"),
-        ):
+        with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
             match.submit(self.project, self.policy, source)
         self.assertFalse((self.root / "build" / "match").exists())
+
+    def test_latest_trial_for_identity_overrides_older_success(self) -> None:
+        source = self.draft("alpha")
+        self.prove(source, identical=False)
+        with self.assertRaisesRegex(Held, "alpha.*identical_everywhere"):
+            match.submit(self.project, self.policy, source)
+        self.prove(source)
+        match.submit(self.project, self.policy, source)
+
+    def test_trial_on_published_wrapper_has_same_submit_identity(self) -> None:
+        source = self.sources / "alpha.c"
+        plain = b"#if DEBUG\nint alpha(void) { return 0; }\n#endif\n"
+        source.write_bytes(b"#ifdef NON_MATCHING\n" + plain + b"#endif\n")
+        from unbake.decomp.trial import Trial
+        from unbake.decomp.trial_compare import TYPES, Compare
+
+        result = Trial(
+            "alpha",
+            drafts.source_identity(source.read_bytes()),
+            {v: Compare(v, 4, 4, dict.fromkeys(TYPES, 0), [], 100, ()) for v in self.versions},
+            [],
+            "match submit alpha.c",
+        )
+        self.store.add(result, source, {v: 100 for v in self.versions})
+        record = self.store.rows("alpha")[-1]
+        self.assertNotEqual(record["sha256"], record["source_sha256"])
+        match.submit(self.project, self.policy, source)
+        self.assertEqual(self.queued()[0]["source_sha256"], record["source_sha256"])
+        self.assertEqual(Path(self.queued()[0]["source"]).read_bytes(), plain)
+        source.write_bytes(b"#ifdef NON_MATCHING\n" + plain.replace(b"return 0", b"return 1") + b"#endif\n")
+        with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
+            match.submit(self.project, self.policy, source)
 
     def test_submit_requires_proof_for_every_version(self) -> None:
         source = self.draft("alpha", versions=["us"])

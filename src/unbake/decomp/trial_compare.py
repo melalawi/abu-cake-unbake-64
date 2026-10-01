@@ -43,6 +43,7 @@ class Compare:
     lines: list[str]
     match_percent: float
     register_changes: tuple[tuple[int, int, int, int], ...]
+    naming: int = 0
 
 
 def words(data: bytes) -> list[int]:
@@ -149,7 +150,7 @@ def register_number(name: str) -> int | None:
 
 
 def compare_object(version: str, document: dict[str, object], function: str) -> Compare:
-    """Classify objdiff's aligned instruction rows, including relocation names."""
+    """Classify aligned rows using resolved targets, retaining naming debt."""
     from typing import Any, cast
 
     from unbake.decomp.score import percent
@@ -161,17 +162,47 @@ def compare_object(version: str, document: dict[str, object], function: str) -> 
     a, b = target.get("instructions", []), draft.get("instructions", [])
     typed = dict.fromkeys(TYPES, 0)
     identical = 0
+    naming = 0
+    addresses = cast(dict[str, int], document.get("symbol_addresses", {}))
+    sections = cast(dict[str, dict[str, int]], document.get("section_addresses", {}))
     register_changes = []
     details = []
     missing: dict[str, list[int]] = defaultdict(list)
     inserted: dict[str, list[int]] = defaultdict(list)
 
-    def relocation(row: dict[str, Any], side: dict[str, Any]) -> tuple[object, ...] | None:
-        value = row.get("instruction", {}).get("relocation")
+    def relocation(
+        row: dict[str, Any], side: dict[str, Any], entry: dict[str, Any], *, resolved: bool
+    ) -> tuple[object, ...] | None:
+        instruction = row.get("instruction", {})
+        value = instruction.get("relocation")
+        start = int(entry.get("address", 0))
+        destination = instruction.get("branch_dest")
+        # A linker fixup and an already encoded local branch have the same target.
+        if resolved and destination is not None and start <= int(destination) < start + int(entry.get("size", 0)):
+            return "function-offset", int(destination) - start
         if value is None:
             return None
         symbol = side["symbols"][int(value.get("target_symbol", 0))]
-        return symbol["name"], value.get("type", 0), value.get("addend", "0")
+        name, type_, addend = symbol["name"], value.get("type", 0), int(value.get("addend", 0))
+        if resolved:
+            side_name = "left" if side is left else "right"
+            paired = cast(dict[str, dict[int, tuple[int, int]]], document.get("relocation_addresses", {}))
+            effective = paired.get(side_name, {}).get(int(instruction.get("address", 0)))
+            if effective is not None:
+                return "address", *effective
+            bases = sections.get(side_name, {})
+            if name in bases:
+                return "address", type_, bases[name] + addend
+            if name in addresses:
+                return "address", type_, addresses[name] + addend
+        return "name", type_, name, addend
+
+    def operands(instruction: dict[str, Any]) -> list[object]:
+        # Normalize only the target argument; registers and opcodes stay exact.
+        return [
+            {"arg": {"reloc": True}} if "branch_dest" in part.get("arg", {}) else part
+            for part in instruction.get("parts", [])
+        ]
 
     for i in range(max(len(a), len(b))):
         x, y = a[i] if i < len(a) else {}, b[i] if i < len(b) else {}
@@ -183,9 +214,20 @@ def compare_object(version: str, document: dict[str, object], function: str) -> 
             kind = "inserted"
         elif after is None:
             kind = "missing"
-        elif relocation(x, left) != relocation(y, right):
+        elif relocation(x, left, target, resolved=True) != relocation(y, right, draft, resolved=True):
             kind = "relocation"
-        elif x.get("diff_kind", "DIFF_NONE") != "DIFF_NONE" or y.get("diff_kind", "DIFF_NONE") != "DIFF_NONE":
+        else:
+            equalised = relocation(x, left, target, resolved=False) != relocation(y, right, draft, resolved=False)
+            naming += int(equalised)
+            # Objdiff can flag an equal effective addend as an argument mismatch.
+            # Compare the non-relocation parts too, so naming never hides code edits.
+            if equalised and operands(before) == operands(after):
+                identical += 1
+                continue
+        if kind == "same" and (
+            x.get("diff_kind", "DIFF_NONE") != "DIFF_NONE" or y.get("diff_kind", "DIFF_NONE") != "DIFF_NONE"
+        ):
+            assert before is not None and after is not None
             if x.get("diff_kind") == "DIFF_ARG_MISMATCH":
                 args1 = [p["arg"] for p in before.get("parts", []) if "arg" in p]
                 args2 = [p["arg"] for p in after.get("parts", []) if "arg" in p]
@@ -242,14 +284,19 @@ def compare_object(version: str, document: dict[str, object], function: str) -> 
                 + details[new].split("; draft ")[1]
             )
             details[new] = ""
+    table_differences = cast(list[str], document.get("jump_table_differences", []))
+    typed["relocation"] += len(table_differences)
+    details.extend(table_differences)
     total = sum("instruction" in row for row in a)
     match = percent(target.get("match_percent", 0), f"{function}.match_percent", "try")
     lines = [
         f"VERSION {version}: identical {identical} of {total} instructions; objdiff {match:.6f}%",
         "typed: " + ", ".join(f"{kind}={typed[kind]}" for kind in TYPES),
     ]
+    if naming:
+        lines.append(f"naming: {naming} relocations equalised by address")
     details = [line for line in details if line]
     if details:
         lines.append("first divergence: " + details[0])
         lines.extend(details)
-    return Compare(version, identical, total, typed, lines, match, tuple(register_changes))
+    return Compare(version, identical, total, typed, lines, match, tuple(register_changes), naming)

@@ -44,6 +44,13 @@ def publish(
     current: dict[str, Path],
     fingerprint: dict[str, str],
 ) -> None:
+    staged = staging.project_at(project, attempt.tree)
+    reports = {
+        v: progress.measure(
+            staged, policy, v, generation=attempt.generations[v] if v in attempt.generations else current[v]
+        )
+        for v in project.versions
+    }
     lock_path = project.root / "build" / ".lock"
     with lock_path.open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -68,8 +75,8 @@ def publish(
                 destination = project.root / Path(edit.path).relative_to(attempt.tree)
                 writes[destination] = read(edit.path)
             ledger = Path(policy.state_root) / project.name / "receipts" / "match.jsonl"
-            reports = {project.root / "versions" / version / "report.json" for version in project.versions}
-            touched = set(writes) | {ledger, queue_path(project), project.root / "README.md"} | reports
+            report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
+            touched = set(writes) | {ledger, queue_path(project), project.root / "README.md"} | report_paths
             before = {path: read(path) if path.exists() else None for path in touched}
             swapped = []
             try:
@@ -78,7 +85,7 @@ def publish(
                 for version, generation in attempt.generations.items():
                     swap(project.build_link(version), generation)
                     swapped.append(version)
-                progress.write(project, policy)
+                progress.write(project, policy, reports=reports)
                 ledger.parent.mkdir(parents=True, exist_ok=True)
                 with ledger.open("a", encoding="utf-8") as output:
                     for draft in candidates:
@@ -104,6 +111,12 @@ def publish(
 
 
 def collect(project: Project) -> None:
+    """Serialize discovery with reader pinning; never wait for active generations."""
+    with build.lock(project):
+        _collect(project)
+
+
+def _collect(project: Project) -> None:
     parent = project.root / "build"
     for version in project.versions:
         live = build.current_generation(project, version).resolve()

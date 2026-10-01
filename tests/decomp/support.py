@@ -1,9 +1,9 @@
 """Trial checks with isolated project fixtures and real MIPS ELF linking."""
 
 import hashlib
-import json
 import struct
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -48,6 +48,10 @@ def fixture(
     root.mkdir()
     for relative in ("src", "include", "asm", "tools", "build"):
         (root / relative).mkdir()
+    (root / "config.toml").write_text(
+        '[build]\nld="ld"\nobjcopy="objcopy"\nsplat="splat"\nas="as"\nasflags=[]\n'
+        'cpp="policy:cpp"\ncppflags=[]\nsn64_asflags=[]\n'
+    )
     (root / "include" / "types.h").write_text("typedef int s32;\n", encoding="utf-8")
     version_map = {}
     for v in versions:
@@ -82,10 +86,11 @@ def fixture(
                 ("gamma", [0x24020003, 0x03E00008, 0]),
             )
         )
-        unit = assemble(generation, "original", program)
-        (generation / "objdiff.json").write_text(
-            json.dumps({"units": [{"name": name, "target_path": "original.o"} for name in ("alpha", "beta", "gamma")]})
-        )
+        objects = generation / "obj/asm/nonmatchings"
+        objects.mkdir(parents=True)
+        unit = assemble(objects, "alpha", program)
+        (generation / ".split.mk").touch()
+        (generation / "fixture.ld").write_text("SECTIONS { .text : { obj/asm/nonmatchings/alpha.o(.text) } }\n")
         script = generation / "layout.ld"
         script.write_text(
             f"external = 0x80003000;\nSECTIONS {{ .text 0x{start:X} : {{ *(.text) }} "
@@ -100,7 +105,24 @@ def fixture(
         asm = root / "asm" / v / "nonmatchings"
         asm.mkdir(parents=True)
         (asm / "alpha.s").write_text(assembly("alpha", words), encoding="utf-8")
-    compiler = Compiler("ido-7.1", "ido", Path("/compiler/cc"), Path(ASSEMBLER), (), root / "tools" / "compiler.sha256")
+    # Exercise draft frontend checks with a real host C compiler. Trial object
+    # tests supply their own MIPS code generator; this fixture checks C input.
+    frontend = root / "tools" / "fixture-cc"
+    frontend.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys\n"
+        "args=sys.argv[1:]\n"
+        "source=next(a for a in args if a.endswith(('.c','.i')))\n"
+        "options=[]; pending=iter(args)\n"
+        "for a in pending:\n"
+        " if a in ('-I','-D','-U','-include','-isystem'): options.extend((a,next(pending)))\n"
+        " elif a.startswith(('-I','-D','-U')): options.append(a)\n"
+        "result=subprocess.run(['cc','-std=gnu89','-fsyntax-only',*options,'-x','c',source])\n"
+        "if result.returncode: sys.exit(result.returncode)\n"
+        "if '-o' in args: open(args[args.index('-o')+1],'w').write('')\n"
+    )
+    frontend.chmod(0o755)
+    compiler = Compiler("ido-7.1", "ido", frontend, Path(ASSEMBLER), (), root / "tools" / "compiler.sha256")
     project = Project(
         root,
         "fixture",

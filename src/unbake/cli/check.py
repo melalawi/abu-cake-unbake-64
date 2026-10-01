@@ -3,7 +3,7 @@
 import argparse
 
 from unbake.cli.common import Subparsers, receipt
-from unbake.project import build, hygiene
+from unbake.project import hygiene
 from unbake.project.config import Policy, Project
 from unbake.report import progress
 
@@ -19,8 +19,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     lines = hygiene.tracked_findings(project, policy)
     if lines or getattr(args, "hygiene", False):
         return receipt("check", lines)
-    with build.lock(project):
-        lines.extend(progress.findings(project, policy))
+    lines.extend(progress.findings(project, policy))
     for source in sorted(project.src.rglob("*.c")):
         for finding in checks.run(source):
             location = f"{source.relative_to(project.root)}:{finding.line}: {finding.rule}: {finding.text}"

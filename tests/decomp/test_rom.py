@@ -13,6 +13,25 @@ def resident_copy() -> list[dict[str, int]]:
 
 
 class RomTests(unittest.TestCase):
+    def test_native_segment_keeps_configured_table_bias_after_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path, image = root / "game.yaml", root / "baserom.z64"
+            path.write_text(
+                "segments:\n  - name: constants\n    type: code\n    start: 0x40\n"
+                "    vram: 0x800C0000\n    subsegments:\n      - [0x40, .rodata, alpha]\n  - [0x48]\n"
+            )
+            image.write_bytes(bytes(0x40) + bytes.fromhex("00001234 00005678"))
+            version = Version("us", image, "", path, root / "symbols.txt", ())
+            copy = {"address": 0x800C0000, "start": 0x40, "end": 0x48, "table_entry_bias": 0x80000000}
+            reader = rom.rom_reader(version, lambda: [copy])
+            self.assertEqual(reader(0x800C0000, 4), bytes.fromhex("00001234"))
+            self.assertEqual(reader.table_entry(0x800C0000), 0x80001234)
+            self.assertEqual(reader.table_entry(0x800C0004), 0x80005678)
+            conflicting = rom.rom_reader(version, lambda: [{**copy, "start": 0x44, "end": 0x4C}])
+            with self.assertRaisesRegex(Held, "table_entry: conflicting resident backing"):
+                conflicting.table_entry(0x800C0000)
+
     def test_aligned_row_uses_shared_boundaries_and_rom_mapping(self) -> None:
         endings = (
             "  - [0x50]\n",

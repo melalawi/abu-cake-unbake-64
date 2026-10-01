@@ -3,7 +3,6 @@
 import argparse
 
 from unbake.cli.common import Subparsers, receipt
-from unbake.project import build
 from unbake.project.config import Policy, Project
 
 
@@ -14,5 +13,4 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.report import progress as report
 
-    with build.lock(project):
-        return receipt("report", report.write(project, policy))
+    return receipt("report", report.write(project, policy))

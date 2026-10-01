@@ -5,15 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import tempfile
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from unbake.cli.common import Subparsers, count, receipt
-
-if TYPE_CHECKING:
-    from unbake.decomp.trial import Trial
 from unbake.project.config import Held, Policy, Project
 
 
@@ -72,29 +68,10 @@ def register(phases: Subparsers) -> None:
 def trial(args: argparse.Namespace, project: Project, policy: Policy, source: Path, versions: list[str] | None) -> None:
     from unbake.decomp import trial as draft_trial
 
-    scratch = args.scratch.expanduser().resolve()
-    if scratch.is_relative_to(project.root.resolve()):
-        raise Held("decomp", f"scratch {scratch} is inside project.root {project.root}")
-    scratch.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=scratch))
-    from unbake.project.build import lock
-
-    with lock(project):
-        generations = {v: project.build_link(v).resolve() for v in project.versions}
-        result = draft_trial.try_draft(project, policy, source, work, versions=versions)
-        store_trial(project, policy, source, work, result, generations)
+    result = draft_trial.retain_draft(
+        project, policy, source, args.scratch, versions=versions, flags=args.verb == "try" and args.flags
+    )
     receipt("decomp", [f"retained NON_MATCHING draft {result.function} {result.source_sha256}"])
-
-
-def store_trial(
-    project: Project, policy: Policy, source: Path, scratch: Path, result: Trial, generations: dict[str, Path]
-) -> None:
-    from unbake.decomp import drafts
-
-    for v in result.compares:
-        if project.build_link(v).resolve() != generations[v]:
-            raise Held("decomp", f"build/{v}: generation changed during trial, retry using --scratch {scratch}")
-    drafts.Store(policy, project).add(result, source, {v: c.match_percent for v, c in result.compares.items()})
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
@@ -131,13 +108,15 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
     elif args.verb == "draft":
         from unbake.decomp import m2c
         from unbake.decomp.trial_compile import run_tool
-        from unbake.project.build import lock
+        from unbake.project import build
 
-        with lock(project):
-            generation = project.build_link(args.version)
-            if not generation.is_symlink() or not (generation / f"{project.name}.elf").is_file():
-                print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
-            source = m2c.draft(project, policy, args.function, args.version, args.scratch)
+        with ExitStack() as holds:
+            with build.lock(project):
+                generation = project.build_link(args.version)
+                if not generation.is_symlink() or not (generation / f"{project.name}.elf").is_file():
+                    print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
+                generation = holds.enter_context(build.pin(build.current_generation(project, args.version)))
+            source = m2c.draft(project, policy, args.function, args.version, args.scratch, generation=generation)
         trial(args, project, policy, source, None)
     elif args.verb == "gbi":
         from unbake.decomp import gbi

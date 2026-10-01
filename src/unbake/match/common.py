@@ -7,7 +7,7 @@ import os
 import re
 import shutil
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from unbake.decomp import needs
 from unbake.layout import split
+from unbake.project import build
 from unbake.project.config import Held, Project
 
 _FUNCTION = re.compile("[A-Za-z_][A-Za-z_0-9]*\\Z")
@@ -41,11 +42,13 @@ class Attempt:
     edits: list[split.Edit] = field(default_factory=list)
     resolved: list[str] = field(default_factory=list)
     diagnostics: dict[str, str] = field(default_factory=dict)
+    holds: ExitStack = field(default_factory=ExitStack)
 
     def discard(self) -> None:
+        self.holds.close()
         shutil.rmtree(self.tree, ignore_errors=True)
         for generation in self.generations.values():
-            shutil.rmtree(generation, ignore_errors=True)
+            build.discard_generation(generation)
 
 
 def held(reason: str) -> NoReturn:
