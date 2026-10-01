@@ -12,7 +12,7 @@ from unbake.decomp import needs
 from unbake.layout import split_apply, structs
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Project
 
 
 class DeclarationTests(unittest.TestCase):
@@ -211,7 +211,7 @@ class FoldTests(unittest.TestCase):
             edits = structs.resolve(pending, project, policy)
             self.assertEqual(len(edits), 1)
             self.assertEqual(edits[0].versions, ("us", "eu"))
-            split_apply.apply(cast(Project, project), cast(Policy, policy), edits, staged=True)
+            split_apply._write_staging(cast(Project, project), edits)
             self.assertIn("unsigned int value;", header.read_text())
             self.assertEqual(structs.resolve(pending, project, policy), [])
 

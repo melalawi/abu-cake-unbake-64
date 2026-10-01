@@ -257,6 +257,6 @@ int main(void) { Gfx commands[3], *p=commands; int x=7;
             )
             tool.chmod(0o755)
             policy.m2c = tool
-            draft = m2c.draft(project, cast(Policy, policy), "alpha", "us", root / "scratch")
+            draft = m2c.draft(project, cast(Policy, policy), "alpha", "us", project.work)
             self.assertIn("gDPPipeSync", draft.read_text())
             self.assertIn('#include "gbi.h"', draft.read_text())

@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import assemble, assembly, fixture
-from unbake.decomp import checks, declarations, drafts, guide, m2c, needs, trial
+from unbake.decomp import checks, declarations, drafts, guide, m2c, needs, trial, work
 from unbake.layout import shared
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
@@ -34,18 +34,20 @@ class FrictionTests(unittest.TestCase):
 
     def test_1_draft_fields_compile_and_have_shared_match_declarations(self) -> None:
         with redirect_stdout(io.StringIO()) as output:
-            source = m2c.draft(self.project, self.policy, "alpha", "us", self.root / "scratch")
+            source = m2c.draft(self.project, self.policy, "alpha", "us", self.project.work)
         self.assertIn(str(source), output.getvalue())
         self.assertNotIn("M2C_FIELD", source.read_text())
         self.assertNotIn("Draft_", source.read_text())
         self.assertIn("struct Layout_alpha_a", source.read_text())
         self.assertFalse((self.project.include[0] / "alpha_fields.h").exists())
-        self.assertTrue((self.project.include[0] / "structs.h").is_file())
+        staged = work.compilation_project(self.project, source)
+        self.assertTrue((staged.include[0] / "structs.h").is_file())
+        self.assertFalse((self.project.include[0] / "structs.h").exists())
         with redirect_stdout(io.StringIO()):
-            repeated = m2c.draft(self.project, self.policy, "alpha", "us", self.root / "scratch")
+            repeated = m2c.draft(self.project, self.policy, "alpha", "us", self.project.work)
         self.assertEqual(source.read_text(), repeated.read_text())
-        records = layouts(source, project=self.project, policy=self.policy, version="us")
-        self.assertEqual(fold(records, self.project), [])
+        records = layouts(source, project=staged, policy=self.policy, version="us")
+        self.assertEqual(fold(records, staged), [])
         self.assertEqual([(f.name, f.offset) for f in records[0].fields][-2:], [("field_40", 0x40), ("field_44", 0x44)])
 
     def test_function_header_moves_to_shared_home_without_changing_layout(self) -> None:
@@ -81,7 +83,7 @@ class FrictionTests(unittest.TestCase):
     def test_2_missing_assembly_names_generation_command(self) -> None:
         (self.project.asm / "us/nonmatchings/alpha.s").unlink()
         with self.assertRaises(Held) as error:
-            m2c.draft(self.project, self.policy, "alpha", "us", self.root / "scratch")
+            m2c.draft(self.project, self.policy, "alpha", "us", self.project.work)
         self.assertIn(
             shlex.join(["make", "-C", str(self.project.root), "VERSION=us", "extract"]), error.exception.reason
         )
@@ -116,7 +118,7 @@ class FrictionTests(unittest.TestCase):
             patch("unbake.project.build.compile_object", side_effect=compile_source),
             redirect_stdout(io.StringIO()),
         ):
-            result = trial.try_draft(self.project, self.policy, self.source, self.root / "scratch")
+            result = trial.try_draft(self.project, self.policy, self.source, self.project.work)
         command = shlex.split(result.next_command)
         self.assertEqual(command[command.index("--policy") + 1], str(policy))
         self.assertIn("submit", command)

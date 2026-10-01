@@ -23,7 +23,13 @@ class PlanningTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.project: Any = SimpleNamespace(
-            name="fixture", root=self.root / "project", versions=("us", "eu"), names_from="us", version=self.version
+            id="00000000-0000-4000-8000-000000000001",
+            workspace_id="00000000-0000-4000-8000-000000000002",
+            name="fixture",
+            root=self.root / "project",
+            versions=("us", "eu"),
+            names_from="us",
+            version=self.version,
         )
         self.policy: Any = SimpleNamespace(state_root=self.root / "state", assignment_idle_hours=3)
         self.versions = {}
@@ -83,6 +89,7 @@ class PlanningTests(unittest.TestCase):
         source.write_text(f"int {function}(void) {{ return 0; }} /* {suffix} */\n")
         trial: Any = SimpleNamespace(
             function=function,
+            work_identity={"schema": 1, "project_id": self.project.id, "workspace_id": self.project.workspace_id},
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares={
                 v: SimpleNamespace(
@@ -173,10 +180,12 @@ class PlanningTests(unittest.TestCase):
                 if not matched:
                     self.add("euro_alpha", {"us": 75, "eu": 70})
                 rows = plan.ranked(self.project, self.policy)
-                self.assertEqual(len(rows), 0 if matched else 1)
+                self.assertEqual(len(rows), 1)
                 if rows:
                     self.assertEqual(rows[0].names, {"us": "alpha", "eu": "euro_alpha"})
-                    self.assertEqual((rows[0].function, rows[0].score), ("alpha", 70))
+                    self.assertEqual((rows[0].function, rows[0].score), ("alpha", None if matched else 70))
+                    if matched:
+                        self.assertEqual(rows[0].route, "port")
         self.layout([("alpha", BODY, "asm", ()), ("other", BODY, "asm", ())], version="us")
         self.layout([("euro_alpha", BODY, "asm", ())], version="eu")
         self.history([])

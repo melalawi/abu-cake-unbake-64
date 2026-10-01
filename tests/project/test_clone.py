@@ -9,7 +9,7 @@ import tarfile
 import tempfile
 import unittest
 from collections.abc import Iterator
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +21,9 @@ from unbake.project import build, clone, config, toolchain
 
 class CloneTests(unittest.TestCase):
     def setUp(self) -> None:
+        guidance = patch("unbake.cli.guidance.resolve", return_value="unbake next")
+        guidance.start()
+        self.addCleanup(guidance.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -34,8 +37,9 @@ class CloneTests(unittest.TestCase):
             rom = bytes.fromhex("80371240") + bytes([index]) * 4
             text = text.replace(old, hashlib.sha1(rom).hexdigest())
         config_path.write_text(text)
-        (self.live / ".gitignore").write_text("build/\nasm/\nbaserom.*\ntools/cc\n")
+        (self.live / ".gitignore").write_text("build/\nasm/\nroms/\ntools/cc\n")
         self.project = config.load(self.live)
+        self.project.roms.mkdir(exist_ok=True)
         self.policy = test_policy(self.root)
         self.destination = self.root / "clone"
         for directory in (self.project.src, self.project.tools, *self.project.include):
@@ -56,7 +60,7 @@ class CloneTests(unittest.TestCase):
             external_rom = self.external / name
             external_rom.write_bytes(rom)
             version.baserom.unlink(missing_ok=True)
-            version.baserom.symlink_to(external_rom)
+            version.baserom.write_bytes(external_rom.read_bytes())
             assembly = self.project.asm / name
             assembly.mkdir(parents=True, exist_ok=True)
             (assembly / "unit.s").write_text("assembly")
@@ -167,17 +171,18 @@ class CloneTests(unittest.TestCase):
 
     def test_cli_names_policy_and_clone_form(self) -> None:
         for operands in (["clone", "SRC", "DEST"], ["--project", str(self.live), "clone", "SRC", "DEST"]):
-            with redirect_stderr(io.StringIO()) as output:
+            with redirect_stdout(io.StringIO()) as output:
                 code = main(operands)
             self.assertEqual(code, 1)
-            self.assertIn("CLI form: unbake --project SRC clone DEST", output.getvalue())
+            self.assertIn("CLI form: unbake [--project SRC] clone DEST", output.getvalue())
         with (
             patch.dict(os.environ, {"UNBAKE_POLICY": "", "XDG_CONFIG_HOME": str(self.root / "absent")}),
-            redirect_stderr(io.StringIO()) as output,
+            redirect_stdout(io.StringIO()) as output,
         ):
             code = main(["--project", str(self.live), "clone", str(self.destination)])
         self.assertEqual(code, 1)
-        self.assertIn(f"UNBAKE_POLICY unset and {self.root / 'absent/unbake/policy.toml'} missing", output.getvalue())
+        self.assertIn("policy.cache_root", output.getvalue())
+        self.assertTrue((self.root / "absent/unbake/policy.toml").is_file())
 
     def test_missing_or_unsafe_inputs_are_named_before_clone(self) -> None:
         cases = (
@@ -302,7 +307,7 @@ class CloneTests(unittest.TestCase):
         self.git("add", ".")
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "clean inputs")
         with patch.object(clone, "prepare", return_value=False):
-            clone.create(self.project, self.policy, self.destination, self.project.versions)
+            cloned = clone.create(self.project, self.policy, self.destination, self.project.versions)
         for run_build in (False, True):
             with self.subTest(build=run_build):
                 if run_build:
@@ -310,7 +315,9 @@ class CloneTests(unittest.TestCase):
                 status = subprocess.run(
                     ["git", "status", "--short"], cwd=self.destination, check=True, capture_output=True
                 )
-                self.assertEqual(status.stdout, b"")
+                self.assertEqual(status.stdout, b" M config.toml\n")
+                self.assertEqual(cloned.id, self.project.id)
+                self.assertNotEqual(cloned.workspace_id, self.project.workspace_id)
         self.assertEqual((self.destination / "Makefile").read_bytes(), (self.live / "Makefile").read_bytes())
 
     def test_cli_dispatch_selects_versions_and_formats_refusal(self) -> None:
@@ -323,7 +330,7 @@ class CloneTests(unittest.TestCase):
                 self.assertTrue((self.destination / "build/us").is_symlink())
                 self.assertEqual((self.destination / "build/us-rev1").exists(), not versions)
                 shutil.rmtree(self.destination)
-        with patch.object(config, "load_policy", return_value=self.policy), redirect_stderr(io.StringIO()) as error:
+        with patch.object(config, "load_policy", return_value=self.policy), redirect_stdout(io.StringIO()) as error:
             code = main(["--project", str(self.live), "clone", str(self.destination), "--version", "missing"])
         self.assertEqual(code, 1)
         self.assertIn("missing", error.getvalue())

@@ -22,6 +22,8 @@ class AssignmentTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = ProjectFixture(Path(self.temp.name))
         self.project.names_from = "us"
+        self.project.id = "00000000-0000-4000-8000-000000000001"
+        self.project.workspace_id = "00000000-0000-4000-8000-000000000002"
         self.store = drafts.Store(self.project.policy, self.project)
         self.ledger = assign.Ledger(self.project, self.project.policy)
 
@@ -53,6 +55,7 @@ class AssignmentTests(unittest.TestCase):
         source.write_text(f"void {function}(void) {{}}\n")
         trial = SimpleNamespace(
             function=function,
+            work_identity={"schema": 1, "project_id": self.project.id, "workspace_id": self.project.workspace_id},
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares={
                 v: SimpleNamespace(
@@ -219,7 +222,10 @@ class AssignmentTests(unittest.TestCase):
         self.assertEqual(self.ledger.open(), [])
         self.assertFalse(self.ledger.path.exists())
         self.ledger.assign("worker", "small", function="alpha")
-        self.assertEqual(self.ledger.path, self.project.policy.state_root / self.project.name / "assignments.jsonl")
+        self.assertEqual(
+            self.ledger.path,
+            self.project.policy.state_root / self.project.id / self.project.workspace_id / "assignments.jsonl",
+        )
         self.assertFalse((self.project.root / "data").exists())
 
     def test_append_preserves_valid_unterminated_final_record(self) -> None:

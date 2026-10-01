@@ -57,6 +57,8 @@ f=["-DUNIT_VALUE=7"]
     )
     compiler = SimpleNamespace(id="gcc-2.7.2-kmc", kind="sn64", cc=Path(sys.executable), cflags=("-O2",))
     return SimpleNamespace(
+        id="00000000-0000-4000-8000-000000000001",
+        workspace_id="00000000-0000-4000-8000-000000000002",
         root=root,
         src=root / "src",
         include=(root / "include",),
@@ -111,7 +113,14 @@ class SearchIntegrationTests(unittest.TestCase):
                     (work / "trial.elf").write_bytes(b"ELF")
                     for name in ("baserom", "draft"):
                         (work / (name + ".bin")).write_bytes(bytes.fromhex("03e0000800000000"))
-                return trial.Trial("f", hashlib.sha256(path.read_bytes()).hexdigest(), comparisons, [], "try again")
+                return trial.Trial(
+                    "f",
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                    comparisons,
+                    [],
+                    "try again",
+                    work_identity={"schema": 1, "project_id": project.id, "workspace_id": project.workspace_id},
+                )
 
             seen = []
 

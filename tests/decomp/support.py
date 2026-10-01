@@ -122,6 +122,7 @@ def fixture(
         "if '-o' in args: open(args[args.index('-o')+1],'w').write('')\n"
     )
     frontend.chmod(0o755)
+    (root / "tools/compiler.sha256").write_text("fixture compiler pins\n")
     compiler = Compiler("ido-7.1", "ido", frontend, Path(ASSEMBLER), (), root / "tools" / "compiler.sha256")
     project = Project(
         root,
@@ -137,6 +138,12 @@ def fixture(
         "ido-7.1",
         {},
         version_map,
+        id="00000000-0000-4000-8000-000000000001",
+        workspace_id="00000000-0000-4000-8000-000000000002",
+        roms=root / "roms",
+        build=root / "build",
+        work=root / "build/work",
+        drafts=root / "build/drafts",
     )
     configured = load_policy()
     policy = SimpleNamespace(

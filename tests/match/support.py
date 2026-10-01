@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import tempfile
@@ -27,6 +26,9 @@ SCRATCH_ROOT = Path(tempfile.gettempdir())
 
 class MatchFixture(unittest.TestCase):
     def setUp(self) -> None:
+        feedback = patch("unbake.decomp.type_context.feedback")
+        feedback.start()
+        self.addCleanup(feedback.stop)
         (SCRATCH_ROOT).mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=SCRATCH_ROOT)
         self.addCleanup(self.temporary.cleanup)
@@ -49,19 +51,25 @@ class MatchFixture(unittest.TestCase):
             split = directory / "fixture.yaml"
             split.write_text(
                 "segments:\n  - name: main\n    type: code\n    start: 0x1000\n"
-                "    subsegments:\n      - [0x1000, asm, text/alpha]\n"
+                "    vram: 0x80001000\n    subsegments:\n      - [0x1000, asm, text/alpha]\n"
                 "      - [0x1010, asm, beta]\n      - [0x1020, asm, gamma]\n"
                 "      - [0x1030, data, constants]\n  - [0x1040]\n"
             )
             symbols = directory / "symbol_addrs.txt"
             symbols.write_text("alpha = 0x80001000;\nbeta = 0x80001010;\ngamma = 0x80001020;\n")
-            baserom = self.root / f"baserom.{name}.z64"
+            baserom = self.root / f"roms/baserom.{name}.z64"
+            baserom.parent.mkdir(exist_ok=True)
             baserom.write_bytes(bytes(range(64)))
             version_map[name] = Version(name, baserom, "a" * 40, split, symbols, ())
+            version_map[name].baserom.write_bytes(bytes(0x1050))
             generation = self.root / "build" / f"{name}.0"
             generation.mkdir(parents=True)
             (generation / ".inuse").touch()
             (generation / "object.o").write_bytes(b"original immutable output")
+            for unit in ("text/alpha", "beta", "gamma"):
+                target = generation / "obj/asm" / (unit + ".o")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"pinned target")
             (self.root / "build" / name).symlink_to(generation.name)
             self.original[name] = generation
         tools = self.root / "tools"
@@ -71,6 +79,8 @@ class MatchFixture(unittest.TestCase):
         (include / "types.h").write_text("typedef int word;\n")
         asm = self.root / "asm"
         asm.mkdir()
+        for filename in ("cc", "as", "compiler.sha256"):
+            (tools / filename).write_bytes(b"fixture compiler pins")
         compiler = Compiler("gcc-2.8.1-sn64", "sn64", tools / "cc", tools / "as", (), tools / "compiler.sha256")
         self.project = Project(
             root=self.root,
@@ -86,6 +96,12 @@ class MatchFixture(unittest.TestCase):
             default_compiler=compiler.id,
             units={},
             version_map=version_map,
+            id="00000000-0000-4000-8000-000000000001",
+            workspace_id="00000000-0000-4000-8000-000000000002",
+            roms=self.root / "roms",
+            build=self.root / "build",
+            work=self.root / "build/work",
+            drafts=self.root / "build/drafts",
         )
         self.policy = Policy(
             cores=2,
@@ -100,9 +116,8 @@ class MatchFixture(unittest.TestCase):
             mips_ld=tools / "ld",
             mips_objdump=tools / "objdump",
             mips_readelf=tools / "readelf",
-            init_same_game_similarity=0.10,
-            init_split="functions",
-            init_probe_count=20,
+            same_game_similarity=0.10,
+            probe_count=20,
             mips_as=tools / "as",
             mips_objcopy=tools / "objcopy",
             cpp=Path(shutil.which("cpp") or "cpp"),
@@ -191,11 +206,23 @@ class MatchFixture(unittest.TestCase):
         versions: Iterable[str] | None = None,
         pending: list[needs.Need] | None = None,
     ) -> None:
-        selected = self.versions if versions is None else versions
+        selected = match.holding_versions(self.project, source.stem) if versions is None else tuple(versions)
+        from unbake.layout import split
+
+        for version in selected:
+            _, _, segments = split.layout(self.project.version(version).split)
+            for segment in segments:
+                for row in segment.rows:
+                    if row.kind in ("asm", "c") and Path(row.path).name == source.stem:
+                        target = (
+                            self.original[version] / "obj" / ("src" if row.kind == "c" else "asm") / (row.path + ".o")
+                        )
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(b"pinned target")
         typed = dict.fromkeys(("register", "order", "immediate", "relocation", "inserted", "missing", "changed"), 0)
         trial = Trial(
             function=source.stem,
-            source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            source_sha256=drafts.source_identity(source.read_bytes()),
             preconditions=[],
             next_command="match submit " + source.name,
             compares={
@@ -226,7 +253,7 @@ class MatchFixture(unittest.TestCase):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def matched(self) -> list[dict[str, Any]]:
-        path = self.policy.state_root / self.project.name / "receipts" / "match.jsonl"
+        path = self.policy.state_root / self.project.id / self.project.workspace_id / "receipts" / "match.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def assert_untouched(self) -> None:

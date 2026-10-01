@@ -147,6 +147,8 @@ class CoreTests(unittest.TestCase):
             for v in ("us", "eu")
         }
         project: Any = SimpleNamespace(
+            id="00000000-0000-4000-8000-000000000001",
+            workspace_id="00000000-0000-4000-8000-000000000002",
             root=project_root,
             name="fixture",
             versions=("us", "eu"),
@@ -183,7 +185,14 @@ class CoreTests(unittest.TestCase):
                 typed = dict.fromkeys(TYPES, 0)
                 typed["changed"] = 294 - count
                 comparisons[version] = Compare(version, count, 294, typed, [], 100 * count / 294, ())
-            return trial.Trial(path.stem, hashlib.sha256(path.read_bytes()).hexdigest(), comparisons, [], "try again")
+            return trial.Trial(
+                path.stem,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                comparisons,
+                [],
+                "try again",
+                work_identity={"schema": 1, "project_id": project.id, "workspace_id": project.workspace_id},
+            )
 
         class Proposals:
             name = "fixture"

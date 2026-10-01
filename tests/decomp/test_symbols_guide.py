@@ -51,6 +51,12 @@ def project_for(symbols_path: Path) -> Project:
         compiler.id,
         {},
         versions,
+        id="00000000-0000-4000-8000-000000000001",
+        workspace_id="00000000-0000-4000-8000-000000000002",
+        roms=root / "roms",
+        build=root / "build",
+        work=root / "build/work",
+        drafts=root / "build/drafts",
     )
 
 
@@ -72,9 +78,8 @@ class SymbolTests(unittest.TestCase):
             mips_ld=mips_tool("ld"),
             mips_objdump=mips_tool("objdump"),
             mips_readelf=mips_tool("readelf"),
-            init_same_game_similarity=0.1,
-            init_split="functions",
-            init_probe_count=1,
+            same_game_similarity=0.1,
+            probe_count=1,
             mips_as=mips_tool("as"),
             mips_objcopy=root / "objcopy",
             cpp=root / "cpp",

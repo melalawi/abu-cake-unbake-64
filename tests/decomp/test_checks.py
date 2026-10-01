@@ -15,6 +15,13 @@ from unbake.project.config import Held
 class ChecksTest(unittest.TestCase):
     def test_refusals_name_rule_and_original_line(self) -> None:
         cases = [
+            ("gfx", 1, "p->words.w0 = 0xE7000000;", "raw-gfx"),
+            ("macro", 1, "#define _SHIFTL(a,b,c) (a)", "local-gbi-macro"),
+            ("type", 1, "typedef int s32;", "local-type-copy"),
+            ("gfx type", 1, "typedef union { struct { int w0, w1; } words; double align; } Gfx;", "local-type-copy"),
+            ("static macro", 1, "#define gsDPSetColor(x) (x)", "local-gbi-macro"),
+            ("struct", 1, "struct func_80201234_S1 { int value; };", "invented-struct"),
+            ("symbol", 1, "#define global ((int*)0x80201234)", "symbol-alias"),
             ("func_80220EB0", 1, 'void f(void) { __asm__("nop"); }', "inline-asm"),
             ("func_80234FDC", 575, "x = *(s32*)((char*)p + 0x18);", "raw-offset"),
             ("func_802ACBCC", 375, "x = *((s32*)((u8*)p + 0x3));", "raw-offset"),
@@ -36,6 +43,8 @@ class ChecksTest(unittest.TestCase):
     def test_real_c_forms_avoid_false_positives(self) -> None:
         cases = [
             "",
+            "p->words.w0 = raw; /* GBI_RAW: dynamic opcode cannot be decoded */",
+            "typedef int SharedDomain;",
             '/* asm volatile */ void f(void) { puts("__asm__"); }',
             "int x = *(volatile int *)&p->field;",
             "int x = *(Entry * volatile *)&p->field;",

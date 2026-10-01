@@ -170,8 +170,8 @@ class DeclarationTests(MatchFixture):
                 pending = self.pending(text)[:1] if outcome != "scoped" else []
                 if outcome == "scoped":
                     text = "int alpha(void) { return 0; }\n"
-                source = self.draft("alpha", text, versions=["us"], pending=pending)
-                match.submit(self.project, self.policy, source, versions=("us",))
+                source = self.draft("alpha", text, pending=pending)
+                match.submit(self.project, self.policy, source)
                 if outcome == "missing":
                     self.project.build_link("eu").unlink()
                 elif outcome == "compare":
@@ -180,15 +180,15 @@ class DeclarationTests(MatchFixture):
                     receipts = match.run(self.project, self.policy)
                 header = self.root / "include" / "shared" / "alpha.h"
                 if outcome == "missing":
-                    self.assertTrue(any("VERSION eu: cannot acquire generation" in line for line in receipts), receipts)
+                    self.assertTrue(any("eu" in line and "HELD" in line for line in receipts), receipts)
                     build.assert_not_called()
                 else:
-                    self.assertEqual(build.call_args.args[2], ["us"] if outcome == "scoped" else ["us", "eu"])
+                    self.assertEqual(build.call_args.args[2], ["us", "eu"])
                 if outcome in ("success", "scoped"):
                     self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
-                    self.assertEqual(self.matched()[0]["versions"], ["us"])
+                    self.assertEqual(self.matched()[0]["versions"], ["us", "eu"])
                     self.assertEqual(header.exists(), outcome == "success")
-                    self.assertEqual(self.current(self.project, "eu").name, "eu.0" if outcome == "scoped" else "eu.1")
+                    self.assertEqual(self.current(self.project, "eu").name, "eu.1")
                 else:
                     self.assertTrue(any("eu" in line and "HELD(match)" in line for line in receipts), receipts)
                     self.assertFalse(header.exists())
@@ -213,14 +213,16 @@ class DeclarationTests(MatchFixture):
         header.write_text("struct Record { int value; };\n")
         text = "struct Record { short value; };\nint alpha(void) { return 0; }\n"
         source = self.draft("alpha", text, pending=self.pending(text))
+        self.prove(source)
         with self.assertRaisesRegex(Held, "Record.value"):
             match.submit(self.project, self.policy, source)
         with self.assertRaisesRegex(Held, "Record.value"):
             declarations.preflight(self.project, self.policy, self.pending(text))
         header.write_text("struct Record { short value; };\n")
+        self.prove(source)
         match.submit(self.project, self.policy, source)
         header.write_text("struct Record { int value; };\n")
-        self.assertTrue(any("Record.value" in line for line in match.run(self.project, self.policy)))
+        self.assertTrue(any("submit.overlay_sha256" in line for line in match.run(self.project, self.policy)))
         self.assertEqual(self.calls, [])
         self.assertFalse(list((self.root / "build" / "match").glob("run-*")))
 

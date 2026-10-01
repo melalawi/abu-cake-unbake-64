@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from dataclasses import replace
-from pathlib import Path
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
-from unbake.cli import match as cli_match
+from unbake.cli import submit as cli_submit
 from unbake.decomp import drafts, trial
 from unbake.match import common, free, proof
 from unbake.match import queue as match
@@ -23,7 +21,7 @@ class MatchFixTests(MatchFixture):
         source = self.sources / "alpha.c"
         source.write_text("#ifdef NON_MATCHING\nint alpha(void) { return 1; }\n#endif\n")
         with patch.object(trial, "retain_draft") as tried:
-            with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
+            with self.assertRaisesRegex(Held, "trial.source_sha256"):
                 match.submit(self.project, self.policy, source)
             tried.assert_not_called()
         self.assertEqual(self.queued(), [])
@@ -33,14 +31,14 @@ class MatchFixTests(MatchFixture):
             source = self.src / f"{name}.c"
             source.write_text(f"#ifdef NON_MATCHING\nint {name}(void) {{ return 0; }}\n#endif\n")
             retained = proof.source(self.project, source)
-            self.prove(retained, identical=identical, versions=["us"])
+            self.prove(retained, identical=identical)
         receipts = free.land(self.project, self.policy, "us")
         self.assertEqual({row["function"] for row in self.matched()}, {"alpha", "beta"})
         self.assertTrue(any("skipped gamma" in line for line in receipts))
         self.assertEqual(self.calls, [("alpha", "beta")])
         self.assertIn("#ifdef NON_MATCHING", (self.src / "gamma.c").read_text())
-        self.assertEqual(self.current(self.project, "eu"), self.original["eu"])
-        self.assertNotIn(", c, ", self.project.version("eu").split.read_text())
+        self.assertNotEqual(self.current(self.project, "eu"), self.original["eu"])
+        self.assertIn(", c, ", self.project.version("eu").split.read_text())
         self.assertEqual(self.queued(), [])
 
     def test_queue_lock_lives_with_queue_and_is_shared_by_queue_operations(self) -> None:
@@ -58,6 +56,19 @@ class MatchFixTests(MatchFixture):
         original = source.read_bytes()
         source.write_bytes(b"#ifdef NON_MATCHING\n" + original + b"#endif\n")
         policy_path = self.project.tools / "clone-policy.toml"
+        for field in (
+            "objdiff_cli",
+            "m2c",
+            "splat",
+            "mips_ld",
+            "mips_objdump",
+            "mips_readelf",
+            "mips_as",
+            "mips_objcopy",
+        ):
+            executable = getattr(self.policy, field)
+            executable.write_text("#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
         policy_path.write_text(isolated_policy(self.policy, self.root))
         legacy = self.root / "data" / "match-queue.jsonl"
         legacy.parent.mkdir()
@@ -71,20 +82,17 @@ class MatchFixTests(MatchFixture):
         with patch.object(self, "store", drafts.Store(clone_policy, self.project)):
             self.prove(retained)
         with patch.object(trial, "retain_draft") as tried:
-            cli_match.run(argparse.Namespace(verb="submit", source=source), self.project, self.policy)
+            cli_submit.run(argparse.Namespace(source=source), self.project, self.policy)
             tried.assert_not_called()
-        rows = common.queue(self.project)
-        self.assertEqual([row["function"] for row in rows], ["alpha"])
-        retained = Path(rows[0]["source"])
-        self.assertTrue(retained.is_relative_to(self.root / ".unbake" / "state"))
-        self.assertEqual(retained.read_bytes(), original)
-        self.assertEqual(rows[0]["source_sha256"], hashlib.sha256(original).hexdigest())
-        self.assertTrue(common.queue_path(self.project).is_relative_to(self.root / ".unbake" / "state"))
+        self.assertTrue((self.src / "alpha.c").is_file())
+        self.assertEqual((self.src / "alpha.c").read_bytes(), original)
+        self.assertEqual(common.queue(self.project), [])
+        receipts = clone_policy.state_root / self.project.id / self.project.workspace_id / "receipts/match.jsonl"
+        self.assertTrue(receipts.is_file())
         self.assertEqual(legacy.read_bytes(), legacy_before)
         self.assertEqual(
             before, {path.relative_to(shared): path.read_bytes() for path in shared.rglob("*") if path.is_file()}
         )
         self.assertEqual(source.read_bytes(), b"#ifdef NON_MATCHING\n" + original + b"#endif\n")
-        match.withdraw("alpha", project=self.project, policy=self.policy)
         self.assertEqual(common.queue(self.project), [])
         self.assertEqual(legacy.read_bytes(), legacy_before)

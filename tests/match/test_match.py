@@ -17,7 +17,7 @@ class MatchTests(MatchFixture):
             cartridge = self.project.version(version)
             cartridge.baserom.write_bytes(expected)
             cartridge.split.write_text(
-                cartridge.split.read_text().replace("segments:\n", "segments:\n  - [0, header, header]\n")
+                cartridge.split.read_text().replace("segments:\n", "segments:\n  - [0, header, header]\n", 1)
             )
         self.build_failures.add(("alpha", "us"))
         offset = 0x1012
@@ -75,11 +75,11 @@ class MatchTests(MatchFixture):
         with self.assertRaisesRegex(Held, "alpha.*identical_everywhere"):
             match.submit(self.project, self.policy, source)
         self.remove_proofs("alpha")
-        with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
+        with self.assertRaisesRegex(Held, "trial.source_sha256"):
             match.submit(self.project, self.policy, source)
         self.draft("alpha")
         source.write_text("int alpha(void) { return 2; }\n")
-        with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
+        with self.assertRaisesRegex(Held, "trial.source_sha256"):
             match.submit(self.project, self.policy, source)
         self.assertFalse((self.root / "build" / "match").exists())
 
@@ -110,9 +110,9 @@ class MatchTests(MatchFixture):
         self.assertNotEqual(record["sha256"], record["source_sha256"])
         match.submit(self.project, self.policy, source)
         self.assertEqual(self.queued()[0]["source_sha256"], record["source_sha256"])
-        self.assertEqual(Path(self.queued()[0]["source"]).read_bytes(), plain)
+        self.assertEqual(Path(self.queued()[0]["source"]).read_bytes(), source.read_bytes())
         source.write_bytes(b"#ifdef NON_MATCHING\n" + plain.replace(b"return 0", b"return 1") + b"#endif\n")
-        with self.assertRaisesRegex(Held, "alpha.*trial row missing source_sha256"):
+        with self.assertRaisesRegex(Held, "trial.source_sha256"):
             match.submit(self.project, self.policy, source)
 
     def test_submit_requires_proof_for_every_version(self) -> None:
@@ -152,6 +152,7 @@ class MatchTests(MatchFixture):
                 published = self.src / source.name
                 published.write_text("#ifdef NON_MATCHING\n" + original + "#endif\n")
                 submitted = published if guarded else source
+                self.prove(submitted)
                 match.submit(self.project, self.policy, submitted)
                 proof_sha = hashlib.sha256(original.encode()).hexdigest()
                 receipts = match.run(self.project, self.policy)
@@ -180,7 +181,7 @@ class MatchTests(MatchFixture):
         match.submit(self.project, self.policy, source)
         self.assertEqual(match.holding_versions(self.project, "alpha"), ("us",))
         path.write_text(original.replace("      - [0x1010, asm, beta]", "      - [0x1010, asm, alpha]"))
-        with self.assertRaisesRegex(Held, "alpha.*eu.*found 2"):
+        with self.assertRaisesRegex(Held, "trial.ownership.*alpha.*eu"):
             match.submit(self.project, self.policy, self.draft("alpha"))
         self.assertEqual(self.calls, [])
 

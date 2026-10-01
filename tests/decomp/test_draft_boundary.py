@@ -36,12 +36,12 @@ class DraftBoundaryTests(unittest.TestCase):
                 policy.m2c = tool
                 messages = io.StringIO()
                 with redirect_stdout(messages), self.assertRaises(Held) as caught:
-                    m2c.draft(project, policy, "alpha", "us", root / "scratch")
+                    m2c.draft(project, policy, "alpha", "us", project.work)
                 self.assertTrue(caught.exception.reason.startswith("alpha:"))
                 self.assertIn(reason, caught.exception.reason)
                 self.assertNotIn("draft_path:", messages.getvalue())
                 self.assertFalse((project.include[0] / "structs.h").exists())
-                self.assertFalse(list((root / "scratch").glob("*/alpha.c")))
+                self.assertFalse(list((project.work).glob("*/alpha.c")))
 
     def test_unknown_widths_and_complex_bitwise_lvalues_compile(self) -> None:
         context = "typedef unsigned char u8; typedef int s32; typedef int M2C_UNK32; typedef float f32;"
@@ -69,7 +69,7 @@ class DraftBoundaryTests(unittest.TestCase):
             )
             tool.chmod(0o755)
             policy.m2c = tool
-            source = m2c.draft(project, policy, "alpha", "us", root / "scratch")
+            source = m2c.draft(project, policy, "alpha", "us", project.work)
             self.assertNotIn("M2C_BITWISE", source.read_text())
             self.assertNotIn("M2C_FIELD", source.read_text())
             self.assertIn("struct Layout_alpha_p", source.read_text())

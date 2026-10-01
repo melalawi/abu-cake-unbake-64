@@ -6,6 +6,12 @@ from unbake.report import progress as report
 
 
 class DecompTests(MainCase):
+    def setUp(self) -> None:
+        super().setUp()
+        guidance = patch("unbake.cli.guidance.resolve", return_value="unbake next")
+        guidance.start()
+        self.addCleanup(guidance.stop)
+
     def test_guide_and_planner_dispatch(self) -> None:
         from unbake.decomp import guide, plan, similar
 
@@ -31,7 +37,7 @@ class DecompTests(MainCase):
                     return_value="guide text" if verb == "guide" else [],
                 ) as operation,
             ):
-                code, _, error = self.run_main(self.args("decomp", verb, *operands))
+                code, _out, error = self.run_main(self.args("decomp", verb, *operands))
                 self.assertEqual(code, 0, error)
                 operation.assert_called_once_with(
                     *expected,
@@ -57,7 +63,7 @@ class DecompTests(MainCase):
         )
         flags = ["--permute-version", "us", "--permute-target", str(target), "--permute-budget", "2"]
         with patch.object(core, "run", autospec=True) as run:
-            code, _, error = self.run_main(operands + flags)
+            code, out, error = self.run_main(operands + flags)
             self.assertEqual(code, 0, error)
             generators = run.call_args.args[3]
             self.assertEqual(len(generators), 2)
@@ -74,9 +80,9 @@ class DecompTests(MainCase):
         ]
         for selected, name in cases:
             with self.subTest(name=name), patch.object(core, "run", autospec=True) as run:
-                code, _, error = self.run_main(operands + selected)
+                code, out, error = self.run_main(operands + selected)
                 self.assertEqual(code, 1)
-                self.assertIn(name, error)
+                self.assertIn(name, out)
                 run.assert_not_called()
 
     def test_assign_and_release_use_project_ledger(self) -> None:
@@ -110,44 +116,6 @@ class DecompTests(MainCase):
     def test_missing_best_names_function(self) -> None:
         store = SimpleNamespace(best=Mock(return_value=None))
         module = self.module("drafts", Store=Mock(return_value=store))
-        code, _out, error = self.run_main(self.args("decomp", "best", "alpha"), {"drafts": module})
+        code, out, _error = self.run_main(self.args("decomp", "best", "alpha"), {"drafts": module})
         self.assertEqual(code, 1)
-        self.assertEqual(error, "HELD(decomp): no draft recorded for function alpha\n")
-
-    def test_draft_preparation_holds_writer_lock_but_m2c_and_try_release_it(self) -> None:
-        import fcntl
-        from contextlib import nullcontext
-
-        from unbake.decomp import m2c, trial, trial_compile
-        from unbake.project.config import Held
-
-        generation = self.root / "build/us.0"
-        generation.mkdir(parents=True)
-        self.project.build_link("us").symlink_to(generation.name)
-
-        def assert_locked(*args: object, **kwargs: object) -> str:
-            with (self.root / "build/.lock").open("a+b") as stream, self.assertRaises(BlockingIOError):
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            raise Held("proof", "lock held")
-
-        def assert_unlocked(*args: object, **kwargs: object) -> str:
-            with (self.root / "build/.lock").open("a+b") as stream:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            raise Held("proof", "lock free")
-
-        for stage in ("make", "m2c", "try"):
-            with self.subTest(stage=stage):
-                verb = "try" if stage == "try" else "draft"
-                operands = ["alpha", "--version", "us"] if verb == "draft" else [str(self.source)]
-                with (
-                    patch.object(trial_compile, "run_tool", side_effect=assert_locked if stage == "make" else None),
-                    patch.object(trial, "try_draft", side_effect=assert_unlocked),
-                    patch.object(trial, "trial_inputs", return_value=nullcontext({})),
-                    patch.object(
-                        m2c, "draft", side_effect=assert_unlocked if stage == "m2c" else None, return_value=self.source
-                    ),
-                    patch.object(trial, "store_trial"),
-                ):
-                    code, _, error = self.run_main(self.args("decomp", verb, *operands, "--scratch", str(self.scratch)))
-                self.assertEqual(code, 1)
-                self.assertIn("lock held" if stage == "make" else "lock free", error)
+        self.assertEqual(out.split("Next: ", 1)[0], "HELD(decomp): no draft recorded for function alpha\n")

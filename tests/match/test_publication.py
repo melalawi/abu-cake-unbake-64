@@ -56,11 +56,11 @@ class PublicationTests(MatchFixture):
             "data/blob.bin",
         ):
             with self.subTest(input=name):
-                before = staging.fingerprint(self.root)
+                before = staging.fingerprint(self.project, self.root)
                 path = self.root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("changed input\n")
-                self.assertNotEqual(before, staging.fingerprint(self.root))
+                self.assertNotEqual(before, staging.fingerprint(self.project, self.root))
 
     def test_retained_artifacts_are_not_staged_or_publication_inputs(self) -> None:
         artifacts = self.root / "artifacts" / "candidate-trials"
@@ -80,9 +80,9 @@ class PublicationTests(MatchFixture):
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts))
         self.assertEqual(retained.read_text(), "new retained trial during landing\n")
-        before = staging.fingerprint(self.root)
+        before = staging.fingerprint(self.project, self.root)
         (self.root / "include" / "types.h").write_text("typedef long word;\n")
-        self.assertNotEqual(before, staging.fingerprint(self.root))
+        self.assertNotEqual(before, staging.fingerprint(self.project, self.root))
 
     def test_success_moves_sources_flips_rows_records_and_collects(self) -> None:
         self.queue("alpha", "beta")
@@ -90,8 +90,8 @@ class PublicationTests(MatchFixture):
         with patch.object(subprocess, "run", wraps=subprocess.run) as copy:
             receipts = match.run(self.project, self.policy)
         self.assertEqual(self.calls, [("alpha", "beta")])
-        self.assertTrue(all(line.startswith("OK(match):") for line in receipts))
-        self.assertEqual(len(receipts), 2)
+        self.assertTrue(all(line.startswith(("OK(match):", "OK(submit):")) for line in receipts))
+        self.assertEqual(len([line for line in receipts if " matched on VERSION " in line]), 2)
         self.assertTrue(all(call.args[0][:3] == ["cp", "-a", "--reflink=auto"] for call in copy.call_args_list))
         self.assertEqual(len(copy.call_args_list), 2)
         for function, content in expected.items():
@@ -265,9 +265,9 @@ class PublicationTests(MatchFixture):
         self.queue("alpha")
 
         def during_build(tree: Path, generation_for: Callable[[str], Path]) -> None:
-            before = staging.fingerprint(self.root)
+            before = staging.fingerprint(self.project, self.root)
             match.withdraw("alpha", project=self.project, policy=self.policy)
-            self.assertEqual(staging.fingerprint(self.root), before)
+            self.assertEqual(staging.fingerprint(self.project, self.root), before)
 
         self.on_build = during_build
         receipts = match.run(self.project, self.policy)
@@ -335,3 +335,22 @@ class PublicationTests(MatchFixture):
         self.assertEqual((self.src / "alpha.c").read_bytes(), external.read_bytes())
         self.assertTrue(source.exists())
         self.assertTrue(external.exists())
+
+    def test_declared_build_directory_is_excluded_from_copy_and_fingerprint(self) -> None:
+        from dataclasses import replace
+
+        project = replace(
+            self.project, build=self.root / "output", work=self.root / "output/work", drafts=self.root / "output/drafts"
+        )
+        generated = project.build / "work/log"
+        generated.parent.mkdir(parents=True)
+        generated.write_text("first")
+        before = staging.fingerprint(project, self.root)
+        generated.write_text("second")
+        self.assertEqual(staging.fingerprint(project, self.root), before)
+        destination = project.build / "staged"
+        staging.copy_tree(project, project.root, destination)
+        self.assertFalse((destination / "output").exists())
+        staged = staging.project_at(project, destination)
+        self.assertEqual(staged.build, destination / "output")
+        self.assertEqual(staged.version("us").baserom, destination / "roms/baserom.us.z64")

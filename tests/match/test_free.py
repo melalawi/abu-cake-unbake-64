@@ -21,11 +21,8 @@ class FreeReportingTests(MatchFixture):
                     project: Project,
                     policy: Policy,
                     source: object,
-                    *,
-                    versions: tuple[str, ...],
                     visible: list[str] = emitted,
                 ) -> list[str]:
-                    self.assertEqual(versions, ("us",))
                     name = str(source).rsplit("/", 1)[-1].removesuffix(".c")
                     if name == "beta":
                         self.assertTrue(any("alpha queued" in line for line in visible))

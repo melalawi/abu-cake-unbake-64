@@ -23,7 +23,7 @@ class M2cTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.project, self.policy, _ = fixture(self.directory)
-        self.scratch = self.directory / "scratch"
+        self.scratch = self.project.work
         self.tool = self.directory / "m2c"
         self.tool.write_text(
             f"#!{sys.executable}\n" + "import json, os, pathlib, sys\n"
