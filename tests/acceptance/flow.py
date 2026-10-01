@@ -39,14 +39,19 @@ def read_config(project: Path) -> dict:
 
 
 class Proof:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, source_tree: Path | None = None) -> None:
         self.root = root.resolve()
         self.logs = self.root / "evidence"
         self.logs.mkdir(parents=True, exist_ok=True)
         self.python = self.root / "venv/bin/python"
         self.unbake = self.root / "venv/bin/unbake"
+        self.source_tree = source_tree.resolve() if source_tree else None
         self.env = dict(os.environ)
         self.env.pop("PYTHONPATH", None)
+        if self.source_tree:
+            self.env["PYTHONPATH"] = os.pathsep.join(
+                path for path in (str(self.source_tree), os.environ.get("PYTHONPATH", "")) if path
+            )
         self.env.update(
             TMPDIR=str(self.root / "tmp"),
             PIP_CACHE_DIR=str(self.root / "pip-cache"),
@@ -86,7 +91,7 @@ class Proof:
             "seconds": time.time() - started,
             "stdout": f"{label}.stdout",
             "stderr": f"{label}.stderr",
-            "pythonpath": None,
+            "pythonpath": (env or self.env).get("PYTHONPATH"),
             "path": (env or self.env)["PATH"],
             "policy": (env or self.env)["UNBAKE_POLICY"],
         }
@@ -97,7 +102,8 @@ class Proof:
         return result
 
     def cli(self, *arguments: str | Path, cwd: Path | None = None, status: int | None = 0) -> str:
-        result = self.run([self.unbake, *arguments], cwd)
+        prefix = [self.python, "-m", "unbake"] if self.source_tree else [self.unbake]
+        result = self.run([*prefix, *arguments], cwd)
         output = result.stdout + result.stderr
         if status is not None:
             require(result.returncode == status, f"cli.exit: expected {status}, got {result.returncode}")
@@ -602,6 +608,7 @@ class Proof:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True, help="Evidence and clean installed environment directory.")
+    parser.add_argument("--source-tree", type=Path, help="Explicit src directory for public source CLI follow-up proofs.")
     phases = parser.add_subparsers(dest="phase", required=True)
     install = phases.add_parser("install", help="Create a clean venv and pip install an explicit immutable source.")
     install.add_argument("--install-spec", required=True, help="Pinned Git URL or immutable source directory.")
@@ -642,10 +649,16 @@ def main() -> int:
     refusals.add_argument("--other-rom", type=Path, required=True)
     refusals.add_argument("--policy", type=Path, required=True)
     args = parser.parse_args()
+    if args.source_tree:
+        args.source_tree = args.source_tree.expanduser().resolve()
+        if not (args.source_tree / "unbake/__main__.py").is_file():
+            parser.error("accept.source_tree: missing unbake/__main__.py")
+        if args.phase in ("install", "update-install"):
+            parser.error("accept.install: package proofs must run without a source override")
     root = args.root.expanduser().resolve()
     if args.phase == "install" and root.exists() and any(root.iterdir()):
         parser.error("accept.root: install requires an empty directory")
-    proof = Proof(root)
+    proof = Proof(root, args.source_tree)
     try:
         if args.phase in ("install", "update-install"):
             proof.install(args.install_spec, update=args.phase == "update-install")
