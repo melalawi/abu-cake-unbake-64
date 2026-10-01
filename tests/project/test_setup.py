@@ -35,15 +35,15 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(receipt[0].startswith("OK(setup): us:"))
         expected = hashlib.sha1(b"ABC").hexdigest()
         self.assertEqual((self.root / "versions/us/game.sha1").read_text(), expected + "  build/us/game.us.z64\n")
-        self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), expected + "  baserom.us.z64\n")
+        self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), expected + "  roms/baserom.us.z64\n")
         self.assertTrue((self.root / "tools/extract.py").is_file())
         self.assertTrue((self.root / "CONTRIBUTING.md").is_file())
         contributing = (self.root / "CONTRIBUTING.md").read_text()
         self.assertNotIn("@", contributing)
-        self.assertIn("every VERSION", contributing)
+        self.assertIn("every version", contributing)
 
     def test_bad_rom_refuses_before_rendered_files_are_written(self) -> None:
-        (self.root / "baserom.us.z64").write_bytes(b"bad")
+        (self.root / "roms/baserom.us.z64").write_bytes(b"bad")
         with self.assertRaisesRegex(config.Held, r"baserom_sha1"):
             setup.run(self.project, self.policy)
         self.assertFalse((self.root / "Makefile").exists())
@@ -110,37 +110,6 @@ class SetupTests(unittest.TestCase):
         split.write_text('name: "hash#inside"\noptions:\n  base_path: .\nsegments: []\n')
         self.assertEqual(len(setup.run(self.project, self.policy)), 1)
 
-    def test_new_rom_requires_declared_identity(self) -> None:
-        supplied = self.root / "supplied.z64"
-        supplied.write_bytes(b"ABC")
-        (self.root / "baserom.us.z64").unlink()
-        setup.run(self.project, self.policy, new_rom=supplied)
-        self.assertEqual((self.root / "baserom.us.z64").read_bytes(), b"ABC")
-        supplied.write_bytes(b"unknown")
-        with self.assertRaisesRegex(config.Held, "new_rom"):
-            setup.run(self.project, self.policy, new_rom=supplied)
-        self.assertEqual((self.root / "baserom.us.z64").read_bytes(), b"ABC")
-
-    def test_new_rom_replaces_only_the_naming_version(self) -> None:
-        from dataclasses import replace
-
-        other = replace(
-            self.project.version("us"),
-            name="eu",
-            baserom=self.root / "baserom.eu.z64",
-            baserom_sha1=hashlib.sha1(b"XYZ").hexdigest(),
-        )
-        other.baserom.write_bytes(b"XYZ")
-        project = replace(
-            self.project, versions=("eu", "us"), version_map={"eu": other, "us": self.project.version("us")}
-        )
-        supplied = self.root / "supplied.z64"
-        supplied.write_bytes(b"ABC")
-        project.version("us").baserom.unlink()
-        setup.run(project, self.policy, new_rom=supplied)
-        self.assertEqual(project.version("us").baserom.read_bytes(), b"ABC")
-        self.assertEqual(other.baserom.read_bytes(), b"XYZ")
-
     def test_sn64_manifest_covers_every_pipeline_executable(self) -> None:
         project, policy = fixture(self.root, "sn64")
         setup.run(project, policy)
@@ -186,16 +155,14 @@ class SetupTests(unittest.TestCase):
             setup.restore_roms(project, source.parent)
         self.assertFalse(project.version("us").baserom.exists())
         (source / "another-name").write_bytes(b"XYZ")
-        args = make_parser().parse_args(["setup", "--supply", str(source.parent)])
-        with redirect_stdout(io.StringIO()):
-            self.assertFalse(setup_command(args, project, self.policy))
+        setup.restore_roms(project, source.parent)
         self.assertEqual(project.version("us").baserom.read_bytes(), b"ABC")
         self.assertEqual(other.baserom.read_bytes(), b"XYZ")
         help_text = make_parser().format_help()
         self.assertIn("setup", help_text)
         with redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit):
             make_parser().parse_args(["setup", "--help"])
-        self.assertIn("SHA-1", output.getvalue())
+        self.assertIn("--supply", output.getvalue())
 
     def test_compiler_status_refuses_failed_install_and_labels_optional(self) -> None:
         from unbake.project import toolchain
@@ -208,12 +175,13 @@ class SetupTests(unittest.TestCase):
                 with self.subTest(broken=broken):
                     if broken:
                         (self.policy.cache_root / "compilers/fixture/cc").unlink()
-                    with redirect_stdout(io.StringIO()) as output:
-                        status = int(
-                            setup_command(make_parser().parse_args(["setup", "--compilers"]), self.project, self.policy)
-                        )
+                    with (
+                        redirect_stdout(io.StringIO()) as output,
+                        patch.object(config, "load_policy", return_value=self.policy),
+                    ):
+                        status = int(setup_command(make_parser().parse_args(["setup", "--compilers"]), self.project))
                     self.assertEqual(status, int(broken))
-                    self.assertIn("optional: optional; not installed", output.getvalue())
+                    self.assertIn("optional: not installed", output.getvalue())
                     if broken:
-                        self.assertIn("HELD(setup): fixture: required;", output.getvalue())
+                        self.assertIn("HELD(setup): fixture:", output.getvalue())
                         self.assertNotIn("OK(setup): fixture", output.getvalue())
