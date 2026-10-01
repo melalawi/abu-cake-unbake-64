@@ -39,6 +39,14 @@ def register(phases: Subparsers) -> None:
     data.add_argument("--rename-from")
     data.add_argument("--correspond", action="store_true", help="Infer placements in all VERSIONs from aligned code.")
     data.add_argument("--apply", action="store_true")
+    port = split_verbs.add_parser("port", phase="port", help="Prove and port existing C rows into other versions.")
+    port.add_argument("functions", nargs="*")
+    port.add_argument("--from-version", required=True, metavar="V")
+    port.add_argument("--version", action="append", required=True, metavar="V")
+    port.add_argument("--measure", type=Path, metavar="CSV", help="Write candidate inventory without compiling.")
+    port.add_argument("--all-identical", action="store_true")
+    port.add_argument("--scratch", type=Path)
+    port.add_argument("--apply", action="store_true", help="Stage rows after target-version object proofs.")
     twins = split_verbs.add_parser("twins", phase="split")
     twins.add_argument("function")
     twins.add_argument("--version", required=True, metavar="V")
@@ -58,6 +66,26 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             return receipt("split", [f"preview {len(changes)} boundary changes in {len(edits)} VERSION splits"])
         results = boundary_map.apply(project, policy, changes)
         return receipt("split", [f"{result.version}: {result.sha1_line}" for result in results] or ["no edits"])
+    if args.verb == "port":
+        from unbake.layout import port
+        from unbake.project.config import Held
+
+        rows = port.candidates(project, args.from_version, args.version)
+        if args.measure is not None:
+            port.measure(args.measure, rows)
+            return receipt("port", [f"measured {len(rows)} candidate version rows in {args.measure}"])
+        if bool(args.functions) == bool(args.all_identical):
+            raise Held("port", "select function names or --all-identical")
+        if args.scratch is None:
+            raise Held("port", "--scratch is required for target-version proofs")
+        if args.all_identical:
+            rows = [row for row in rows if row.identity in ("identical", "relocations")]
+        else:
+            missing = set(args.functions) - {row.function for row in rows}
+            if missing:
+                raise Held("port", f"no source-C/target-ASM candidates: {', '.join(sorted(missing))}")
+            rows = [row for row in rows if row.function in args.functions]
+        return receipt("port", port.port(project, policy, rows, args.scratch, apply=args.apply))
     if args.verb == "data-symbol":
         from unbake.decomp.symbols_edits import data_symbol
         from unbake.layout.data_symbols import correspondence
