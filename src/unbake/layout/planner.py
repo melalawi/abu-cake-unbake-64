@@ -176,25 +176,30 @@ def correspondence(
             index[signature].append(f)
         indexes[version] = index
     names: dict[str, dict[int, str]] = {version: {} for version in inventories}
+    # Inventory order is the declared project order. A naming version is never
+    # required to contain an item; unique bodies among any subset form one item.
+    canonical: dict[str, tuple[str, split.Function]] = {}
     for version, index in indexes.items():
         for signature, ff in index.items():
-            canonical = indexes[reference].get(signature, [])
+            if len(ff) == 1:
+                canonical.setdefault(signature, (version, ff[0]))
+    used: dict[str, tuple[str, int]] = {}
+    item_names: dict[str, str] = {}
+    for signature, (version, f) in canonical.items():
+        name = f.name
+        if re.fullmatch(r"func_[0-9A-Fa-f]+", name) or name in used:
+            name += "_" + version.replace("-", "_")
+        if name in used:
+            name += f"_{f.start:X}"
+        used[name] = (version, f.start)
+        item_names[signature] = name
+    for version, index in indexes.items():
+        for signature, ff in index.items():
             for f in ff:
-                if version == reference:
-                    name = (
-                        f.name + "_" + reference.replace("-", "_")
-                        if re.fullmatch(r"func_[0-9A-Fa-f]+", f.name)
-                        else f.name
-                    )
-                elif len(ff) == len(canonical) == 1:
-                    source = canonical[0].name
-                    name = (
-                        source + "_" + reference.replace("-", "_")
-                        if re.fullmatch(r"func_[0-9A-Fa-f]+", source)
-                        else source
-                    )
-                else:
-                    name = f.name + "_" + version.replace("-", "_")
+                name = item_names[signature] if len(ff) == 1 else f.name + "_" + version.replace("-", "_")
+                if len(ff) != 1 and name in used:
+                    name += f"_{f.start:X}"
+                used.setdefault(name, (version, f.start))
                 names[version][f.start] = name
     return names
 
@@ -472,6 +477,10 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             inventories[version] = functions(cartridge.data, version, ranges_by_version[version], measured)
             loaded_by_version[version] = mappings(cartridge.data, ranges_by_version[version])
     names = correspondence(images, inventories, census.names_from)
+    holding: dict[str, list[str]] = defaultdict(list)
+    for version, placements in names.items():
+        for name in placements.values():
+            holding[name].append(version)
     versions: dict[str, VersionLayout] = {}
     for version, original in inventories.items():
         ff = [
@@ -522,11 +531,9 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                         "boundary": asdict(evidence),
                         "source": "pinned disassembler",
                         "assembly": True,
-                        "correspondence": "naming-version"
-                        if version == census.names_from
-                        else "unique-body"
-                        if not f.name.endswith("_" + version.replace("-", "_"))
-                        else "unresolved",
+                        "correspondence": "unique-body" if len(holding[f.name]) > 1 else "single-version",
+                        "holding_versions": holding[f.name],
+                        "name_source": holding[f.name][0],
                     },
                 )
             )

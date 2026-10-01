@@ -56,3 +56,21 @@ class PlannerTests(unittest.TestCase):
         ]
         struct.pack_into(">" + "I" * len(code), data, 0x1000, *code)
         self.assertIn((0x2000, 0x2010, 0x80003000), copy_evidence(bytes(data)))
+
+    def test_item_missing_from_naming_version_joins_other_versions(self) -> None:
+        body = struct.pack(">4I", 0x24020002, 0x03E00008, 0, 0)
+        first = Function("eu", "func_80002000", 0, 16, 0x80002000, "entry", "asm", ())
+        second = Function("de", "func_80003000", 0, 16, 0x80003000, "entry", "asm", ())
+        inventories = {"us": [], "eu": [first], "de": [second]}
+        images = {"us": b"", "eu": body, "de": body}
+        names = correspondence(images, inventories, "us")
+        self.assertEqual(names, {"us": {}, "eu": {0: "func_80002000_eu"}, "de": {0: "func_80002000_eu"}})
+        self.assertEqual(names, correspondence(images, inventories, "de"))
+
+    def test_declared_order_names_an_item_and_ambiguous_bodies_stay_separate(self) -> None:
+        body = struct.pack(">4I", 0x24020002, 0x03E00008, 0, 0)
+        first = Function("eu", "first", 0, 16, 0x80002000, "entry", "asm", ())
+        second = Function("us", "second", 0, 16, 0x80003000, "entry", "asm", ())
+        duplicate = Function("us", "duplicate", 16, 32, 0x80003010, "entry", "asm", ())
+        names = correspondence({"eu": body, "us": body * 2}, {"eu": [first], "us": [second, duplicate]}, "us")
+        self.assertEqual(names, {"eu": {0: "first"}, "us": {0: "second_us", 16: "duplicate_us"}})
