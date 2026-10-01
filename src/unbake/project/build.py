@@ -1,0 +1,147 @@
+"""Run the standalone proof path and cache individual compiler objects."""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from unbake.project import makefile
+from unbake.project.config import Held, Policy, Project
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    version: str
+    ok: bool
+    sha1_line: str
+    log: Path
+    generation: Path
+
+
+def current_generation(project: Project, v: str) -> Path:
+    project.version(v)
+    link = project.build_link(v)
+    if not link.is_symlink():
+        raise Held("build", f"{link}: build generation symlink is missing")
+    try:
+        generation = link.resolve(strict=True)
+    except OSError as error:
+        raise Held("build", f"{link}: {error}") from error
+    if not generation.is_dir():
+        raise Held("build", f"{link}: generation {generation} is not a directory")
+    return generation
+
+
+def build(
+    project: Project, policy: Policy, versions: Sequence[str], *, tree: Path, generation_for: Callable[[str], Path]
+) -> dict[str, BuildResult]:
+    if not versions:
+        raise Held("build", "versions is required")
+    if not isinstance(policy.cores, int) or policy.cores < 1:
+        raise Held("build", "policy.cores must be a positive integer")
+    for v in versions:
+        project.version(v)
+    tree = Path(tree).resolve()
+    if not (tree / "Makefile").is_file():
+        raise Held("build", f"{tree / 'Makefile'} is missing")
+    from unbake.project import toolchain
+
+    for ident in project.compilers:
+        toolchain.verify(tree / project.tools.relative_to(project.root) / ident, toolchain.specification(ident))
+    results = {}
+    generations = {v: Path(generation_for(v)).resolve() for v in versions}
+    for generation in generations.values():
+        generation.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="build-") as temporary:
+        driver = Path(temporary) / "Makefile"
+        lines = [".PHONY: all " + " ".join(versions), "all: " + " ".join(versions)]
+        for v, generation in generations.items():
+            command = "$(MAKE) -C " + makefile.shell_words([tree, f"VERSION={v}", "COMPARE=1", f"BUILD={generation}"])
+            log_word = makefile.shell_words([generation / "build.log"])
+            status_word = makefile.shell_words([generation / "build.exit"])
+            lines.extend(
+                [v + ":", f"\t+@{command} > {log_word} 2>&1; result=$$?; echo $$result > {status_word}; exit $$result"]
+            )
+        driver.write_text("\n".join(lines) + "\n")
+        try:
+            subprocess.run(["make", "-f", str(driver), f"-j{policy.cores}", "-k"], capture_output=True, text=True)
+        except OSError as error:
+            raise Held("build", f"make: {error}") from error
+    for v, generation in generations.items():
+        log = generation / "build.log"
+        output = log.read_text() if log.exists() else ""
+        status = generation / "build.exit"
+        success = status.exists() and status.read_text().strip() == "0"
+        rom = generation / f"{project.name}.{v}.z64"
+        sha1_line = next(
+            (line for line in reversed(output.splitlines()) if line in (f"{rom}: OK", f"{rom}: FAILED")), ""
+        )
+        results[v] = BuildResult(v, success and sha1_line == f"{rom}: OK", sha1_line, log, generation)
+    return results
+
+
+def _run(command: list[str], root: Path) -> bytes:
+    try:
+        completed = subprocess.run(command, cwd=root, capture_output=True)
+    except OSError as error:
+        raise Held("compile", f"{command[0]}: {error}") from error
+    if completed.returncode:
+        raise Held(
+            "compile",
+            f"{command[0]} exited {completed.returncode}: "
+            + (completed.stdout + completed.stderr).decode(errors="replace"),
+        )
+    return completed.stdout
+
+
+def compile_object(project: Project, policy: Policy, source: Path, v: str, out: Path) -> Path:
+    project.version(v)
+    source, out = Path(source).resolve(), Path(out).resolve()
+    if not source.is_file():
+        raise Held("compile", f"source {source} is missing")
+    from unbake.project import toolchain
+
+    compiler = project.compiler_for(source)
+    toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    unit = (
+        source.relative_to(project.root)
+        if source.is_relative_to(project.src)
+        else project.src.relative_to(project.root) / (source.stem + ".c")
+    )
+    with tempfile.TemporaryDirectory(prefix=".compile-", dir=out.parent) as temporary:
+        work = Path(temporary)
+        for name, content in makefile.helpers(project).items():
+            (work / Path(name).name).write_text(content)
+        shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
+        _run(
+            [
+                sys.executable,
+                str(work / "compile.py"),
+                "--kind",
+                "cc",
+                "--recipe",
+                str(work / "build.json"),
+                "--version",
+                v,
+                "--unit",
+                str(unit),
+                "--source",
+                str(source),
+                "--output",
+                str(out),
+                "--non-matching",
+                "0",
+                "--cache-root",
+                str(policy.cache_root),
+            ],
+            project.root,
+        )
+    if not out.is_file():
+        raise Held("compile", f"[compilers.{compiler.id}].cc produced no object at {out}")
+    return out

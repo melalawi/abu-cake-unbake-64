@@ -1,0 +1,407 @@
+"""Derive data bindings from MIPS relocations and return native Splat edits."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    from unbake.decomp.trial_artifacts import TrialContext
+import re
+import struct
+from dataclasses import dataclass
+from pathlib import Path
+
+from unbake.decomp.needs import LabelNeed, Need, SymbolNeed, register_deriver, register_resolver
+from unbake.families import Family, family_for
+from unbake.families.mips import relocation_value
+from unbake.layout.split import Edit
+from unbake.project.config import Held, Policy, Project
+
+
+@dataclass(frozen=True)
+class Binding:
+    name: str
+    address: int
+    section: str
+    type: str
+    size: int
+
+
+@dataclass(frozen=True)
+class DataRow:
+    name: str
+    start: int
+    end: int
+    section: str
+
+
+@dataclass(frozen=True)
+class Relocation:
+    offset: int
+    kind: int
+    name: str
+
+
+@dataclass(frozen=True)
+class TrialElf:
+    words: tuple[int, ...]
+    relocations: tuple[Relocation, ...]
+    bindings: tuple[Binding, ...]
+    rows: tuple[DataRow, ...]
+    gp: int | None
+    family: Family
+
+
+@dataclass(frozen=True)
+class Reference:
+    address: int
+    type: str
+    size: int
+    offset: int
+
+
+_LOADS = {
+    0x20: ("s8", 1),
+    0x21: ("s16", 2),
+    0x23: ("s32", 4),
+    0x24: ("u8", 1),
+    0x25: ("u16", 2),
+    0x28: ("s8", 1),
+    0x29: ("s16", 2),
+    0x2B: ("s32", 4),
+    0x31: ("f32", 4),
+    0x35: ("f64", 8),
+    0x37: ("s64", 8),
+    0x39: ("f32", 4),
+    0x3D: ("f64", 8),
+    0x3F: ("s64", 8),
+}
+_NAME = r"[A-Za-z_.$][\w.$]*"
+_LINE = re.compile(rf"^\s*({_NAME})\s*=\s*(0[xX][\da-fA-F]+|\d+)\s*;\s*(?://(.*))?$")
+
+
+T = TypeVar("T")
+
+
+def _required(value: T | None, name: str) -> T:
+    if value is None or value == "":
+        raise Held("symbols", f"{name}: missing value")
+    return value
+
+
+def _signed(value: int) -> int:
+    return (value & 0x7FFF) - (value & 0x8000)
+
+
+def references(target_words: Sequence[int], gp: int | None) -> list[Reference]:
+    """Find absolute memory accesses whose base is proved by constant instructions."""
+    _required(target_words, "target_words")
+    constants = {0: 0}
+    if gp is not None:
+        constants[28] = gp
+    result: list[Reference] = []
+    reset_after_slot = False
+    for index, word in enumerate(target_words):
+        reset_now, reset_after_slot = reset_after_slot, False
+        if type(word) is not int or not 0 <= word <= 0xFFFFFFFF:
+            raise Held("symbols", f"target_words[{index}]: expected unsigned word")
+        op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
+        immediate = word & 0xFFFF
+        if op in _LOADS and rs in constants:
+            address = (constants[rs] + _signed(immediate)) & 0xFFFFFFFF
+            if address >= 0x80000000:
+                type_, size = _LOADS[op]
+                result.append(Reference(address, type_, size, index * 4))
+        if op == 15 and rt:
+            constants[rt] = immediate << 16
+        elif op in (9, 13) and rt:
+            if rs in constants:
+                constants[rt] = (
+                    (constants[rs] + _signed(immediate)) if op == 9 else constants[rs] | immediate
+                ) & 0xFFFFFFFF
+            else:
+                constants.pop(rt, None)
+        elif op == 0:
+            rd, function = word >> 11 & 31, word & 63
+            if function in (0x21, 0x25) and rd and rs in constants and rt in constants:
+                constants[rd] = (
+                    (constants[rs] + constants[rt]) if function == 0x21 else constants[rs] | constants[rt]
+                ) & 0xFFFFFFFF
+            elif rd:
+                constants.pop(rd, None)
+        elif op in (2, 3) or op in (1, 4, 5, 6, 7, 0x14, 0x15, 0x16, 0x17):
+            reset_after_slot = True
+        elif op not in (0x28, 0x29, 0x2B, 0x39, 0x3D, 0x3F, 0x31, 0x35, 0x11) and rt:
+            constants.pop(rt, None)
+        if op == 0 and word & 63 in (8, 9):
+            reset_after_slot = True
+        if reset_now:
+            constants = {0: 0, **({28: gp} if gp is not None else {})}
+    return result
+
+
+def _row(rows: Sequence[DataRow], address: int, size: int, name: str) -> DataRow:
+    found = [row for row in rows if row.start <= address < row.end]
+    if len(found) != 1:
+        raise Held("symbols", f"{name}: data row at 0x{address:08X} is missing or ambiguous")
+    row = found[0]
+    _required(row.section, f"{name}.section")
+    if address + size > row.end:
+        raise Held("symbols", f"{name}.size: crosses data row {row.name}")
+    return row
+
+
+def _bindings(bindings: Sequence[Binding]) -> dict[str, Binding]:
+    result: dict[str, Binding] = {}
+    for binding in bindings:
+        if binding.name in result and result[binding.name] != binding:
+            raise Held("symbols", f"{binding.name}: two-addresses or conflicting metadata")
+        result[binding.name] = binding
+    return result
+
+
+def _need(
+    version: str,
+    name: str,
+    address: int,
+    addend: int,
+    type_: str,
+    size: int,
+    rows: Sequence[DataRow],
+    bindings: dict[str, Binding],
+    evidence: str,
+) -> list[Need]:
+    existing = bindings.get(name)
+    if existing and existing.address != address:
+        raise Held("symbols", f"{name}: placed-elsewhere at 0x{existing.address:08X}, inferred 0x{address:08X}")
+    row = _row(rows, address, size, name)
+    needs: list[Need] = [SymbolNeed(version, name, address, addend, row.section, type_, size, evidence)]
+    if row.start < address and not existing:
+        needs.append(LabelNeed(version, name, address, row.name, evidence))
+    return needs
+
+
+def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> list[Need]:
+    """Bind relocation symbols using paired target immediates and object addends."""
+    _required(version, "version")
+    _required(trial_elf, "trial_elf")
+    _required(target_words, "target_words")
+    bindings = _bindings(trial_elf.bindings)
+    access = {ref.offset: ref for ref in references(target_words, trial_elf.gp)}
+    family = _required(trial_elf.family, "trial_elf.family")
+    relocations = [
+        relocation
+        for relocation in trial_elf.relocations
+        if not (relocation.name in bindings and bindings[relocation.name].section == ".text")
+    ]
+    grouped: dict[tuple[int, int, str], tuple[Relocation, list[Relocation]]] = {}
+    for high, low in family.relocation_pairs(relocations):
+        key = (low.offset, low.kind, low.name)
+        grouped.setdefault(key, (low, []))[1].extend([high] if high is not None else [])
+    result: list[Need] = []
+    observed: dict[str, int] = {}
+    for relocation, highs in grouped.values():
+        name = _required(relocation.name, "relocation.name")
+        binding = bindings.get(name)
+        offset, kind = relocation.offset, relocation.kind
+        if kind in (0, 4, 10):
+            continue
+        effective, addend = relocation_value(highs, relocation, trial_elf.words, target_words, trial_elf.gp)
+        address = (effective - addend) & 0xFFFFFFFF
+        if name in observed and observed[name] != address:
+            raise Held("symbols", f"{name}: two-addresses")
+        observed[name] = address
+        ref = access.get(offset)
+        if ref:
+            type_, size = ref.type, ref.size
+        elif binding:
+            type_, size = binding.type, binding.size
+        else:
+            # An address materialization can be typed by a later proved access.
+            related = [ref for ref in access.values() if ref.address == effective]
+            if not related:
+                raise Held("symbols", f"{name}.type: no load/store or symbol evidence")
+            type_, size = related[0].type, related[0].size
+        _required(type_, f"{name}.type")
+        if size <= 0:
+            raise Held("symbols", f"{name}.size: expected positive extent")
+        if binding:
+            type_, size = binding.type, binding.size
+        _required(type_, f"{name}.type")
+        if size <= 0:
+            raise Held("symbols", f"{name}.size: expected positive extent")
+        evidence = f"relocation {kind} at +0x{offset:X}; reference 0x{effective:08X}; addend {addend}"
+        result.extend(_need(version, name, address, addend, type_, size, trial_elf.rows, bindings, evidence))
+    # Constant references without relocations still expose missing mid-interval labels.
+    for ref in access.values():
+        if any(need.address + need.addend == ref.address for need in result if isinstance(need, SymbolNeed)):
+            continue
+        exact = [binding for binding in bindings.values() if binding.address == ref.address]
+        name = exact[0].name if len(exact) == 1 else f"D_{ref.address:08X}"
+        result.extend(
+            _need(
+                version,
+                name,
+                ref.address,
+                0,
+                ref.type,
+                ref.size,
+                trial_elf.rows,
+                bindings,
+                f"constant reference at +0x{ref.offset:X}",
+            )
+        )
+    unique: dict[tuple[type[Need], str, int], Need] = {}
+    for need in result:
+        assert isinstance(need, (SymbolNeed, LabelNeed))
+        need_key = (type(need), need.name, need.address)
+        if need_key in unique and isinstance(need, SymbolNeed):
+            previous = unique[need_key]
+            assert isinstance(previous, SymbolNeed)
+            if (previous.type, previous.size) != (need.type, need.size):
+                raise Held("symbols", f"{need.name}.type: conflicting access evidence")
+        unique[need_key] = need
+    return list(unique.values())
+
+
+def symbol_line(need: SymbolNeed) -> str:
+    """Render the exact Splat symbol declaration used in edits and guidance."""
+    for field in ("version", "name", "address", "section", "type", "size"):
+        _required(getattr(need, field), f"{need.name}.{field}")
+    if not re.fullmatch(_NAME, need.name):
+        raise Held("symbols", f"{need.name}.name: invalid symbol")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", need.type):
+        raise Held("symbols", f"{need.name}.type: invalid Splat type")
+    if not 0 <= need.address <= 0xFFFFFFFF or need.size <= 0:
+        raise Held("symbols", f"{need.name}.address/size: invalid range")
+    return f"{need.name} = 0x{need.address:08X}; // type:{need.type} size:0x{need.size:X}"
+
+
+def resolve(needs: list[Need], project: Project, policy: Policy) -> list[Edit]:
+    """Coalesce symbol and label needs into reviewable edits without writing files."""
+    # Policy is required by the resolver protocol; symbol edits use no process tools.
+    _required(policy, "policy")
+    names_from = _required(getattr(project, "names_from", None), "project.names_from")
+    groups: dict[Path, list[SymbolNeed | LabelNeed]] = {}
+    for need in needs:
+        if not isinstance(need, (SymbolNeed, LabelNeed)):
+            raise Held("symbols", f"needs: unsupported {type(need).__name__}")
+        version = project.version(need.version)
+        path = Path(_required(version.symbols, f"version.{need.version}.symbols"))
+        groups.setdefault(path, []).append(need)
+    edits = []
+    for path, group in groups.items():
+        try:
+            before = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise Held("symbols", f"{path}: {error}") from error
+        lines = before.splitlines()
+        existing: dict[str, tuple[int, int, str]] = {}
+        for index, line in enumerate(lines):
+            if not line.strip() or line.lstrip().startswith(("//", "#")):
+                continue
+            match = _LINE.fullmatch(line)
+            if not match:
+                raise Held("symbols", f"{path}:{index + 1}: symbol line required")
+            name, value, attrs = match.groups()
+            address = int(value, 16 if value.lower().startswith("0x") else 10)
+            if name in existing:
+                raise Held("symbols", f"{name}: duplicate symbol declaration")
+            existing[name] = (address, index, attrs or "")
+        selected: dict[str, SymbolNeed] = {}
+        for need in group:
+            if not isinstance(need, SymbolNeed):
+                continue
+            symbol_line(need)
+            if need.name in selected:
+                other = selected[need.name]
+                if (other.address, other.type, other.size) != (need.address, need.type, need.size):
+                    raise Held("symbols", f"{need.name}: two-addresses or conflicting type/size")
+            selected[need.name] = need
+        for need in group:
+            if isinstance(need, LabelNeed) and need.name not in selected and need.name not in existing:
+                raise Held("symbols", f"{need.name}.type/size: LabelNeed requires SymbolNeed")
+            if isinstance(need, LabelNeed):
+                address = selected[need.name].address if need.name in selected else existing[need.name][0]
+                if address != need.address:
+                    raise Held("symbols", f"{need.name}: two-addresses for label")
+        for name, need in sorted(selected.items(), key=lambda item: (item[1].address, item[0])):
+            named = re.fullmatch(r"D_([\da-fA-F]{8})", name)
+            if named and need.version == names_from and int(named[1], 16) != need.address:
+                raise Held("symbols", f"{name}: address-named symbol disagrees with 0x{need.address:08X}")
+            rendered = symbol_line(need)
+            if name in existing:
+                address, index, attrs = existing[name]
+                if address != need.address:
+                    raise Held("symbols", f"{name}: placed-elsewhere at 0x{address:08X}")
+                for field, value in (("type", need.type), ("size", need.size)):
+                    found = re.search(rf"\b{field}:([^\s]+)", attrs)
+                    if found:
+                        try:
+                            actual = int(found[1], 0) if field == "size" else found[1]
+                        except ValueError as error:
+                            raise Held("symbols", f"{name}.{field}: invalid existing value") from error
+                        if actual != value:
+                            raise Held("symbols", f"{name}.{field}: conflicting existing value")
+                    else:
+                        suffix = value if field == "type" else f"0x{value:X}"
+                        if "//" not in lines[index]:
+                            lines[index] += " //"
+                        lines[index] += f" {field}:{suffix}"
+            else:
+                lines.append(rendered)
+        after = "\n".join(lines) + ("\n" if lines else "")
+        if after != before:
+            edits.append(Edit(path, before, after, tuple(dict.fromkeys(need.version for need in group))))
+    return edits
+
+
+def derive_trial(context: TrialContext) -> list[Need]:
+    """Consume TrialContext artifacts and add exact declarations to try comparisons."""
+    from unbake.decomp.guide import data_rows, render, words
+    from unbake.decomp.trial_layout import symbol_values
+    from unbake.project_tools.elf import Object
+
+    result = []
+    for version, artifact in context.artifacts.items():
+        for field in ("unit", "target_words", "version"):
+            if field not in artifact:
+                raise Held("symbols", f"artifacts.{version}.{field}: missing value")
+        try:
+            obj = Object(artifact["unit"].path)
+            text = obj.section(".text")
+            text = _required(text, f"{version}.text")
+            draft = words(obj.content(text), "big")
+            relocations = tuple(
+                Relocation(offset, kind, symbol["name"])
+                for offset, kind, symbol in obj.relocations(text)
+                if symbol["section"] != text
+                and not any(
+                    obj.section(placed.section) == symbol["section"] for placed in artifact.get("placements", [])
+                )
+            )
+        except (OSError, ValueError, IndexError, struct.error) as error:
+            raise Held("symbols", f"{version}.trial_elf: {error}") from error
+        rows = data_rows(context.project, version)
+        values = symbol_values(artifact["version"].symbols)
+        refs = references(artifact["target_words"], values.get("_gp"))
+        bindings = []
+        for name, address in values.items():
+            matches = [ref for ref in refs if ref.address == address]
+            containing = [row for row in rows if row.start <= address < row.end]
+            if matches and len(containing) == 1:
+                bindings.append(Binding(name, address, containing[0].section, matches[0].type, matches[0].size))
+        family = family_for(context.project.compiler_for(context.source).id)
+        object_evidence = TrialElf(draft, relocations, tuple(bindings), rows, values.get("_gp"), family)
+        derived = derive(object_evidence, artifact["target_words"], version)
+        result.extend(derived)
+        guidance = render(derived)
+        if guidance:
+            context.trial.compares[version].lines.extend(guidance.splitlines())
+    return result
+
+
+register_deriver(derive_trial)
+register_resolver(SymbolNeed, 10, resolve)
+register_resolver(LabelNeed, 20, resolve)

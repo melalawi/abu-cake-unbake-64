@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "measures": {
+    "fuzzy_match_percent": 2.1114564,
+    "total_code": 709084,
+    "matched_code": "14972",
+    "matched_code_percent": 2.1114566,
+    "matched_data_percent": 100.0,
+    "total_functions": 3234,
+    "matched_functions": 137,
+    "matched_functions_percent": 4.23624,
+    "complete_code": 14972,
+    "complete_code_percent": 2.1114566,
+    "complete_data_percent": 100.0,
+    "total_units": 1755,
+    "complete_units": 137
+  }
+}

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+export PYTHONPATH=src
+# Golden documents are byte-exact external inputs for the report preservation tests.
+status=0
+rg -n -i --glob '!hygiene' --glob '!**/__pycache__/**' --glob '!tests/fixture/readme/*.golden' \
+    --glob '!*.pyc' --glob '!*.egg-info/**' \
+    '\b(ai|agents?|lanes?|models?|claude|openai|chatgpt|codex)\b|/(home|mnt|Users|opt|tmp)/' \
+    src tests bin README.md pyproject.toml || status=$?
+if [[ "$status" -eq 0 ]]; then
+    exit 1
+fi
+if [[ "$status" -ne 1 ]]; then
+    exit "$status"
+fi

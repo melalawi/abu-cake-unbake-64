@@ -1,0 +1,7 @@
+cores = 12
+stall_trials = 5
+search_beam = 4
+assignment_idle_hours = 3
+init_same_game_similarity = 0.10
+init_split = "functions"
+init_probe_count = 20

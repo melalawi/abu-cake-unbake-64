@@ -1,0 +1,157 @@
+import hashlib
+import io
+import os
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+
+from tests.project.test_config import write_policy
+from tests.project.test_makefile import WORK, fixture
+from unbake.cli.main import make_parser
+from unbake.cli.setup import run as setup_command
+from unbake.project import config, setup
+
+
+class SetupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        WORK.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=WORK)
+        self.addCleanup(self.temporary.cleanup)
+        self.addCleanup(patch.stopall)
+        self.root = Path(self.temporary.name)
+        policy_path = write_policy(self.root)
+        patch.dict(os.environ, UNBAKE_POLICY=str(policy_path)).start()
+        self.project, self.policy = fixture(self.root)
+
+    def test_verified_setup_writes_real_sha1_and_helpers(self) -> None:
+        receipt = setup.run(self.project, self.policy)
+        self.assertEqual(len(receipt), 1)
+        self.assertTrue(receipt[0].startswith("OK(setup): us:"))
+        expected = hashlib.sha1(b"ABC").hexdigest()
+        self.assertEqual((self.root / "versions/us/game.sha1").read_text(), expected + "  build/us/game.us.z64\n")
+        self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), expected + "  baserom.us.z64\n")
+        self.assertTrue((self.root / "tools/extract.py").is_file())
+        self.assertTrue((self.root / "CONTRIBUTING.md").is_file())
+        contributing = (self.root / "CONTRIBUTING.md").read_text()
+        self.assertNotIn("@", contributing)
+        self.assertIn("every VERSION", contributing)
+
+    def test_bad_rom_refuses_before_rendered_files_are_written(self) -> None:
+        (self.root / "baserom.us.z64").write_bytes(b"bad")
+        with self.assertRaisesRegex(config.Held, r"baserom_sha1"):
+            setup.run(self.project, self.policy)
+        self.assertFalse((self.root / "Makefile").exists())
+
+    def test_unchanged_setup_preserves_generated_timestamps(self) -> None:
+        setup.run(self.project, self.policy)
+        paths = [self.root / "Makefile", self.root / "tools/compiler.sha256", self.root / "tools/build.json"]
+        before = [path.stat().st_mtime_ns for path in paths]
+        setup.run(self.project, self.policy)
+        self.assertEqual(before, [path.stat().st_mtime_ns for path in paths])
+
+    def test_bad_compiler_and_missing_pin_refused(self) -> None:
+        (self.root / "tools/fixture/cc").write_text("wrong")
+        with self.assertRaisesRegex(config.Held, "pins.cc: missing"):
+            setup.run(self.project, self.policy)
+        (self.root / "tools/fixture/cc").unlink()
+        with self.assertRaisesRegex(config.Held, "fixture/cc"):
+            setup.verify_compiler(self.project)
+
+    def test_yaml_comments_refused_but_quoted_hash_allowed(self) -> None:
+        split = self.project.version("us").split
+        split.write_text(split.read_text() + "\n# prose\n")
+        with self.assertRaisesRegex(config.Held, "YAML comment"):
+            setup.run(self.project, self.policy)
+        split.write_text('name: "hash#inside"\noptions:\n  base_path: .\nsegments: []\n')
+        self.assertEqual(len(setup.run(self.project, self.policy)), 1)
+
+    def test_new_rom_requires_declared_identity(self) -> None:
+        supplied = self.root / "supplied.z64"
+        supplied.write_bytes(b"ABC")
+        (self.root / "baserom.us.z64").unlink()
+        setup.run(self.project, self.policy, new_rom=supplied)
+        self.assertEqual((self.root / "baserom.us.z64").read_bytes(), b"ABC")
+        supplied.write_bytes(b"unknown")
+        with self.assertRaisesRegex(config.Held, "new_rom"):
+            setup.run(self.project, self.policy, new_rom=supplied)
+        self.assertEqual((self.root / "baserom.us.z64").read_bytes(), b"ABC")
+
+    def test_new_rom_replaces_only_the_naming_version(self) -> None:
+        from dataclasses import replace
+
+        other = replace(
+            self.project.version("us"),
+            name="eu",
+            baserom=self.root / "baserom.eu.z64",
+            baserom_sha1=hashlib.sha1(b"XYZ").hexdigest(),
+        )
+        other.baserom.write_bytes(b"XYZ")
+        project = replace(
+            self.project, versions=("eu", "us"), version_map={"eu": other, "us": self.project.version("us")}
+        )
+        supplied = self.root / "supplied.z64"
+        supplied.write_bytes(b"ABC")
+        project.version("us").baserom.unlink()
+        setup.run(project, self.policy, new_rom=supplied)
+        self.assertEqual(project.version("us").baserom.read_bytes(), b"ABC")
+        self.assertEqual(other.baserom.read_bytes(), b"XYZ")
+
+    def test_sn64_manifest_covers_every_pipeline_executable(self) -> None:
+        project, policy = fixture(self.root, "sn64")
+        setup.run(project, policy)
+        self.assertTrue((self.root / "tools/sn64_cc.py").is_file())
+        self.assertTrue((self.root / "tools/asn64.py").is_file())
+
+    def test_supply_restores_every_version_by_sha1(self) -> None:
+        setup.run(self.project, self.policy)
+        other = replace(
+            self.project.version("us"),
+            name="eu",
+            baserom=self.root / "other.z64",
+            baserom_sha1=hashlib.sha1(b"XYZ").hexdigest(),
+        )
+        project = replace(
+            self.project, versions=("us", "eu"), version_map={"us": self.project.version("us"), "eu": other}
+        )
+        source = self.root / "supply/nested"
+        source.mkdir(parents=True)
+        project.version("us").baserom.unlink()
+        (source / "unexpected-name").write_bytes(b"ABC")
+        with self.assertRaisesRegex(config.Held, "version.eu.*missing supplied SHA-1"):
+            setup.restore_roms(project, source.parent)
+        self.assertFalse(project.version("us").baserom.exists())
+        (source / "another-name").write_bytes(b"XYZ")
+        args = make_parser().parse_args(["setup", "--supply", str(source.parent)])
+        with redirect_stdout(io.StringIO()):
+            self.assertFalse(setup_command(args, project, self.policy))
+        self.assertEqual(project.version("us").baserom.read_bytes(), b"ABC")
+        self.assertEqual(other.baserom.read_bytes(), b"XYZ")
+        help_text = make_parser().format_help()
+        self.assertIn("setup", help_text)
+        with redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit):
+            make_parser().parse_args(["setup", "--help"])
+        self.assertIn("SHA-1", output.getvalue())
+
+    def test_compiler_status_refuses_failed_install_and_labels_optional(self) -> None:
+        from unbake.project import toolchain
+
+        setup.run(self.project, self.policy)
+        spec = toolchain.specification("fixture")
+        optional = replace(spec, id="optional")
+        with patch.object(toolchain, "registry", return_value={"fixture": spec, "optional": optional}):
+            for broken in (False, True):
+                with self.subTest(broken=broken):
+                    if broken:
+                        (self.policy.cache_root / "compilers/fixture/cc").unlink()
+                    with redirect_stdout(io.StringIO()) as output:
+                        status = int(
+                            setup_command(make_parser().parse_args(["setup", "--compilers"]), self.project, self.policy)
+                        )
+                    self.assertEqual(status, int(broken))
+                    self.assertIn("optional: optional; not installed", output.getvalue())
+                    if broken:
+                        self.assertIn("HELD(setup): fixture: required;", output.getvalue())
+                        self.assertNotIn("OK(setup): fixture", output.getvalue())

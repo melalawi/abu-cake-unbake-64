@@ -1,0 +1,39 @@
+[project]
+name = "fixture"
+title = "Synthetic three-function project"
+names_from = "us"
+versions = ["us", "us-rev1"]
+default_compiler = "ido-7.1"
+
+[paths]
+src = "src"
+include = ["include"]
+asm = "asm"
+tools = "tools"
+
+[version.us]
+baserom_sha1 = "21758de98b69907bcac48b82f833f14833a5f7cc"
+split = "versions/us/fixture.yaml"
+symbols = "versions/us/symbol_addrs.txt"
+macros = ["VERSION_US"]
+
+[version.us-rev1]
+baserom_sha1 = "eafd5564f7042dd6128314aadcb802dbb9ff8cfa"
+split = "versions/us-rev1/fixture.yaml"
+symbols = "versions/us-rev1/symbol_addrs.txt"
+macros = ["VERSION_US_REV1"]
+
+[compilers."ido-7.1"]
+cflags = ["-O2", "-G0", "-mips2"]
+
+[units]
+
+[build]
+as = "mips-linux-gnu-as"
+ld = "mips-linux-gnu-ld"
+objcopy = "mips-linux-gnu-objcopy"
+splat = "splat"
+asflags = ["-EB", "-mips2", "-G0"]
+cpp = "cpp"
+cppflags = []
+sn64_asflags = []

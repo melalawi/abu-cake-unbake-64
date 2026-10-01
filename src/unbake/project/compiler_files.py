@@ -1,0 +1,134 @@
+"""Verified compiler archives and atomic file publication."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import shutil
+import stat
+import tarfile
+import tempfile
+import urllib.request
+import zipfile
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+from unbake.project.config import Held
+
+if TYPE_CHECKING:
+    from unbake.project.toolchain import Download
+
+
+def relative(name: str) -> str:
+    path = PurePosixPath(name)
+    if (
+        not name
+        or path.is_absolute()
+        or ".." in path.parts
+        or not path.parts
+        or any(c.isspace() or c in "\\#" for c in name)
+    ):
+        raise Held("setup", f"unsafe file name {name!r}")
+    return name
+
+
+def sha(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def atomic_bytes(path: Path, content: bytes) -> None:
+    if path.exists() and path.read_bytes() == content:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".write-", delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            stream.write(content)
+            stream.close()
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def download(entry: Download, cache: Path) -> Path:
+    path = cache / "downloads" / entry.sha256
+    if path.exists():
+        actual = sha(path)
+        if actual != entry.sha256:
+            raise Held("setup", f"{path}: sha256 expected {entry.sha256}, found {actual}")
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".download-", delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            with urllib.request.urlopen(entry.url, timeout=60) as response:
+                shutil.copyfileobj(response, stream)
+            stream.close()
+            actual = sha(temporary)
+            if actual != entry.sha256:
+                raise Held("setup", f"{entry.url}: archive sha256 expected {entry.sha256}, found {actual}")
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return path
+
+
+def archive_files(path: Path, wanted: set[str]) -> dict[str, bytes]:
+    """Read pinned contents without ever extracting archive paths to disk."""
+    found = {}
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            for member in archive.infolist():
+                relative(member.filename)
+                mode = member.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise Held("setup", f"{path}: archive link {member.filename}")
+                if not member.is_dir():
+                    content = archive.read(member)
+                    digest = hashlib.sha256(content).hexdigest()
+                    if digest in wanted:
+                        found[digest] = content
+    else:
+        with tarfile.open(path) as archive:
+            for tar_member in archive:
+                relative(tar_member.name)
+                if not tar_member.isdir() and not tar_member.isfile():
+                    raise Held("setup", f"{path}: unsupported archive entry {tar_member.name}")
+                if tar_member.isfile():
+                    extracted = archive.extractfile(tar_member)
+                    if extracted is None:
+                        raise Held("setup", f"{path}: missing archive content {tar_member.name}")
+                    with extracted as stream:
+                        content = stream.read()
+                    digest = hashlib.sha256(content).hexdigest()
+                    if digest in wanted:
+                        found[digest] = content
+    return found
+
+
+def directory_files(source: Path, wanted: set[str], algorithm: str) -> dict[str, bytes]:
+    """Find supplied inputs by content digest, independently of their filenames."""
+    if not source.is_dir():
+        raise Held("setup", f"supply {source}: missing directory")
+    found = {}
+    for candidate in sorted(source.rglob("*")):
+        if candidate.is_file():
+            try:
+                with candidate.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, algorithm).hexdigest()
+                if digest in wanted:
+                    found[digest] = candidate.read_bytes()
+                    if found.keys() >= wanted:
+                        break
+            except OSError as error:
+                raise Held("setup", f"supply {candidate}: {error}") from error
+    return found
+
+
+def supplied_files(source: Path, wanted: set[str]) -> dict[str, bytes]:
+    if source.is_dir():
+        return directory_files(source, wanted, "sha256")
+    if source.is_file():
+        return archive_files(source, wanted)
+    raise Held("setup", f"compiler supply {source}: missing archive/directory")

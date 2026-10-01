@@ -1,0 +1,160 @@
+"""C layout records, project preprocessing, and registered layout evidence."""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, NoReturn, cast
+
+from unbake.decomp.needs import LayoutNeed, Need, register_deriver, register_resolver
+from unbake.layout.split import Edit
+from unbake.project.config import Held
+
+
+@dataclass(frozen=True)
+class Field:
+    name: str
+    type: str
+    offset: int
+    size: int
+    extent: tuple[int, ...]
+    declaration: str
+    fields: tuple[Field, ...] = ()
+    start: int = 0
+    end: int = 0
+
+
+@dataclass(frozen=True)
+class Layout:
+    name: str
+    kind: str
+    fields: tuple[Field, ...]
+    size: int
+    alignment: int
+    aliases: tuple[str, ...]
+    source: str
+    start: int
+    end: int
+    body_start: int
+    body_end: int
+
+
+def held(name: str, reason: str) -> NoReturn:
+    raise Held("structs", f"{name}: {reason}")
+
+
+def preprocess(source: Path, project: Any, policy: Any, version: str) -> str:
+    """Preprocess a file with explicit project includes, flags and VERSION macros."""
+    source = Path(source)
+    if not source.is_file():
+        held(str(source), "missing source")
+    if not project.include:
+        held("project.include", "missing include directories")
+    if not policy.cpp:
+        held("policy.cpp", "missing executable")
+    compiler = project.compiler_for(source)
+    flags: list[str] = []
+    options = iter(compiler.cflags)
+    for option in options:
+        if option in ("-I", "-D", "-U", "-include", "-isystem"):
+            value = next(options, None)
+            if value is None:
+                held(option, "missing preprocessing argument")
+            flags.extend((option, value))
+        elif option.startswith(("-I", "-D", "-U")):
+            flags.append(option)
+    command = [
+        str(policy.cpp),
+        *policy.cppflags,
+        "-P",
+        *flags,
+        *(f"-I{path}" for path in project.include),
+        *(f"-D{macro}" for macro in project.version(version).macros),
+        str(source.resolve()),
+    ]
+    try:
+        result = subprocess.run(command, cwd=project.root, capture_output=True, text=True)
+    except OSError as error:
+        held("policy.cpp", str(error))
+    if result.returncode:
+        held(str(source), result.stderr.strip() or f"preprocessing exit {result.returncode}")
+    return result.stdout
+
+
+def layouts(source: str | Path, *, project: Any = None, policy: Any = None, version: str | None = None) -> list[Layout]:
+    """Parse aggregate layouts; files use explicit project preprocessing facts."""
+    if isinstance(source, Path):
+        for name, value in (("project", project), ("policy", policy), ("VERSION", version)):
+            if value is None:
+                held(name, "required for file preprocessing")
+        source = preprocess(source, project, policy, cast(str, version))
+    if not isinstance(source, str):
+        held("source", "C text or Path required")
+    if re.search(r"^\s*#\s*(include|if|ifdef|ifndef|elif)\b", source, re.M):
+        held("source preprocessing", "conditional declarations and includes require project preprocessing")
+    from unbake.layout.structs_parser import Parser
+
+    return Parser(source).parse()
+
+
+def derive(context: Any) -> list[Need]:
+    """Read VERSION-specific declarations into serializable layout evidence."""
+
+    result: list[Need] = []
+    for version in context.artifacts:
+        for record in layouts(Path(context.source), project=context.project, policy=context.policy, version=version):
+            result.append(
+                LayoutNeed(
+                    version,
+                    record.name,
+                    [asdict(member) for member in record.fields],
+                    str(context.source),
+                    dict(kind=record.kind, size=record.size, alignment=record.alignment, aliases=list(record.aliases)),
+                )
+            )
+    return result
+
+
+def resolve(pending: list[Need], project: Any, policy: Any) -> list[Edit]:
+    """Fold proved layouts into shared headers before rebuilding includers."""
+
+    def member(row: dict[str, Any]) -> Field:
+        for key in Field.__dataclass_fields__:
+            if key not in row:
+                held(f"LayoutNeed.fields.{key}", "missing value")
+        return Field(**{**row, "extent": tuple(row["extent"]), "fields": tuple(member(item) for item in row["fields"])})
+
+    records = []
+    for need in pending:
+        if not isinstance(need, LayoutNeed):
+            held("need", "LayoutNeed required")
+        project.version(need.version)
+        if not isinstance(need.evidence, dict):
+            held(need.struct, "layout evidence required")
+        for key in ("kind", "size", "alignment", "aliases"):
+            if key not in need.evidence:
+                held(f"{need.struct}.{key}", "missing value")
+        records.append(
+            Layout(
+                need.struct,
+                need.evidence["kind"],
+                tuple(member(item) for item in cast(list[dict[str, Any]], need.fields)),
+                need.evidence["size"],
+                need.evidence["alignment"],
+                tuple(need.evidence["aliases"]),
+                need.source,
+                0,
+                0,
+                0,
+                0,
+            )
+        )
+    from unbake.layout.structs_fold import fold
+
+    return fold(records, project) if records else []
+
+
+register_deriver(derive)
+register_resolver(LayoutNeed, 30, resolve)

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unbake"
+version = "0.1.0"
+description = "Standalone N64 decompilation builds and matching"
+readme = "README.md"
+license = { file = "LICENSE" }
+classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)"]
+requires-python = ">=3.11"
+dependencies = ["pycparser"]
+
+[project.scripts]
+unbake = "unbake.cli.main:main"
+
+[project.optional-dependencies]
+dev = ["ruff==0.16.9", "mypy==2.3.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["unbake", "unbake.*"]
+
+[tool.setuptools.package-data]
+"unbake.project" = ["policy.toml", "compilers.toml"]
+"unbake.project_tools" = ["*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]

@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+/dist/
+/.venv/
+/build/
+/asm/
+baserom.*.z64
+.ruff_cache/
+.mypy_cache/

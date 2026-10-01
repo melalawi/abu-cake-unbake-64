@@ -1,0 +1,219 @@
+"""Match behavior with stored trial proofs and a controlled build implementation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+import unittest
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
+
+from unbake.decomp import drafts, needs
+from unbake.match import queue as match
+from unbake.project.config import Compiler, Held, Policy, Project, Version
+
+SCRATCH_ROOT = Path(tempfile.gettempdir())
+
+
+class MatchFixture(unittest.TestCase):
+    def setUp(self) -> None:
+        (SCRATCH_ROOT).mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=SCRATCH_ROOT)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "project"
+        self.root.mkdir()
+        self.sources = Path(self.temporary.name) / "submitted"
+        self.sources.mkdir()
+        self.src = self.root / "src"
+        self.src.mkdir()
+        self.versions = ("us", "eu")
+        version_map = {}
+        self.original = {}
+        for name in self.versions:
+            directory = self.root / "versions" / name
+            directory.mkdir(parents=True)
+            split = directory / "fixture.yaml"
+            split.write_text(
+                "segments:\n  - name: main\n    type: code\n    start: 0x1000\n"
+                "    subsegments:\n      - [0x1000, asm, text/alpha]\n"
+                "      - [0x1010, asm, beta]\n      - [0x1020, asm, gamma]\n"
+                "      - [0x1030, data, constants]\n  - [0x1040]\n"
+            )
+            symbols = directory / "symbol_addrs.txt"
+            symbols.write_text("alpha = 0x80001000;\nbeta = 0x80001010;\ngamma = 0x80001020;\n")
+            baserom = self.root / f"baserom.{name}.z64"
+            baserom.write_bytes(bytes(range(64)))
+            version_map[name] = Version(name, baserom, "a" * 40, split, symbols, ())
+            generation = self.root / "build" / f"{name}.0"
+            generation.mkdir(parents=True)
+            (generation / ".inuse").touch()
+            (generation / "object.o").write_bytes(b"original immutable output")
+            (self.root / "build" / name).symlink_to(generation.name)
+            self.original[name] = generation
+        tools = self.root / "tools"
+        tools.mkdir()
+        include = self.root / "include"
+        include.mkdir()
+        (include / "types.h").write_text("typedef int word;\n")
+        asm = self.root / "asm"
+        asm.mkdir()
+        compiler = Compiler("gcc-2.8.1-sn64", "sn64", tools / "cc", tools / "as", (), tools / "compiler.sha256")
+        self.project = Project(
+            root=self.root,
+            name="fixture",
+            title="Fixture",
+            names_from="us",
+            versions=self.versions,
+            src=self.src,
+            include=(include,),
+            asm=asm,
+            tools=tools,
+            compilers={compiler.id: compiler},
+            default_compiler=compiler.id,
+            units={},
+            version_map=version_map,
+        )
+        self.policy = Policy(
+            cores=2,
+            stall_trials=4,
+            assignment_idle_hours=1.0,
+            cache_root=Path(self.temporary.name) / "cache",
+            state_root=Path(self.temporary.name) / "state",
+            objdiff_cli=tools / "objdiff",
+            objdiff_sha256="b" * 64,
+            m2c=tools / "m2c",
+            splat=tools / "splat",
+            mips_ld=tools / "ld",
+            mips_objdump=tools / "objdump",
+            mips_readelf=tools / "readelf",
+            init_same_game_similarity=0.10,
+            init_split="functions",
+            init_probe_count=20,
+            mips_as=tools / "as",
+            mips_objcopy=tools / "objcopy",
+            cpp=tools / "cpp",
+            asflags=(),
+            cppflags=(),
+            sn64_asflags=(),
+            search_beam=2,
+            permuter_archive=tools / "permuter.tar",
+            permuter_sha256="c" * 64,
+        )
+        self.store = drafts.Store(self.policy, self.project)
+        (self.root / "Makefile").write_text("all:\n\ttrue\n")
+        self.calls: list[tuple[str, ...]] = []
+        self.fail: set[tuple[str, str]] = set()
+        self.interactions: list[set[str]] = []
+        self.on_build: Callable[[Path, Callable[[str], Path]], object] | None = None
+        self.addCleanup(patch.stopall)
+        patch.object(match.build, "build", self.build, create=True).start()
+        patch.object(match.build, "current_generation", self.current, create=True).start()
+
+    def current(self, project: Project, version: str) -> Path:
+        link = project.build_link(version)
+        if not link.is_symlink() or not link.resolve().is_dir():
+            raise Held("build", f"{link}: current generation missing")
+        return link.resolve()
+
+    def build(
+        self,
+        project: Project,
+        policy: Policy,
+        versions: list[str],
+        *,
+        tree: Path,
+        generation_for: Callable[[str], Path],
+    ) -> dict[str, SimpleNamespace]:
+        functions = sorted(path.stem for path in (tree / "src").glob("*.c"))
+        self.calls.append(tuple(functions))
+        self.assertTrue(tree.is_relative_to(self.root / "build" / "match"))
+        self.assertFalse((tree / "build").exists())
+        for function in functions:
+            for version in versions:
+                split = (tree / project.version(version).split.relative_to(self.root)).read_text()
+                self.assertIn(f", c, {function}]", split)
+        inputs = {v: self.current(project, v) for v in versions}
+        if self.on_build:
+            self.on_build(tree, generation_for)
+        results = {}
+        for version in versions:
+            generation = generation_for(version)
+            self.assertEqual(generation.parent, self.root / "build")
+            self.assertNotEqual(generation, self.current(project, version))
+            self.assertEqual((generation / "object.o").read_bytes(), (inputs[version] / "object.o").read_bytes())
+            self.assertNotEqual((generation / "object.o").stat().st_ino, (inputs[version] / "object.o").stat().st_ino)
+            (generation / "object.o").write_bytes(("compiled " + ",".join(functions)).encode())
+            log = generation / "build.log"
+            log.write_text("compare\n")
+            ok = not any((function, version) in self.fail for function in functions)
+            ok = ok and not any(group <= set(functions) for group in self.interactions)
+            results[version] = SimpleNamespace(
+                version=version, ok=ok, sha1_line="fixture: OK" if ok else "FAIL", log=log, generation=generation
+            )
+        return results
+
+    def draft(
+        self,
+        function: str,
+        content: str | None = None,
+        *,
+        identical: bool = True,
+        versions: Iterable[str] | None = None,
+        pending: list[needs.Need] | None = None,
+    ) -> Path:
+        source = self.sources / f"{function}.c"
+        source.write_text(content if content is not None else f"int {function}(void) {{ return 0; }}\n")
+        self.prove(source, identical=identical, versions=versions, pending=pending)
+        return source
+
+    def prove(
+        self,
+        source: Path,
+        *,
+        identical: bool = True,
+        versions: Iterable[str] | None = None,
+        pending: list[needs.Need] | None = None,
+    ) -> None:
+        selected = self.versions if versions is None else versions
+        typed = dict.fromkeys(("register", "order", "immediate", "relocation", "inserted", "missing", "changed"), 0)
+        trial = SimpleNamespace(
+            function=source.stem,
+            source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            identical_everywhere=identical,
+            needs=[] if pending is None else pending,
+            preconditions=[],
+            next_command="match submit " + source.name,
+            compares={
+                v: SimpleNamespace(version=v, identical=4 if identical else 3, of=4, typed=typed.copy(), lines=[])
+                for v in selected
+            },
+        )
+        self.store.add(trial, source, {v: 100 if identical else 75 for v in selected})
+
+    def remove_proofs(self, function: str) -> None:
+        rows = [row for row in self.store.history() if row["function"] != function]
+        (self.store.root / "trials.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    def queue(self, *functions: str) -> None:
+        for function in functions:
+            match.submit(self.project, self.policy, self.draft(function))
+
+    def queued(self) -> list[dict[str, Any]]:
+        path = self.root / "data" / "match-queue.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def matched(self) -> list[dict[str, Any]]:
+        path = self.policy.state_root / self.project.name / "receipts" / "match.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def assert_untouched(self) -> None:
+        self.assertFalse(list(self.src.glob("*.c")))
+        self.assertEqual(self.matched(), [])
+        for version in self.versions:
+            self.assertEqual(self.current(self.project, version), self.original[version])
+            self.assertEqual((self.original[version] / "object.o").read_bytes(), b"original immutable output")
+            self.assertNotIn(", c, ", self.project.version(version).split.read_text())
