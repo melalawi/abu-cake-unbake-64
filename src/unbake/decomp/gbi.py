@@ -24,7 +24,7 @@ from unbake.decomp.gbi_source import (
     typedefs,
     word_builder,
 )
-from unbake.project.config import Held, Project
+from unbake.project.config import Held, Policy, Project
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 
@@ -431,11 +431,21 @@ LEXICAL = re.compile(
 )
 ACCESS = r"(?P<ptr>[A-Za-z_]\w*(?:\s*\[[^\]\n]+\])*)\s*(?P<access>->|\.)(?:\s*words\s*\.)?\s*w0"
 PAIR = re.compile(
-    ACCESS + r"\s*=\s*(?P<w0>[^;]+);\s*(?P=ptr)\s*(?P=access)(?:\s*words\s*\.)?\s*w1\s*=\s*(?P<w1>[^;]+);", re.S
+    ACCESS
+    + r"\s*=\s*(?P<w0>[^;]+);\s*"
+    + r"(?P<middle>(?:[A-Za-z_]\w*\s*=\s*[^;{}]+;\s*)*?)"
+    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*\.)?\s*w1\s*=\s*(?P<w1>[^;]+);",
+    re.S,
+)
+REVERSE_PAIR = re.compile(
+    ACCESS.removesuffix("w0")
+    + r"w1\s*=\s*(?P<w1>[^;]+);\s*(?P<middle>)"
+    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*\.)?\s*w0\s*=\s*(?P<w0>[^;]+);",
+    re.S,
 )
 
 
-def lower(source: str, variant: str | None = None) -> Lowered:
+def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True) -> Lowered:
     result = Lowered(source)
     definitions = macros(source)
     shiftl = definitions.get("_SHIFTL")
@@ -444,7 +454,11 @@ def lower(source: str, variant: str | None = None) -> Lowered:
     )
     masked = LEXICAL.sub(lambda match: re.sub(r"[^\n]", " ", match[0]), source)
     edits = []
-    for match in PAIR.finditer(masked):
+    pairs: list[re.Match[str]] = []
+    for match in sorted([*PAIR.finditer(masked), *REVERSE_PAIR.finditer(masked)], key=lambda match: match.start()):
+        if not pairs or match.start() >= pairs[-1].end():
+            pairs.append(match)
+    for match in pairs:
         w0, w1 = (expand(source[match.start(key) : match.end(key)].strip(), definitions) for key in ("w0", "w1"))
         line = source.count("\n", 0, match.start()) + 1
         try:
@@ -459,8 +473,22 @@ def lower(source: str, variant: str | None = None) -> Lowered:
             before = masked[masked.rfind("\n", 0, match.start()) + 1 : match.start()]
             if re.search(r"\b(?:if|while|for)\s*\([^{};]*\)\s*$", before):
                 raise Ambiguous("only the first store is controlled by a branch")
-            if "words" in w0 + w1:
+            if re.search(r"(?:->|\.)\s*(?:words\s*\.\s*)?w[01]\b", w0 + " " + w1):
                 raise Ambiguous("operand reads command storage")
+            middle = source[match.start("middle") : match.end("middle")].strip()
+            if middle:
+                for statement in match["middle"].split(";"):
+                    if not statement.strip():
+                        continue
+                    target, value = statement.split("=", 1)
+                    target = target.strip()
+                    if (
+                        not pure(value)
+                        or re.search(r"->|\.|\[|\*\s*[A-Za-z_(]", value)
+                        or re.search(r"\b" + re.escape(target) + r"\b", w0 + " " + match["ptr"])
+                        or re.search(r"\bvolatile\b[^;{}]*\b" + re.escape(target) + r"\b", masked)
+                    ):
+                        raise Ambiguous("intervening assignment can affect the first store")
             name, args = decode(w0, w1, variant)
         except Ambiguous as error:
             try:
@@ -481,13 +509,13 @@ def lower(source: str, variant: str | None = None) -> Lowered:
         if prefix and suffix:
             pointer = source[prefix.start(1) : prefix.end(1)].strip()
             start, end = prefix.start(), end + suffix.end()
-        if not scoped and len(re.findall(r"\b" + re.escape(match["ptr"]) + r"\b", masked)) == 4:
+        if fold_pointers and not scoped and len(re.findall(r"\b" + re.escape(match["ptr"]) + r"\b", masked)) == 4:
             assigned = re.search(r"\b" + re.escape(match["ptr"]) + r"\s*=\s*([^;{}]+);\s*$", masked[:start])
             if assigned and re.search(r"\bGfx\s*\*\s*" + re.escape(match["ptr"]) + r"\s*;", masked):
                 pointer = source[assigned.start(1) : assigned.end(1)].strip()
                 start = assigned.start()
         comments = re.findall(r"/\*.*?\*/|//[^\n]*", source[start:end], re.S)
-        text = "\n".join([*comments, f"{name}({', '.join([pointer, *args])});"])
+        text = "\n".join([*comments, *([middle] if middle else []), f"{name}({', '.join([pointer, *args])});"])
         if scoped and re.match(r"\s*else\b", masked[end:]):
             text = text.removesuffix(";")
         edits.append((start, end, text))
@@ -543,9 +571,8 @@ def lower(source: str, variant: str | None = None) -> Lowered:
         if converted == len(sites):
             edits.append((macro.start, macro.end, ""))
     # Report unmatched writes as well as paired commands.
-    starts = {match.start() for match in PAIR.finditer(masked)}
     for match in re.finditer(ACCESS + r"\s*=", masked):
-        if match.start() not in starts:
+        if not any(pair.start() <= match.start() < pair.end() for pair in pairs):
             result.raw.append(
                 Raw(
                     source.count("\n", 0, match.start()) + 1,
@@ -579,7 +606,7 @@ def microcode(project: Project) -> str | None:
 def install(project: Project) -> str:
     if not project.include:
         raise Held("gbi", "paths.include: required include directory")
-    destination = project.include[0] / "gbi.h"
+    destination = project.include[0] / "unbake_gbi.h"
     content = HEADER.read_text()
     if destination.is_symlink() or (destination.exists() and destination.read_text() != content):
         raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
@@ -592,7 +619,7 @@ def install(project: Project) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists():
         destination.write_text(content)
-    return '#include "gbi.h"\n'
+    return '#include "unbake_gbi.h"\n'
 
 
 def canonical_types(project: Project, source: str) -> str:
@@ -651,7 +678,9 @@ def canonical_types(project: Project, source: str) -> str:
     return source
 
 
-def rewrite(project: Project, files: list[Path], *, all_files: bool = False) -> dict[str, object]:
+def rewrite(project: Project, policy: Policy, files: list[Path], *, all_files: bool = False) -> dict[str, object]:
+    from unbake.decomp.gbi_proof import preserve
+
     if bool(files) == all_files:
         raise Held("gbi", "provide FILE... or --all")
     paths = sorted(project.src.rglob("*.c")) if all_files else files
@@ -678,17 +707,43 @@ def rewrite(project: Project, files: list[Path], *, all_files: bool = False) -> 
         if result.macros:
             result.source = canonical_types(project, result.source)
             prepared.append((path, source, result))
-            counts.update(result.macros)
     if prepared:
         include = install(project)
         for path, source, result in prepared:
             output = result.source
-            if '#include "gbi.h"' not in output:
+            if include.strip() not in output:
                 # Types must precede GBI use; macros expand at their call sites.
                 output = include + output
             if output != source:
+                try:
+                    preserve(project, policy, path, source, output)
+                except (Held, ValueError) as error:
+                    conservative = lower(source, variant, fold_pointers=False)
+                    alternate = canonical_types(project, conservative.source)
+                    if include.strip() not in alternate:
+                        alternate = include + alternate
+                    if alternate != output:
+                        try:
+                            preserve(project, policy, path, source, alternate)
+                        except (Held, ValueError):
+                            pass
+                        else:
+                            path.write_text(alternate)
+                            changed.append(str(path.relative_to(project.root)))
+                            counts.update(conservative.macros)
+                            continue
+                    raw.append(
+                        {
+                            "file": str(path.relative_to(project.root)),
+                            "line": 1,
+                            "command": "rewrite",
+                            "reason": f"{path.stem}: {error}",
+                        }
+                    )
+                    continue
                 path.write_text(output)
                 changed.append(str(path.relative_to(project.root)))
+                counts.update(result.macros)
     return {
         "variant": variant,
         "files_rewritten": len(changed),

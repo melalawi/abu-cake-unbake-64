@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 from tests.decomp.support import fixture
 from unbake.decomp import gbi
@@ -140,6 +141,64 @@ void f(void) {
         self.assertEqual(result.source, source)
         self.assertIn("_SHIFTL", result.raw[0].reason)
 
+    def test_intervening_local_assignments_preserve_dependencies(self) -> None:
+        text = "void f(Gfx *p) { p->words.w0=0xE7000000; next=old+1; p->words.w1=0; }"
+        result = gbi.lower(text, "f3dex2")
+        self.assertEqual(result.macros, {"gDPPipeSync": 1})
+        self.assertLess(result.source.index("next=old+1;"), result.source.index("gDPPipeSync"))
+        for assignment in ("color=7", "next=read()", "next=*input", "next=input[0]"):
+            text = f"void f(Gfx *p) {{ p->words.w0=0xF7000000; {assignment}; p->words.w1=color; }}"
+            # Assigning a w1 dependency is safe, but reading aliased memory or
+            # calling a function between stores must remain in original order.
+            result = gbi.lower(text, "f3dex2")
+            if assignment == "color=7":
+                self.assertIn("gDPSetFillColor", result.source)
+            else:
+                self.assertEqual(result.source, text)
+        text = "void f(Gfx *p) {p->words.w0=0xF7000000 | color; color=7; p->words.w1=0;}"
+        self.assertEqual(gbi.lower(text, "f3dex2").source, text)
+        text = "void f(Gfx *p) {p->words.w1=0; p->words.w0=0xE7000000;}"
+        self.assertEqual(gbi.lower(text, "f3dex2").macros, {"gDPPipeSync": 1})
+        text = "void f(Gfx *p) {p->words.w0=0xE7000000; p->words.w1=0; p->words.w0=0xE6000000;}"
+        result = gbi.lower(text, "f3dex2")
+        self.assertEqual(result.macros, {"gDPPipeSync": 1})
+        self.assertEqual(len(result.raw), 1)
+
+    def test_codegen_refusal_keeps_original_source_and_names_function(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, policy, _ = fixture(Path(directory))
+            code = project.src / "alpha.c"
+            original = "typedef struct {unsigned w0,w1;} Gfx; void alpha(Gfx *p) {p->w0=0xE7000000;p->w1=0;}"
+            code.write_text(original)
+            with patch("unbake.decomp.gbi_proof.preserve", side_effect=Held("gbi", "alpha: rewrite changes codegen")):
+                result = gbi.rewrite(project, cast(Policy, policy), [code])
+            self.assertEqual(code.read_text(), original)
+            self.assertEqual(result["files_rewritten"], 0)
+            self.assertEqual(result["macros"], {})
+            self.assertIn("alpha:", str(result["raw"]))
+
+    def test_install_does_not_replace_a_project_gbi_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, _, _ = fixture(Path(directory))
+            existing = project.include[0] / "gbi.h"
+            existing.write_text("/* Project-owned graphics declarations. */\n")
+            self.assertEqual(gbi.install(project), '#include "unbake_gbi.h"\n')
+            self.assertEqual(existing.read_text(), "/* Project-owned graphics declarations. */\n")
+
+    def test_failed_pointer_folding_retries_without_moving_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project, policy, _ = fixture(Path(directory))
+            code = project.src / "alpha.c"
+            code.write_text(
+                "typedef struct {unsigned w0,w1;} Gfx; extern Gfx *dl;\n"
+                "void alpha(void) { Gfx *p; p=dl++; p->w0=0xE7000000; p->w1=0; }\n"
+            )
+            with patch("unbake.decomp.gbi_proof.preserve", side_effect=[Held("gbi", "alpha: changed codegen"), None]):
+                result = gbi.rewrite(project, cast(Policy, policy), [code])
+            self.assertEqual(result["files_rewritten"], 1)
+            self.assertIn("p=dl++;", code.read_text())
+            self.assertIn("gDPPipeSync(p)", code.read_text())
+
     def test_static_forms(self) -> None:
         source = "Gfx list[] = {{{0xE7000000, 0}}, {{0xDF000000, 0}}, {{0xAB000000, 0}}};"
         result = gbi.lower(source, "f3dex2")
@@ -220,7 +279,7 @@ int main(void) { Gfx commands[3], *p=commands; int x=7;
 
     def test_cli_rewrite_install_and_idempotence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, _, _ = fixture(Path(directory))
+            project, policy, _ = fixture(Path(directory))
             config = project.root / "config.toml"
             config.write_text(config.read_text().replace("cppflags=[]", 'cppflags=["-DF3DEX_GBI_2"]'))
             # This fixture is IDO; definitions must also be found in raw project
@@ -230,15 +289,17 @@ int main(void) { Gfx commands[3], *p=commands; int x=7;
                 "typedef union { struct { unsigned int w0,w1; } words; } Gfx;\n"
                 "void alpha(Gfx *p) {p->words.w0=0xE7000000;p->words.w1=0;}\n"
             )
-            result = gbi.rewrite(project, [code])
+            with patch("unbake.decomp.gbi_proof.preserve") as proof:
+                result = gbi.rewrite(project, cast(Policy, policy), [code])
+                proof.assert_called_once()
             self.assertEqual(result["files_rewritten"], 1)
             self.assertEqual(result["macros"], {"gDPPipeSync": 1})
-            self.assertTrue((project.include[0] / "gbi.h").is_file())
-            self.assertIn('#include "gbi.h"', code.read_text())
-            self.assertEqual(gbi.rewrite(project, [], all_files=True)["files_rewritten"], 0)
+            self.assertTrue((project.include[0] / "unbake_gbi.h").is_file())
+            self.assertIn('#include "unbake_gbi.h"', code.read_text())
+            self.assertEqual(gbi.rewrite(project, cast(Policy, policy), [], all_files=True)["files_rewritten"], 0)
             json.dumps(result)
             with self.assertRaises(Held):
-                gbi.rewrite(project, [])
+                gbi.rewrite(project, cast(Policy, policy), [])
 
     def test_draft_postpass(self) -> None:
         import sys
@@ -259,4 +320,4 @@ int main(void) { Gfx commands[3], *p=commands; int x=7;
             policy.m2c = tool
             draft = m2c.draft(project, cast(Policy, policy), "alpha", "us", root / "scratch")
             self.assertIn("gDPPipeSync", draft.read_text())
-            self.assertIn('#include "gbi.h"', draft.read_text())
+            self.assertIn('#include "unbake_gbi.h"', draft.read_text())

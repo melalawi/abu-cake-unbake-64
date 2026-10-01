@@ -127,7 +127,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
     elif args.verb == "gbi":
         from unbake.decomp import gbi
 
-        print(json.dumps(gbi.rewrite(project, args.files, all_files=args.all_files), indent=2))
+        print(json.dumps(gbi.rewrite(project, policy, args.files, all_files=args.all_files), indent=2))
     elif args.verb == "search":
         from unbake.search import available, methods
         from unbake.search.core import run as search_run
