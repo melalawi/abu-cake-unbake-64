@@ -149,5 +149,5 @@ class FrictionTests(unittest.TestCase):
         path.write_text(content)
         with self.assertRaises(Held) as error:
             store.history()
-        self.assertIn("function", error.exception.reason)
+        self.assertIn("work is missing", error.exception.reason)
         self.assertEqual(path.read_text(), content)
