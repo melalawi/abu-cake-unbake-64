@@ -1,6 +1,7 @@
 """Current input checks and atomic overlay publication."""
 
 from dataclasses import replace
+from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.decomp import work
@@ -57,6 +58,18 @@ class CurrentTrialTests(MatchFixture):
         changed = replace(self.project, workspace_id="00000000-0000-4000-8000-000000000003")
         with self.assertRaisesRegex(Held, "trial.source_sha256"):
             proof.ensure(changed, self.policy, source, self.versions)
+
+    def test_type_feedback_failure_preserves_truthful_publication_receipts(self) -> None:
+        source = self.draft("alpha")
+        with patch("unbake.decomp.type_context.feedback", side_effect=Held("types", "types.conflict: named conflict")):
+            lines = queue.publish_source(self.project, self.policy, source)
+        self.assertTrue(any(line.startswith("OK(match): alpha matched") for line in lines), lines)
+        self.assertEqual(sum(line.startswith("OK(submit):") for line in lines), len(self.versions))
+        self.assertTrue(
+            any(line.startswith("HELD(types): types.conflict:") and "was published" in line for line in lines), lines
+        )
+        self.assertTrue((self.project.src / "alpha.c").is_file())
+        self.assertEqual(self.queued(), [])
 
     def test_overlay_is_published_only_with_successful_rom_proof(self) -> None:
         directory = self.project.drafts / "alpha"

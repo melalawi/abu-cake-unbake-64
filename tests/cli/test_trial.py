@@ -60,6 +60,7 @@ class TrialTests(MainCase):
             generation=generation,
             type_context="",
             announce=False,
+            use_type_db=True,
         )
         persisted.assert_called_once_with(self.project, manifest)
         self.assertTrue((self.project.drafts / "alpha/alpha.c").is_file())

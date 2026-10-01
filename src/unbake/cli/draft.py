@@ -16,6 +16,7 @@ from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 def register(phases: Subparsers) -> None:
     parser = phases.add_parser("draft", phase="draft", help="Draft a function using the configured naming version.")
     parser.add_argument("function", nargs="?", metavar="FUNCTION")
+    parser.add_argument("--without-type-db", action="store_true", help="Diagnostic baseline: omit solved type context.")
     parser.add_argument("--struct", metavar="ID", help="Draft an evidenced shared struct (implementation pending).")
 
 
@@ -34,7 +35,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         policy = load_policy(local)
     versions = owning_versions(project, function, None)
     naming = versions[0]
-    database, context = type_context.required(project)
+    database, context = ("", "") if args.without_type_db else type_context.required(project)
     destination = project.drafts / function
     source = destination / (function + ".c")
     refresh = source.exists() and function in type_context.redrafts(project)
@@ -50,6 +51,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             generation=pinned[naming][0],
             type_context=context,
             announce=False,
+            use_type_db=not args.without_type_db,
         )
         if refresh:
             archive = project.work / (function + ".redraft." + uuid4().hex)
@@ -59,6 +61,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         shutil.copytree(generated.parent / "overlay", destination / "overlay")
         shutil.copyfile(generated.parent / "overlay.json", destination / "overlay.json")
         work.persist(project, work.identity(project, source, versions, pinned=pinned, policy=policy))
-    type_context.clear_redraft(project, function, database)
+    if not args.without_type_db:
+        type_context.clear_redraft(project, function, database)
     suggest(command(project.root, "try") + " " + shlex.quote(str(source)))
     return receipt("draft", [f"draft_path: {source}", f"versions: {', '.join(versions)}; draft version: {naming}"])

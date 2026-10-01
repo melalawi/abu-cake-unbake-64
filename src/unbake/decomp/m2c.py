@@ -111,6 +111,7 @@ def _draft(
     generation: Path | None = None,
     type_context: str = "",
     announce: bool = True,
+    use_type_db: bool = True,
 ) -> Path:
     if not isinstance(function, str) or not re.fullmatch(r"[A-Za-z_]\w*", function):
         raise Held("m2c", "function is required and must be a C identifier")
@@ -131,6 +132,9 @@ def _draft(
     work = Path(tempfile.mkdtemp(prefix=function + ".m2c.", dir=directory))
     project = draft_work.overlay(project, work)
     headers = _headers(project)
+    if not use_type_db:
+        generated = {root / "shared" / name for root in project.include for name in ("typemap.h", "prototypes.h")}
+        headers = [(path, name) for path, name in headers if path not in generated]
     context = work / "context.c"
     examples = similar.retrieve(project, function, v)
     examples_context = similar.context(examples)
@@ -276,11 +280,20 @@ def draft(
     generation: Path | None = None,
     type_context: str = "",
     announce: bool = True,
+    use_type_db: bool = True,
 ) -> Path:
     """Name the selected function on every refusal from the draft boundary."""
     try:
         return _draft(
-            project, policy, function, v, scratch, generation=generation, type_context=type_context, announce=announce
+            project,
+            policy,
+            function,
+            v,
+            scratch,
+            generation=generation,
+            type_context=type_context,
+            announce=announce,
+            use_type_db=use_type_db,
         )
     except Held as error:
         if function and not error.reason.startswith(function + ":"):

@@ -138,7 +138,7 @@ def generation(project: Project, version: str, current: Path, holds: ExitStack) 
 
 
 def chunk_stale_sources(generation: Path, tools: Path) -> None:
-    """Let the ordinary Make cold-chunk rule refresh outdated C receipts.
+    """Let the ordinary Make cold-chunk rule refresh outdated C/assembly receipts.
 
     Keep objects and dependency files: the compiler still verifies their content
     keys, while Make avoids starting one interpreter per stale source receipt.
@@ -149,9 +149,10 @@ def chunk_stale_sources(generation: Path, tools: Path) -> None:
     if not inputs:
         return
     newest = max(path.stat().st_mtime_ns for path in inputs)
-    for receipt in (generation / "obj" / "src").rglob("*.built"):
-        if not receipt.is_symlink() and receipt.stat().st_mtime_ns < newest:
-            receipt.unlink()
+    for kind in ("src", "asm"):
+        for receipt in (generation / "obj" / kind).rglob("*.built"):
+            if not receipt.is_symlink() and receipt.stat().st_mtime_ns < newest:
+                receipt.unlink()
 
 
 def project_at(project: Project, tree: Path) -> Project:

@@ -224,8 +224,9 @@ def run(project: Project, policy: Policy, *, function: str | None = None) -> lis
             targets = dict(draft.row["work"]["target_sha256"])
             try:
                 type_context.feedback(project, draft.function, source, draft.versions, targets, policy=policy)
-            except Held as error:
-                receipts.append(f"HELD(types): {draft.function} published; {error.reason}")
+            except (Held, OSError, ValueError, RuntimeError) as error:
+                reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"
+                receipts.append(f"HELD(types): {reason}; {draft.function} was published")
         return receipts
     except Held as error:
         receipts.extend(f"HELD(match): {draft.function}: {error.reason}" for draft in candidates)
