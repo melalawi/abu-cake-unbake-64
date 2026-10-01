@@ -29,6 +29,12 @@ class BuildResult:
 def lock(project: Project) -> Iterator[None]:
     """Serialize project build writes with generation publication."""
     path = project.root / "build" / ".lock"
+    with _lock(path):
+        yield
+
+
+@contextmanager
+def _lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise Held("build", f"{path}: build lock must not be a symlink")
@@ -49,6 +55,27 @@ def current_generation(project: Project, v: str) -> Path:
     if not generation.is_dir():
         raise Held("build", f"{link}: generation {generation} is not a directory")
     return generation
+
+
+@contextmanager
+def pin(generation: Path) -> Iterator[Path]:
+    """Keep a generation alive; acquire under lock(project) before releasing it."""
+    with (generation / ".inuse").open("a+b") as stream:
+        fcntl.flock(stream, fcntl.LOCK_SH)
+        yield generation
+
+
+def discard_generation(generation: Path) -> None:
+    """Drop an abandoned generation only after all readers release their pins."""
+    with _lock(generation.parent / ".lock"):
+        if not generation.is_dir():
+            return
+        with (generation / ".inuse").open("a+b") as stream:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            shutil.rmtree(generation, ignore_errors=True)
 
 
 def build(
