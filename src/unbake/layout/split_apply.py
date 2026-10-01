@@ -70,12 +70,10 @@ def write(path: Path, text: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def apply(project: Project, policy: Policy, edits: Iterable[split.Edit], *, staged: bool = False) -> list[BuildResult]:
-    from unbake.project import build
-
+def _validated(project: Project, edits: Iterable[split.Edit]) -> tuple[list[split.Edit], list[str]]:
     edits = coalesce(edits)
     if not edits:
-        return []
+        return [], []
     allowed = {
         Path(path).resolve(): v
         for v in project.versions
@@ -106,21 +104,32 @@ def apply(project: Project, policy: Policy, edits: Iterable[split.Edit], *, stag
             version = project.version(v)
             if path.resolve() in (Path(version.split).resolve(), Path(version.symbols).resolve()):
                 affected.add(v)
-    versions = [v for v in project.versions if v in affected]
-    if staged:
-        staged_written: list[tuple[split.Edit, bool]] = []
-        try:
-            for edit in edits:
-                existed = Path(edit.path).exists()
-                write(edit.path, edit.after)
-                staged_written.append((edit, existed))
-        except BaseException:
-            for edit, existed in reversed(staged_written):
-                if existed:
-                    write(edit.path, edit.before)
-                else:
-                    Path(edit.path).unlink(missing_ok=True)
-            raise
+    return edits, [v for v in project.versions if v in affected]
+
+
+def _write_staging(project: Project, edits: Iterable[split.Edit]) -> None:
+    """Write validated edits in a private tree before its full publication proof."""
+    edits, _ = _validated(project, edits)
+    written: list[tuple[split.Edit, bool]] = []
+    try:
+        for edit in edits:
+            existed = Path(edit.path).exists()
+            write(edit.path, edit.after)
+            written.append((edit, existed))
+    except BaseException:
+        for edit, existed in reversed(written):
+            if existed:
+                write(edit.path, edit.before)
+            else:
+                Path(edit.path).unlink(missing_ok=True)
+        raise
+
+
+def apply(project: Project, policy: Policy, edits: Iterable[split.Edit]) -> list[BuildResult]:
+    from unbake.project import build
+
+    edits, versions = _validated(project, edits)
+    if not edits:
         return []
     generations: dict[str, Path] = {}
     links: dict[str, str] = {}
@@ -135,7 +144,7 @@ def apply(project: Project, policy: Policy, edits: Iterable[split.Edit], *, stag
             links[v] = os.readlink(generation_link)
             number = 1
             while True:
-                generation = project.root / "build" / f"{v}.{number}"
+                generation = project.build / f"{v}.{number}"
                 try:
                     generation.mkdir()
                     break

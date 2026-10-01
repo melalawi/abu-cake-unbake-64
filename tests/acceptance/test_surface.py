@@ -1,0 +1,103 @@
+"""Public shell onboarding and retired command acceptance."""
+
+import importlib.util
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import tomllib
+import unittest
+from pathlib import Path
+
+
+class CutoverSurfaceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.source = Path(__file__).resolve().parents[2] / "src"
+        self.env = dict(
+            os.environ,
+            PYTHONPATH=str(self.source),
+            PYTHONNOUSERSITE="1",
+            UNBAKE_POLICY=str(self.root / "missing-policy.toml"),
+        )
+
+    def command(self, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            [sys.executable, "-m", "unbake", *arguments],
+            cwd=cwd or self.root,
+            env=self.env,
+            input="",
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        output = result.stdout + result.stderr
+        self.assertNotIn("Traceback", output)
+        self.assertEqual(len(re.findall(r"(?m)^Next: .+$", output)), 1, output)
+        stream = result.stderr if "Next:" in result.stderr else result.stdout
+        self.assertTrue(stream.rstrip().splitlines()[-1].startswith("Next: "), output)
+        return result
+
+    def test_init_generates_staged_onboarding_without_policy_or_commit(self) -> None:
+        project = self.root / "A name with spaces"
+        result = self.command("init", str(project))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.root / "missing-policy.toml").exists())
+        self.assertFalse((project / "build").exists())
+        with (project / "config.toml").open("rb") as source:
+            config = tomllib.load(source)
+        self.assertEqual(config["project"]["state"], "awaiting-roms")
+        self.assertNotIn("compilers", config)
+        self.assertNotIn("units", config)
+        expected = (self.source / "unbake/project_tools/CONTRIBUTING.pending.md").read_bytes()
+        self.assertEqual((project / "CONTRIBUTING.md").read_bytes(), expected)
+        self.assertNotIn("toolkit", expected.decode().lower())
+        for heading in ("Install", "New project", "Next command"):
+            self.assertIn("## " + heading, expected.decode())
+        result = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=project, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        rom = project / config["paths"]["roms"] / "arbitrary.z64"
+        result = subprocess.run(["git", "check-ignore", str(rom)], cwd=project, capture_output=True)
+        self.assertEqual(result.returncode, 0)
+        result = self.command("setup", cwd=project)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("setup.roms:", result.stdout)
+
+    def test_retired_spellings_are_parse_refusals(self) -> None:
+        for operands in (
+            ("init", "new", "--rom", "absent.z64"),
+            ("init", "new", "--rompath", "absent"),
+            ("init", "new", "--split", "files"),
+            ("setup", "--new", "absent.z64"),
+            ("rodata", "migrate", "alpha"),
+            ("decomp", "draft", "alpha"),
+            ("decomp", "try", "alpha.c"),
+            ("match", "submit", "alpha.c"),
+            ("match", "run"),
+        ):
+            with self.subTest(operands=operands):
+                result = self.command(*operands)
+                self.assertEqual(result.returncode, 1)
+                self.assertRegex(result.stdout + result.stderr, "invalid choice|unrecognized arguments")
+        self.assertFalse((self.root / "new").exists())
+
+    def test_converter_modules_and_alternate_wrappers_are_absent(self) -> None:
+        for module in (
+            "unbake.layout.rodata_migrate",
+            "unbake.layout.rodata_bulk",
+            "unbake.layout.rodata_switch",
+            "unbake.decomp.ledger",
+        ):
+            with self.subTest(module=module):
+                self.assertIsNone(importlib.util.find_spec(module))
+        from unbake.cli import rodata
+        from unbake.decomp import declarations, similar
+        from unbake.match import free
+
+        for module in (rodata, declarations, similar, free):
+            with self.subTest(module=module.__name__):
+                self.assertFalse(hasattr(module, "main"))

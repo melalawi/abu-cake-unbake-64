@@ -1,11 +1,10 @@
-"""Read-only ownership and all-VERSION private migration command regressions."""
+"""Read-only ownership and private string/table layout regressions."""
 
 import argparse
 import contextlib
 import io
 import json
 import struct
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,10 +15,7 @@ from unittest.mock import patch
 from tests.decomp.support import assemble
 from tests.layout.test_split import ProjectFixture
 from unbake.cli import rodata
-from unbake.layout import split
-from unbake.layout.rodata_bulk import Group, hosts, migrate_all
-from unbake.layout.rodata_migrate import migrate
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Policy, Project
 from unbake.project_tools.elf import Object
 from unbake.project_tools.layout import resident
 from unbake.project_tools.literal_layout import arrange
@@ -27,53 +23,6 @@ from unbake.project_tools.rodata import relocated
 
 
 class RodataCommandTests(unittest.TestCase):
-    def test_shared_owners_use_their_common_file(self) -> None:
-        from unbake.layout.rodata_owners import Constant, scan
-
-        census = scan(self.project, "us")
-        census.functions = [
-            split.Function("us", name, 0x10, 0x20, 0x80001000, "common", "c", ()) for name in ("alpha", "beta")
-        ]
-        (self.fixture.src / "common.c").write_text("void alpha(void) {}\nvoid beta(void) {}\n")
-        build = self.fixture.build_link("us")
-        (build / "obj/src").mkdir()
-        (build / "obj/src/common.o").write_bytes((build / "obj/asm/alpha.o").read_bytes())
-        row = next(
-            row
-            for segment in split.layout(self.fixture.version("us").split)[2]
-            for row in segment.rows
-            if row.kind == "bin"
-        )
-        item = Constant(0x80003000, 0x80003004, "float", "resident", "load", [], owners={"alpha", "beta"})
-        group = Group(0x40, 0x44, item.address, row, [item])
-        hosts(self.project, census, [group])
-        self.assertEqual(group.host, "common")
-
-    def test_bulk_includes_shared_storage_and_preserves_access_expressions(self) -> None:
-        original = self.source.read_text()
-        (self.fixture.src / "beta.c").write_text("extern float D_SHARED;\nfloat beta(void) { return D_SHARED; }\n")
-        for version in self.fixture.versions:
-            build = self.fixture.build_link(version)
-            (build / "obj/src").mkdir()
-            for name in ("alpha", "beta"):
-                (build / "obj/src" / (name + ".o")).write_bytes((build / "obj/asm" / (name + ".o")).read_bytes())
-        bulk = migrate_all(self.project)
-        for version in self.fixture.versions:
-            self.assertEqual(len(bulk.migrated[version]), 2)
-            self.assertEqual(bulk.migrated[version][0]["owners"], ["alpha", "beta"])
-            self.assertFalse(bulk.resident[version])
-        alpha = next(edit.after for edit in bulk.edits if edit.path == self.source)
-        self.assertTrue(alpha.startswith(original))
-        self.assertIn("const float unbake_rodata_", alpha)
-        for edit in bulk.edits:
-            if edit.path.suffix == ".c":
-                subprocess.run(
-                    ["cc", "-std=c89", "-pedantic-errors", "-DVERSION_US", "-x", "c", "-fsyntax-only", "-"],
-                    input=edit.after.encode(),
-                    check=True,
-                )
-        self.assertEqual(self.source.read_text(), original)
-
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -135,93 +84,7 @@ class RodataCommandTests(unittest.TestCase):
         self.assertEqual([item["names"] for item in typed], [["D_SHARED"], ["D_PRIVATE"]])
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()})
 
-    def test_migrate_command_stages_native_splits_for_real_version_differences(self) -> None:
-        original = self.source.read_text()
-        for declaration, expression in (
-            ("extern float D_PRIVATE;", "(D_SHARED && D_PRIVATE) ? D_PRIVATE : 0.0f"),
-            ("typedef struct { float value; } Private;\nextern Private D_PRIVATE;", "D_SHARED + D_PRIVATE.value"),
-        ):
-            with self.subTest(expression=expression):
-                self.source.write_text(
-                    "extern float D_SHARED;\n" + declaration + "\nfloat alpha(void) { return " + expression + "; }\n"
-                )
-                rewritten = next(e.after for e in migrate(self.project, "alpha") if e.path == self.source)
-                subprocess.run(
-                    ["cc", "-std=c89", "-pedantic-errors", "-DVERSION_US", "-x", "c", "-fsyntax-only", "-"],
-                    input=rewritten.encode(),
-                    check=True,
-                )
-        for version in self.fixture.versions:
-            runtime = self.mappings[version][0]["address"]
-            symbols = self.fixture.version(version).symbols
-            symbols.write_text(symbols.read_text() + f"D_BASE = 0x{runtime:X};\n")
-            build = self.fixture.build_link(version)
-            offset_object = assemble(
-                build,
-                "offset_alpha",
-                ".set noreorder\n.text\n.globl alpha\nalpha:\n"
-                "lui $at,%hi(D_SHARED)\nlwc1 $f0,%lo(D_SHARED)($at)\n"
-                "lui $at,%hi(D_BASE+4)\nlwc1 $f2,%lo(D_BASE+4)($at)\n",
-            )
-            (build / "obj/src").mkdir()
-            (build / "obj/src/alpha.o").write_bytes(offset_object.read_bytes())
-        self.source.write_text(
-            "typedef struct { char padding[4]; float value; } Private;\n"
-            "extern float D_SHARED;\nextern float D_BASE;\n"
-            "float alpha(void) { return D_SHARED + ((Private *)(&D_BASE))->value; }\n"
-        )
-        rewritten = next(e.after for e in migrate(self.project, "alpha") if e.path == self.source)
-        self.assertNotIn("D_BASE", rewritten)
-        self.assertIn("extern float D_SHARED;", rewritten)
-        subprocess.run(
-            ["cc", "-std=c89", "-pedantic-errors", "-DVERSION_US", "-x", "c", "-fsyntax-only", "-"],
-            input=rewritten.encode(),
-            check=True,
-        )
-        self.source.write_text(original)
-        self.source.write_text(
-            self.source.read_text()
-            .replace("extern float D_PRIVATE;", "extern float D_PRIVATE[1];")
-            .replace("+ D_PRIVATE;", "+ D_PRIVATE[0];")
-        )
-        preview = io.StringIO()
-        with contextlib.redirect_stdout(preview):
-            self.assertFalse(
-                rodata.run(
-                    argparse.Namespace(verb="migrate", function="alpha", apply=False, stage=False),
-                    self.project,
-                    cast(Policy, None),
-                )
-            )
-        self.assertIn("return D_SHARED + 2.0f;", preview.getvalue())
-        self.source.write_text(
-            self.source.read_text() + "const float *private_address(void) { return &D_PRIVATE[0]; }\n"
-        )
-        args = argparse.Namespace(verb="migrate", function="alpha", apply=True, stage=True)
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertFalse(rodata.run(args, self.project, cast(Policy, None)))
-        source = self.source.read_text()
-        self.assertIn("extern float D_SHARED;", source)
-        self.assertNotIn("D_PRIVATE", source)
-        self.assertIn("defined(VERSION_US)", source)
-        self.assertIn("2.0f", source)
-        self.assertIn("3.0f", source)
-        subprocess.run(
-            ["cc", "-std=c89", "-pedantic-errors", "-DVERSION_US", "-fsyntax-only", str(self.source)], check=True
-        )
-        for version in self.fixture.versions:
-            _, _, segments = split.layout(self.fixture.version(version).split)
-            rows = [r for segment in segments for r in segment.rows]
-            local = next(r for r in rows if r.kind == ".rodata")
-            self.assertEqual(local.path, "alpha")
-            self.assertEqual(local.start, 0x44)
-            self.assertEqual(split.end(local), 0x48)
-            self.assertEqual(
-                split.address(local, self.fixture.version(version).split), self.mappings[version][0]["address"] + 4
-            )
-        with self.assertRaisesRegex(Held, "not in one resident bin"):
-            migrate(self.project, "alpha")
-
+    def test_private_string_and_biased_table_layout_is_repeatable(self) -> None:
         obj = Object(
             assemble(
                 self.root,
