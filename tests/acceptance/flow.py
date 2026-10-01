@@ -57,7 +57,9 @@ class Proof:
         self.env["UNBAKE_POLICY"] = str(self.root / "policy.toml")
         (self.root / "tmp").mkdir(exist_ok=True)
 
-    def run(self, argv: list[str | Path], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, argv: list[str | Path], cwd: Path | None = None, *, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         command = [str(value) for value in argv]
         directory = cwd or self.root
         number = len(list(self.logs.glob("*.command.json"))) + 1
@@ -65,7 +67,7 @@ class Proof:
         print(f"$ (cd {shlex.quote(str(directory))} && {shlex.join(command)})", flush=True)
         started = time.time()
         result = subprocess.run(
-            command, cwd=directory, env=self.env, input="", capture_output=True, text=True, check=False
+            command, cwd=directory, env=env or self.env, input="", capture_output=True, text=True, check=False
         )
         (self.logs / f"{label}.stdout").write_text(result.stdout)
         (self.logs / f"{label}.stderr").write_text(result.stderr)
@@ -78,6 +80,8 @@ class Proof:
             "stdout": f"{label}.stdout",
             "stderr": f"{label}.stderr",
             "pythonpath": None,
+            "path": (env or self.env)["PATH"],
+            "policy": (env or self.env)["UNBAKE_POLICY"],
         }
         (self.logs / f"{label}.command.json").write_text(json.dumps(record, indent=2) + "\n")
         print(result.stdout, end="", flush=True)
@@ -166,7 +170,10 @@ class Proof:
             arguments.extend(["--supply", supply])
         output = self.cli(*arguments, cwd=project, status=1)
         require(
-            "setup.compiler_confirmation:" in output or "setup.compiler_candidate:" in output,
+            any(
+                key + ":" in output
+                for key in ("setup.compiler_confirmation", "setup.compiler_candidate", "setup.compiler_mixed")
+            ),
             "setup.proposal: expected reviewable compiler proposal",
         )
         config = read_config(project)
@@ -178,6 +185,22 @@ class Proof:
         shutil.copyfile(proposal, saved)
         token = hashlib.sha256(proposal.read_bytes()).hexdigest()
         print(f"Review {saved}\nConfirmation token: {token}")
+
+    def propose(self, project: Path, compilers: list[str], supply: Path | None) -> None:
+        require(compilers, "accept.compilers: supply explicit REGION=ID choices")
+        arguments: list[str | Path] = ["setup"]
+        for choice in compilers:
+            arguments.extend(["--compiler", choice])
+        if supply:
+            arguments.extend(["--supply", supply])
+        output = self.cli(*arguments, cwd=project, status=1)
+        require("setup.compiler_confirmation:" in output, "setup.proposal: choices remain unresolved")
+        config = read_config(project)
+        require(config["project"]["state"] == "awaiting-roms", "setup.proposal: project prematurely ready")
+        proposal = project / config["paths"]["build"] / "setup/proposal.json"
+        saved = self.logs / (project.name + ".proposal.json")
+        shutil.copyfile(proposal, saved)
+        print(f"Review {saved}\nConfirmation token: {hashlib.sha256(proposal.read_bytes()).hexdigest()}")
 
     def confirm(self, project: Path, token: str, supply: Path | None) -> None:
         arguments: list[str | Path] = ["setup", "--confirm", token]
@@ -221,6 +244,79 @@ class Proof:
         before = self.canonical(project)
         self.cli("setup", cwd=project)
         require(self.canonical(project) == before, "setup.rerun: human work changed")
+        standalone = dict(self.env)
+        standalone["PATH"] = os.pathsep.join(
+            entry for entry in self.env["PATH"].split(os.pathsep) if not (Path(entry) / "unbake").exists()
+        )
+        require(shutil.which("unbake", path=standalone["PATH"]) is None, "make.standalone: unbake remains on PATH")
+        result = self.run(["make", "check"], project, env=standalone)
+        require(result.returncode == 0, "make.standalone: proof failed with unbake removed from PATH")
+
+    def refusals(self, rom: str, other_rom: Path, policy: Path) -> None:
+        require("=" in rom, "accept.rom: expected VERSION=FILE")
+        version, filename = rom.split("=", 1)
+        source = Path(filename).resolve()
+        require(source.is_file() and other_rom.is_file(), "accept.rom: missing refusal ROM input")
+        self.policy(policy)
+        valid_policy = (self.root / "policy.toml").read_text()
+        workspace = self.root / "refusals"
+        require(not workspace.exists(), "accept.refusals: expected fresh proof directory")
+        workspace.mkdir()
+
+        def shell(name: str) -> Path:
+            project = workspace / name
+            self.cli("init", project)
+            shutil.copyfile(source, project / "roms/input.z64")
+            return project
+
+        def pending(project: Path, key: str, *arguments: str) -> None:
+            output = self.cli("setup", *arguments, cwd=project, status=1)
+            require(key + ":" in output, f"accept.refusal: expected {key}")
+            config = read_config(project)
+            require(config["project"]["state"] == "awaiting-roms", "accept.refusal: project became ready")
+            require("compilers" not in config and "units" not in config, "accept.refusal: compiler choices published")
+
+        protected = workspace / "nonempty"
+        protected.mkdir()
+        (protected / "owner.txt").write_text("preserve this file\n")
+        output = self.cli("init", protected, status=1)
+        require("init.target:" in output, "init.target: nonempty refusal missing")
+        require((protected / "owner.txt").read_text() == "preserve this file\n", "init.target: owner file changed")
+        target = workspace / "symlink-target"
+        target.mkdir()
+        link = workspace / "symlink"
+        link.symlink_to(target, target_is_directory=True)
+        output = self.cli("init", link, status=1)
+        require("init.target:" in output and not any(target.iterdir()), "init.target: symlink input not protected")
+        pending(shell("no-naming-version"), "project.names_from")
+        duplicate = shell("duplicate")
+        shutil.copyfile(source, duplicate / "roms/duplicate.z64")
+        pending(duplicate, "setup.roms.duplicate_sha1", "--names-from", version)
+        mixed = shell("mixed")
+        shutil.copyfile(other_rom, mixed / "roms/other.z64")
+        pending(mixed, "setup.same_game.game_code", "--names-from", version)
+        invalid = shell("bad-magic")
+        (invalid / "roms/input.z64").write_bytes(b"bad input")
+        output = self.cli("setup", "--names-from", version, cwd=invalid, status=1)
+        require("rom.magic:" in output or "rom.size:" in output, "rom.input: malformed dump not named")
+        crc = shell("bad-crc")
+        damaged = bytearray(source.read_bytes())
+        require(len(damaged) > 0x2000, "accept.rom: input too small for CRC protection proof")
+        damaged[0x2000] ^= 1
+        (crc / "roms/input.z64").write_bytes(damaged)
+        output = self.cli("setup", "--names-from", version, cwd=crc, status=1)
+        require("crc" in output.lower() and "HELD(" in output, "rom.crc: corrupt input not refused")
+        try:
+            for field in ("splat", "mips_as", "mips_ld", "mips_objcopy", "cpp", "cache_root"):
+                modified, count = re.subn(r"(?m)^" + field + r"\s*=.*\n?", "", valid_policy)
+                require(count == 1, f"policy.{field}: expected explicit input for omission test")
+                (self.root / "policy.toml").write_text(modified)
+                pending(shell("missing-" + field), "policy." + field, "--names-from", version)
+            (self.root / "policy.toml").unlink()
+            pending(shell("missing-policy"), "policy.cache_root", "--names-from", version)
+            require((self.root / "policy.toml").is_file(), "policy.template: missing policy not created")
+        finally:
+            (self.root / "policy.toml").write_text(valid_policy)
 
     @staticmethod
     def canonical(project: Path) -> dict[str, str]:
@@ -290,6 +386,48 @@ class Proof:
         result = self.run([self.python, "-c", code])
         require(result.returncode == 0, "retire.imports: retired API remains")
 
+    def resubmit(self, project: Path, source_dir: Path) -> None:
+        require(source_dir.is_dir(), "accept.source_dir: missing authored C directory")
+        sources = sorted(source_dir.rglob("*.c"))
+        require(sources, "accept.sources: no authored C inputs")
+        require(len({source.stem for source in sources}) == len(sources), "accept.sources: duplicate function names")
+        config = read_config(project)
+        drafts = project / config["paths"]["drafts"]
+        summary_path = self.logs / (project.name + ".resubmit.json")
+        rows = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+        for source in sources:
+            original = source.read_bytes()
+            digest = hashlib.sha256(original).hexdigest()
+            previous = rows.get(source.stem, {})
+            published = project / config["paths"]["src"] / (source.stem + ".c")
+            if (
+                previous.get("status") == "passed"
+                and previous.get("input_sha256") == digest
+                and published.is_file()
+                and hashlib.sha256(published.read_bytes()).hexdigest() == previous.get("published_sha256")
+            ):
+                continue
+            copied = drafts / ("resubmit-" + source.stem) / source.name
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            copied.write_bytes(original)
+            record = {"input": str(source), "input_sha256": digest, "copy": str(copied)}
+            before = self.canonical(project)
+            try:
+                self.cli("try", copied, cwd=project)
+                require(self.canonical(project) == before, "trial.overlay: canonical files changed")
+                self.cli("submit", copied, cwd=project)
+                require(published.is_file(), "submit.source: canonical C missing after publication")
+                record.update(status="passed", published_sha256=hashlib.sha256(published.read_bytes()).hexdigest())
+            except ProofError as error:
+                require(self.canonical(project) == before, "submit.refusal: canonical files changed")
+                record.update(status="held", reason=str(error))
+            require(source.read_bytes() == original, "accept.source: authored input changed")
+            rows[source.stem] = record
+            summary_path.write_text(json.dumps(rows, indent=2) + "\n")
+        failures = [name for name, row in rows.items() if row["status"] != "passed"]
+        self.verify(project)
+        require(not failures, f"accept.resubmit: {len(failures)} held inputs, see {summary_path}")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -306,6 +444,9 @@ def main() -> int:
     confirm = phases.add_parser("confirm", help="Accept an explicitly reviewed token and prove every ROM.")
     confirm.add_argument("--token", required=True)
     confirm.add_argument("--supply", type=Path)
+    propose = phases.add_parser("propose", help="Revise a pending proposal using explicit reviewed compiler choices.")
+    propose.add_argument("--compiler", action="append", required=True, metavar="REGION=ID")
+    propose.add_argument("--supply", type=Path)
     cycle = phases.add_parser("cycle", help="Execute next/draft/try/submit and refuse a changed untried source.")
     cycle.add_argument("--source", type=Path, help="Reviewed matching C to copy into the generated draft.")
     resubmit = phases.add_parser(
@@ -313,9 +454,13 @@ def main() -> int:
     )
     resubmit.add_argument("--source-dir", type=Path, required=True)
     verify = phases.add_parser("verify", help="Check digests, generated docs, hygiene and repeat setup.")
-    for command in (prepare, confirm, cycle, resubmit, verify):
+    for command in (prepare, propose, confirm, cycle, resubmit, verify):
         command.add_argument("--project", type=Path, required=True)
     phases.add_parser("retirement", help="Refuse every retired route and check removed imports.")
+    refusals = phases.add_parser("refusals", help="Prove named input refusals and pending-state protection.")
+    refusals.add_argument("--rom", required=True, metavar="VERSION=FILE")
+    refusals.add_argument("--other-rom", type=Path, required=True)
+    refusals.add_argument("--policy", type=Path, required=True)
     args = parser.parse_args()
     root = args.root.expanduser().resolve()
     if args.phase == "install" and root.exists() and any(root.iterdir()):
@@ -326,6 +471,8 @@ def main() -> int:
             proof.install(args.install_spec)
         elif args.phase == "retirement":
             proof.retirement()
+        elif args.phase == "refusals":
+            proof.refusals(args.rom, args.other_rom, args.policy)
         else:
             project = args.project.expanduser().resolve()
             require(proof.unbake.is_file(), "accept.install: run install first")
@@ -334,16 +481,14 @@ def main() -> int:
                 proof.prepare(project, args.rom, args.names_from, args.compiler, args.supply)
             elif args.phase == "confirm":
                 proof.confirm(project, args.token, args.supply)
+            elif args.phase == "propose":
+                proof.propose(project, args.compiler, args.supply)
             elif args.phase == "cycle":
                 proof.cycle(project, args.source)
             elif args.phase == "verify":
                 proof.verify(project)
             else:
-                require(args.source_dir.is_dir(), "accept.source_dir: missing authored C directory")
-                sources = sorted(args.source_dir.rglob("*.c"))
-                require(sources, "accept.sources: no authored C inputs")
-                for source in sources:
-                    proof.cycle(project, source)
+                proof.resubmit(project, args.source_dir)
         print("PASS: " + args.phase)
         return 0
     except (ProofError, OSError, ValueError, KeyError, IndexError) as error:
