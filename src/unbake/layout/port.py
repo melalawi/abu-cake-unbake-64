@@ -52,7 +52,11 @@ def object_path(project: Project, function: split.Function) -> Path:
 def identity(project: Project, source: split.Function, target: split.Function) -> tuple[str, int, str]:
     left, right = split.words(project, source), split.words(project, target)
     if len(left) != len(right):
-        return "different", abs(len(left) - len(right)) // 4, "target size differs"
+        return (
+            "different",
+            abs(len(left) - len(right)) // 4,
+            f"target size differs (source {len(left)} bytes, target {len(right)} bytes)",
+        )
     if left == right:
         return "identical", 0, ""
     try:
@@ -255,9 +259,18 @@ def port(project: Project, policy: Policy, rows: list[Candidate], scratch: Path,
             continue
         try:
             work = scratch / f"{row.function}-{version}"
-            result = trial.try_draft(project, policy, source, work, versions=[version])
+            result = trial.try_draft(project, policy, source, work, versions=[version], function=row.function)
             if not result.identical_everywhere:
-                receipts.append(f"HELD(port): {label}: target-version try is not identical")
+                reasons = [
+                    line
+                    for comparison in result.compares.values()
+                    for line in comparison.lines
+                    if line.startswith(("first divergence:", "placement:"))
+                ]
+                detail = "; ".join(reasons)
+                receipts.append(
+                    f"HELD(port): {label}: target-version try is not identical" + (f"; {detail}" if detail else "")
+                )
                 continue
             objects = list(work.rglob(row.function + ".o"))
             if not objects:

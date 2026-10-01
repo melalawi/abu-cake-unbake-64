@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from re import Match
@@ -153,7 +154,86 @@ def _span(project: Any, version: str, function: str, row: Any, start: int, words
     return Span(version, function, start, end, address, row.path, row.kind, alignment)
 
 
-def locate(project: Any, function: str) -> dict[str, Span | None]:
+def _jump(word: int, address: int) -> int:
+    return ((address + 4) & 0xF0000000) | ((word & 0x03FFFFFF) << 2)
+
+
+def _disambiguate(
+    project: Any,
+    function: str,
+    reference: str,
+    origin: int,
+    words: list[int],
+    image: bytes,
+    version: str,
+    data: bytes,
+    candidates: list[Span],
+) -> list[Span]:
+    """Constrain twins by named jump operands and structurally identical callers."""
+    from unbake.decomp.symbols import references
+
+    _, source_symbols = split.symbols(project.version(reference).symbols)
+    _, target_symbols = split.symbols(project.version(version).symbols)
+    addresses: dict[int, set[int]] = {}
+    for name, (address, _, _) in source_symbols.items():
+        if name in target_symbols:
+            addresses.setdefault(address, set()).add(target_symbols[name][0])
+    for index, word in enumerate(words):
+        if word >> 26 not in (2, 3):
+            continue
+        expected = addresses.get(_jump(word, origin + index * 4))
+        if expected and len(expected) == 1:
+            candidates = [
+                span
+                for span in candidates
+                if _jump(
+                    int.from_bytes(data[span.start + index * 4 : span.start + index * 4 + 4], "big"),
+                    span.address + index * 4,
+                )
+                in expected
+            ]
+    for operand in references(words, source_symbols.get("_gp", (None,))[0]):
+        expected = addresses.get(operand.address)
+        if not expected or len(expected) != 1:
+            continue
+        retained = []
+        for span in candidates:
+            actual = list(struct.unpack(f">{len(words)}I", data[span.start : span.start + len(words) * 4]))
+            target_operands = references(actual, target_symbols.get("_gp", (None,))[0])
+            if any(value.offset == operand.offset and value.address in expected for value in target_operands):
+                retained.append(span)
+        candidates = retained
+    if len(candidates) <= 1:
+        return candidates
+    target_rows = _inventory(project, version)
+    for row in _inventory(project, reference):
+        caller_address = split.address(row, project.version(reference).split)
+        caller_words = body(image, row.start, split.end(row), row.path)
+        calls = [
+            index
+            for index, word in enumerate(caller_words)
+            if word >> 26 in (2, 3) and _jump(word, caller_address + index * 4) == origin
+        ]
+        if not calls:
+            continue
+        caller = _named(project, version, Path(row.path).name, target_rows)
+        if caller is None:
+            continue
+        target_row, at = caller
+        if at + len(caller_words) * 4 > split.end(target_row) or not _equal(
+            caller_words, _masks(caller_words), data, at
+        ):
+            continue
+        address = split.address(target_row, project.version(version).split) + at - target_row.start
+        for index in calls:
+            destination = _jump(int.from_bytes(data[at + index * 4 : at + index * 4 + 4], "big"), address + index * 4)
+            candidates = [span for span in candidates if span.address == destination]
+        if len(candidates) <= 1:
+            return candidates
+    return candidates
+
+
+def locate(project: Any, function: str, *, versions: Iterable[str] | None = None) -> dict[str, Span | None]:
     """Find one relocation-masked text span per VERSION; refuse ambiguous matches."""
     function = split.name(function)
     reference = _reference(project)
@@ -170,7 +250,8 @@ def locate(project: Any, function: str) -> dict[str, Span | None]:
         raise Held("placement", f"function {function} relocation signature: no fixed instruction")
     anchor_index, anchor = fixed[0]
     result: dict[str, Span | None] = {}
-    for version in project.versions:
+    selected = tuple(project.versions) if versions is None else tuple(dict.fromkeys((reference, *versions)))
+    for version in selected:
         data = image if version == reference else _image(project, version)
         rows = _inventory(project, version)
         named = _named(project, version, function, rows)
@@ -195,7 +276,17 @@ def locate(project: Any, function: str) -> dict[str, Span | None]:
                 if _equal(words, masks, data, candidate):
                     candidates.append(_span(project, version, function, target_row, candidate, words, data))
         if len(candidates) > 1:
-            raise Held("placement", f"VERSION {version} function {function}: ambiguous relocation-masked placement")
+            origin = split.address(row, project.version(reference).split) + start - row.start
+            candidates = _disambiguate(project, function, reference, origin, words, image, version, data, candidates)
+            if not candidates:
+                raise Held("placement", f"VERSION {version} function {function}: relocation/symbol evidence conflicts")
+        if len(candidates) > 1:
+            choices = ", ".join(f"0x{span.address:08X} (ROM 0x{span.start:X}, row {span.row})" for span in candidates)
+            raise Held(
+                "placement",
+                f"VERSION {version} function {function}: ambiguous relocation-masked placement; "
+                f"missing symbol {function} address selecting one of {len(candidates)} twins: {choices}",
+            )
         result[version] = candidates[0] if candidates else None
     return result
 
