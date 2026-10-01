@@ -17,6 +17,8 @@ def register(phases: Subparsers) -> None:
     parser.add_argument("--title", metavar="TITLE")
     parser.add_argument("--compilers", action="store_true", help="Inspect compiler registry pins.")
     parser.add_argument("--supply", type=Path, metavar="DIR")
+    parser.add_argument("--compiler", action="append", default=[], metavar="REGION=ID")
+    parser.add_argument("--confirm", metavar="SHA256")
 
 
 def pairs(values: list[str], flag: str) -> dict[str, str]:
@@ -32,7 +34,7 @@ def pairs(values: list[str], flag: str) -> dict[str, str]:
 
 
 def run(args: argparse.Namespace, project: PendingProject) -> bool:
-    from unbake.project import census, config, flow, setup_config, toolchain
+    from unbake.project import census, config, flow, setup, setup_config, toolchain
 
     if args.compilers:
         policy = config.load_policy(args.policy, stage="setup")
@@ -49,6 +51,11 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
             else:
                 lines.append(f"{ident}: installed; pins verified")
         return receipt("setup", lines)
+    if project.state == "ready":
+        if args.compiler or args.name or args.title or args.names_from or args.version_name or args.version_order:
+            raise Held("setup", "setup.rom_set_changed: ready setup retains confirmed facts and human layout")
+        policy = config.load_policy(args.policy, stage="setup")
+        return receipt("setup", setup.refresh(config.load(project.root), policy, supply=args.supply))
     # Empty ROM refusal precedes policy requirements and template creation.
     census.candidates(project)
     print(f"OK(setup): ROM folder: {project.roms}")
@@ -57,6 +64,10 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
     with (project.root / "config.toml").open("rb") as source:
         saved = tomllib.load(source)
     selected = args.names_from if args.names_from is not None else saved["project"].get("names_from")
+    if selected is None:
+        previous = census.ingest_manifest(project)
+        if previous is not None:
+            selected = previous.get("names_from")
     result = census.run(
         project,
         policy_census,
@@ -69,5 +80,11 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
     print(f"OK(setup): census: {result.manifest}")
     policy = config.load_policy(args.policy, stage="setup")
     layout = flow.plan_layout(project, result, policy)
-    proposal = flow.propose_compilers(project, result, layout, policy)
-    return receipt("setup", flow.complete_setup(project, result, layout, proposal, policy))
+    proposal = flow.propose_compilers(
+        project, result, layout, policy, choices=pairs(args.compiler, "--compiler") or None
+    )
+    # Compiler acquisition stays inside the confirmed staging transaction.
+    return receipt(
+        "setup",
+        setup.complete_setup(project, result, layout, proposal, policy, confirm=args.confirm, supply=args.supply),
+    )

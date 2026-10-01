@@ -45,6 +45,8 @@ def ingest_manifest(project: PendingProject) -> dict[str, Any] | None:
             raise ValueError("incomplete manifest")
         if not isinstance(previous["generated_inputs"], list) or not isinstance(previous["renames"], dict):
             raise ValueError("invalid generated inputs or renames")
+        if not isinstance(previous["names_from"], str) or not previous["names_from"]:
+            raise ValueError("invalid names_from")
         order = previous["version_order"]
         if order is not None and (not isinstance(order, list) or any(not isinstance(value, str) for value in order)):
             raise ValueError("invalid version order")
