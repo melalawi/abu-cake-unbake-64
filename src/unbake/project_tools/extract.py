@@ -267,6 +267,34 @@ def external_labels(directory: Path) -> str:
     return "".join(f"{name} = 0x{name[2:]};\n" for name in sorted(labels))
 
 
+def instruction_symbols(directory: Path, committed: dict[str, int]) -> dict[str, int]:
+    """Retain symbolic addresses proved by original HI16/LO16 words.
+
+    Some interior data labels are omitted from the disassembler's CSV. Decode
+    its original instruction comments rather than infer addresses from names.
+    """
+    found = dict(committed)
+    pattern = re.compile(
+        r"/\*\s*[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([0-9A-Fa-f]{8})\s*\*/"
+        r"[^\n]*?%(hi|lo)\(([A-Za-z_.$][\w.$]*)\)"
+    )
+    for path in directory.rglob("*.s"):
+        pending: dict[str, list[int]] = {}
+        for raw, kind, name in pattern.findall(path.read_text()):
+            word = int(raw, 16)
+            if kind == "hi" and word >> 26 == 15:
+                pending.setdefault(name, []).append((word & 65535) << 16)
+            elif kind == "lo":
+                low = word & 65535
+                low = low - 65536 if low & 32768 else low
+                for high in pending.pop(name, []):
+                    address = (high + low) & 0xFFFFFFFF
+                    if name in found and found[name] != address:
+                        raise ValueError(f"conflicting instruction address for {name} in {path.name}")
+                    found[name] = address
+    return found
+
+
 def inventory(script: str, staging: Path, asm: Path, src: Path, compiler: str) -> tuple[str, list[str]]:
     groups: dict[str, list[str]] = {"C": [], "ASM": [], "ASSET": []}
     edges = []
@@ -432,7 +460,7 @@ def extract(args: argparse.Namespace) -> None:
         tables = [args.symbols]
         symbol_dump = staging / ".splat" / "splat_symbols.csv"
         publish(args.build / "splat_symbols.csv", symbol_dump.read_bytes())
-        committed = discovered_symbols(symbol_dump, symbols_from(tables))
+        committed = instruction_symbols(staging / "asm", discovered_symbols(symbol_dump, symbols_from(tables)))
         units = unit_addresses(text)
         for name, address in units.items():
             if name in committed and committed[name] != address:

@@ -7,11 +7,22 @@ from pathlib import Path
 
 from tests.decomp.support import assemble
 from unbake.project_tools.elf import Object
-from unbake.project_tools.extract import pool_rows, raw_storage, unit_ranges
+from unbake.project_tools.extract import instruction_symbols, pool_rows, raw_storage, unit_ranges
 from unbake.project_tools.layout import transfer_private, transfer_selectors
 
 
 class PoolSliceTests(unittest.TestCase):
+    def test_data_symbol_omitted_from_csv_uses_original_instruction_words(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "text.s").write_text(
+                "/* 20 80001020 3C05800C */ lui $a1,%hi(interior)\n"
+                "/* 24 80001024 24A5A52C */ addiu $a1,$a1,%lo(interior)\n"
+            )
+            self.assertEqual(instruction_symbols(root, {}), {"interior": 0x800BA52C})
+            with self.assertRaisesRegex(ValueError, "conflicting instruction address"):
+                instruction_symbols(root, {"interior": 0x800CA52C})
+
     def test_retained_double_at_absolute_eight_byte_boundary_keeps_exact_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             # ROM start is four bytes off an eight-byte boundary. A .double
