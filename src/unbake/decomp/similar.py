@@ -1,21 +1,16 @@
-"""Retrieve landed C and assembly by local opcode sequence similarity.
-
-Public command: python -m unbake.decomp.similar FUNCTION --project DIR
-"""
+"""Retrieve landed C and assembly by local opcode sequence similarity."""
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import struct
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.decomp.drafts import is_partial
 from unbake.decomp.trial_compare import fields
 from unbake.layout import split
-from unbake.project.config import Held, Project, load
+from unbake.project.config import Held, Project
 
 
 @dataclass(frozen=True)
@@ -150,24 +145,3 @@ def context(examples: list[Similar]) -> str:
         # Line comments cannot be terminated by comments inside landed C.
         parts.append("\n".join("// " + line for line in text.splitlines()))
     return "\n\n".join(parts) + ("\n" if parts else "")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("function")
-    parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--version")
-    parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--bound", type=int, default=512)
-    args = parser.parse_args()
-    try:
-        project = load(args.project)
-        rows = retrieve(project, args.function, args.version or project.names_from, top_k=args.top_k, bound=args.bound)
-    except Held as error:
-        parser.exit(2, f"HELD({error.phase}): {error.reason}\n")
-    for row in rows:
-        print(json.dumps(asdict(row), default=str, sort_keys=True))
-
-
-if __name__ == "__main__":
-    main()
