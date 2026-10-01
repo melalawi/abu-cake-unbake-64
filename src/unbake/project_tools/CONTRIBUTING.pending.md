@@ -17,7 +17,7 @@ Setup reads the ROM headers to name each version.
 unbake setup
 ```
 
-Setup asks which version names the functions.
+Each cross-version item gets one name.
 It shows compiler evidence and asks for confirmation.
 It prints the policy path and names any missing input.
 It proves every version before the project is ready.
@@ -26,8 +26,13 @@ Setup then writes instructions with your ROM paths.
 ## Next command
 
 ```sh
+unbake map
+unbake solve
 unbake next
 ```
 
+Run map and solve after setup succeeds.
+Map reads every version.
+Solve builds shared types from the measured facts.
 Every command ends with the next command to run.
 `unbake next` prints it again.

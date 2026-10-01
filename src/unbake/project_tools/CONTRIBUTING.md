@@ -14,7 +14,7 @@ Put your own ROM dumps at these paths.
 @ROM_INPUTS@
 
 ```sh
-unbake setup --names-from @NAMES_FROM@
+unbake setup
 ```
 
 Setup shows compiler evidence and asks for confirmation.
@@ -33,17 +33,25 @@ Their hashes are recorded in `@PINS@`.
 ## Next command
 
 ```sh
+unbake map
+unbake solve
 unbake next
 unbake draft FUNCTION
 unbake try FILE
 unbake submit FILE
 ```
 
-Use the function suggested by `next`.
+Map reads the whole program across every version.
+Solve builds shared types from the measured facts.
+Use the item suggested by `next`.
 Use the file printed by `draft`.
+Draft states which containing version it uses.
+It uses the shared type context.
 Edit that file and run `try` again.
 Submit the exact file after it matches every holding version.
 Submit proves the ROMs before it publishes the C.
+It feeds proven facts back into solve.
+Affected neighbours are marked for another draft.
 
 Every command ends with the next command to run.
 `unbake next` prints it again.

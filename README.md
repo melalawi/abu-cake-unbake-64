@@ -24,7 +24,8 @@ Run these commands inside the repo.
 unbake setup
 ```
 
-Setup asks which version names the functions.
+Setup reads every ROM header.
+Each cross-version item gets one name.
 It shows compiler evidence and asks for confirmation.
 It proves every version before the project is ready.
 Setup prints the policy path and names any missing input.
@@ -33,12 +34,17 @@ Machine paths go in `~/.config/unbake/policy.toml`.
 ## Next command
 
 ```sh
+unbake map
+unbake solve
 unbake next
 ```
 
+Map reads the whole program across every version.
+Solve builds shared types from the measured facts.
 Every command ends with the next command to run.
 `unbake next` prints it again.
 Follow it through `draft` then `try` then `submit`.
+Each submit feeds proven facts back into solve.
 
 ## Dependencies
 
