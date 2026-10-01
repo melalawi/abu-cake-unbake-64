@@ -17,5 +17,6 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.layout import rodata_owners
 
-    print(json.dumps(rodata_owners.scan(project, args.version or project.names_from).document(), indent=2))
+    version = project.names_from if args.version is None else args.version
+    print(json.dumps(rodata_owners.scan(project, version).document(), indent=2))
     return False
