@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = make_parser().parse_args(argv)
         phase = args.phase
+        if args.phase == "clone":
+            clone.validate(args)
         if args.policy is not None:
             os.environ["UNBAKE_POLICY"] = str(args.policy.expanduser().absolute())
         if args.phase == "init":

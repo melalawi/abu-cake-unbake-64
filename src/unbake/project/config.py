@@ -308,6 +308,8 @@ def load_policy(path: Path | None = None) -> Policy:
         explicit = os.environ.get("UNBAKE_POLICY")
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         path = Path(explicit) if explicit else base / "unbake" / "policy.toml"
+        if not explicit and not path.expanduser().is_file():
+            raise Held("config", f"UNBAKE_POLICY unset and {path.expanduser().absolute()} missing")
     path = Path(path).expanduser().absolute()
     data = {**_read(POLICY_PATH), **_read(path)}
 

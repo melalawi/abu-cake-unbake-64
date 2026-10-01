@@ -119,6 +119,12 @@ def run(project: Project, policy: Policy, *, new_rom: Path | None = None) -> lis
     shared.consolidate(project)
     if config_text != config_path.read_text():
         compiler_files.atomic_bytes(config_path, config_text.encode())
+    publish_files(project, files)
+    return receipts
+
+
+def publish_files(project: Project, files: dict[str, str]) -> None:
+    """Publish generated build files and refresh only tool-owned manifest entries."""
     for relative, content in files.items():
         destination = project.root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -158,4 +164,3 @@ def run(project: Project, policy: Policy, *, new_rom: Path | None = None) -> lis
             pins += f"{digest}  {relative}\n"
     if manifest.read_text() != pins:
         compiler_files.atomic_bytes(manifest, pins.encode())
-    return receipts

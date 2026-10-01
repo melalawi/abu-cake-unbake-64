@@ -265,7 +265,7 @@ def render(project: Project) -> dict[str, str]:
         "DRIVERS": " ".join(
             "$(TOOLS)/" + name
             for name in (
-                ["compile.py", "cache.py", "elf.py", "host.py"]
+                ["compile.py", "elf.py", "host.py"]
                 + (
                     [
                         "sn64_cc.py",

@@ -2,17 +2,21 @@
 
 import hashlib
 import io
+import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
+from collections.abc import Iterator
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.support import test_policy
 from unbake.cli.main import main
-from unbake.project import clone, config, toolchain
+from unbake.project import build, clone, config, toolchain
 
 
 class CloneTests(unittest.TestCase):
@@ -72,7 +76,7 @@ class CloneTests(unittest.TestCase):
 
     def test_warm_clone_materializes_inputs_preserves_mtimes_and_isolates_policy(self) -> None:
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.live.rglob("*") if p.is_file()}
-        with patch.object(toolchain, "verify"):
+        with patch.object(clone, "prepare", return_value=False):
             result = clone.create(self.project, self.policy, self.destination, self.project.versions)
         self.assertEqual(result.root, self.destination)
         for source, (content, timestamp) in before.items():
@@ -96,6 +100,85 @@ class CloneTests(unittest.TestCase):
         checked = subprocess.run(["make", "-j4", "check"], cwd=self.destination, capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stderr)
 
+    def test_cli_acquires_missing_and_stale_compiler_without_changing_source(self) -> None:
+        content = b"pinned compiler"
+        pin = hashlib.sha256(content).hexdigest()
+        archive = self.root / "compiler.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            for name in ("cc", "as1"):
+                entry = tarfile.TarInfo(name)
+                entry.size = len(content)
+                output.addfile(entry, io.BytesIO(content))
+        spec = replace(
+            toolchain.specification("ido-7.1"),
+            pins={"cc": pin, "as1": pin},
+            downloads=(
+                toolchain.Download(archive.as_uri(), hashlib.sha256(archive.read_bytes()).hexdigest(), ("cc", "as1")),
+            ),
+        )
+        for stale in (True, False):
+            with self.subTest(stale=stale):
+                directory = self.project.tools / spec.id
+                directory.mkdir(exist_ok=True)
+                for name in spec.pins:
+                    target = directory / name
+                    if stale:
+                        target.write_bytes(b"obsolete compiler")
+                    else:
+                        target.unlink(missing_ok=True)
+                warm_receipt = self.live / "build/us.3/obj/src/unit.built"
+                warm_receipt.parent.mkdir(parents=True, exist_ok=True)
+                warm_receipt.touch()
+                before = {path: path.read_bytes() for path in directory.iterdir()}
+                with (
+                    patch.object(toolchain, "registry", return_value={spec.id: spec}),
+                    patch.dict(os.environ),
+                    redirect_stdout(io.StringIO()) as output,
+                ):
+                    policy_path = self.root / "policy.toml"
+                    policy_path.write_text(clone.isolated_policy(self.policy, self.root / "unused"))
+                    code = main(
+                        ["--policy", str(policy_path), "--project", str(self.live), "clone", str(self.destination)]
+                    )
+                self.assertEqual(code, 0, output.getvalue())
+                self.assertIn("OK(clone)", output.getvalue())
+                self.assertEqual(before, {path: path.read_bytes() for path in directory.iterdir()})
+                toolchain.verify(self.destination / "tools" / spec.id, spec)
+                self.assertTrue(warm_receipt.is_file())
+                self.assertFalse((self.destination / "build/us.3/obj/src/unit.built").exists())
+                helper = self.destination / "tools/cache.py"
+                self.assertIn("mode = path.stat().st_mode", helper.read_text())
+                self.assertNotIn(
+                    "if path.exists():", helper.read_text().split("def get(", 1)[1].split("def _temporary", 1)[0]
+                )
+                checked = subprocess.run(["make", "-j4", "check"], cwd=self.destination, capture_output=True, text=True)
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                shutil.rmtree(self.destination)
+        self.assertFalse(list(self.root.glob(".clone-*")))
+
+    def test_failed_preparation_never_publishes_partial_checkout(self) -> None:
+        with (
+            patch.object(clone, "prepare", side_effect=config.Held("setup", "pinned download refused")),
+            self.assertRaisesRegex(config.Held, "pinned download refused"),
+        ):
+            clone.create(self.project, self.policy, self.destination, self.project.versions)
+        self.assertFalse(self.destination.exists())
+        self.assertFalse(list(self.root.glob(".clone-*")))
+
+    def test_cli_names_policy_and_clone_form(self) -> None:
+        for operands in (["clone", "SRC", "DEST"], ["--project", str(self.live), "clone", "SRC", "DEST"]):
+            with redirect_stderr(io.StringIO()) as output:
+                code = main(operands)
+            self.assertEqual(code, 1)
+            self.assertIn("CLI form: unbake --project SRC clone DEST", output.getvalue())
+        with (
+            patch.dict(os.environ, {"UNBAKE_POLICY": "", "XDG_CONFIG_HOME": str(self.root / "absent")}),
+            redirect_stderr(io.StringIO()) as output,
+        ):
+            code = main(["--project", str(self.live), "clone", str(self.destination)])
+        self.assertEqual(code, 1)
+        self.assertIn(f"UNBAKE_POLICY unset and {self.root / 'absent/unbake/policy.toml'} missing", output.getvalue())
+
     def test_missing_or_unsafe_inputs_are_named_before_clone(self) -> None:
         cases = (
             (self.project.version("us").baserom, "baserom.us.z64"),
@@ -108,7 +191,7 @@ class CloneTests(unittest.TestCase):
                 moved = path.with_name(path.name + ".saved")
                 path.rename(moved)
                 try:
-                    with self.assertRaisesRegex(config.Held, label), patch.object(toolchain, "verify"):
+                    with self.assertRaisesRegex(config.Held, label), patch.object(clone, "prepare", return_value=False):
                         clone.create(self.project, self.policy, self.destination, self.project.versions)
                     self.assertFalse(self.destination.exists())
                 finally:
@@ -122,6 +205,86 @@ class CloneTests(unittest.TestCase):
             clone.create(self.project, self.policy, linked / "proof", ["us"])
         with self.assertRaisesRegex(config.Held, "overlaps"):
             clone.create(self.project, self.policy, self.live / "proof", ["us"])
+
+    def test_clone_pins_generation_and_skips_vanishing_build_scratch(self) -> None:
+        generation = self.live / "build/us.3"
+        assembly = self.project.asm / "us"
+        assembly.rename(generation / "assembly")
+        assembly.symlink_to(self.project.build_link("us") / "assembly", target_is_directory=True)
+        replacement = self.live / "build/us.4"
+        shutil.copytree(generation, replacement)
+        (replacement / "assembly/unit.s").write_text("replacement assembly")
+        (replacement / "state.json").write_text('{"replacement": true}')
+        scratch = []
+        for parent in (generation, generation / "obj/src", generation / "assembly"):
+            parent.mkdir(parents=True, exist_ok=True)
+            for name in (".extract-gone", ".object-gone", ".compile-gone"):
+                path = parent / name
+                path.mkdir()
+                (path / "temporary.s").write_text("scratch")
+                scratch.append(path)
+            for name in (".input-gone.s", "unit.o.partial"):
+                path = parent / name
+                path.write_text("scratch")
+                scratch.append(path)
+        resolve = Path.resolve
+        iterdir = Path.iterdir
+
+        def publish(path: Path, strict: bool = False) -> Path:
+            pinned = resolve(path, strict=strict)
+            if path == assembly:
+                link = self.project.build_link("us")
+                link.unlink()
+                link.symlink_to(replacement.name, target_is_directory=True)
+            return pinned
+
+        def vanish(path: Path) -> Iterator[Path]:
+            children = list(iterdir(path))
+            for child in children:
+                if child in scratch:
+                    if child.is_dir():
+                        shutil.rmtree(child)
+                    else:
+                        child.unlink()
+            return iter(children)
+
+        with (
+            patch.object(clone, "prepare", return_value=False),
+            patch.object(Path, "resolve", publish),
+            patch.object(Path, "iterdir", vanish),
+        ):
+            clone.create(self.project, self.policy, self.destination, ["us"])
+        target = self.destination / "build/us.3"
+        self.assertEqual((self.destination / "asm/us/unit.s").read_text(), "assembly")
+        self.assertEqual((target / "state.json").read_text(), '{"warm": true}')
+        self.assertEqual((self.destination / "build/us").readlink(), Path("us.3"))
+        self.assertFalse((self.destination / "build/us.4").exists())
+        self.assertTrue((target / ".extract-key").is_file())
+        for path in scratch:
+            self.assertFalse((target / path.relative_to(generation)).exists())
+
+    def test_cli_keeps_source_generation_pinned_through_copy(self) -> None:
+        generation = self.live / "build/us.3"
+        original_copy = clone.copy_regular
+        attempted = []
+
+        def copy(source: Path, target: Path, ancestors: frozenset[Path] = frozenset()) -> None:
+            if source == generation:
+                build.discard_generation(generation)
+                attempted.append(generation)
+                self.assertTrue(generation.is_dir())
+            original_copy(source, target, ancestors)
+
+        with (
+            patch.object(config, "load_policy", return_value=self.policy),
+            patch.object(clone, "prepare", return_value=False),
+            patch.object(clone, "copy_regular", side_effect=copy),
+            redirect_stdout(io.StringIO()),
+        ):
+            code = main(["--project", str(self.live), "clone", str(self.destination), "--version", "us"])
+        self.assertEqual(code, 0)
+        self.assertEqual(attempted, [generation])
+        self.assertFalse((self.destination / "build/us.3/.inuse").exists())
 
     def test_local_policy_and_build_outputs_leave_tracked_checkout_clean(self) -> None:
         helper = self.project.tools / "helper.py"
@@ -138,11 +301,11 @@ class CloneTests(unittest.TestCase):
             (self.live / "build" / f"{name}.3/.split.mk").write_text("# warm graph\n")
         self.git("add", ".")
         self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "clean inputs")
-        with patch.object(toolchain, "verify"):
+        with patch.object(clone, "prepare", return_value=False):
             clone.create(self.project, self.policy, self.destination, self.project.versions)
-        for build in (False, True):
-            with self.subTest(build=build):
-                if build:
+        for run_build in (False, True):
+            with self.subTest(build=run_build):
+                if run_build:
                     subprocess.run(["make", "-j4", "check"], cwd=self.destination, check=True, capture_output=True)
                 status = subprocess.run(
                     ["git", "status", "--short"], cwd=self.destination, check=True, capture_output=True
@@ -153,7 +316,7 @@ class CloneTests(unittest.TestCase):
     def test_cli_dispatch_selects_versions_and_formats_refusal(self) -> None:
         for versions in ([], ["--version", "us"]):
             with self.subTest(versions=versions), patch.object(config, "load_policy", return_value=self.policy):
-                with patch.object(toolchain, "verify"), redirect_stdout(io.StringIO()) as output:
+                with patch.object(clone, "prepare", return_value=False), redirect_stdout(io.StringIO()) as output:
                     code = main(["--project", str(self.live), "clone", str(self.destination), *versions])
                 self.assertEqual(code, 0)
                 self.assertIn("OK(clone)", output.getvalue())

@@ -9,11 +9,13 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Sequence
+from contextlib import ExitStack
 from dataclasses import fields
 from pathlib import Path
 
-from unbake.project import build, compiler_files, config, hygiene, toolchain
+from unbake.project import build, compiler_files, config, hygiene, makefile, setup, toolchain
 from unbake.project.config import Held, Policy, Project
 
 
@@ -33,8 +35,10 @@ def require(path: Path, *, directory: bool = False) -> None:
 
 
 def copy_regular(source: Path, destination: Path, ancestors: frozenset[Path] = frozenset()) -> None:
-    """Read links at the source, unlink destination links before any writes."""
-    resolved = source.resolve(strict=True)
+    """Copy durable inputs from pinned link targets without destination links."""
+    # Children enumerated from a pinned physical directory need only resolve
+    # their own links, rather than walking every ancestor again.
+    resolved = source if source.parent in ancestors and not source.is_symlink() else source.resolve(strict=True)
     if resolved in ancestors:
         raise Held("clone", f"{source}: cyclic directory link")
     if destination.is_symlink():
@@ -43,13 +47,22 @@ def copy_regular(source: Path, destination: Path, ancestors: frozenset[Path] = f
         if destination.exists() and not destination.is_dir():
             destination.unlink()
         destination.mkdir(parents=True, exist_ok=True)
-        for child in source.iterdir():
+        for child in resolved.iterdir():
+            # Build helpers publish final files separately from these scratch
+            # paths. Filter by name before opening a path that may disappear.
+            if (
+                child.name.startswith((".extract-", ".object-", ".input-", ".compile-"))
+                and child.name != ".extract-key"
+            ):
+                continue
+            if child.name.endswith(".partial") or child.name in {"__pycache__", ".inuse"}:
+                continue
             copy_regular(child, destination / child.name, ancestors | {resolved})
-        shutil.copystat(source, destination)
+        shutil.copystat(resolved, destination)
     else:
-        require(source)
+        require(resolved)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+        shutil.copy2(resolved, destination)
 
 
 def git(root: Path, *arguments: str) -> bytes:
@@ -89,6 +102,47 @@ def refresh_checksums(project: Project) -> None:
 
 
 def create(project: Project, policy: Policy, destination: Path, versions: Sequence[str]) -> Project:
+    """Publish only a ready checkout; pin warm source generations through the copy."""
+    destination = destination.expanduser().absolute()
+    if any(path.is_symlink() for path in (destination, *destination.parents)):
+        raise Held("clone", f"{destination}: destination has a symlink component")
+    destination = destination.resolve()
+    if destination.exists():
+        raise Held("clone", f"{destination}: destination already exists")
+    if destination.is_relative_to(project.root) or project.root.is_relative_to(destination):
+        raise Held("clone", f"{destination}: destination overlaps source project")
+    if not versions:
+        raise Held("clone", "--version: required nonempty selection")
+    if len(set(versions)) != len(versions):
+        raise Held("clone", "--version: duplicate VERSION")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with ExitStack() as pins:
+        with build.lock(project):
+            generations = {}
+            for name in versions:
+                generation = build.current_generation(project, name)
+                if generation.parent != project.root / "build" or not re.fullmatch(
+                    re.escape(name) + r"\.\d+", generation.name
+                ):
+                    raise Held("clone", f"{generation}: required build/{name}.N generation")
+                generations[name] = pins.enter_context(build.pin(generation))
+        with tempfile.TemporaryDirectory(prefix=".clone-", dir=destination.parent) as temporary:
+            stage = Path(temporary) / "project"
+            cloned = _create(project, policy, stage, versions, generations)
+            policy_path = cloned.tools / "clone-policy.toml"
+            policy_path.write_text(isolated_policy(policy, destination))
+            final_policy = destination / policy_path.relative_to(stage)
+            (stage / ".unbake/env").write_text(f"export UNBAKE_POLICY={shlex.quote(str(final_policy))}\n")
+            # rename cannot expose a partial checkout. Refuse an intervening creator.
+            if destination.exists() or destination.is_symlink():
+                raise Held("clone", f"{destination}: destination already exists")
+            stage.rename(destination)
+    return config.load(destination)
+
+
+def _create(
+    project: Project, policy: Policy, destination: Path, versions: Sequence[str], generations: dict[str, Path]
+) -> Project:
     """Clone Git history, then copy live build inputs and receipts without hardlinks."""
     destination = destination.expanduser().absolute()
     if any(path.is_symlink() for path in (destination, *destination.parents)):
@@ -108,7 +162,6 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
         require(path, directory=True)
     require(project.root / "Makefile")
     require(project.tools / "compiler.sha256")
-    generations = {}
     for name in versions:
         version = project.version(name)
         for path in (version.baserom, version.split, version.symbols):
@@ -117,7 +170,7 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
         actual = hashlib.sha1(version.baserom.read_bytes()).hexdigest()
         if actual != version.baserom_sha1:
             raise Held("clone", f"{version.baserom}: sha1 expected {version.baserom_sha1}, found {actual}")
-        generation = build.current_generation(project, name)
+        generation = generations[name]
         if generation.parent != project.root / "build" or not re.fullmatch(re.escape(name) + r"\.\d+", generation.name):
             raise Held("clone", f"{generation}: required build/{name}.N generation")
         for filename in (".split.mk", ".extract-key", project.name + ".elf", f"{project.name}.{name}.z64"):
@@ -126,8 +179,6 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
         project_relative(project, assembly)
         require(assembly, directory=True)
         generations[name] = generation
-    for ident in project.compilers:
-        toolchain.verify(project.tools / ident, toolchain.specification(ident))
     tracked = git(project.root, "ls-files", "-z").decode().split("\0")
     for name in filter(None, tracked):
         require(project.root / name)
@@ -170,7 +221,13 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
     for generation in generations.values():
         graph = destination / "build" / generation.name / ".split.mk"
         original_stat = graph.stat()
-        graph.write_bytes(f"export UNBAKE_POLICY := $(abspath {local_policy})\n".encode() + graph.read_bytes())
+        graph.write_bytes(
+            (
+                f"export UNBAKE_POLICY := $(abspath {local_policy})\n"
+                "DRIVERS := $(filter-out $(TOOLS)/cache.py,$(DRIVERS))\n"
+            ).encode()
+            + graph.read_bytes()
+        )
         os.utime(graph, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
     local = destination / ".unbake"
     local.mkdir(exist_ok=True)
@@ -179,8 +236,28 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
     exclude = destination / ".git/info/exclude"
     with exclude.open("a") as output:
         output.write("\n" + hygiene.ignore_text(cloned))
+    if prepare(cloned, config.load_policy(policy_path)):
+        # A replaced compiler invalidates warm code even when its path/flags
+        # stay identical. Cache service updates alone do not affect object bytes.
+        for generation in generations.values():
+            for receipt in (destination / "build" / generation.name).rglob("*.built"):
+                receipt.unlink()
     refresh_checksums(cloned)
     return cloned
+
+
+def prepare(project: Project, policy: Policy) -> bool:
+    """Acquire pins and current build helpers in the clone, never in its source."""
+    changed = False
+    for ident in project.compilers:
+        spec = toolchain.specification(ident)
+        for name, pin in spec.pins.items():
+            path = project.tools / ident / name
+            if not path.is_file() or compiler_files.sha(path) != pin:
+                changed = True
+    toolchain.ensure(project, policy)
+    setup.publish_files(project, makefile.helpers(project))
+    return changed
 
 
 def materialize_links(path: Path) -> None:

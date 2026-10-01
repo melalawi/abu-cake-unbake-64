@@ -64,6 +64,21 @@ class BuildCacheTests(unittest.TestCase):
         compile.compile_object(args)
         self.assertEqual((self.root / "calls").read_text().splitlines().count("cc1"), 3)
 
+    def test_cache_service_update_keeps_warm_codegen_receipts(self) -> None:
+        project, _ = fixture(self.root)
+        write_rendered(project)
+        result = subprocess.run(["make", "-j4"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = self.root / "build/us/obj/src/middle.built"
+        before = receipt.stat().st_mtime_ns
+        calls = (self.root / "calls").read_text()
+        helper = self.root / "tools/cache.py"
+        helper.write_text(helper.read_text() + "\n# Cache reader service update.\n")
+        result = subprocess.run(["make", "-j4"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(receipt.stat().st_mtime_ns, before)
+        self.assertEqual((self.root / "calls").read_text(), calls)
+
     def test_cold_graph_batches_sources_and_preserves_incremental_rules(self) -> None:
         project, _ = fixture(self.root)
         write_rendered(project)
