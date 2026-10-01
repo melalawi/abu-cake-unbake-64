@@ -72,14 +72,14 @@ class Constraints:
         return conflicts
 
 
-def origin_node(value: dict[str, Any], globals_: dict[str, Any], version: str) -> str | None:
+def origin_node(value: dict[str, Any], addresses: dict[int, list[str]]) -> str | None:
     origins = value.get("origins", [])
     if len(origins) == 1 and origins[0]["offset"] == 0:
         return str(origins[0]["id"])
     constant = value.get("constant")
-    names = [
-        name for name, row in globals_.items() if row.get("versions", {}).get(version, {}).get("address") == constant
-    ]
+    if constant is None:
+        return None
+    names = addresses.get(constant, [])
     return "address:" + names[0] if len(names) == 1 else None
 
 
@@ -89,7 +89,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
-                ignored = ("provenance", "prototype", "declaration", "aliases", "registers")
+                ignored = ("provenance", "prototype", "declaration", "aliases", "registers", "declaration_conflict")
                 old = {k: v for k, v in previous.items() if k not in ignored}
                 new = {k: v for k, v in record.items() if k not in ignored}
                 if key == "functions":
@@ -119,21 +119,32 @@ def infer(project: Project, facts: dict[str, Any], seeds: list[dict[str, Any]]) 
     globals_ = _merge_records(seeds, "globals", graph)
     structs = _merge_records(seeds, "structs", graph)
     arrays = _merge_records(seeds, "arrays", graph)
+    addresses: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for name, record in facts["globals"].items():
+        for version, placement in record["versions"].items():
+            addresses[version][placement["address"]].append(name)
     for seed in seeds:
         for name, signature in seed["functions"].items():
             for param, reg in zip(signature["params"], signature["registers"], strict=True):
                 if reg is not None:
-                    graph.seed(
-                        f"param:{name}:{reg}", declarations.canonical(param["type"], aliases), signature["provenance"]
-                    )
+                    graph.touch(f"param:{name}:{reg}", name)
+                    if not declarations.unknown(param["type"]):
+                        graph.seed(
+                            f"param:{name}:{reg}",
+                            declarations.canonical(param["type"], aliases),
+                            signature["provenance"],
+                        )
             type_ = declarations.canonical(signature["return"], aliases)
             register = "f0" if type_ in ("float", "double") else "r2"
-            if type_ != "void":
+            graph.touch(f"result:{name}:{register}", name)
+            if type_ != "void" and not declarations.unknown(signature["return"]):
                 graph.seed(f"result:{name}:{register}", type_, signature["provenance"])
         for name, record in seed["globals"].items():
             type_ = declarations.canonical(record["type"], aliases)
-            graph.seed("global:" + name, type_, record["provenance"])
-            graph.seed("address:" + name, type_ + " *", record["provenance"])
+            graph.touch("global:" + name)
+            if not declarations.unknown(record["type"]):
+                graph.seed("global:" + name, type_, record["provenance"])
+                graph.seed("address:" + name, type_ + " *", record["provenance"])
     neighbours: dict[str, set[str]] = defaultdict(set)
     fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     forwarded: dict[str, set[str]] = defaultdict(set)
@@ -160,7 +171,7 @@ def infer(project: Project, facts: dict[str, Any], seeds: list[dict[str, Any]]) 
                 for reg, value in call["arguments"].items():
                     if reg not in used:
                         continue
-                    node = origin_node(value, facts["globals"], version)
+                    node = origin_node(value, addresses[version])
                     formal = f"param:{callee}:{reg}"
                     forwarded[formal].add(node if node is not None else "unknown")
                     if node is not None:
@@ -172,7 +183,7 @@ def infer(project: Project, facts: dict[str, Any], seeds: list[dict[str, Any]]) 
                     graph.connect(f"result:{callee}:{reg}", f"return:{function}:{version}:{index}:{reg}", call)
             for returned in body["returns"]:
                 for reg, value in returned["values"].items():
-                    node = origin_node(value, facts["globals"], version)
+                    node = origin_node(value, addresses[version])
                     if node is not None:
                         graph.connect(f"result:{function}:{reg}", node, returned)
                         graph.touch(node, function)
@@ -194,7 +205,7 @@ def infer(project: Project, facts: dict[str, Any], seeds: list[dict[str, Any]]) 
                 if memory["direction"] == "read":
                     graph.connect(cell, value_node, memory)
                 else:
-                    node = origin_node(memory["value"], facts["globals"], version)
+                    node = origin_node(memory["value"], addresses[version])
                     if node is not None:
                         graph.connect(cell, node, memory)
                 graph.facts.append(
@@ -207,14 +218,20 @@ def infer(project: Project, facts: dict[str, Any], seeds: list[dict[str, Any]]) 
                     }
                 )
 
+    base_cache: dict[str, str | None] = {}
+
     def common_base(origin: str, active: frozenset[str] = frozenset()) -> str | None:
         if origin == "unknown" or origin in active:
             return None
+        if origin in base_cache:
+            return base_cache[origin]
         sources = forwarded.get(origin, set())
         if not sources:
             return origin
         roots = {common_base(source, active | {origin}) for source in sources}
-        return next(iter(roots)) if len(roots) == 1 and None not in roots else None
+        root = next(iter(roots)) if len(roots) == 1 and None not in roots else None
+        base_cache[origin] = root
+        return root
 
     shared_fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for origin, offsets in fields.items():
@@ -356,20 +373,56 @@ def infer(project: Project, facts: dict[str, Any], seeds: list[dict[str, Any]]) 
     for name, record in output_globals.items():
         if record["state"] != "known":
             unknown.append(f"global:{name}: {record['state']}")
+    output_arrays = {
+        name: {
+            **row,
+            "state": "conflict"
+            if row.get("declaration_conflict")
+            else "known"
+            if row["extent"] is not None
+            else "unknown",
+        }
+        for name, row in arrays.items()
+    }
+    for function, item in facts["functions"].items():
+        for version, body in item["versions"].items():
+            for memory in body["memory"]:
+                indexed = memory.get("indexed")
+                if indexed is None:
+                    continue
+                names = addresses[version].get(indexed["anchor"], [])
+                key = names[0] if len(names) == 1 else f"address:{version}:{indexed['anchor']:08X}"
+                if key in arrays:
+                    continue
+                candidate = output_arrays.setdefault(
+                    key,
+                    {"state": "unknown", "type": None, "extent": None, "strides": [], "users": [], "provenance": []},
+                )
+                candidate["strides"] = sorted(set(candidate["strides"]) | {indexed["scale"]})
+                candidate["users"] = sorted(set(candidate["users"]) | {function})
+                candidate["provenance"].append(
+                    {"function": function, "version": version, "instruction": memory["instruction"], **indexed}
+                )
+    unknown.extend(
+        f"array:{name}: element/extent unresolved" for name, row in output_arrays.items() if row["state"] != "known"
+    )
     dependencies = {name: sorted(neighbours[name]) for name in facts["functions"]}
-    for state in graph.resolved.values():
-        for user in state["users"]:
-            dependencies.setdefault(user, [])
-            dependencies[user] = sorted(set(dependencies[user]) | (set(state["users"]) - {user}))
+    component_names: dict[int, str] = {}
+    components: dict[str, dict[str, Any]] = {}
+    nodes: dict[str, dict[str, Any]] = {}
+    for node, state in sorted(graph.resolved.items()):
+        identity = id(state)
+        component = component_names.setdefault(identity, node)
+        components.setdefault(component, state)
+        nodes[node] = {"state": state["state"], "type": state["type"], "component": component}
     return {
         "functions": output_functions,
         "globals": output_globals,
         "structs": output_structs,
-        "arrays": {
-            name: {**row, "state": "known" if row["extent"] is not None else "unknown"} for name, row in arrays.items()
-        },
+        "arrays": output_arrays,
         "constraints": graph.facts,
-        "nodes": graph.resolved,
+        "nodes": nodes,
+        "components": components,
         "conflicts": conflicts,
         "unknown": sorted(set(unknown)),
         "dependencies": dependencies,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
@@ -23,7 +24,7 @@ def clean(source: str) -> str:
     return source
 
 
-def headers(project: Project, policy: Policy | None, version: str) -> str:
+def headers(project: Project, policy: Policy | None, version: str, extra: Path | None = None) -> str:
     contents = {
         path: path.read_text()
         for root in project.include
@@ -36,10 +37,16 @@ def headers(project: Project, policy: Policy | None, version: str) -> str:
         for path, text in contents.items():
             if re.search(r"^\s*#\s*(?:if\b|elif\b|else\b)", text, re.M):
                 raise Held("solve", f"types.declaration: {path}: policy.cpp required for conditional types")
+        if extra is not None:
+            if re.search(r"^\s*#\s*(?:if\b|ifdef\b|ifndef\b|elif\b|else\b)", extra.read_text(), re.M):
+                raise Held("solve", f"types.declaration: {extra}: policy.cpp required for conditional C")
+            return clean("\n".join(contents[path] for path in ordered) + "\n" + extra.read_text())
         return clean("\n".join(contents[path] for path in ordered))
     if not policy.cpp:
         raise Held("solve", "policy.cpp: required for typed header preprocessing")
     source = "".join(f'#include "{path}"\n' for path in ordered)
+    if extra is not None:
+        source += f'#include "{extra}"\n'
     flags: list[str] = []
     pending = iter(project.compilers[project.default_compiler].cflags)
     for flag in pending:
@@ -109,6 +116,11 @@ def canonical(type_: str, aliases: dict[str, str]) -> str:
         "long int": "long",
         "unsigned long int": "unsigned long",
     }.get(type_, type_)
+
+
+def unknown(type_: str) -> bool:
+    """Decompiler placeholders specify machine widths, not semantic C types."""
+    return bool(re.search(r"\bM2C_(?:UNK|UNKNOWN)\w*\b", type_))
 
 
 def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -> list[str | None]:
@@ -209,10 +221,8 @@ def extract(source: str, provenance: dict[str, Any], *, definitions: bool = Fals
 
 def collect(project: Project, policy: Policy | None) -> list[dict[str, Any]]:
     seeds = []
-    contexts = {}
     for version in project.versions:
         source = headers(project, policy, version)
-        contexts[version] = source
         seeds.append(
             extract(source, {"kind": "declared", "version": version, "sha256": storage.digest(source.encode())})
         )
@@ -222,8 +232,7 @@ def collect(project: Project, policy: Policy | None) -> list[dict[str, Any]]:
         for function, row in records.items():
             source = project.root / row["source"]
             for version in row["versions"]:
-                # Includes are supplied by the same preprocessed header context; bodies are real matched C.
-                text = contexts[version] + "\n" + clean(source.read_text())
+                text = headers(project, policy, version, source)
                 seed = extract(
                     text,
                     {

@@ -28,6 +28,15 @@ def solve(programs: dict, source: str) -> dict:
 
 
 class SolverTests(unittest.TestCase):
+    def test_width_placeholder_typedef_does_not_become_a_semantic_type(self) -> None:
+        result = solve(
+            {"leaf": (0x80001000, [0x03E00008, 0])},
+            "typedef int M2C_UNK; M2C_UNK leaf(M2C_UNK p); extern M2C_UNK global;",
+        )
+        self.assertEqual(result["functions"]["leaf"]["state"], "unknown")
+        self.assertIsNone(result["functions"]["leaf"]["prototype"])
+        self.assertEqual(result["globals"]["global"]["state"], "unknown")
+
     def test_tagged_typedef_alias_does_not_recursively_expand_its_own_tag(self) -> None:
         self.assertEqual(canonical("Gfx *", {"Gfx": "union Gfx"}), "union Gfx *")
 
@@ -118,6 +127,15 @@ class SolverTests(unittest.TestCase):
         result = infer(SimpleNamespace(), facts({"leaf": (0x80001000, [0x03E00008, 0])}), seeds)
         self.assertEqual(result["functions"]["leaf"]["state"], "conflict")
         self.assertGreaterEqual(len(result["conflicts"]), 2)
+
+    def test_identical_cross_version_declarations_do_not_conflict(self) -> None:
+        source = "struct Shared { int count; }; int leaf(int *p); extern int data; extern float table[12];"
+        seeds = [extract(source, {"version": "us"}), extract(source, {"version": "eu"})]
+        result = infer(SimpleNamespace(), facts({"leaf": (0x80001000, [0x03E00008, 0])}), seeds)
+        self.assertFalse(result["conflicts"])
+        self.assertEqual(result["functions"]["leaf"]["state"], "known")
+        self.assertEqual(result["structs"]["Shared"]["state"], "known")
+        self.assertEqual(result["arrays"]["table"]["state"], "known")
 
 
 if __name__ == "__main__":

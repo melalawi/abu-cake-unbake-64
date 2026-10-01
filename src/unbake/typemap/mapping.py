@@ -84,6 +84,12 @@ def map_program(project: Project) -> dict[str, Any]:
                 symbols_here = symbols[row.version].get(address, [])
                 memory["symbols"] = symbols_here
                 memory["address"] = address
+                if not symbols_here:
+                    key = f"address:{row.version}:{address:08X}"
+                    candidate = globals_.setdefault(
+                        key, {"name": None, "versions": {row.version: {"address": address}}, "accesses": []}
+                    )
+                    candidate["accesses"].append(memory)
                 for symbol in symbols_here:
                     if symbol in globals_:
                         globals_[symbol]["accesses"].append(memory)
