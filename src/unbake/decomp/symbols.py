@@ -219,16 +219,12 @@ def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> li
         else:
             # An address materialization can be typed by a later proved access.
             related = [ref for ref in access.values() if ref.address == effective]
-            if not related:
-                raise Held("symbols", f"{name}.type: no load/store or symbol evidence")
-            type_, size = related[0].type, related[0].size
-        required(type_, f"{name}.type")
-        if size <= 0:
-            raise Held("symbols", f"{name}.size: expected positive extent")
+            # A relocation proves placement even when only the address is used.
+            type_, size = (related[0].type, related[0].size) if related else ("address", 0)
         if binding:
             type_, size = binding.type, binding.size
         required(type_, f"{name}.type")
-        if size <= 0:
+        if size <= 0 and (type_, size) != ("address", 0):
             raise Held("symbols", f"{name}.size: expected positive extent")
         evidence = f"relocation {kind} at +0x{offset:X}; reference 0x{effective:08X}; addend {addend}"
         result.extend(_need(version, name, address, addend, type_, size, trial_elf.rows, bindings, evidence))
@@ -258,6 +254,11 @@ def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> li
         if need_key in unique and isinstance(need, SymbolNeed):
             previous = unique[need_key]
             assert isinstance(previous, SymbolNeed)
+            if need.type == "address":
+                continue
+            if previous.type == "address":
+                unique[need_key] = need
+                continue
             if (previous.type, previous.size) != (need.type, need.size):
                 raise Held("symbols", f"{need.name}.type: conflicting access evidence")
         unique[need_key] = need
@@ -272,8 +273,15 @@ def symbol_line(need: SymbolNeed) -> str:
         raise Held("symbols", f"{need.name}.name: invalid symbol")
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", need.type):
         raise Held("symbols", f"{need.name}.type: invalid Splat type")
-    if not 0 <= need.address <= 0xFFFFFFFF or need.size <= 0:
+    address_only = (need.type, need.size) == ("address", 0)
+    if (
+        not 0 <= need.address <= 0xFFFFFFFF
+        or (need.size <= 0 and not address_only)
+        or (need.type == "address" and not address_only)
+    ):
         raise Held("symbols", f"{need.name}.address/size: invalid range")
+    if address_only:
+        return f"{need.name} = 0x{need.address:08X};"
     return f"{need.name} = 0x{need.address:08X}; // type:{need.type} size:0x{need.size:X}"
 
 

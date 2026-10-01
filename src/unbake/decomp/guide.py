@@ -32,6 +32,8 @@ _SIZES = {"f32": 4, "f64": 8, "s8": 1, "u8": 1, "s16": 2, "u16": 2, "s32": 4, "u
 def extern(need: SymbolNeed) -> str:
     """Give the exact scalar/array declaration justified by type and extent."""
     symbol_line(need)
+    if need.type == "address":
+        return f"extern u8 {need.name}[];"
     if need.type not in _C_TYPES:
         raise Held("guide", f"{need.name}.type: no exact C declaration for {need.type}")
     width = _SIZES[need.type]

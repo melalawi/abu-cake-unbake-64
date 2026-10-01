@@ -9,7 +9,7 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
     source_version = project.names_from
     _, source = split.symbols(project.version(source_version).symbols)
     if name not in source:
-        return {}
+        raise Held("split", f"data symbol {name}: missing in names_from VERSION {source_version}")
     address = source[name][0]
     result = {}
     for version in project.versions:
@@ -24,9 +24,15 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
         )
         lower = [item for item in anchors if item[0] < address]
         upper = [item for item in anchors if item[0] > address]
-        if not lower or not upper or lower[-1][1] != upper[0][1]:
+        deltas = (
+            {delta for base, delta in lower if base == lower[-1][0]}
+            | {delta for base, delta in upper if base == upper[0][0]}
+            if lower and upper
+            else set()
+        )
+        if len(deltas) != 1:
             raise Held("split", f"data symbol {name}: no unambiguous correspondence in VERSION {version}")
-        mapped = address + lower[-1][1]
+        mapped = address + deltas.pop()
         candidates = [key for key, value in target.items() if value[0] == mapped]
         if len(candidates) != 1:
             raise Held(

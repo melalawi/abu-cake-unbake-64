@@ -148,7 +148,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
             generation = project.build_link(args.version)
             if not generation.is_symlink() or not (generation / f"{project.name}.elf").is_file():
                 print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
-        source = m2c.draft(project, policy, args.function, args.version, args.scratch)
+            source = m2c.draft(project, policy, args.function, args.version, args.scratch)
         trial(args, project, policy, source, None)
     elif args.verb == "search":
         from unbake.search import methods

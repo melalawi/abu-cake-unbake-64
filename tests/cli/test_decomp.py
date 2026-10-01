@@ -126,13 +126,16 @@ class DecompTests(MainCase):
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
             raise Held("proof", "lock held")
 
-        for verb in ("draft", "try"):
-            with self.subTest(verb=verb):
+        for stage in ("make", "m2c", "try"):
+            with self.subTest(stage=stage):
+                verb = "try" if stage == "try" else "draft"
                 operands = ["alpha", "--version", "us"] if verb == "draft" else [str(self.source)]
                 with (
-                    patch.object(trial_compile, "run_tool", side_effect=assert_locked),
+                    patch.object(trial_compile, "run_tool", side_effect=assert_locked if stage == "make" else None),
                     patch.object(trial, "try_draft", side_effect=assert_locked),
-                    patch.object(m2c, "draft", return_value=self.source),
+                    patch.object(
+                        m2c, "draft", side_effect=assert_locked if stage == "m2c" else None, return_value=self.source
+                    ),
                     patch.object(decomp, "store_trial"),
                 ):
                     code, _, error = self.run_main(self.args("decomp", verb, *operands, "--scratch", str(self.scratch)))

@@ -52,6 +52,12 @@ def resolve(needs: list[Need], project: Project, policy: Policy) -> list[Edit]:
             symbol_line(need)
             if need.name in selected:
                 other = selected[need.name]
+                if other.address == need.address:
+                    if need.type == "address":
+                        continue
+                    if other.type == "address":
+                        selected[need.name] = need
+                        continue
                 if (other.address, other.type, other.size) != (need.address, need.type, need.size):
                     raise Held("symbols", f"{need.name}: two-addresses or conflicting type/size")
             selected[need.name] = need
@@ -71,6 +77,8 @@ def resolve(needs: list[Need], project: Project, policy: Policy) -> list[Edit]:
                 address, index, attrs = existing[name]
                 if address != need.address:
                     raise Held("symbols", f"{name}: placed-elsewhere at 0x{address:08X}")
+                if need.type == "address":
+                    continue
                 for field, value in (("type", need.type), ("size", need.size)):
                     found = re.search(rf"\b{field}:([^\s]+)", attrs)
                     if found:

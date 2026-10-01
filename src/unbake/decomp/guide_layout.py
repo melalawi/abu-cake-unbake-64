@@ -17,7 +17,8 @@ def resolve(
         return set(), []
     text = preprocess(source, project, policy, version)
     records = {name: record for record in layouts(text) for name in (record.name, *record.aliases)}
-    declarations = re.findall(r"\bextern\s+(?:(?:struct|union)\s+)?(\w+)\s+(\w+)\s*;", text)
+    qualifier = r"(?:(?:const|volatile|restrict|__restrict)\s+)*"
+    declarations = re.findall(rf"\bextern\s+{qualifier}(?:(?:struct|union)\s+)?(\w+)\s+{qualifier}(\w+)\s*;", text)
     objects = [
         (name, values[name], records[type_]) for type_, name in declarations if type_ in records and name in values
     ]

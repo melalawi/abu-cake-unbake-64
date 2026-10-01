@@ -92,6 +92,58 @@ class SymbolTests(unittest.TestCase):
         )
         self.rows = (symbols.DataRow("pool", 0x800C0000, 0x800D0000, ".rodata"),)
 
+    def test_address_only_relocations_need_placement_without_type_or_extent(self) -> None:
+        for compiler in ("ido-7.1", "gcc-2.7.2-kmc", "gcc-2.8.1-sn64"):
+            for addend in (0, 4, -4):
+                with self.subTest(compiler=compiler, addend=addend), tempfile.TemporaryDirectory() as temporary:
+                    address = 0x800C8000
+                    target = pair(address + addend, 9)
+                    relocations = (symbols.Relocation(0, 5, "value"), symbols.Relocation(4, 6, "value"))
+                    obj = symbols.TrialElf(
+                        pair(addend & 0xFFFFFFFF, 9),
+                        relocations,
+                        (),
+                        self.rows,
+                        None,
+                        family_for(compiler),
+                        frozenset(),
+                    )
+                    derived = symbols.derive(obj, target, "us")
+                    inferred = next(n for n in derived if isinstance(n, SymbolNeed))
+                    self.assertEqual(
+                        (inferred.address, inferred.addend, inferred.type, inferred.size),
+                        (address, addend, "address", 0),
+                    )
+                    self.assertIn("extern u8 value[];", guide.render(derived))
+                    self.assertEqual(symbols.symbol_line(inferred), "value = 0x800C8000;")
+                    project = project_for(Path(temporary) / "symbols")
+                    project.version("us").symbols.write_text("")
+                    edit = symbols_edits.resolve(derived, project, self.policy)[0]
+                    self.assertEqual(edit.after, "value = 0x800C8000;\n")
+                    project.version("us").symbols.write_text("value = 0x800C8000; // type:f32 size:0x4\n")
+                    self.assertEqual(symbols_edits.resolve(derived, project, self.policy), [])
+                    # Stronger access evidence supersedes the address-only observation,
+                    # including when another relocation uses a different addend.
+                    typed_target = (*target, *pair(address, 0x31))
+                    typed_obj = replace(
+                        obj,
+                        words=(*obj.words, *pair(0, 0x31)),
+                        relocations=(
+                            *relocations,
+                            symbols.Relocation(8, 5, "value"),
+                            symbols.Relocation(12, 6, "value"),
+                        ),
+                    )
+                    typed = next(n for n in symbols.derive(typed_obj, typed_target, "us") if isinstance(n, SymbolNeed))
+                    self.assertEqual((typed.type, typed.size), ("f32", 4))
+                    for group in ([inferred, typed], [typed, inferred]):
+                        self.assertEqual(symbols_edits.resolve(cast(list[needs.Need], group), project, self.policy), [])
+                    for size in (-1, 1):
+                        with self.assertRaisesRegex(Held, "size"):
+                            symbols.symbol_line(replace(inferred, size=size))
+                    with self.assertRaisesRegex(Held, "placed-elsewhere"):
+                        symbols_edits.resolve([replace(inferred, address=address + 4)], project, self.policy)
+
     def test_settled_pointer_binding_invalidates_loaded_register(self) -> None:
         address = 0x800FDFCC
         target = (pair(address, 0x23)[0], pair(address, 0x23)[1] ^ (6 << 16), 0xAC400014, 0xAC400088)
