@@ -42,6 +42,8 @@ class MainTests(MainCase):
             ("try", ["try", str(self.source), "--flags"]),
             ("submit", ["submit", str(self.source)]),
             ("next", ["next"]),
+            ("map", ["map"]),
+            ("solve", ["solve"]),
             ("decomp", ["decomp", "best", "alpha"]),
             ("decomp", ["decomp", "publish", "--all"]),
             ("match", ["match", "withdraw", "alpha"]),

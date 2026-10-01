@@ -27,6 +27,13 @@ class FunctionRecord(Span):
     evidence: dict[str, Any]
 
 
+class CrossVersionItem(TypedDict):
+    name: str
+    versions: list[str]
+    placements: dict[str, FunctionRecord]
+    evidence: dict[str, Any]
+
+
 class ProviderRecord(Span):
     name: str
     kind: Literal["private", "shared", "writable", "unresolved", "text", "bin"]

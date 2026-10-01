@@ -29,20 +29,37 @@ from unbake.project.config import Held, Policy, Project
 
 
 def make_parser() -> argparse.ArgumentParser:
-    from unbake.cli import draft, submit, trial
+    from unbake.cli import draft, solve, submit, trial
+    from unbake.cli import map as map_command
 
     parser = Parser(prog="unbake", description="Build and match N64 decompilation projects.")
     parser.add_argument("--project", type=Path, metavar="DIR")
     parser.add_argument("--policy", type=Path, metavar="FILE")
     phases = parser.add_subparsers(dest="phase", required=True)
-    for command in (setup, init, split, decomp, match, report, check, clone, rodata, draft, trial, submit):
+    for command in (
+        setup,
+        init,
+        split,
+        decomp,
+        match,
+        report,
+        check,
+        clone,
+        rodata,
+        draft,
+        trial,
+        submit,
+        map_command,
+        solve,
+    ):
         command.register(phases)
     phases.add_parser("next", phase="next", help="Show the next required project action.")
     return parser
 
 
 def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
-    from unbake.cli import draft, submit, trial
+    from unbake.cli import draft, solve, submit, trial
+    from unbake.cli import map as map_command
 
     if args.phase == "decomp":
         decomp.run(args, project, policy)
@@ -51,6 +68,8 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
         "draft": draft.run,
         "try": trial.run,
         "submit": submit.run,
+        "map": map_command.run,
+        "solve": solve.run,
         "rodata": rodata.run,
         "clone": clone.run,
         "split": split.run,
@@ -61,9 +80,20 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
     return commands[args.phase](args, project, policy)
 
 
+def _contextualize(action: str, root: Path | None, policy: Path | None) -> str:
+    if not action.startswith("unbake "):
+        return action
+    tokens = shlex.split(action)
+    overrides = shlex.split(guidance.command(root, "next"))[1:-1] if "--project" not in tokens else []
+    if policy is not None and "--policy" not in tokens:
+        overrides += ["--policy", str(policy)]
+    return shlex.join([tokens[0], *overrides, *tokens[1:]])
+
+
 def main(argv: list[str] | None = None) -> int:
     phase = "config"
     root = None
+    policy_override = None
     missing = None
     tokens = sys.argv[1:] if argv is None else argv
     json_output = any(
@@ -77,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         json_output = (phase == "rodata" and args.verb == "owners") or (phase == "decomp" and args.verb == "gbi")
         retry = "unbake " + phase
         if args.policy is not None:
-            os.environ["UNBAKE_POLICY"] = str(args.policy.expanduser().absolute())
+            policy_override = args.policy.expanduser().absolute()
+            os.environ["UNBAKE_POLICY"] = str(policy_override)
         if phase == "init":
             refused = init.run(args)
             root = args.target.expanduser().absolute()
@@ -128,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                 action = guidance.resolve(root, missing=missing, retry=retry)
             else:
                 action = invocation.next_action or guidance.resolve(root, retry=retry)
+            action = _contextualize(action, root, policy_override)
         except (Held, ImportError, OSError, RuntimeError, ValueError, TypeError, AttributeError, KeyError):
             action = shlex.join(["unbake", "--project", str(root), "next"]) if root is not None else "unbake --help"
         common.finish(action, json_output=json_output)

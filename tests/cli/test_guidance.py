@@ -17,6 +17,21 @@ from unbake.project.config import Held
 class GuidanceTests(MainCase):
     real_guidance = True
 
+    def test_suggested_command_preserves_external_project_and_policy(self) -> None:
+        policy = self.directory / "policy with spaces.toml"
+        policy.write_text("")
+
+        def mapped(*args: object) -> bool:
+            common.suggest("unbake solve")
+            return False
+
+        with patch.dict(os.environ), patch("unbake.cli.map.run", side_effect=mapped):
+            code, out, error = self.run_main(["--project", str(self.root), "--policy", str(policy), "map"])
+        self.assertEqual(code, 0)
+        self.assertEqual(error, "")
+        action = out.split("Next: ", 1)[1].strip()
+        self.assertEqual(shlex.split(action), ["unbake", "--project", str(self.root), "--policy", str(policy), "solve"])
+
     def test_ready_next_does_not_create_an_absent_policy(self) -> None:
         path = self.directory / "absent-operator/policy.toml"
         with patch.dict(os.environ, UNBAKE_POLICY=str(path)):
