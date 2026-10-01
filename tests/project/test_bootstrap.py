@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from unbake.decomp import m2c
 from unbake.layout import split
-from unbake.project import build, config, fingerprint, header, init, rom, toolchain
+from unbake.project import build, config, fingerprint, header, init, init_config, rom, toolchain
 from unbake.project.config import Held
 from unbake.report import progress as report
 from unbake.report import units as report_units
@@ -59,6 +59,21 @@ def function(name: str, start: int, end: int, address: int) -> Any:
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_version_order_requires_complete_explicit_input_and_preserves_assignment_order(self) -> None:
+        names = {Path(version): version for version in ("de", "eu-x", "eu", "us-rev1", "us")}
+        explicit = {version: version for version in ("us", "us-rev1", "eu", "eu-x", "de")}
+        for supplied, missing in (({}, "de, eu-x, eu, us-rev1, us"), ({"us": "us"}, "de, eu-x, eu, us-rev1")):
+            with self.subTest(supplied=supplied), self.assertRaisesRegex(Held, "project.versions order.*" + missing):
+                init_config.ordered_versions(names, supplied)
+        for inputs in (names, dict(reversed(list(names.items())))):
+            with self.subTest(inputs=inputs):
+                self.assertEqual(list(init_config.ordered_versions(inputs, explicit).values()), list(explicit.values()))
+        renamed = {Path("pal"): "pal", Path("usa"): "usa"}
+        self.assertEqual(
+            list(init_config.ordered_versions(renamed, {"us": "usa", "eu": "pal"}).values()), ["usa", "pal"]
+        )
+        self.assertEqual(init_config.ordered_versions({Path("us"): "us"}, {}), {Path("us"): "us"})
+
     def test_function_family_boundaries_and_ambiguous_copies(self) -> None:
         addresses = (0x80110480, 0x80110490, 0x80124340, 0x80124350)
         for mixed in (False, True):
@@ -193,7 +208,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual((root / "generation" / unit["base_path"]).resolve(), partial.resolve())
 
     def test_report_refuses_missing_values_by_name(self) -> None:
-        fields = ("matched_code", "total_code", "matched_code_percent", "fuzzy_match_percent")
+        fields = ("complete_code", "total_code", "complete_units", "total_units", "fuzzy_match_percent")
         for field in fields:
             for bad in (None, True, -1):
                 with self.subTest(field=field, bad=bad):

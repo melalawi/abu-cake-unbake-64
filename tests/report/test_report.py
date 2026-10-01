@@ -27,78 +27,86 @@ def document(code: int, total: int, matched_percent: float, fuzzy_percent: float
     return {
         "version": 2,
         "measures": {
-            "matched_code": code,
+            "complete_code": code,
             "total_code": total,
-            "matched_code_percent": matched_percent,
+            "complete_code_percent": matched_percent,
             "fuzzy_match_percent": fuzzy_percent,
         },
     }
 
 
 class RenderTests(unittest.TestCase):
-    def test_exact_example_and_rounding_edges(self) -> None:
-        example = Path(__file__).with_name("example-progress.golden").read_text().rstrip("\n")
+    def test_reference_layout_goldens_and_idempotence(self) -> None:
+        for stem in ("battletanx", "ragewars"):
+            with self.subTest(project=stem):
+                root = Path(__file__).parent
+                reference = (root / f"{stem}-reference.golden").read_text()
+                golden = (root / f"{stem}-progress.golden").read_text()
+                reports = json.loads((root / f"{stem}-measures.json").read_text())
+                template = "intro\n## Progress\n\n" + reference + "\n## End\nfooter\n"
+                expected = template.replace(reference, golden)
+                self.assertEqual(report.render(template, reports), expected)
+                self.assertEqual(report.render(expected, reports), expected)
+                self.assertNotIn("fuzzy", golden)
+                # Configuration order cannot change existing README VERSION order.
+                self.assertEqual(report.render(template, dict(reversed(list(reports.items())))), expected)
+
+    def test_byte_and_function_bar_edges(self) -> None:
         cases = (
-            ("us-rev1", document(805984, 1133680, 71.09, 77.60), example),
-            ("us", document(0, 100, 0, 0), "us [" + "░" * 20 + "]  0.00% (~0.00%)  0 of 100 bytes"),
-            ("us", document(100, 100, 100, 100), "us [" + "█" * 20 + "]  100.00% (~100.00%)  100 of 100 bytes"),
-            ("us", document(71, 100, 71, 71), "us [" + "█" * 14 + "░" * 6 + "]  71.00% (~71.00%)  71 of 100 bytes"),
-            ("us", document(0, 0, 0, 0), "us [" + "░" * 20 + "]  0.00% (~0.00%)  0 of 0 bytes"),
-            ("us", document(99, 100, 99, 100), "us [" + "█" * 19 + "▒" + "]  99.00% (~100.00%)  99 of 100 bytes"),
+            (0, 0, "░" * 20),
+            (100, 100, "█" * 20),
+            (71, 71, "█" * 14 + "░" * 6),
+            (71.09, 77.60, "██████████████▒▒░░░░"),
+            (99, 100, "█" * 19 + "▒"),
         )
-        for version, measures, expected in cases:
-            with self.subTest(version=version, measures=measures):
-                self.assertEqual(report.progress_line(version, measures), expected)
+        for matched, fuzzy, bar in cases:
+            with self.subTest(matched=matched, fuzzy=fuzzy):
+                candidate = document(round(matched * 100), 10000, matched, fuzzy)
+                candidate["measures"].update(complete_units=round(matched * 100), total_units=10000)
+                rendered = report.progress({"us": candidate}, {"us": "us (release)"})
+                self.assertIn(f"bytes     [{bar}]  {matched:5.2f}% (~{fuzzy:.2f}%)", rendered)
+                self.assertIn(f"functions [{'█' * int(matched // 5) + '░' * (20 - int(matched // 5))}]", rendered)
+                self.assertEqual(rendered.count("(~"), 1)
+        empty = report.progress({"us": document(0, 0, 0, 0)}, {"us": "us (release)"})
+        self.assertIn("0 of 0", empty)
 
-    def test_real_battletanx_progress_format(self) -> None:
-        golden = Path(__file__).with_name("battletanx-progress.golden").read_text().rstrip("\n")
-        measures = json.loads(Path(__file__).with_name("battletanx-measures.json").read_text())
-        original = (Path(__file__).parents[1] / "fixture/readme/BattleTanx.golden").read_text()
-        before, body = original.split("## Progress\n\n")
-        _, after = body.split("\n\n## ", 1)
-        expected = before + "## Progress\n\n" + golden + "\n\n## " + after
-        updated = report.render(original, {"us": measures})
-        self.assertEqual(updated, expected)
-        self.assertEqual(report.render(updated, {"us": measures}), expected)
-        self.assertNotIn("fuzzy", updated.split("## Progress")[1].split("\n## ")[0])
-
-    def test_configuration_order_and_surrounding_markup(self) -> None:
-        reports = {"us-rev1": document(2, 4, 50, 75), "us": document(1, 4, 25, 25)}
-        descriptions = {version: version + " (release)" for version in reports}
-        tables = report.progress(reports, descriptions)
-        self.assertLess(tables.index("<code>us-rev1"), tables.index("<code>us ["))
-        old = "\n\n".join(reversed(tables.split("\n\n"))).replace("<code>us-rev1 [", "<code>bytes [", 1)
-        template = "intro\n## Progress\n\n<!-- progress -->\n" + old + "\n<!-- end -->\n\n## End\nfooter\n"
-        self.assertEqual(report.render(template, reports), template.replace(old, tables))
-
-    def test_native_measures_are_used_without_completed_counters(self) -> None:
-        candidate = document(7, 100, 71.09, 77.60)
-        candidate["measures"].update(matched_code="7", complete_code=90, complete_code_percent=90)
-        self.assertEqual(
-            report.progress_line("us-rev1", candidate),
-            "us-rev1 [██████████████▒▒░░░░]  71.09% (~77.60%)  7 of 100 bytes",
+    def test_summary_totals_are_weighted_and_padding_is_preserved(self) -> None:
+        summary = (
+            "<pre><code>all     [--------------------]   0.00%  0 of 400 bytes</code><br>"
+            "<code>us      [--------------------]   0.00%  0 of 100 bytes</code><br>"
+            "<code>us-rev1 [--------------------]   0.00%  0 of 300 bytes</code></pre>\n\n"
         )
-
-    def test_legacy_multiversion_summary_is_replaced_by_one_line_per_version(self) -> None:
-        original = (Path(__file__).parents[1] / "fixture/readme/RageWars.golden").read_text()
-        versions = ("us", "us-rev1", "eu", "eu-mul", "de")
-        reports = {version: document(0, 100, 0, 0) for version in versions}
-        rendered = report.render(original, reports)
-        body = rendered.split("## Progress\n\n")[1].split("\n## ")[0]
-        self.assertEqual(body.count("<code>"), len(versions))
-        self.assertEqual(body.count("<pre>"), len(versions))
-        self.assertNotIn("<pre></pre>", body)
-        self.assertTrue(body.startswith("| us ("))
+        reports = {"us": document(50, 100, 50, 75), "us-rev1": document(300, 300, 100, 100)}
+        tables = report.progress(reports, {v: v + " (release)" for v in reports})
+        template = "## Progress\n\n" + summary + tables + "\n\n## End\n"
+        rendered = report.render(template, reports)
+        self.assertIn("all     [█████████████████▒▒░]  87.50% (~93.75%)  350 of 400 bytes", rendered)
+        self.assertEqual(rendered.count("<pre>"), 3)
+        self.assertEqual(rendered.count("functions"), 2)
         self.assertEqual(report.render(rendered, reports), rendered)
-        self.assertNotIn("functions", body)
-        self.assertNotIn("<code>all", body)
-        self.assertEqual(rendered.split("\n## Development")[1], original.split("\n## Development")[1])
+
+    def test_completion_counters_override_matched_measures(self) -> None:
+        candidate = document(7, 100, 71.09, 77.60)
+        candidate["measures"].update(
+            matched_code="7",
+            complete_code="90",
+            complete_code_percent=90,
+            complete_units="99",
+            total_units=100,
+            matched_functions="3",
+            total_functions="10",
+            matched_functions_percent=30,
+        )
+        rendered = report.progress({"us": candidate}, {"us": "us (release)"})
+        self.assertIn("bytes     [██████████████████░░]  90.00% (~77.60%)  90 of 100", rendered)
+        self.assertIn("functions [███████████████████░]  99.00%  99 of 100", rendered)
 
     def test_required_measures_and_descriptions_are_named(self) -> None:
         for field, values in (
-            ("matched_code", (-1, "bad", True)),
+            ("complete_code", (-1, "bad", True)),
             ("total_code", (-1, "bad", True)),
-            ("matched_code_percent", (-1, 101, "0", True, float("nan"), float("inf"))),
+            ("complete_units", (-1, "bad", True)),
+            ("total_units", (-1, "bad", True)),
             ("fuzzy_match_percent", (-1, 101, "0", True, float("nan"), float("inf"))),
         ):
             for value in values:
@@ -117,17 +125,19 @@ class RenderTests(unittest.TestCase):
         ):
             with self.subTest(field=field), self.assertRaisesRegex(Held, field):
                 report.progress(reports, descriptions)
-        self.assertEqual(
-            report.progress_line("us", {"version": 2, "measures": {}}),
-            "us [" + "░" * 20 + "]  0.00% (~0.00%)  0 of 0 bytes",
-        )
 
-    def test_missing_progress_structure_is_named(self) -> None:
+    def test_missing_progress_structure_and_removed_format_are_named(self) -> None:
         for template, field in (
             ("No heading", "Progress"),
             ("## Progress\n\n", "following section"),
             ("## Progress\n\nold\n## End\n", "descriptions.us"),
             ("## Progress\n\n<pre>summary</pre>\n| us (release) |\n\n## End\n", "progress block"),
+            (
+                "## Progress\n\n| us (release) |\n| <pre><code>us ["
+                + "░" * 20
+                + "]  0.00% (~0.00%)  0 of 100 bytes</code></pre> |\n\n## End\n",
+                "unexpected label",
+            ),
         ):
             with self.subTest(template=template), self.assertRaisesRegex(Held, field):
                 report.render(template, {"us": document(0, 0, 0, 0)})
@@ -155,7 +165,8 @@ class ReportTest(unittest.TestCase):
         self.readme = self.project.root / "README.md"
         self.readme.write_text(
             "Project introduction\n\n## Progress\n\n| us (fixture release) |\n|---|\n"
-            "| <pre><code>old figures</code></pre> |\n\n## Contributions\nGuide\n"
+            "| <pre><code>bytes     [--------------------]   0.00%  0 of 36</code><br>"
+            "<code>functions [--------------------]   0.00%  0 of 3</code></pre> |\n\n## Contributions\nGuide\n"
         )
         self.generation = self.project.root / "build/us.1"
         self.object(self.generation / "obj/src/matched.o", "matched")
@@ -236,7 +247,7 @@ class ReportTest(unittest.TestCase):
         self.assertIn("0 of 36", self.readme.read_text())
         report.write(self.project, self.policy)
         self.assertIn("| us (us, revision 0) |", self.readme.read_text())
-        self.assertIn("24 of 36", self.readme.read_text())
+        self.assertIn("12 of 36", self.readme.read_text())
 
     def test_target_wrapper_scores_same_code_and_names_bad_input(self) -> None:
         target = self.root / "target.o"

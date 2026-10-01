@@ -186,7 +186,9 @@ def run(target: Path, roms: list[Path], forced: Forced) -> list[str]:
     policy = config.load_policy()
     if shutil.which(str(policy.splat)) is None:
         raise Held("init", f"policy.splat {policy.splat}: missing executable")
-    names = rom.version_names(cartridges, forced.version_names)
+    names = init_config.ordered_versions(rom.version_names(cartridges, forced.version_names), forced.version_names)
+    by_path = {cartridge.path: cartridge for cartridge in cartridges}
+    cartridges = [by_path[path] for path in names]
     names_from = naming_version(tuple(names.values()), forced.names_from)
     reference = next(cartridge for cartridge in cartridges if names[cartridge.path] == names_from)
     title = forced.title if forced.title is not None else reference.header.title

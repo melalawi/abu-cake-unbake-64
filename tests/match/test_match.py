@@ -2,9 +2,11 @@
 
 import hashlib
 import json
+from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.decomp import needs
+from unbake.match import proof
 from unbake.match import queue as match
 from unbake.project.config import Held
 
@@ -57,16 +59,16 @@ class MatchTests(MatchFixture):
     def test_submit_status_withdraw_and_replacement(self) -> None:
         source = self.draft("alpha")
         self.assertIn("alpha queued", match.submit(self.project, self.policy, source)[0])
-        self.assertIn(str(source), match.status(project=self.project)[0])
+        self.assertIn(str(source), match.status(project=self.project, policy=self.policy)[0])
         match.submit(self.project, self.policy, source)
         self.assertEqual(len(self.queued()), 1)
         source = self.draft("alpha", "int alpha(void) { return 1; }\n")
         match.submit(self.project, self.policy, source)
         self.assertEqual(self.queued()[0]["source_sha256"], hashlib.sha256(source.read_bytes()).hexdigest())
-        self.assertIn("alpha withdrawn", match.withdraw("alpha", project=self.project)[0])
-        self.assertEqual(match.status(project=self.project), [])
+        self.assertIn("alpha withdrawn", match.withdraw("alpha", project=self.project, policy=self.policy)[0])
+        self.assertEqual(match.status(project=self.project, policy=self.policy), [])
         with self.assertRaisesRegex(Held, "alpha.*not in"):
-            match.withdraw("alpha", project=self.project)
+            match.withdraw("alpha", project=self.project, policy=self.policy)
         self.assertEqual(self.calls, [])
 
     def test_submit_refuses_missing_or_nonidentical_exact_sha_proof(self) -> None:
@@ -74,11 +76,17 @@ class MatchTests(MatchFixture):
         with self.assertRaisesRegex(Held, "alpha.*identical_everywhere"):
             match.submit(self.project, self.policy, source)
         self.remove_proofs("alpha")
-        with self.assertRaisesRegex(Held, "alpha.*source_sha256"):
+        with (
+            patch.object(proof, "trial", side_effect=Held("try", "alpha source_sha256 trial refused")),
+            self.assertRaisesRegex(Held, "alpha.*source_sha256"),
+        ):
             match.submit(self.project, self.policy, source)
         self.draft("alpha")
         source.write_text("int alpha(void) { return 2; }\n")
-        with self.assertRaisesRegex(Held, "alpha.*source_sha256"):
+        with (
+            patch.object(proof, "trial", side_effect=Held("try", "alpha source_sha256 trial refused")),
+            self.assertRaisesRegex(Held, "alpha.*source_sha256"),
+        ):
             match.submit(self.project, self.policy, source)
         self.assertFalse((self.root / "build" / "match").exists())
 
@@ -118,15 +126,9 @@ class MatchTests(MatchFixture):
                 original = source.read_text()
                 published = self.src / source.name
                 published.write_text("#ifdef NON_MATCHING\n" + original + "#endif\n")
-                if guarded:
-                    with self.assertRaisesRegex(Held, "source_sha256"):
-                        match.submit(self.project, self.policy, published)
-                    self.prove(published)
-                    submitted = published
-                else:
-                    submitted = source
+                submitted = published if guarded else source
                 match.submit(self.project, self.policy, submitted)
-                proof_sha = hashlib.sha256(submitted.read_bytes()).hexdigest()
+                proof_sha = hashlib.sha256(original.encode()).hexdigest()
                 receipts = match.run(self.project, self.policy)
                 self.assertTrue(any(f"{function} matched" in line for line in receipts), receipts)
                 self.assertEqual(published.read_text(), original)

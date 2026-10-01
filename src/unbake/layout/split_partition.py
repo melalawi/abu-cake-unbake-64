@@ -139,9 +139,9 @@ def cut_functions(yaml: str, functions: Sequence[split.Function]) -> str:
     return "".join(output)
 
 
-def type_text(path: Path, measured: split.ExtractedText) -> str:
+def type_text(path: Path, measured: split.ExtractedText, *, text: str | None = None) -> str:
     """Split text rows at exact measured directive boundaries, retaining instructions."""
-    _, lines, segments = split.layout(path)
+    _, lines, segments = split.parse_layout(path, split.read(path) if text is None else text)
     data: list[tuple[int, int]] = []
     for start, end in measured.data:
         if data and data[-1][1] == start:
@@ -172,15 +172,7 @@ def type_text(path: Path, measured: split.ExtractedText) -> str:
 
 
 def classify(project: Project, version: str) -> list[split.Edit]:
-    """Measure configured assembly rows and repair their text/data types."""
-    path = project.version(version).split
-    before, _, segments = split.layout(path)
-    paths = [
-        project.asm / version / (row.path + ".s")
-        for segment in segments
-        for row in segment.rows
-        if row.kind in ("asm", "hasm")
-    ]
-    measured = split.extracted_text(project, version, paths)
-    after = type_text(path, measured)
-    return [split.Edit(path, before, after, (version,))] if before != after else []
+    """Audit configured text rows and plan measured boundary/type repairs."""
+    from unbake.layout.split_audit import audit
+
+    return audit(project, version)[1]

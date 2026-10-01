@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from unbake.decomp import needs
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.project.config import Held, Policy, Project, load_policy
 
 _FUNCTION = re.compile("[A-Za-z_][A-Za-z_0-9]*\\Z")
 
@@ -80,8 +80,10 @@ def queue_path(project: Project) -> Path:
 
 
 @contextmanager
-def queue_lock(project: Project) -> Iterator[None]:
-    path = queue_path(project).with_suffix(".lock")
+def queue_lock(project: Project, policy: Policy | None = None) -> Iterator[None]:
+    policy = load_policy() if policy is None else policy
+    identity = sha(str(project.root.resolve()).encode())
+    path = policy.state_root / project.name / "locks" / f"match-queue-{identity}.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

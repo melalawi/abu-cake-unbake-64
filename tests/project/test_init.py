@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from tests.project.test_bootstrap import policy
 from unbake.layout import split
-from unbake.project import fingerprint, header, init, makefile, rom
+from unbake.project import config, fingerprint, header, init, makefile, rom
 from unbake.project.config import Held
 from unbake.report import progress as report
 
@@ -54,7 +54,8 @@ elif tool == 'splat':
     )
     + r""")
     else:
-        assembly = root / 'asm' / 'us' / 'text.s'
+        version = Path(arguments[1]).parent.name
+        assembly = root / 'asm' / version / 'text.s'
         assembly.parent.mkdir(parents=True, exist_ok=True)
         text = '.section .text, "ax"\n'
         for index, name in enumerate(('alpha', 'beta', 'gamma')):
@@ -73,7 +74,7 @@ elif tool == 'make':
             link.symlink_to(generation.name, target_is_directory=True)
         output = link / ('example.' + version + '.z64')
         data = bytearray((root / ('baserom.' + version + '.z64')).read_bytes())
-        if os.environ.get('FIXTURE_MISMATCH'):
+        if os.environ.get('FIXTURE_MISMATCH') or os.environ.get('FIXTURE_MISMATCH_VERSION') == version:
             data[0x1020] ^= 1
         output.write_bytes(data)
         bytecode = root / 'tools' / '__pycache__' / 'compile.cpython-311.pyc'
@@ -124,6 +125,36 @@ class InitTests(unittest.TestCase):
 
     def forced(self) -> init.Forced:
         return init.Forced(compiler={"*": "gcc-2.7.2-kmc"}, name="example")
+
+    def test_five_version_init_proves_every_rom_before_publishing(self) -> None:
+        original = (self.inputs / "example.z64").read_bytes()
+        (self.inputs / "example.z64").unlink()
+        versions = ("us", "us-rev1", "eu", "eu-x", "de")
+        for version, region, revision in (
+            ("de", "D", 0),
+            ("eu-x", "X", 0),
+            ("eu", "P", 0),
+            ("us-rev1", "E", 1),
+            ("us", "E", 0),
+        ):
+            data = bytearray(original)
+            data[0x3E:0x40] = bytes((ord(region), revision))
+            (self.inputs / f"{version}.z64").write_bytes(data)
+        forced = replace(self.forced(), version_names=dict(zip(versions, versions, strict=True)), names_from="us-rev1")
+        inputs = sorted(self.inputs.iterdir())
+        receipts = init.run(self.target, inputs, forced)
+        self.assertEqual(config.load(self.target).versions, versions)
+        for version in versions:
+            with self.subTest(version=version):
+                self.assertEqual(
+                    (self.target / "build" / version / f"example.{version}.z64").read_bytes(),
+                    (self.inputs / f"{version}.z64").read_bytes(),
+                )
+                self.assertTrue(any(f"VERSION {version} " in line and "byte-identical" in line for line in receipts))
+        failed = self.root / "failed"
+        with patch.dict(os.environ, FIXTURE_MISMATCH_VERSION="de"), self.assertRaisesRegex(Held, "VERSION de.*0x1020"):
+            init.run(failed, inputs, forced)
+        self.assertFalse(failed.exists())
 
     def test_fresh_init_committed_inputs_have_no_absolute_paths(self) -> None:
         def rendered(project: object, policy: object) -> None:
@@ -186,14 +217,14 @@ class InitTests(unittest.TestCase):
         self.assertTrue((self.target / "build/us").is_symlink())
         self.assertEqual((self.target / "build/us").readlink(), Path("us.0"))
         self.assertIn("| us (us, revision 0) |", readme)
-        self.assertIn("us [" + "░" * 20 + "]  0.00% (~0.00%)  0 of 96 bytes", readme)
+        self.assertIn("bytes     [" + "░" * 20 + "]   0.00% (~0.00%)  0 of 96", readme)
         updated = report.render(
             readme,
             {
                 "us": {
                     "version": 2,
                     "measures": {
-                        "matched_code": 32,
+                        "complete_code": 32,
                         "total_code": 96,
                         "matched_code_percent": 100 / 3,
                         "fuzzy_match_percent": 50,
@@ -201,7 +232,7 @@ class InitTests(unittest.TestCase):
                 }
             },
         )
-        self.assertIn("us [██████▒▒▒▒░░░░░░░░░░]  33.33% (~50.00%)  32 of 96 bytes", updated)
+        self.assertIn("bytes     [██████▒▒▒▒░░░░░░░░░░]  33.33% (~50.00%)  32 of 96", updated)
         self.assertEqual(updated.split("## Building")[1], readme.split("## Building")[1])
 
     def test_empty_existing_target_is_preserved_after_commit_failure(self) -> None:

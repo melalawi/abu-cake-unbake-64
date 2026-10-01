@@ -18,6 +18,22 @@ def required(policy: Policy, name: str) -> Any:
     return value
 
 
+def ordered_versions(names: dict[Path, str], explicit: dict[str, str]) -> dict[Path, str]:
+    """Use complete, ordered --version-name assignments for multiple ROMs."""
+    if len(names) <= 1:
+        return names
+    paths = {version: path for path, version in names.items()}
+    missing = [version for version in paths if version not in explicit.values()]
+    if missing:
+        raise Held(
+            "init",
+            "project.versions order: missing explicit --version-name assignments for "
+            + ", ".join(missing)
+            + "; pass --version-name OLD=NEW for every VERSION in the desired order",
+        )
+    return {paths[version]: version for version in explicit.values()}
+
+
 def write_config(
     root: Path,
     name: str,

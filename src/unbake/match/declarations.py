@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
-from unbake.decomp import needs
+from unbake.decomp import drafts, needs
 from unbake.layout import shared, structs
 from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
@@ -59,3 +61,16 @@ def final_source(project: Project, text: str) -> str:
             if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', text, re.M):
                 text = f'#include "{include}"\n' + text
     return re.sub(r"^[ \t]*/\*\s*NON_MATCHING:\s*draft\b[^\n]*\*/[ \t]*\n?", "", text, flags=re.M)
+
+
+def match_edits(project: Project, function: str, text: str, versions: Iterable[str]) -> list[Edit]:
+    """Publish an assembly-backed source, including committed unguarded drafts."""
+    path = project.src / f"{function}.c"
+    if not path.exists() or drafts.is_partial(path.read_text()):
+        return drafts.match_edits(project, function, text, versions)
+    # Derive the same publication edits without treating an assembly-backed draft
+    # as an already matched source. The selected split rows still require asm.
+    unpublished = replace(project, src=project.src / ".match-unpublished")
+    edits = drafts.match_edits(unpublished, function, text, versions)
+    edits[0] = replace(edits[0], path=path, before=path.read_text())
+    return edits

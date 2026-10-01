@@ -29,6 +29,10 @@ class DraftInputTests(unittest.TestCase):
     def test_duplicate_typedef_dependencies_are_expanded_once(self) -> None:
         for name in ("one", "two"):
             (self.project.include[0] / f"{name}.h").write_text(f'#include "types.h"\nstruct {name} {{ s32 v; }};\n')
+        self.policy.m2c.write_text(
+            '#!/bin/sh\nprintf "typedef int s32;\\n'
+            'int alpha(struct one *a, struct two *b) { return a->v + b->v; }\\n"\n'
+        )
         source = m2c.draft(self.project, self.policy, "alpha", "us", self.root / "draft")
         self.assertEqual(source.read_text().count("typedef int s32;"), 1)
         self.assertIn("struct one", source.read_text())

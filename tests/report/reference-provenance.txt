@@ -1,0 +1,7 @@
+battletanx-reference.golden: BattleTanx 2ba9c0b README.md Progress section.
+ragewars-reference.golden: RageWars efd5f6e README.md Progress section.
+Measures: committed HEAD versions/<VERSION>/report.json, keyed by config.toml project.versions.
+BattleTanx HEAD: 1be272562078b5b76d1e32caf0d03890c2b9cee5.
+RageWars HEAD: 4c5b550dc69fbd9d070aee594b9aacd94b3e4d70.
+Progress goldens preserve reference layout, use complete_code/total_code and complete_units/total_units,
+add Unicode art and byte (~fuzzy_match_percent%) values, and use the configured eu-x VERSION label.

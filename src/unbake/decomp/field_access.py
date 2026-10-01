@@ -22,6 +22,15 @@ def _base_name(base: str) -> str:
 
 def share(project: Project, function: str, output: str, context: str) -> tuple[str, Path | None]:
     """Create shared declarations only for explicit, nonoverlapping typed fields."""
+
+    def arithmetic_load(match: re.Match[str]) -> str:
+        base, pointer, literal = match.groups()
+        if not re.fullmatch(r"[A-Za-z_]\w*", base.strip()):
+            return f"*({pointer.strip()})((char *)({base}) + {literal})"
+        return match[0]
+
+    # An arithmetic address does not establish an aggregate object identity.
+    output = _FIELD.sub(arithmetic_load, output)
     groups: dict[str, dict[int, str]] = {}
     for match in _FIELD.finditer(output):
         base, pointer, literal = match.groups()

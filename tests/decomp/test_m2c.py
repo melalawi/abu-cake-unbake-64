@@ -24,7 +24,8 @@ class M2cTests(unittest.TestCase):
         self.tool.write_text(
             f"#!{sys.executable}\n" + "import json, os, pathlib, sys\n"
             "pathlib.Path('invocation.json').write_text(json.dumps({'argv': sys.argv[1:], "
-            "'cwd': os.getcwd(), 'tmpdir': os.environ['TMPDIR']}))\n"
+            "'cwd': os.getcwd(), 'tmpdir': os.environ['TMPDIR'], "
+            "'context': pathlib.Path(sys.argv[sys.argv.index('--context') + 1]).read_text()}))\n"
             "print('int alpha(void) { return 1; }')\n",
             encoding="utf-8",
         )
@@ -57,6 +58,28 @@ class M2cTests(unittest.TestCase):
         invocation = json.loads((source.parent / "invocation.json").read_text())
         self.assertIn("mips-gcc-c", invocation["argv"])
 
+    def test_shared_types_precede_headers_without_explicit_includes(self) -> None:
+        from pycparser import c_parser
+
+        for name in ("Vector3f", "Position"):
+            with self.subTest(type=name):
+                (self.project.include[0] / "a_game.h").write_text(
+                    f"typedef struct {{ s32 id; {name} position; }} Game;\n"
+                )
+                (self.project.include[0] / "z_vectors.h").write_text(f"typedef struct {{ float x, y, z; }} {name};\n")
+                self.tool.write_text(
+                    f"#!{sys.executable}\n"
+                    "import pathlib, sys\nfrom pycparser import c_parser\n"
+                    "context = pathlib.Path(sys.argv[sys.argv.index('--context') + 1]).read_text()\n"
+                    "c_parser.CParser().parse(context)\n"
+                    "print('s32 alpha(Game *v, s32 index) { "
+                    "return (s32)v->position.x + M2C_FIELD((v + index), s32 *, 0); }')\n"
+                )
+                source = m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+                # Both the actual m2c input and the standalone candidate must parse.
+                c_parser.CParser().parse(source.read_text().split("*/", 1)[1])
+                self.assertLess(source.read_text().index(f"}} {name};"), source.read_text().index("} Game;"))
+
     def test_nested_headers_are_deduplicated_in_context(self) -> None:
         nested = self.project.include[0] / "nested"
         nested.mkdir()
@@ -65,9 +88,12 @@ class M2cTests(unittest.TestCase):
         source = m2c.draft(project, self.policy, "alpha", "us", self.scratch)
         context = (source.parent / "context.c").read_text()
         self.assertEqual(context.count("typedef int s32"), 1)
-        self.assertIn("struct Value", context)
-        self.assertLess(context.index("typedef int s32"), context.index("struct Value"))
-        self.assertIn("struct Value", source.read_text())
+        initial_context = json.loads((source.parent / "invocation.json").read_text())["context"]
+        self.assertEqual(initial_context.count("typedef int s32"), 1)
+        self.assertIn("struct Value", initial_context)
+        self.assertLess(initial_context.index("typedef int s32"), initial_context.index("struct Value"))
+        self.assertNotIn("struct Value", context)
+        self.assertNotIn("struct Value", source.read_text())
 
     def test_missing_context_include_is_named(self) -> None:
         (self.project.include[0] / "types.h").write_text('#include "missing.h"\n', encoding="utf-8")

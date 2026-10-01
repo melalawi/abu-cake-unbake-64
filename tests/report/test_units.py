@@ -173,8 +173,8 @@ class UnitsTests(unittest.TestCase):
                     self.assertEqual(measures["complete_code"], 16)
                     self.assertEqual(measures["total_code"], 32)
                     self.assertIn(
-                        "us [▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░]  0.00% (~49.88%)  0 of 32 bytes"
+                        "bytes     [██████████░░░░░░░░░░]  50.00% (~49.88%)  16 of 32"
                         if changed
-                        else "us [██████████░░░░░░░░░░]  50.00% (~50.00%)  16 of 32 bytes",
+                        else "bytes     [██████████░░░░░░░░░░]  50.00% (~50.00%)  16 of 32",
                         readme.read_text(),
                     )

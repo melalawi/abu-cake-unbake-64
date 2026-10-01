@@ -6,12 +6,13 @@ import shutil
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from unbake.decomp import checks, drafts, features, needs
 from unbake.layout import split
-from unbake.match import common, declarations
+from unbake.match import common, declarations, proof
 from unbake.match import staging as stage
 from unbake.match.common import (
     Draft,
@@ -35,6 +36,12 @@ _ROW = re.compile(
     r"(?P<kind>asm|c)(?P<gap>\s*,\s*)"
     r"(?P<name>[^,\]\r\n]+?)(?P<tail>\s*\]\s*)$"
 )
+
+
+def row(line: str) -> tuple[str, str] | None:
+    """Read the kind and source name of a code split row."""
+    match = _ROW.fullmatch(line)
+    return None if match is None else (match["kind"], Path(match["name"].strip().strip("\"'")).name)
 
 
 def holding_versions(project: Project, function: str) -> tuple[str, ...]:
@@ -67,7 +74,10 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     identical = [record for record in proof if record.get("identical_everywhere") is True]
     if not identical:
         held(f"{function}: trial source_sha256 {sha} requires identical_everywhere=true")
-    versions = holding_versions(project, function)
+    holding = holding_versions(project, function)
+    versions = tuple(row.get("versions", holding))
+    if not versions or any(v not in holding for v in versions):
+        held(f"{function}: queue VERSIONs must select holding VERSIONs")
     if not any(
         isinstance(record.get("compares"), dict) and all(v in record["compares"] for v in versions)
         for record in identical
@@ -81,7 +91,7 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     blockers = [finding for finding in findings if finding.fakematch is None]
     if blockers:
         held(f"{function}: " + "; ".join(f"{finding.rule}:{finding.line}: {finding.text}" for finding in blockers))
-    edits: list[split.Edit] = drafts.match_edits(project, function, text, versions)
+    edits: list[split.Edit] = declarations.match_edits(project, function, text, versions)
     for edit in edits:
         relative(project, edit.path)
     proof_row = next(record for record in reversed(identical) if all(v in record["compares"] for v in versions))
@@ -93,25 +103,33 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     return Draft(row, content, versions, pending)
 
 
-def submit(project: Project, policy: Policy, source: str | Path | None) -> list[str]:
-    """Enqueue the exact bytes of a draft with complete stored trial proof."""
+def submit(
+    project: Project, policy: Policy, source: str | Path | None, *, versions: tuple[str, ...] | None = None
+) -> list[str]:
+    """Try an unproven draft, then enqueue its exact bytes with stored proof."""
     if source is None:
         held("source: missing value")
     features.load()
-    source = Path(source).resolve()
-    row = {"function": function(source.stem), "source": str(source), "source_sha256": sha(read(source))}
+    source = proof.source(project, policy, Path(source).resolve())
+    selected = holding_versions(project, function(source.stem)) if versions is None else versions
+    for version in selected:
+        project.version(version)
+    proof.ensure(project, policy, source, selected)
+    row: dict[str, Any] = {"function": function(source.stem), "source": str(source), "source_sha256": sha(read(source))}
+    if versions is not None:
+        row["versions"] = list(versions)
     validate(project, policy, row)
-    with queue_lock(project):
+    with queue_lock(project, policy):
         rows = [existing for existing in queue(project) if existing["function"] != row["function"]]
         rows.append(row)
         write_queue(project, rows)
     return [f"OK(match): {row['function']} queued {row['source_sha256']}"]
 
 
-def withdraw(function: str, *, project: Project) -> list[str]:
+def withdraw(function: str, *, project: Project, policy: Policy | None = None) -> list[str]:
     """Remove one explicitly named function from this project's queue."""
     common.function(function)
-    with queue_lock(project):
+    with queue_lock(project, policy):
         rows = queue(project)
         remaining = [row for row in rows if row["function"] != function]
         if len(remaining) == len(rows):
@@ -120,9 +138,9 @@ def withdraw(function: str, *, project: Project) -> list[str]:
     return [f"OK(match): {function} withdrawn"]
 
 
-def status(*, project: Project) -> list[str]:
+def status(*, project: Project, policy: Policy | None = None) -> list[str]:
     """Return the current queue without deriving any project selection."""
-    with queue_lock(project):
+    with queue_lock(project, policy):
         rows = queue(project)
     return [f"OK(match): {row['function']} queued {row['source_sha256']} {row['source']}" for row in rows]
 
@@ -143,7 +161,7 @@ def run(project: Project, policy: Policy) -> list[str]:
     """Build outside build/.lock, isolate failures, then publish verified files."""
     features.load()
     receipts = []
-    with queue_lock(project):
+    with queue_lock(project, policy):
         rows = queue(project)
     candidates = []
     for row in rows:
@@ -163,7 +181,7 @@ def run(project: Project, policy: Policy) -> list[str]:
         current = {}
         with runner(project) as staging:
             with ExitStack() as holds:
-                for version in project.versions:
+                for version in dict.fromkeys(v for draft in candidates for v in draft.versions):
                     generation = build.current_generation(project, version).resolve()
                     current[version] = generation
                     lock = holds.enter_context((generation / ".inuse").open("a+b"))
@@ -191,7 +209,7 @@ def run(project: Project, policy: Policy) -> list[str]:
                 publish(project, policy, attempt, candidates, current, fingerprint)
                 receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
                 published = True
-            collect(project)
+            collect(replace(project, versions=tuple(current)))
         receipts.extend(
             f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}" for draft in candidates
         )

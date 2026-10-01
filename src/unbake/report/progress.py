@@ -91,35 +91,48 @@ def _native_counts(document: Any, name: str | Path) -> None:
         measures[field] = value
 
 
-def progress_line(version: str, document: dict[str, Any]) -> str:
-    """Use report measures; floor matched cells and ceil additional fuzzy cells."""
-    measures = _measures(document, version)
-    counts = []
-    for field in ("matched_code", "total_code"):
-        value = measures.get(field, 0)  # Native proto3 reports omit zero-valued fields.
-        if isinstance(value, str) and re.fullmatch("[0-9]+", value):
-            value = int(value)
-        if type(value) is not int or value < 0:
-            raise Held("report", f"{version}.measures.{field}: invalid native counter")
-        counts.append(value)
-    matched, total = counts
-    if matched > total:
-        raise Held("report", f"{version}.measures: matched_code exceeds total_code")
-    percentages = []
-    for field in ("matched_code_percent", "fuzzy_match_percent"):
-        value = measures.get(field, 0)
-        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100:
-            raise Held("report", f"{version}.measures.{field}: invalid percentage")
-        percentages.append(float(value))
-    matched_percent, fuzzy_percent = percentages
-    matched_cells = math.floor(matched_percent / 5)
-    fuzzy_cells = min(20 - matched_cells, math.ceil(max(0, fuzzy_percent - matched_percent) / 5))
-    bar = "█" * matched_cells + "▒" * fuzzy_cells + "░" * (20 - matched_cells - fuzzy_cells)
-    return f"{version} [{bar}]  {matched_percent:.2f}% (~{fuzzy_percent:.2f}%)  {matched:,} of {total:,} bytes"
+def _counter(measures: dict[str, Any], field: str, name: str) -> int:
+    value = measures.get(field, 0)
+    if isinstance(value, str) and re.fullmatch("[0-9]+", value):
+        value = int(value)
+    if type(value) is not int or value < 0:
+        raise Held("report", f"{name}.measures.{field}: invalid native counter")
+    return value
+
+
+def _percentage(measures: dict[str, Any], field: str, name: str) -> float:
+    value = measures.get(field, 0)
+    if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 100:
+        raise Held("report", f"{name}.measures.{field}: invalid percentage")
+    return float(value)
+
+
+def _figures(document: dict[str, Any], name: str, functions: bool = False) -> tuple[int, int, float, float]:
+    measures = _measures(document, name)
+    kind = "units" if functions else "code"
+    complete = _counter(measures, "complete_" + kind, name)
+    total = _counter(measures, "total_" + kind, name)
+    if complete > total:
+        raise Held("report", f"{name}.measures: complete_{kind} exceeds total_{kind}")
+    percent = 100 * complete / total if total else 0.0
+    fuzzy = percent if functions else _percentage(measures, "fuzzy_match_percent", name)
+    return complete, total, percent, fuzzy
+
+
+def _bar(percent: float, fuzzy: float) -> str:
+    matched = math.floor(percent / 5)
+    partial = min(20 - matched, math.ceil(max(0, fuzzy - percent) / 5))
+    return "█" * matched + "▒" * partial + "░" * (20 - matched - partial)
+
+
+def _line(label: str, document: dict[str, Any], version: str, functions: bool = False) -> str:
+    matched, total, percent, fuzzy = _figures(document, version, functions)
+    suffix = "" if functions else f" (~{fuzzy:.2f}%)"
+    return f"{label} [{_bar(percent, fuzzy)}]  {percent:5.2f}%{suffix}  {matched:,} of {total:,}"
 
 
 def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -> str:
-    """Render one progress line per VERSION, in report/configuration order."""
+    """Create the established bytes/functions table layout for a new README."""
     if not reports:
         raise Held("report", "reports: missing VERSION values")
     blocks = []
@@ -129,13 +142,64 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
             raise Held("report", f"readme.descriptions.{version}: missing value")
         if "\n" in description or "|" in description:
             raise Held("report", f"readme.descriptions.{version}: invalid table description")
-        line = progress_line(version, document)
-        blocks.append(f"| {description} |\n|---|\n| <pre><code>{line}</code></pre> |")
+        byte_line = _line("bytes    ", document, version)
+        function_line = _line("functions", document, version, functions=True)
+        blocks.append(
+            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{function_line}</code></pre> |"
+        )
     return "\n\n".join(blocks)
 
 
+_FIGURE = re.compile(
+    r"(?P<label>[\w-]+)(?P<pad> +)\[[#\-█▒░]{20}\]"
+    r"(?P<percent_pad> +)(?P<percent>[0-9]+\.[0-9]+)%"
+    r"(?: \(~[0-9]+\.[0-9]+%\))?(?P<count_pad> +)"
+    r"[0-9,]+ of [0-9,]+(?P<suffix> bytes)?"
+)
+
+
+def _replace_figures(content: str, document: dict[str, Any], version: str, table: bool) -> str:
+    expected = {"bytes", "functions"} if table else {version}
+    seen: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        label = match["label"]
+        if label not in expected:
+            raise Held("report", f"readme.Progress.{version}: unexpected label {label}")
+        seen.append(label)
+        functions = label == "functions"
+        matched, total, percent, fuzzy = _figures(document, version, functions)
+        width = len(match["percent_pad"]) + len(match["percent"])
+        percentage = f"{percent:.2f}".rjust(width)
+        fuzzy_text = "" if functions else f" (~{fuzzy:.2f}%)"
+        return (
+            f"{label}{match['pad']}[{_bar(percent, fuzzy)}]{percentage}%{fuzzy_text}"
+            f"{match['count_pad']}{matched:,} of {total:,}{match['suffix'] or ''}"
+        )
+
+    updated = _FIGURE.sub(replace, content)
+    if set(seen) != expected or len(seen) != len(expected):
+        raise Held("report", f"readme.Progress.{version}: bytes/functions progress block missing or duplicated")
+    return updated
+
+
+def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    figures = [_figures(document, version) for version, document in reports.items()]
+    matched = sum(row[0] for row in figures)
+    total = sum(row[1] for row in figures)
+    fuzzy = sum(row[1] * row[3] for row in figures) / total if total else 0.0
+    return {
+        "version": 2,
+        "measures": {
+            "complete_code": matched,
+            "total_code": total,
+            "fuzzy_match_percent": fuzzy,
+        },
+    }
+
+
 def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
-    """Replace existing progress figures while preserving surrounding README text."""
+    """Update only figures in the existing summary and bytes/functions tables."""
     heading = "## Progress\n\n"
     if template.count(heading) != 1:
         raise Held("report", "readme.Progress: exactly one heading required")
@@ -143,7 +207,22 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
     end = body.find("\n## ")
     if end < 0:
         raise Held("report", "readme.Progress: following section missing")
+    if not reports:
+        raise Held("report", "reports: missing VERSION values")
     block = body[:end]
+    # Reconcile a uniquely renamed VERSION while retaining the established layout.
+    labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|$", block, re.MULTILINE)
+    missing = set(reports) - set(labels)
+    obsolete = set(labels) - set(reports)
+    if len(missing) == len(obsolete) == 1:
+        old, new = next(iter(obsolete)), next(iter(missing))
+        block = re.sub(r"(?m)^(\| )" + re.escape(old) + r"(?= \()", lambda m: m[1] + new, block)
+
+        def rename_summary(match: re.Match[str]) -> str:
+            width = len(old) + len(match[1])
+            return new + " " * max(1, width - len(new)) + "["
+
+        block = re.sub(r"(?<=<code>)" + re.escape(old) + r"( +)\[", rename_summary, block)
     descriptions = {}
     matches = []
     for version in reports:
@@ -151,15 +230,11 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
         if match is None:
             raise Held("report", f"readme.descriptions.{version}: missing value")
         descriptions[version] = match[1]
-        matches.append(match)
-    if not reports:
-        raise Held("report", "reports: missing VERSION values")
-    # Initial project templates contain only description rows, before any figures exist.
+        matches.append((version, match))
     if "<pre>" not in block:
         return before + heading + progress(reports, descriptions) + "\n" + body[end:]
-    spans = []
-    tables = []
-    for version, match in zip(reports, matches, strict=True):
+    replacements = []
+    for version, match in matches:
         following = re.search(r"^\| [\w-]+ \([^\n|]+ \|$", block[match.end() :], re.MULTILINE)
         limit = match.end() + following.start() if following else len(block)
         figures = re.search(r"<pre>(.*?)</pre>", block[match.end() : limit], re.DOTALL)
@@ -167,17 +242,21 @@ def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
             raise Held("report", f"readme.Progress.{version}: progress block missing")
         start = match.end() + figures.start(1)
         stop = match.end() + figures.end(1)
-        table_end = block.find("\n", match.end() + figures.end())
-        if table_end < 0:
-            table_end = len(block)
-        line = "<code>" + progress_line(version, reports[version]) + "</code>"
-        tables.append(block[match.start() : start] + line + block[stop:table_end])
-        spans.append((match.start(), table_end))
-    replacements = list(zip(sorted(spans), tables, strict=True))
-    for (start, stop), table in reversed(replacements):
-        block = block[:start] + table + block[stop:]
-    # Remove the duplicate legacy summary and its separating blank line.
-    block = re.sub(r"^<pre>.*?</pre>\n*", "", block, count=1, flags=re.DOTALL)
+        replacements.append((start, stop, _replace_figures(figures[1], reports[version], version, table=True)))
+    # Summary labels and their order belong to the template, including its all line.
+    first_table = min(match.start() for _, match in matches)
+    summary = block[:first_table]
+    summary_reports = {**reports, "all": _aggregate(reports)}
+    for code in re.finditer(r"<code>(.*?)</code>", summary, re.DOTALL):
+        figure = _FIGURE.fullmatch(code[1])
+        if figure is None or figure["label"] not in summary_reports:
+            raise Held("report", "readme.Progress: invalid summary label or figures")
+        version = figure["label"]
+        replacements.append(
+            (code.start(1), code.end(1), _replace_figures(code[1], summary_reports[version], version, table=False))
+        )
+    for start, stop, replacement in sorted(replacements, reverse=True):
+        block = block[:start] + replacement + block[stop:]
     return before + heading + block + body[end:]
 
 

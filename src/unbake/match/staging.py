@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from unbake.decomp import drafts, needs
+from unbake.decomp import needs
 from unbake.layout import split, split_apply
 from unbake.match import declarations
 from unbake.match.common import (
@@ -147,7 +147,7 @@ def attempt(
             apply(
                 staged_project,
                 policy,
-                drafts.match_edits(
+                declarations.match_edits(
                     staged_project,
                     draft.function,
                     declarations.final_source(staged_project, draft.content.decode("utf-8")),

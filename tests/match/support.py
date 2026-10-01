@@ -128,7 +128,7 @@ class MatchFixture(unittest.TestCase):
         tree: Path,
         generation_for: Callable[[str], Path],
     ) -> dict[str, SimpleNamespace]:
-        functions = sorted(path.stem for path in (tree / "src").glob("*.c"))
+        functions = sorted(path.stem for path in (tree / "src").glob("*.c") if not drafts.is_partial(path.read_text()))
         self.calls.append(tuple(functions))
         self.assertTrue(tree.is_relative_to(self.root / "build" / "match"))
         self.assertFalse((tree / "build").exists())

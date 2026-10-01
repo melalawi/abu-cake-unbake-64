@@ -171,7 +171,7 @@ class PublicationTests(MatchFixture):
 
     def test_withdraw_during_build_prevents_publication(self) -> None:
         self.queue("alpha")
-        self.on_build = lambda tree, generation_for: match.withdraw("alpha", project=self.project)
+        self.on_build = lambda tree, generation_for: match.withdraw("alpha", project=self.project, policy=self.policy)
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any("alpha" in line and "withdrawn" in line for line in receipts))
         self.assert_untouched()
@@ -224,7 +224,7 @@ class PublicationTests(MatchFixture):
         directory.mkdir()
         (directory / "match-queue.jsonl").write_text('{"function":"alpha"}\n')
         with self.assertRaisesRegex(Held, "match-queue.jsonl.*missing source"):
-            match.status(project=self.project)
+            match.status(project=self.project, policy=self.policy)
 
     def test_external_named_source_replaces_existing_partial(self) -> None:
         source = self.draft("alpha")

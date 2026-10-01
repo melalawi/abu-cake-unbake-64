@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from unbake.decomp.commands import prefix
+from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.decomp.draft_input import header_types, jump_tables, version_for, whole_body
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
@@ -37,6 +38,7 @@ def _headers(project: Project) -> list[tuple[Path, str]]:
 
 def _context(headers: list[tuple[Path, str]]) -> str:
     paths = {path for path, _ in headers}
+    contents = {path: read_text(path, "m2c") for path, _ in headers}
     relative_paths: dict[str, Path] = {}
     for path, relative in headers:
         if relative in relative_paths and relative_paths[relative] != path:
@@ -49,7 +51,7 @@ def _context(headers: list[tuple[Path, str]]) -> str:
             return ""
         expanded.add(path)
         lines = [f"/* {path} */"]
-        for line in read_text(path, "m2c").splitlines():
+        for line in contents[path].splitlines():
             include = re.match(r'^\s*#\s*include\s*["<]([^">]+)[">]', line)
             if include:
                 local = (path.parent / include[1]).resolve()
@@ -61,7 +63,7 @@ def _context(headers: list[tuple[Path, str]]) -> str:
                 lines.append(line)
         return "\n".join(lines) + "\n"
 
-    return "\n".join(expand(path) for path, _ in headers)
+    return "\n".join(expand(path) for path in ordered_headers(contents))
 
 
 def draft(project: Project, policy: Policy, function: str | None, v: str | None, scratch: Path) -> Path:
@@ -118,6 +120,10 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     source.write_text(output, encoding="utf-8")
     print(f"draft_path: {source}")
     print(f"source filename: {function}.c (decomp try identifies the function from the filename)")
+    selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
+    headers = [(path, relative) for path, relative in headers if path in selected]
+    context.write_text(_context(headers), encoding="utf-8")
+    context.write_text(preprocess(context, project, policy, v), encoding="utf-8")
     output, shared = share(project, function, output, context.read_text())
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:
         headers.append((shared.resolve(), shared.relative_to(project.include[0]).as_posix()))

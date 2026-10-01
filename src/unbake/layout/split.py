@@ -159,7 +159,11 @@ def plain(value: str) -> str:
 
 
 def layout(path: Path) -> tuple[str, list[str], list[Segment]]:
-    text = read(path)
+    return parse_layout(path, read(path))
+
+
+def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
+    """Parse layout text without publishing a temporary YAML file."""
     lines = text.splitlines(keepends=True)
     segments: list[Segment] = []
     boundaries: list[int] = []

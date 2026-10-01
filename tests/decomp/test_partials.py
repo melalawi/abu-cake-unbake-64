@@ -150,6 +150,7 @@ class PartialsTest(unittest.TestCase):
         result = subprocess.run(
             [
                 "make",
+                "-j4",
                 "-C",
                 str(project.root),
                 "VERSION=us",
@@ -165,7 +166,12 @@ class PartialsTest(unittest.TestCase):
         self.assertNotIn("sha1sum -c -", result.stdout)
         calls = [json.loads(line) for line in (project.root / "compiler-args.jsonl").read_text().splitlines()]
         self.assertTrue(calls)
-        self.assertTrue(all("-DNON_MATCHING=1" in call for call in calls))
+        preprocessing = [call for call in calls if "-E" in call or "-M" in call]
+        codegen = [call for call in calls if "-E" not in call and "-M" not in call]
+        self.assertTrue(preprocessing)
+        self.assertTrue(codegen)
+        self.assertTrue(all("-DNON_MATCHING=1" in call for call in preprocessing))
+        self.assertTrue(all("-DNON_MATCHING=1" not in call for call in codegen))
         self.assertIn("obj/src/first.o", (project.root / "build/us.nonmatching/.split.mk").read_text())
         self.assertIn("[0x0, asm, first]", project.version("us").split.read_text())
         self.assertFalse((project.root / "build/us/obj/src/first.o").exists())
