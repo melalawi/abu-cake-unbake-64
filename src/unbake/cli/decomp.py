@@ -43,6 +43,9 @@ def register(phases: Subparsers) -> None:
     draft.add_argument("function")
     draft.add_argument("--version", required=True, metavar="V")
     draft.add_argument("--scratch", type=Path, required=True, metavar="DIR")
+    gbi = decomp_verbs.add_parser("gbi", phase="decomp", help="Rewrite proven Gfx word pairs as standard GBI macros.")
+    gbi.add_argument("files", type=Path, nargs="*", metavar="FILE")
+    gbi.add_argument("--all", action="store_true", dest="all_files")
     trial = decomp_verbs.add_parser(
         "try", phase="decomp", help="Compare a C draft and explain its first divergence and object score."
     )
@@ -136,6 +139,10 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
                 print(run_tool(["make", f"VERSION={args.version}", f"-j{policy.cores}"], project.root, "decomp"))
             source = m2c.draft(project, policy, args.function, args.version, args.scratch)
         trial(args, project, policy, source, None)
+    elif args.verb == "gbi":
+        from unbake.decomp import gbi
+
+        print(json.dumps(gbi.rewrite(project, args.files, all_files=args.all_files), indent=2))
     elif args.verb == "search":
         from unbake.search import methods
         from unbake.search.core import run as search_run
