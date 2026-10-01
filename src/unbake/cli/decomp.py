@@ -26,7 +26,9 @@ def register(phases: Subparsers) -> None:
     similar.add_argument("--version", metavar="V")
     similar.add_argument("--top-k", type=count, default=5)
     similar.add_argument("--bound", type=int, default=512)
-    guide = decomp_verbs.add_parser("guide", phase="decomp")
+    guide = decomp_verbs.add_parser(
+        "guide", phase="decomp", help="Show prologue and declaration guidance for all or one VERSION."
+    )
     guide.add_argument("function")
     guide.add_argument("--version", metavar="V")
     assign = decomp_verbs.add_parser("assign", phase="decomp")
@@ -41,7 +43,9 @@ def register(phases: Subparsers) -> None:
     draft.add_argument("function")
     draft.add_argument("--version", required=True, metavar="V")
     draft.add_argument("--scratch", type=Path, required=True, metavar="DIR")
-    trial = decomp_verbs.add_parser("try", phase="decomp")
+    trial = decomp_verbs.add_parser(
+        "try", phase="decomp", help="Compare a C draft and explain its first divergence and object score."
+    )
     trial.add_argument("source", type=Path, metavar="FILE")
     trial.add_argument("--scratch", type=Path, required=True, metavar="DIR")
     trial.add_argument("--version", action="append", metavar="V", help="Repeat to select VERSIONs.")
@@ -79,33 +83,12 @@ def trial(args: argparse.Namespace, project: Project, policy: Policy, source: Pa
 def store_trial(
     project: Project, policy: Policy, source: Path, scratch: Path, result: Trial, generations: dict[str, Path]
 ) -> None:
-    from unbake.decomp import drafts, score
-    from unbake.report import progress as report
+    from unbake.decomp import drafts
 
-    scores = {}
     for v in result.compares:
         if project.build_link(v).resolve() != generations[v]:
             raise Held("decomp", f"build/{v}: generation changed during trial, retry using --scratch {scratch}")
-        candidates = [path for path in scratch.rglob("*.elf") if path.parent.name == v]
-        if len(candidates) != 1:
-            raise Held(
-                "decomp",
-                f"VERSION {v} draft ELF in scratch {scratch}: expected exactly one *.elf, found {len(candidates)}",
-            )
-        candidate = candidates[0]
-        objects = []
-        for name in ("baserom", "draft"):
-            binary = candidate.parent / (name + ".bin")
-            try:
-                content = binary.read_bytes()
-            except OSError as error:
-                raise Held("decomp", f"VERSION {v} trial.{name} bytes {binary}: {error}") from error
-            obj = candidate.parent / (name + ".score.o")
-            obj.write_bytes(report.target_object(result.function, content))
-            objects.append(obj)
-        scores[v] = score.fuzzy(project, policy, v, result.function, objects[0], objects[1])
-        print(f"score VERSION {v}: objdiff {scores[v]:.6f}")
-    drafts.Store(policy, project).add(result, source, scores)
+    drafts.Store(policy, project).add(result, source, {v: c.match_percent for v, c in result.compares.items()})
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:

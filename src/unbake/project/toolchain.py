@@ -104,6 +104,8 @@ def registry() -> dict[str, CompilerSpec]:
             raise Held("setup", f"{label}.pins: expected nonempty table")
         pins = {compiler_files.relative(name): _digest(value, f"{label}.pins.{name}") for name, value in pins.items()}
         for name in ("cc", "as"):
+            if name == "as" and fields[name] == "policy:mips_as":
+                continue
             if fields[name] not in pins:
                 raise Held("setup", f"{label}.{name}: {fields[name]} has no file pin")
         downloads = []
@@ -193,7 +195,7 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
                 "setup",
                 f"[compilers.{spec.id}].supply: missing archive/directory for {', '.join(sorted(supplied))}. "
                 "Run setup --supply DIR with files matching the registry SHA-256 pins. "
-                "See README Compiler setup and the project compiler acquisition docs. "
+                "See README Compilers for public downloads and proprietary files you must obtain yourself. "
                 "Supplied files are not downloaded automatically.",
             )
         with tempfile.TemporaryDirectory(dir=cache, prefix=f".{spec.id}-") as temporary:
@@ -212,7 +214,7 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
                         "setup",
                         f"[compilers.{spec.id}].pins.{name}: missing supplied/downloaded SHA-256 {pin}. "
                         "Supply the exact pinned file using setup --supply DIR. "
-                        "See the project compiler acquisition docs. Keep the authoritative pin unchanged.",
+                        "See README Compilers for file acquisition. The supplied file must match this SHA-256.",
                     )
                 target = stage / name
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +274,21 @@ def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
     cache.mkdir(parents=True, exist_ok=True)
     installs = {ident: _install(specs[ident], cache, sources.get(ident)) for ident in sorted(compilers)}
     tools.mkdir(parents=True, exist_ok=True)
+    manifest_path = tools / "compiler.sha256"
+    if manifest_path.is_file():
+        for line in manifest_path.read_text().splitlines():
+            fields = line.split(maxsplit=1)
+            if len(fields) != 2 or not re.fullmatch(r"[0-9a-f]{64}", fields[0]):
+                continue
+            relative = Path(compiler_files.relative(fields[1]))
+            for ident in installs:
+                prefix = tools_relative / ident
+                if relative.is_relative_to(prefix) and relative.relative_to(prefix).as_posix() not in specs[ident].pins:
+                    target = root / relative
+                    if any(parent.is_symlink() for parent in target.parents):
+                        raise Held("setup", f"{target}: compiler parent is a symlink")
+                    if target.is_file() or target.is_symlink():
+                        target.unlink()
     manifest = []
     for ident, directory in installs.items():
         project_directory = tools / ident

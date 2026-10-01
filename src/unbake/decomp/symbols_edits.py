@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 
 from unbake.decomp.needs import LabelNeed, Need, SymbolNeed, register_resolver
+from unbake.decomp.rom import NAME
 from unbake.decomp.symbols import required, symbol_line
-from unbake.decomp.trial_layout import NAME
 from unbake.layout.split import Edit
 from unbake.project.config import Held, Policy, Project
 

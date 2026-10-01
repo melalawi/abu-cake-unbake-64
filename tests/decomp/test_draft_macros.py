@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pycparser import c_parser  # type: ignore[import-untyped]
 
-from tests.decomp.test_trial import fixture
+from tests.decomp.support import fixture
 from unbake.decomp.draft_context import required_headers
 from unbake.decomp.draft_macros import lower
 from unbake.decomp.field_access import share

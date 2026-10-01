@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from unbake.decomp.explain import Allocation, align, annotate, function_dump, leverage, render
-from unbake.decomp.trial_compare import compare_words
+from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.families.gcc.allocation import allocation as gcc
 from unbake.families.gcc.allocation import dump_flags as gcc_flags
 from unbake.families.gcc.allocation import flip, global_priority
@@ -126,13 +126,24 @@ class RegistersTests(unittest.TestCase):
                     self.assertEqual(function_dump(text, name).strip(), expected)
 
     def test_alignment_winners_and_no_gain(self) -> None:
-        for name, target, draft, expected in [
-            ("func_80220EB0", [0x8E020018], [0x8E620018], 1),
-            ("func_8021EED8", [0x02201021], [0x02601021], 1),
-            ("func_8027DD1C", [0x03E00008, 0], [0x03E00008, 0], 0),
+        for name, expected in [
+            ("func_80220EB0", 1),
+            ("func_8021EED8", 1),
+            ("func_8027DD1C", 0),
         ]:
             with self.subTest(function=name):
-                result = align(evidence(), compare_words("us", target, draft))
+                result = align(
+                    evidence(),
+                    Compare(
+                        "us",
+                        int(not expected),
+                        1,
+                        dict.fromkeys(TYPES, 0),
+                        [],
+                        0 if expected else 100,
+                        ((0, 0, 16, 19),) if expected else (),
+                    ),
+                )
                 self.assertEqual(len(result.differences), expected)
                 if expected:
                     self.assertEqual(result.differences[0].candidates, (80,))

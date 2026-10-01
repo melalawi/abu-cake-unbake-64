@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from collections.abc import Callable, Iterable
@@ -100,7 +101,7 @@ class MatchFixture(unittest.TestCase):
             init_probe_count=20,
             mips_as=tools / "as",
             mips_objcopy=tools / "objcopy",
-            cpp=tools / "cpp",
+            cpp=Path(shutil.which("cpp") or "cpp"),
             asflags=(),
             cppflags=(),
             sn64_asflags=(),
@@ -116,6 +117,7 @@ class MatchFixture(unittest.TestCase):
         self.on_build: Callable[[Path, Callable[[str], Path]], object] | None = None
         self.addCleanup(patch.stopall)
         patch.object(progress, "write", return_value=[]).start()
+        patch.object(build, "compile_object", return_value=Path("unused.o")).start()
         patch.object(build, "build", self.build, create=True).start()
         patch.object(build, "current_generation", self.current, create=True).start()
 
@@ -189,11 +191,18 @@ class MatchFixture(unittest.TestCase):
         trial = Trial(
             function=source.stem,
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
-            needs=[] if pending is None else pending,
             preconditions=[],
             next_command="match submit " + source.name,
             compares={
-                v: Compare(version=v, identical=4 if identical else 3, of=4, typed=typed.copy(), lines=[])
+                v: Compare(
+                    version=v,
+                    identical=4 if identical else 3,
+                    of=4,
+                    typed=typed.copy(),
+                    lines=[],
+                    match_percent=100 if identical else 75,
+                    register_changes=(),
+                )
                 for v in selected
             },
         )
@@ -208,7 +217,7 @@ class MatchFixture(unittest.TestCase):
             match.submit(self.project, self.policy, self.draft(function))
 
     def queued(self) -> list[dict[str, Any]]:
-        path = self.root / "data" / "match-queue.jsonl"
+        path = self.root / ".unbake" / "state" / "match-queue.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def matched(self) -> list[dict[str, Any]]:

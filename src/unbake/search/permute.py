@@ -16,7 +16,7 @@ import tarfile
 import tempfile
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -150,6 +150,7 @@ class Permuter:
     version: str
     target_object: Path
     budget_seconds: float
+    ran: bool = field(default=False, init=False)
 
     def propose(self, source: str, trial: Trial, ctx: Context) -> Iterator[Mutation]:
         """Yield external improvements for the common search loop to confirm."""
@@ -230,6 +231,7 @@ class Permuter:
                 return
             if len(baseline) != 1:
                 raise Held("permute", "permuter.log base score is required")
+            object.__setattr__(self, "ran", True)
             seen = {hashlib.sha256(source.encode()).hexdigest()}
             for score, candidate in outputs(work):
                 if score >= int(baseline[0]):

@@ -3,10 +3,9 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from tests.layout.test_xver import Project
-from unbake.decomp.needs import PlacementNeed, SymbolNeed
+from unbake.decomp.needs import PlacementNeed
 from unbake.layout import xver
 from unbake.project.config import Held
 
@@ -34,27 +33,20 @@ class TrialCutRowTests(unittest.TestCase):
                         version,
                         [(0x40, body), (0x50, body + (bytes.fromhex("24030002") if merged else bytes(4)))],
                     )
-                trial = SimpleNamespace(
-                    function="caller",
-                    needs=[SymbolNeed("eu-x", "callee", 0x80200010, 0, ".text", "func", len(body), "jump")],
-                )
                 before = {item.split: item.split.read_bytes() for item in project.maps.values()}
                 if not merged:
-                    span = xver.callee_span(project, "callee", "eu-x")
+                    span = xver.locate(project, "callee")["eu-x"]
                     assert span is not None
                     self.assertEqual(span.end, 0x5C + padding)
-                    self.assertFalse(
-                        any(isinstance(need, PlacementNeed) for need in xver.needs(project, "caller", trial))
-                    )
+                    self.assertFalse(any(isinstance(need, PlacementNeed) for need in xver.needs(project, "callee")))
                 else:
                     # An entry inside a row still requires a cut; named row
                     # ownership must not silently accept an interior entry.
                     item = project.version("eu-x")
                     item.symbols.write_text("caller = 0x80200000;\ncallee = 0x80200014;\n")
-                    trial.needs = [SymbolNeed("eu-x", "callee", 0x80200014, 0, ".text", "func", 12, "jump")]
                     if kind == "c":
                         with self.assertRaisesRegex(Held, "cannot cut c row callee"):
-                            xver.needs(project, "caller", trial)
+                            xver.needs(project, "callee")
                     else:
-                        self.assertTrue(any(need.action == "cut" for need in xver.needs(project, "caller", trial)))
+                        self.assertTrue(any(need.action == "cut" for need in xver.needs(project, "callee")))
                 self.assertEqual(before, {path: path.read_bytes() for path in before})

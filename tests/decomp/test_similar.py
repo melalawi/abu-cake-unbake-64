@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import cast
 
 from tests.decomp import test_m2c, test_plan
-from tests.decomp.test_trial import fixture
+from tests.decomp.support import fixture
 from unbake.decomp import m2c, similar
 from unbake.project.config import Held, Policy
 

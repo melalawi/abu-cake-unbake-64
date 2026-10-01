@@ -100,3 +100,35 @@ class DataRenameTests(unittest.TestCase):
             target.baserom.write_bytes(bytes(128))
             with self.assertRaises(Held):
                 data_symbols.addresses(project, "value")
+
+    def test_implicit_address_names_follow_their_naming_version_and_refuse_ambiguity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = DataProjectFixture(Path(temporary), ("us", "us-rev1", "eu", "eu-x", "de"))
+            project = cast(Project, fixture)
+            expected = {}
+            for index, version in enumerate(project.versions):
+                fixture.layout(version, [(0x10, "asm", "alpha"), (0x30, "asm", "beta"), (0x40, "data", "pool")])
+                layout = project.version(version).split
+                layout.write_text(layout.read_text().replace("    subsegments:", "    subalign: 4\n    subsegments:"))
+                address = 0x80002034 + index * 0x1000
+                expected[version] = address
+                code = [0x3C038000, 0x8C640000 | (address & 0xFFFF), 0x03E00008, 0]
+                image = bytearray(128)
+                image[:4] = bytes.fromhex("80371240")
+                for offset in (0x10, 0x30):
+                    image[offset : offset + 16] = struct.pack(">4I", *code)
+                project.version(version).baserom.write_bytes(image)
+            before = {v: project.version(v).symbols.read_bytes() for v in project.versions}
+            for origin in ("us", "eu"):
+                fixture.names_from = origin
+                name = f"D_{expected[origin]:08X}"
+                self.assertEqual(data_symbols.addresses(project, name), expected)
+                edits = data_symbols.correspondence(project, cast(Policy, fixture.policy), name)
+                self.assertEqual(len(edits), 5)
+                self.assertEqual({v: project.version(v).symbols.read_bytes() for v in project.versions}, before)
+            target = project.version("de")
+            image = bytearray(target.baserom.read_bytes())
+            image[0x34:0x38] = struct.pack(">I", 0x8C646038)
+            target.baserom.write_bytes(image)
+            with self.assertRaisesRegex(Held, "no unambiguous aligned reference in VERSION de"):
+                data_symbols.addresses(project, name)

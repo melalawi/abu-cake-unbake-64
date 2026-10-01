@@ -12,7 +12,7 @@ from unbake.project_tools.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.decomp.explain import Allocation
-    from unbake.decomp.symbols import Relocation
+    from unbake.families.mips import Relocation
 
 from unbake.project.config import Held
 

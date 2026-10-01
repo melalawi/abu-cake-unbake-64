@@ -165,7 +165,9 @@ def _order_header(text: str, prefix: str) -> str:
     return text
 
 
-def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | None = None) -> list[Edit]:
+def fold(
+    records: list[Layout], headers: Any, *, versions: tuple[str, ...] | None = None, destination: Path | None = None
+) -> list[Edit]:
     """Merge fields into existing include headers, returning edits without writing.
 
     headers is a project (which supplies include paths and affected VERSIONs), an
@@ -324,10 +326,10 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
     if additions:
         if project is None:
             held("project", "shared declaration home required")
-        path = shared.home(project)
+        path = destination if destination is not None else shared.home(project)
         before = texts.get(path, "")
         before_header = before or (
-            "#ifndef UNBAKE_STRUCTS_H\n#define UNBAKE_STRUCTS_H\n"
+            f"#ifndef UNBAKE_{path.stem.upper()}_H\n#define UNBAKE_{path.stem.upper()}_H\n"
             + _scalar_include(project, texts, list(additions.values()))
             + "\n#endif\n"
         )

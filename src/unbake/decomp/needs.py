@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, TypeAlias
-
-if TYPE_CHECKING:
-    from unbake.decomp.trial_artifacts import TrialContext
-
+from typing import Any, TypeAlias
 
 from unbake.layout.split import Edit
 from unbake.project.config import Held, Policy, Project
@@ -45,16 +41,6 @@ class LayoutNeed:
 
 
 @dataclass(frozen=True)
-class RodataNeed:
-    version: str
-    section: str
-    kind: str
-    address: int
-    size: int
-    evidence: object
-
-
-@dataclass(frozen=True)
 class PlacementNeed:
     version: str
     function: str
@@ -73,12 +59,10 @@ class GuardFinding:
     fakematch: str | None = None
 
 
-Need: TypeAlias = SymbolNeed | LabelNeed | LayoutNeed | RodataNeed | PlacementNeed | GuardFinding
+Need: TypeAlias = SymbolNeed | LabelNeed | LayoutNeed | PlacementNeed | GuardFinding
 Resolver: TypeAlias = Callable[[list[Need], Project, Policy], list[Edit]]
-Deriver: TypeAlias = Callable[["TrialContext"], list[Need]]
-_KINDS = {kind.__name__: kind for kind in (SymbolNeed, LabelNeed, LayoutNeed, RodataNeed, PlacementNeed, GuardFinding)}
+_KINDS = {kind.__name__: kind for kind in (SymbolNeed, LabelNeed, LayoutNeed, PlacementNeed, GuardFinding)}
 RESOLVERS: dict[type[Need], tuple[int, Resolver]] = {}
-DERIVERS: list[Deriver] = []
 
 
 def name(need: object) -> str:
@@ -109,26 +93,6 @@ def resolvers() -> list[tuple[type[Need], int, Resolver]]:
         (kind, order, resolver)
         for kind, (order, resolver) in sorted(RESOLVERS.items(), key=lambda item: (item[1][0], item[0].__name__))
     ]
-
-
-def register_deriver(fn: Deriver) -> None:
-    if not callable(fn) or fn in DERIVERS:
-        raise Held("needs", "deriver: unique callable required")
-    DERIVERS.append(fn)
-
-
-def derivers() -> list[Deriver]:
-    return list(DERIVERS)
-
-
-def derive(context: TrialContext) -> list[Need]:
-    result = []
-    for fn in derivers():
-        for need in fn(context):
-            if type(need) not in _KINDS.values():
-                raise Held("needs", f"need {name(need)}: unknown kind {type(need).__name__}")
-            result.append(need)
-    return result
 
 
 def encode(need: Need) -> dict[str, object]:

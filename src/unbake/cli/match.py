@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from unbake.cli.common import Subparsers, receipt
-from unbake.project.config import Policy, Project
+from unbake.project.config import Policy, Project, load_policy
 
 
 def register(phases: Subparsers) -> None:
@@ -21,6 +21,9 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.match import queue as match
 
+    local_policy = project.tools / "clone-policy.toml"
+    if local_policy.is_file():
+        policy = load_policy(local_policy)
     if args.verb == "submit":
         match.submit(project, policy, args.source)
         return receipt("match", [f"submitted {args.source}"])

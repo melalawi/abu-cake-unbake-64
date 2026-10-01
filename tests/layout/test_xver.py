@@ -1,14 +1,13 @@
 """Placement evidence using small MIPS instruction and split fixtures."""
 
 import struct
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from unbake.decomp.needs import PlacementNeed, SymbolNeed
+from unbake.decomp.needs import PlacementNeed
 from unbake.layout import split, split_edits, xver, xver_edits
 from unbake.project.config import Held
 from unbake.project_tools.extract import alignment_rows, render_alignment
@@ -93,8 +92,7 @@ class PlacementTests(unittest.TestCase):
                     for item in self.project.maps.values()
                     for path in (item.split, item.symbols)
                 }
-                trial = SimpleNamespace(function=name, needs=[])
-                pending = xver.needs(self.project, name, trial)
+                pending = xver.needs(self.project, name)
                 self.assertIn(expected, [need.action for need in pending])
                 self.assertEqual(xver.locate(self.project, name)["eu-x"].start, start)
                 edits = xver_edits.resolve(pending, self.project, object())
@@ -103,7 +101,7 @@ class PlacementTests(unittest.TestCase):
                     self.assertEqual(path.read_bytes(), content)
                 for edit in edits:
                     edit.path.write_text(edit.after)
-                self.assertFalse(xver.needs(self.project, name, trial))
+                self.assertFalse(xver.needs(self.project, name))
 
     def test_rename_after_symbol_resolution_and_worklist(self) -> None:
         self.prepare("entry", "twin")
@@ -131,17 +129,6 @@ class PlacementTests(unittest.TestCase):
                 struct.pack_into(">I", data, 0x40 + index, changed)
                 self.project.version("eu-x").baserom.write_bytes(data)
                 self.assertIsNone(xver.locate(self.project, "entry")["eu-x"])
-
-    def test_callee_twins_need_the_requested_address(self) -> None:
-        for name in ("func_8044EBB0", "func_8044BD30", "func_802192C0"):
-            with self.subTest(name=name):
-                self.prepare(name, merged=True)
-                requested = SymbolNeed("eu-x", name, 0x80200020, 0, ".text", "func", len(BODY), "jump")
-                trial = SimpleNamespace(function=name, needs=[requested])
-                self.assertIn("cut", [need.action for need in xver.needs(self.project, name, trial)])
-                trial.needs = [SymbolNeed("eu-x", name, 0x80200024, 0, ".text", "func", len(BODY), "jump")]
-                with self.assertRaisesRegex(Held, name):
-                    xver.needs(self.project, name, trial)
 
     def test_alignment_boundaries_and_linker_fragment(self) -> None:
         for alignment in (2, 4, 8, 16):
@@ -173,79 +160,10 @@ class PlacementTests(unittest.TestCase):
                 xver_edits.resolve(
                     [PlacementNeed("us", "entry", 0x40, 0x64, action, value, "")], self.project, object()
                 )
-        for trial, message in [
-            (None, "trial"),
-            (SimpleNamespace(function="other", needs=[]), "trial.function"),
-            (SimpleNamespace(function="entry"), "trial.needs"),
-        ]:
-            with self.subTest(message=message), self.assertRaisesRegex(Held, message):
-                xver.needs(self.project, "entry", trial)
         with self.assertRaisesRegex(Held, "missing"):
             xver.locate(self.project, "missing")
         del self.project.names_from
         with self.assertRaisesRegex(Held, "names_from"):
-            xver.locate(self.project, "entry")
-
-    def test_object_call_evidence_and_named_refusals(self) -> None:
-        self.prepare()
-        address = 0x80200000
-        jump = 0x0C000000 | ((address >> 2) & 0x03FFFFFF)
-        from tests.support import tool
-        from unbake.project_tools.elf import Object
-
-        source = self.project.root / "call.s"
-        source.write_text(".set noreorder\n.text\njal entry\nnop\n")
-        path = source.with_suffix(".o")
-        subprocess.run(
-            [tool("mips-linux-gnu-as"), "-EB", "-o", str(path), str(source)], check=True, capture_output=True
-        )
-        original = path.read_bytes()
-        artifact = {
-            "unit": SimpleNamespace(path=path),
-            "target_words": [jump],
-            "span": SimpleNamespace(address=0x80201000),
-        }
-        context = SimpleNamespace(
-            project=self.project, trial=SimpleNamespace(function="entry"), artifacts={"us": artifact}
-        )
-        result = xver.derive(context)
-        self.assertTrue(any(isinstance(need, SymbolNeed) and need.address == address for need in result))
-        for field in ("unit", "target_words", "span"):
-            saved = artifact.pop(field)
-            with self.subTest(field=field), self.assertRaisesRegex(Held, field):
-                xver.derive(context)
-            artifact[field] = saved
-        obj = Object(path)
-        text_offset = obj.sections[obj.section(".text")][4]
-        relocation_offset = obj.sections[obj.section(".rel.text")][4]
-        # Named placement survives a draft call that has no target instruction.
-        artifact["target_words"] = [0]
-        self.assertTrue(any(isinstance(need, SymbolNeed) for need in xver.derive(context)))
-        artifact["target_words"] = [jump]
-        for offset, target, content, message in [
-            (1, jump, bytes.fromhex("0c000000"), "offset"),
-            (0, jump, bytes.fromhex("0c000001"), "addend"),
-        ]:
-            data = bytearray(original)
-            struct.pack_into(">I", data, relocation_offset, offset)
-            data[text_offset : text_offset + 4] = content
-            path.write_bytes(data)
-            artifact["target_words"] = [target]
-            with self.subTest(message=message), self.assertRaisesRegex(Held, message):
-                xver.derive(context)
-        self.prepare()
-        with self.assertRaisesRegex(Held, "policy"):
-            xver_edits.resolve([], self.project, None)
-        path = self.project.version("us").split
-        edit = split_edits.align(self.project, "us", "entry", 8)[0]
-        path.write_text(edit.after)
-        with self.assertRaisesRegex(Held, "conflicts"):
-            split_edits.align(self.project, "us", "entry", 16)
-        with self.assertRaisesRegex(Held, "missing"):
-            split_edits.align(self.project, "us", "missing", 16)
-        self.prepare()
-        self.project.version("eu-x").baserom.write_bytes(b"")
-        with self.assertRaisesRegex(Held, "baserom"):
             xver.locate(self.project, "entry")
 
     def test_ambiguity_empty_and_truncated_words(self) -> None:

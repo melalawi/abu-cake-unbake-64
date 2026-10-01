@@ -273,8 +273,8 @@ class PublicationTests(MatchFixture):
         self.assertEqual(len(self.queued()), 1)
 
     def test_queue_corruption_names_missing_value(self) -> None:
-        directory = self.root / "data"
-        directory.mkdir()
+        directory = self.root / ".unbake" / "state"
+        directory.mkdir(parents=True)
         (directory / "match-queue.jsonl").write_text('{"function":"alpha"}\n')
         with self.assertRaisesRegex(Held, "match-queue.jsonl.*missing source"):
             match.status(project=self.project, policy=self.policy)

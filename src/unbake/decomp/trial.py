@@ -1,25 +1,25 @@
-"""Compile and compare a draft without mutating or locking a project build."""
+"""Compile drafts and compare relocatable objects from the current build."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.decomp import checks, features
-from unbake.decomp import needs as evidence
+from unbake.decomp import checks
 from unbake.decomp.commands import prefix
-from unbake.decomp.trial_artifacts import Artifact, TrialContext, rodata_object
-from unbake.decomp.trial_compare import TYPES, Compare, compare_words, words
-from unbake.decomp.trial_compile import compile_draft, executable, run_tool, scratch_directory
-from unbake.decomp.trial_layout import function_span, symbol_values, target
-from unbake.decomp.trial_link import inspect, link, snapshot_layout
-from unbake.decomp.trial_rodata import compare_rodata, pool_guidance, section_placements
+from unbake.decomp.score import diff
+from unbake.decomp.trial_compare import Compare, compare_object
+from unbake.decomp.trial_compile import compile_draft, run_tool, scratch_directory
+from unbake.decomp.trial_source import annotate_divergence
+from unbake.decomp.trial_target import target_object
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools.elf import Object
 
 
 @dataclass
@@ -29,13 +29,11 @@ class Trial:
     compares: dict[str, Compare]
     preconditions: list[str]
     next_command: str
-    needs: list[evidence.Need] = field(default_factory=list)
 
     @property
     def identical_everywhere(self) -> bool:
         return bool(self.compares) and all(
-            result.of > 0 and result.identical == result.of and not any(result.typed.values())
-            for result in self.compares.values()
+            result.match_percent == 100 and not any(result.typed.values()) for result in self.compares.values()
         )
 
 
@@ -43,7 +41,6 @@ def render(trial: Trial) -> str:
     lines = [f"OK(try): {trial.function} — NON_MATCHING draft"]
     for result in trial.compares.values():
         lines.extend(result.lines)
-    lines.extend(f"need: {evidence.name(need)} ({type(need).__name__})" for need in trial.needs)
     lines.extend(f"precondition: {line}" for line in trial.preconditions)
     lines.append(f"next_command: {trial.next_command}")
     return "\n".join(lines)
@@ -52,10 +49,7 @@ def render(trial: Trial) -> str:
 def try_draft(
     project: Project, policy: Policy, source: Path, scratch: Path, versions: list[str] | None = None
 ) -> Trial:
-    features.load()
     directory = scratch_directory(project, scratch, "try")
-    if source is None or not str(source):
-        raise Held("try", "source is required")
     source = Path(source).resolve()
     if source.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", source.stem):
         raise Held("try", f"source {source} must be named <function>.c")
@@ -64,113 +58,59 @@ def try_draft(
         text = content.decode("utf-8")
     except (OSError, UnicodeError) as error:
         raise Held("try", f"source {source}: {error}") from error
-    findings = checks.run(text)
-    preconditions = [checks.message(finding) for finding in findings if finding.fakematch is None]
-    if any(finding.rule == "inline-asm" and finding.fakematch is None for finding in findings):
-        raise Held("try", "; ".join(preconditions))
+    preconditions = [checks.message(finding) for finding in checks.run(text) if finding.fakematch is None]
     selected = list(project.versions) if versions is None else list(versions)
-    if not selected:
-        raise Held("try", "versions is missing or empty")
-    if len(set(selected)) != len(selected):
-        raise Held("try", "versions contains duplicates")
-    tools = {
-        name: executable(getattr(policy, f"mips_{name}", None), f"mips_{name}", "try")
-        for name in ("ld", "readelf", "objdump")
-    }
+    if not selected or len(set(selected)) != len(selected):
+        raise Held("try", "versions must be nonempty and unique")
     function = source.stem
-    compares: dict[str, Compare] = {}
-    trial = Trial(function, hashlib.sha256(content).hexdigest(), compares, preconditions, "")
+    trial = Trial(function, hashlib.sha256(content).hexdigest(), {}, preconditions, "")
     work = Path(tempfile.mkdtemp(prefix=f"{function}.", dir=directory))
     copied = work / source.name
-    copied.write_bytes(b"#define NON_MATCHING 1\n" + content)
+    copied.write_bytes(("#define NON_MATCHING 1\n#line 1 " + json.dumps(str(source)) + "\n").encode() + content)
     for name in selected:
-        version = project.version(name)
-        values = symbol_values(Path(version.symbols))
-        span = function_span(version, function, values)
-        if span is None:
-            if versions is not None:
-                raise Held("try", f"{version.symbols}: function {function} is missing for VERSION {name}")
-            continue
-        generation = Path(build.current_generation(project, name))
+        project.version(name)
+        generation = build.current_generation(project, name)
+        target = target_object(generation, function, name)
         version_work = work / name
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
-            raise Held("try", f"VERSION {name!r} cannot name a scratch directory")
         version_work.mkdir()
-        layout = inspect(snapshot_layout(generation, version_work), tools["readelf"], version_work)
-        expected = target(version, span)
-        object_path = version_work / f"{function}.o"
-        compile_draft(project, policy, copied, name, object_path)
-        unit = inspect(object_path, tools["readelf"], version_work)
-        artifact: Artifact = {
-            "unit": unit,
-            "layout": layout,
-            "target_words": words(expected),
-            "span": span,
-            "version": version,
-            "work": version_work,
-        }
-        artifact["rodata"] = rodata_object(project, source, function, artifact, values)
-        artifact["placements"] = section_placements(project, artifact, function)
-        provisional = Compare(name, 0, len(expected) // 4, dict.fromkeys(TYPES, 0), pool_guidance(project, artifact))
-        compares[name] = provisional
-        pending = evidence.derive(TrialContext(project, policy, copied, trial, {name: artifact}))
-        for need in pending:
-            if need not in trial.needs:
-                trial.needs.append(need)
-        produced, relocations, linked = link(
-            unit,
-            layout,
-            function,
-            span,
-            values,
-            [*pending, *artifact["placements"]],
-            tools["ld"],
-            tools["readelf"],
-            version_work,
+        obj = Object(target)
+        symbols = [s for table in obj.symbols.values() for s in table if s["info"] & 15 == 2 and s["section"]]
+        if not any(s["name"] == function for s in symbols):
+            entries = [s for s in symbols if s["value"] == 0]
+            if len(entries) != 1:
+                raise Held("try", f"VERSION {name}: target object entry for {function} is missing")
+            canonical = version_work / "target.o"
+            run_tool(
+                [
+                    str(policy.mips_objcopy),
+                    "--redefine-sym",
+                    entries[0]["name"] + "=" + function,
+                    str(target),
+                    str(canonical),
+                ],
+                version_work,
+                "try",
+            )
+            target = canonical
+        candidate = version_work / f"{function}.o"
+        compile_draft(project, policy, copied, name, candidate)
+        comparison = compare_object(
+            name, diff(policy, name, function, target, candidate, version_work / "objdiff.json"), function
         )
-        (version_work / "baserom.bin").write_bytes(expected)
-        (version_work / "draft.bin").write_bytes(produced)
-        listing = run_tool([tools["objdump"], "-dr", str(linked)], version_work, "try")
-        (version_work / "draft.asm").write_text(listing, encoding="utf-8")
-        target_listing = run_tool(
-            [
-                tools["objdump"],
-                "-D",
-                "-b",
-                "binary",
-                "-m",
-                "mips:4300",
-                "-EB",
-                f"--adjust-vma=0x{span.address:X}",
-                str(version_work / "baserom.bin"),
-            ],
-            version_work,
-            "try",
-        )
-        (version_work / "baserom.asm").write_text(target_listing, encoding="utf-8")
-        comparison = compare_words(name, words(expected), words(produced), relocations)
-        comparison.lines.insert(
-            1, f"address 0x{span.address:08X}; ROM offset 0x{span.offset:X}; generation {generation}"
-        )
-        comparison.lines.extend(provisional.lines)
-        if "rodata" in provisional.typed:
-            comparison.typed["rodata"] = provisional.typed["rodata"]
-        compare_rodata(artifact, linked, tools["readelf"], comparison)
-        compares[name] = comparison
-    if not compares:
-        raise Held("try", f"function {function} is missing from symbols for versions {selected}")
+        annotate_divergence(project, policy, copied, source, name, version_work, candidate, comparison)
+        comparison.lines.insert(1, f"target object {target}; generation {generation}")
+        trial.compares[name] = comparison
     command = [*prefix(project), "decomp", "try", str(source), "--scratch", str(directory)]
     if versions is not None:
         for name in selected:
             command.extend(["--version", name])
     trial.next_command = shlex.join(command)
     if trial.identical_everywhere and not preconditions:
-        if versions is not None and set(selected) != set(project.versions):
-            trial.next_command = shlex.join(
-                [*prefix(project), "decomp", "try", str(source), "--scratch", str(directory)]
-            )
-        else:
-            trial.next_command = shlex.join([*prefix(project), "match", "submit", str(source)])
+        trial.next_command = shlex.join(
+            [*prefix(project), "match", "submit", str(source)]
+            if set(selected) == set(project.versions)
+            else [*prefix(project), "decomp", "try", str(source), "--scratch", str(directory)]
+        )
     (work / "report.txt").write_text(render(trial) + "\n", encoding="utf-8")
     print(render(trial))
     return trial

@@ -1,7 +1,6 @@
 """Match behavior with stored trial proofs and a controlled build implementation."""
 
 import hashlib
-import json
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
@@ -146,15 +145,6 @@ class MatchTests(MatchFixture):
         self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
         self.assertEqual(self.matched()[0]["fakematch"], [reason])
         self.assertFalse((self.root / "data" / "matched.jsonl").exists())
-
-    def test_stored_needs_are_required(self) -> None:
-        source = self.draft("alpha")
-        rows = self.store.history()
-        del rows[0]["needs"]
-        (self.store.root / "trials.jsonl").write_text(json.dumps(rows[0]) + "\n")
-        with self.assertRaisesRegex(Held, "needs"):
-            match.submit(self.project, self.policy, source)
-        self.assertEqual(self.calls, [])
 
     def test_absent_version_is_allowed_and_duplicate_function_is_refused(self) -> None:
         path = self.project.version("eu").split

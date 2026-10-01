@@ -167,12 +167,8 @@ def description(project: Project) -> dict[str, Any]:
         compilers[ident] = {
             "kind": compiler.kind,
             "cc": relative(project, compiler.cc),
-            "as": relative(project, compiler.as_),
+            "as": str(compiler.as_) if str(compiler.as_).startswith("policy:") else relative(project, compiler.as_),
             "cflags": list(compiler.cflags),
-            "wibo": relative(project, project.tools / ident / "wibo") if compiler.kind == "sn64" else None,
-            "obj_parser": relative(project, project.tools / ident / "psyq-obj-parser")
-            if compiler.kind == "sn64"
-            else None,
         }
     units = dict(project.units)
     memberships: dict[str, set[str]] = {}
@@ -215,11 +211,10 @@ def description(project: Project) -> dict[str, Any]:
 
 def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
     """Link proved shared compiler sections over their resident split rows."""
-    from unbake.layout.rodata import linker_fragment
-    from unbake.project_tools.rodata import insert_fragment
+    from unbake.project_tools.rodata import fragment, insert_fragment
 
     try:
-        return insert_fragment(script, linker_fragment(rows))
+        return insert_fragment(script, fragment(rows))
     except ValueError as error:
         raise Held("build", str(error)) from error
 
@@ -228,7 +223,16 @@ def helpers(project: Project) -> dict[str, str]:
     tools = relative(project, project.tools)
     names = ["extract.py", "compile.py", "elf.py", "layout.py", "rodata.py", "literal_layout.py", "host.py"]
     if any(c.kind == "sn64" for c in project.compilers.values()):
-        names.extend(["sn64_cc.py", "asn64.py", "resolve_external_branches.py"])
+        names.extend(
+            [
+                "sn64_cc.py",
+                "sn64_gnu_as.py",
+                "sn64_schedule.py",
+                "sn64_literals.py",
+                "sn64_macros.py",
+                "resolve_external_branches.py",
+            ]
+        )
     files = {
         tools + "/" + name: (TEMPLATES / name)
         .read_text()
@@ -267,7 +271,14 @@ def render(project: Project) -> dict[str, str]:
             for name in (
                 ["compile.py", "cache.py", "elf.py", "host.py"]
                 + (
-                    ["sn64_cc.py", "asn64.py", "resolve_external_branches.py"]
+                    [
+                        "sn64_cc.py",
+                        "sn64_gnu_as.py",
+                        "sn64_schedule.py",
+                        "sn64_literals.py",
+                        "sn64_macros.py",
+                        "resolve_external_branches.py",
+                    ]
                     if any(c.kind == "sn64" for c in project.compilers.values())
                     else []
                 )

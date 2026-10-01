@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -22,7 +23,7 @@ from unbake.match.common import (
     sha,
 )
 from unbake.project import build
-from unbake.project.config import Policy, Project
+from unbake.project.config import Held, Policy, Project
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
 _OUTPUTS = frozenset({"build", ".git", "artifacts", ".unbake", ".splat"})
@@ -145,6 +146,24 @@ def chunk_stale_sources(generation: Path, tools: Path) -> None:
             receipt.unlink()
 
 
+def project_at(project: Project, tree: Path) -> Project:
+    """Relocate mutable build inputs to an isolated tree."""
+    return replace(
+        project,
+        root=tree,
+        src=tree / relative(project, project.src),
+        include=tuple(tree / relative(project, path) for path in project.include),
+        version_map={
+            v: replace(
+                project.version(v),
+                split=tree / relative(project, project.version(v).split),
+                symbols=tree / relative(project, project.version(v).symbols),
+            )
+            for v in project.versions
+        },
+    )
+
+
 def attempt(
     project: Project, policy: Policy, base: Path, workspace: Path, current: dict[str, Path], candidates: list[Draft]
 ) -> Attempt:
@@ -157,20 +176,7 @@ def attempt(
         local_policy = project.tools / "clone-policy.toml"
         if local_policy.is_file():
             shutil.copy2(local_policy, tree / relative(project, local_policy))
-        staged_project = replace(
-            project,
-            root=tree,
-            src=tree / relative(project, project.src),
-            include=tuple(tree / relative(project, path) for path in project.include),
-            version_map={
-                v: replace(
-                    project.version(v),
-                    split=tree / relative(project, project.version(v).split),
-                    symbols=tree / relative(project, project.version(v).symbols),
-                )
-                for v in project.versions
-            },
-        )
+        staged_project = project_at(project, tree)
         applied: list[split.Edit] = []
 
         def apply(staged: Project, policy: Policy, edits: Iterable[split.Edit]) -> None:
@@ -183,11 +189,8 @@ def attempt(
             apply(
                 staged_project,
                 policy,
-                declarations.match_edits(
-                    staged_project,
-                    draft.function,
-                    declarations.final_source(staged_project, draft.content.decode("utf-8")),
-                    draft.versions,
+                declarations.folded_edits(
+                    staged_project, policy, draft.function, draft.content.decode("utf-8"), draft.versions
                 ),
             )
         affected = {v for edit in applied for v in edit.versions}
@@ -237,3 +240,25 @@ def bisect(
     middle = len(group) // 2
     accepted = bisect(project, policy, base, workspace, current, group[:middle], accepted, receipts)
     return bisect(project, policy, base, workspace, current, group[middle:], accepted, receipts)
+
+
+def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
+    """Compile the publication form before writing any queue state."""
+    with tempfile.TemporaryDirectory(prefix="match-submit-") as temporary:
+        workspace = Path(temporary)
+        tree = workspace / "tree"
+        copy_tree(project.root, tree)
+        staged = project_at(project, tree)
+        edits = declarations.folded_edits(staged, policy, draft.function, draft.content.decode("utf-8"), draft.versions)
+        split_apply.apply(staged, policy, edits, staged=True)
+        for version in draft.versions:
+            try:
+                build.compile_object(
+                    staged,
+                    policy,
+                    staged.src / f"{draft.function}.c",
+                    version,
+                    workspace / version / f"{draft.function}.o",
+                )
+            except (Held, OSError) as error:
+                held(f"{draft.function}: folded source compile failed on VERSION {version}: {error}")

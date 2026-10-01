@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.decomp.needs import GuardFinding, Need, register_deriver, register_resolver
+from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
 from unbake.project.config import Held
 
@@ -320,13 +320,4 @@ def resolve(findings: list[Need], project: object, policy: object) -> list[Edit]
     return []
 
 
-def derive(context: object) -> list[Need]:
-    """Attach source findings to a trial before match resolution."""
-    source = getattr(context, "source", None)
-    if not isinstance(source, Path):
-        raise Held("checks", "trial_context.source is missing or invalid")
-    return list(run(source))
-
-
-register_deriver(derive)
 register_resolver(GuardFinding, 0, resolve)

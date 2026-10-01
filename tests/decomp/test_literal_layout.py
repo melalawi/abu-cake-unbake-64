@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.decomp.test_trial import assemble
+from tests.decomp.support import assemble
 from unbake.project_tools.elf import Object
 from unbake.project_tools.layout import resident
 from unbake.project_tools.literal_layout import arrange

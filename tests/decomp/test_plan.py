@@ -90,7 +90,6 @@ class PlanningTests(unittest.TestCase):
                 )
                 for v in scores
             },
-            needs=[],
             preconditions=[],
             next_command="unbake decomp plan",
             identical_everywhere=identical,
@@ -110,7 +109,7 @@ class PlanningTests(unittest.TestCase):
             ),
             (
                 [
-                    ("gamma", {"us": 65, "eu": 65}, True),
+                    ("gamma", {"us": 100, "eu": 100}, True),
                     ("gamma", {"us": 100, "eu": 100}, False),
                     ("alpha", {"us": 100, "eu": 100}, False),
                 ],
@@ -131,11 +130,11 @@ class PlanningTests(unittest.TestCase):
                 self.assertEqual([row.function for row in rows], expected)
                 if entries and entries[0][2]:
                     self.assertTrue(rows[0].identical)
-                    self.assertEqual(rows[0].score, 65)
+                    self.assertEqual(rows[0].score, 100)
                     self.assertIn(b"/* 0 */", rows[0].draft.read_bytes())
 
     def test_latest_trial_for_same_source_replaces_old_evidence(self) -> None:
-        row, path = self.add("beta", {"us": 90, "eu": 90}, True)
+        row, path = self.add("beta", {"us": 100, "eu": 100}, True)
         replacement = copy.deepcopy(row)
         replacement["identical_everywhere"] = False
         replacement["compares"]["eu"]["identical"] = 5

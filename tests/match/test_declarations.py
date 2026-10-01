@@ -16,10 +16,58 @@ from unbake.layout.structs_parser import Parser
 from unbake.match import declarations
 from unbake.match import queue as match
 from unbake.project import build as project_build
-from unbake.project.config import Held
+from unbake.project.config import Held, Policy, Project
 
 
 class DeclarationTests(MatchFixture):
+    def test_version_branches_fold_and_compile_before_queueing(self) -> None:
+        text = (
+            "typedef struct Record Record;\nstruct Record { int value; };\n"
+            "typedef struct { int value; } Other;\n"
+            "int alpha(Record *arg, Other *other) {\n"
+            "#if defined(VERSION_US)\nif (arg->value) {\n"
+            "#else\nif (other->value) {\n#endif\nreturn arg->value; } return 0; }\n"
+        )
+        source = self.draft("alpha", text)
+        compiler = shutil.which("cc")
+        assert compiler is not None
+        compiled = []
+
+        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+            completed = subprocess.run(
+                [
+                    compiler,
+                    "-std=c89",
+                    "-fsyntax-only",
+                    f"-DVERSION_{version.upper()}",
+                    f"-I{project.include[0]}",
+                    str(source),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode:
+                raise Held("compile", completed.stderr)
+            compiled.append(version)
+            return out
+
+        with patch.object(project_build, "compile_object", side_effect=compile_source):
+            match.submit(self.project, self.policy, source)
+        self.assertEqual(compiled, list(self.versions))
+        self.assertFalse((self.root / "include" / "shared" / "alpha.h").exists())
+        self.assertTrue(any("alpha matched" in receipt for receipt in match.run(self.project, self.policy)))
+        self.assertIn('"shared/alpha.h"', (self.src / "alpha.c").read_text())
+        self.assertIn("struct Record {", (self.root / "include" / "shared" / "alpha.h").read_text())
+        invalid = self.draft(
+            "beta", text.replace("alpha(", "beta(").replace("return arg->value;", "return arg->missing;")
+        )
+        with (
+            patch.object(project_build, "compile_object", side_effect=compile_source),
+            self.assertRaisesRegex(Held, "folded source compile failed.*VERSION us"),
+        ):
+            match.submit(self.project, self.policy, invalid)
+        self.assertEqual(self.queued(), [])
+
     def test_folded_scalar_typedefs_use_project_home_or_refuse_by_name(self) -> None:
         header = self.root / "include" / "basetypes.h"
         header.write_text(
@@ -51,9 +99,9 @@ class DeclarationTests(MatchFixture):
                 text = f"{aliases}\nstruct Record {{ {field_type} value; }};\n/* retained */\n{body}\n"
                 if conflict:
                     with self.assertRaisesRegex(Held, rf"{conflict}: conflicting draft scalar typedef"):
-                        declarations.final_source(self.project, text)
+                        declarations.final_source(self.project, text, [Parser(text)], [])
                     continue
-                final = declarations.final_source(self.project, text)
+                final = declarations.final_source(self.project, text, [Parser(text)], [])
                 self.assertEqual(final.count('#include "basetypes.h"'), 1)
                 self.assertIn(body, final)
                 self.assertIn("/* retained */", final)
@@ -101,7 +149,8 @@ class DeclarationTests(MatchFixture):
                     [text[item.start : item.end] for item in records], [definition[:-1] for definition in definitions]
                 )
                 self.assertTrue(all(first.end <= second.start for first, second in pairwise(records)))
-                final = declarations.final_source(self.project, text)
+                (self.root / "include" / "structs.h").write_text("\n".join([*forwards, *definitions]))
+                final = declarations.final_source(self.project, text, [Parser(text)], [])
                 self.assertIn(extern, final)
                 self.assertIn(body, final)
                 for declaration in (*forwards, *definitions):
@@ -129,7 +178,7 @@ class DeclarationTests(MatchFixture):
                     self.build_failures.add(("alpha", "eu"))
                 with patch.object(project_build, "build", wraps=self.build) as build:
                     receipts = match.run(self.project, self.policy)
-                header = self.root / "include" / "structs.h"
+                header = self.root / "include" / "shared" / "alpha.h"
                 if outcome == "missing":
                     self.assertTrue(any("VERSION eu: cannot acquire generation" in line for line in receipts), receipts)
                     build.assert_not_called()
@@ -173,7 +222,7 @@ class DeclarationTests(MatchFixture):
         header.write_text("struct Record { int value; };\n")
         self.assertTrue(any("Record.value" in line for line in match.run(self.project, self.policy)))
         self.assertEqual(self.calls, [])
-        self.assertFalse((self.root / "build" / "match").exists())
+        self.assertFalse(list((self.root / "build" / "match").glob("run-*")))
 
     def test_landing_creates_and_extends_one_shared_home(self) -> None:
         for function, name in (("alpha", "Record"), ("beta", "Other")):
@@ -184,9 +233,9 @@ class DeclarationTests(MatchFixture):
             match.submit(self.project, self.policy, source)
             self.assertTrue(any(f"{function} matched" in line for line in match.run(self.project, self.policy)))
             landed = (self.src / source.name).read_text()
-            self.assertIn('#include "structs.h"', landed)
+            self.assertIn(f'#include "shared/{function}.h"', landed)
             self.assertNotIn("typedef struct", landed)
-        header = (self.root / "include" / "structs.h").read_text()
+        header = "\n".join(path.read_text() for path in (self.root / "include" / "shared").glob("*.h"))
         self.assertIn("struct Record", header)
         self.assertIn("struct Other", header)
         self.assertFalse((self.root / "include" / "alpha.h").exists())

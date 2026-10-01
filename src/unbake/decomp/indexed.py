@@ -4,7 +4,7 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from unbake.decomp.trial_layout import FunctionSpan, project_reader
+from unbake.decomp.rom import FunctionSpan, project_reader
 from unbake.layout import split
 from unbake.project.config import Held, Project
 

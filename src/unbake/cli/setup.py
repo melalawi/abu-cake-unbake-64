@@ -11,7 +11,7 @@ def register(phases: Subparsers) -> None:
     setup = phases.add_parser(
         "setup",
         phase="setup",
-        help="Verify inputs and generate the standalone build. See README Dependencies and Policy first.",
+        help="Verify inputs and generate the standalone build. See README Dependencies and Policy.",
     )
     setup.add_argument("--new", type=Path, metavar="ROM")
     setup.add_argument(
@@ -23,7 +23,7 @@ def register(phases: Subparsers) -> None:
         metavar="DIR",
         help="Supply verified compiler files and optional VERSION ROMs. ROMs are verified by SHA-1. "
         "Files are found recursively by digest. "
-        "See the project compiler acquisition docs.",
+        "See README Compilers for file acquisition and proprietary file requirements.",
     )
 
 

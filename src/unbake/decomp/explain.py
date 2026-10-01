@@ -63,38 +63,21 @@ def function_dump(text: str, function: str) -> str:
 
 def align(allocation: Allocation, comparison: Compare) -> Allocation:
     """Attach the trial's aligned register words to possible pseudos and winners."""
-    from unbake.decomp.trial_compare import fields
-
     differences = []
-    pattern = re.compile(r"^register: target \+0x([0-9A-F]+) ([0-9A-F]{8}); draft \+0x([0-9A-F]+) ([0-9A-F]{8})$", re.I)
-    for line in comparison.lines:
-        match = pattern.fullmatch(line)
-        if match is None:
-            continue
-        target_offset, target, draft_offset, draft = (int(x, 16) for x in match.groups())
-        mask, _ = fields(target)
-        for shift in (6, 11, 16, 21):
-            field = 31 << shift
-            if mask & field != field or not (target ^ draft) & field:
-                continue
-            before, after = (target >> shift) & 31, (draft >> shift) & 31
-            if target >> 26 == 0x11:
-                mode = (target >> 21) & 31
-                if shift in (6, 11) or (shift == 16 and mode >= 16):
-                    before, after = before + 32, after + 32
-            candidates = tuple(p.number for p in allocation.pseudos if p.hard == after)
-            holders = tuple(p.number for p in allocation.pseudos if p.hard == before)
-            differences.append(
-                RegisterDifference(
-                    target_offset,
-                    draft_offset,
-                    before,
-                    after,
-                    candidates,
-                    holders,
-                    len(candidates) != 1 or len(holders) != 1,
-                )
+    for target_offset, draft_offset, before, after in comparison.register_changes:
+        candidates = tuple(p.number for p in allocation.pseudos if p.hard == after)
+        holders = tuple(p.number for p in allocation.pseudos if p.hard == before)
+        differences.append(
+            RegisterDifference(
+                target_offset,
+                draft_offset,
+                before,
+                after,
+                candidates,
+                holders,
+                len(candidates) != 1 or len(holders) != 1,
             )
+        )
     return replace(allocation, differences=tuple(differences))
 
 
@@ -218,7 +201,7 @@ def allocation(project: Project, policy: Policy, source: Path, version: str) -> 
         work = Path(temporary)
         comparison = trial.try_draft(project, policy, source, work, versions=[version]).compares[version]
         if spec.family == "gcc":
-            expanded, codeflags = _gcc_input(project, policy, source, version, work)
+            expanded, codeflags = gcc_input(project, policy, source, version, work, preserve_lines=False)
             input_path = work / "source.i"
             input_path.write_text(expanded)
             trial_compile.run_tool(
@@ -278,7 +261,10 @@ def _state_root(policy: Policy) -> Path:
     return Path(root)
 
 
-def _gcc_input(project: Project, policy: Policy, source: Path, version: str, work: Path) -> tuple[str, list[str]]:
+def gcc_input(
+    project: Project, policy: Policy, source: Path, version: str, work: Path, *, preserve_lines: bool
+) -> tuple[str, list[str]]:
+    """Prepare the exact GCC input with optional source line directives."""
     from unbake.decomp import trial_compile
     from unbake.project import makefile
     from unbake.project_tools.sn64_cc import partition_flags
@@ -293,7 +279,7 @@ def _gcc_input(project: Project, policy: Policy, source: Path, version: str, wor
         recipe = makefile.recipe(project)
         command = [
             makefile.host_executable(policy, recipe.cpp or "", "cpp"),
-            *recipe.cppflags,
+            *(flag for flag in recipe.cppflags if not (preserve_lines and flag == "-P")),
             *options,
             "-DNON_MATCHING=1",
             str(source),
@@ -302,7 +288,8 @@ def _gcc_input(project: Project, policy: Policy, source: Path, version: str, wor
         codeflags = [flag for flag in flags if flag != "-c"]
         command = [str(compiler.cc), *codeflags, "-DNON_MATCHING=1", "-E", str(source)]
     expanded = trial_compile.run_tool(command, work, "explain")
-    expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
+    if not preserve_lines:
+        expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
     return expanded, codeflags
 
 
@@ -325,7 +312,7 @@ def order(project: Project, policy: Policy, source: Path, version: str) -> Sched
     root = trial_compile.scratch_directory(project, _state_root(policy) / "explain", "explain")
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:
         work = Path(temporary)
-        expanded, flags = _gcc_input(project, policy, source, version, work)
+        expanded, flags = gcc_input(project, policy, source, version, work, preserve_lines=False)
         input_path = work / "source.i"
         input_path.write_text(expanded, encoding="utf-8")
         trial_compile.run_tool(

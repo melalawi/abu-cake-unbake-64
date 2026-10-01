@@ -313,7 +313,9 @@ def run(
                 break
     mutations = evaluated - 1
     if mutations == 0:
-        raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
+        if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
+            raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
+        print("external permuter ran; no improving candidates emitted")
     print(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s")
     if best.trial.identical_everywhere:
         print(f"IDENTICAL {best.trial.function}: {best.path}")

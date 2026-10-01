@@ -161,7 +161,6 @@ class DeclarationTests(unittest.TestCase):
 
 class FoldTests(unittest.TestCase):
     def test_registered_layouts_round_trip_and_fold(self) -> None:
-        self.assertIn(structs.derive, needs.derivers())
         self.assertIn((needs.LayoutNeed, 30, structs.resolve), needs.resolvers())
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -182,10 +181,31 @@ class FoldTests(unittest.TestCase):
                 src=root / "src",
             )
             policy = SimpleNamespace(cpp=Path(cast(str, shutil.which("cpp"))), cppflags=("-undef", "-nostdinc"))
-            context = SimpleNamespace(project=project, policy=policy, source=source, artifacts={"us": {}, "eu": {}})
             pending = [
                 needs.decode(row)
-                for row in json.loads(json.dumps([needs.encode(item) for item in structs.derive(context)]))
+                for row in json.loads(
+                    json.dumps(
+                        [
+                            needs.encode(
+                                needs.LayoutNeed(
+                                    version,
+                                    record.name,
+                                    record.fields,
+                                    str(source),
+                                    dict(
+                                        kind=record.kind,
+                                        size=record.size,
+                                        alignment=record.alignment,
+                                        aliases=record.aliases,
+                                    ),
+                                )
+                            )
+                            for version in project.versions
+                            for record in layouts(source, project=project, policy=policy, version=version)
+                        ],
+                        default=lambda value: value.__dict__,
+                    )
+                )
             ]
             edits = structs.resolve(pending, project, policy)
             self.assertEqual(len(edits), 1)

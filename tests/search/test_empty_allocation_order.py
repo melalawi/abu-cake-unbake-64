@@ -26,7 +26,7 @@ class EmptyAllocationOrderTests(unittest.TestCase):
             source = root / "f.c"
             source.write_text("int f(unsigned char *base, int index){return (base + index)[24];}")
             policy = cast(Policy, SimpleNamespace(state_root=root / "state"))
-            proof = trial.Trial("f", "0" * 64, {"us": Compare("us", 4, 2, {}, [])}, [], "", [])
+            proof = trial.Trial("f", "0" * 64, {"us": Compare("us", 4, 2, {}, [], 0.0, ())}, [], "")
             for ranking in ("", ";; 0 regs to allocate:\n"):
                 with self.subTest(ranking=ranking):
 

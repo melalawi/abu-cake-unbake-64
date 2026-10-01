@@ -7,7 +7,6 @@ def load() -> None:
     for name in (
         "unbake.decomp.checks",
         "unbake.decomp.symbols",
-        "unbake.layout.rodata",
         "unbake.layout.structs",
         "unbake.layout.xver",
     ):

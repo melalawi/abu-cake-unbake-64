@@ -8,14 +8,12 @@ from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unbake.decomp.trial_layout import RomReader
+    from unbake.decomp.rom import RomReader
 
 from unbake.decomp.commands import prefix
-from unbake.decomp.draft_input import version_for
 from unbake.decomp.indexed import table_guidance
 from unbake.decomp.needs import LayoutNeed, Need, SymbolNeed
-from unbake.decomp.symbols import Binding, DataRow, TrialElf, derive, references, symbol_line
-from unbake.families import Family
+from unbake.decomp.symbols import Binding, DataRow, references, required, symbol_line
 from unbake.project.config import Held, Project, load_policy
 
 _C_TYPES = {
@@ -75,12 +73,39 @@ def from_words(
     bindings: Iterable[Binding],
     rows: Iterable[DataRow],
     gp: int | None,
-    family: Family,
     settled: frozenset[int] = frozenset(),
 ) -> list[Need]:
     """Derive guidance before drafting, using the same constant-reference analysis."""
-    evidence = TrialElf(tuple(target_words), (), tuple(bindings), tuple(rows), gp, family, settled)
-    return derive(evidence, target_words, version)
+    required(version, "version")
+    known = tuple(bindings)
+    intervals = tuple(rows)
+    result: list[Need] = []
+    seen: set[int] = set()
+    for ref in references(target_words, gp):
+        if ref.address in settled or ref.address in seen:
+            continue
+        matches = [row for row in intervals if row.start <= ref.address < row.end]
+        if len(matches) != 1:
+            raise Held("guide", f"data row at 0x{ref.address:08X} is missing or ambiguous")
+        row = matches[0]
+        if ref.address + ref.size > row.end:
+            raise Held("guide", f"reference 0x{ref.address:08X}: crosses data row {row.name}")
+        aliases = [binding for binding in known if binding.address == ref.address]
+        name = aliases[0].name if len(aliases) == 1 else f"D_{ref.address:08X}"
+        result.append(
+            SymbolNeed(
+                version,
+                name,
+                ref.address,
+                0,
+                row.section,
+                ref.type,
+                ref.size,
+                f"constant reference at +0x{ref.offset:X}",
+            )
+        )
+        seen.add(ref.address)
+    return result
 
 
 def prologue(target_words: Iterable[int]) -> str:
@@ -148,19 +173,21 @@ def resident_row(reader: RomReader, address: int, size: int) -> DataRow:
 
 def run(project: Project, function: str, version: str | None) -> str:
     """Read a configured function's target and print data declarations and prologue."""
-    from unbake.decomp import trial_layout
+    selected = list(project.versions) if version is None else [version]
+    return "\n\n".join(f"VERSION {name}\n{for_version(project, function, name)}" for name in selected)
 
-    version = version_for(project, version, "guide")
+
+def for_version(project: Project, function: str, version: str) -> str:
+    """Compose guidance for one configured VERSION without printing it."""
+    from unbake.decomp import rom
+
     configured = project.version(version)
-    values = trial_layout.symbol_values(configured.symbols)
-    span = trial_layout.function_span(configured, function, values)
+    values = rom.symbol_values(configured.symbols)
+    span = rom.function_span(configured, function, values)
     if span is None:
         raise Held("guide", f"{function}: missing split placement in VERSION {version}")
-    from unbake.families import family_for
-
-    family = family_for(project.compiler_for(project.src / (function + ".c")).id)
     rows = data_rows(project, version)
-    target = words(trial_layout.target(configured, span), "big")
+    target = words(rom.target(configured, span), "big")
     from unbake.decomp.guide_layout import resolve
 
     refs = references(target, values.get("_gp"))
@@ -174,7 +201,7 @@ def run(project: Project, function: str, version: str | None) -> str:
         ):
             settled.add(ref.address)
             field_guidance.append(f"reference: 0x{ref.address:08X} = {aliases[0]}; configured symbol")
-    reader = trial_layout.project_reader(project, version)
+    reader = rom.project_reader(project, version)
     for ref in refs:
         if ref.address in settled or any(row.start <= ref.address < row.end for row in rows):
             continue
@@ -186,25 +213,17 @@ def run(project: Project, function: str, version: str | None) -> str:
             )
             continue
         rows += (DataRow(f"resident_{mapping.address:08X}", mapping.address, mapping.end, ".rodata"),)
-    inferred = from_words(target, version, (), rows, values.get("_gp"), family, frozenset(settled))
+    inferred = from_words(target, version, (), rows, values.get("_gp"), frozenset(settled))
     bindings = []
     for need in inferred:
         if isinstance(need, SymbolNeed):
             aliases = [name for name, address in values.items() if address == need.address]
             if len(aliases) == 1:
                 bindings.append(Binding(aliases[0], need.address, need.section, need.type, need.size))
-    needs = from_words(target, version, bindings, rows, values.get("_gp"), family, frozenset(settled))
-    from unbake.decomp.drafts import Store
+    needs = from_words(target, version, bindings, rows, values.get("_gp"), frozenset(settled))
 
-    store = Store(load_policy(), project)
-    rows_history = store.rows(function)
     commands = []
-    if rows_history:
-        from unbake.decomp.needs import decode
-
-        latest = rows_history[-1]
-        pending = [decode(item) for item in latest["needs"]]
-        needs.extend(need for need in pending if isinstance(need, LayoutNeed) and need.version == version)
+    if needs:
         for need in needs:
             if isinstance(need, LayoutNeed):
                 command = [
@@ -246,5 +265,4 @@ def run(project: Project, function: str, version: str | None) -> str:
                 ]
             )
         )
-    print(output)
     return output

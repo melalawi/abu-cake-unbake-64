@@ -86,7 +86,7 @@ def whole_body(assembly: str, function: str) -> str:
 
 def jump_tables(project: Project, version: str, function: str, assembly: str) -> str:
     """Supply ROM-backed local jump tables omitted by text-only extraction."""
-    from unbake.decomp.trial_layout import function_span, project_reader, symbol_values
+    from unbake.decomp.rom import function_span, project_reader, symbol_values
 
     names = set(re.findall(r"%hi\((jtbl_[A-Za-z0-9_]+)\)", assembly))
     if not names:

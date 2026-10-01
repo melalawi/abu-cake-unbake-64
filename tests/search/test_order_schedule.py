@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from unbake.decomp import explain, score, trial, trial_compile
 from unbake.decomp.explain import Allocation
-from unbake.decomp.trial_compare import Compare, compare_words
+from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.families.gcc.schedule import schedule
 from unbake.families.ido.schedule import schedule as ido_schedule
 from unbake.project import toolchain
@@ -92,10 +92,16 @@ class SearchIntegrationTests(unittest.TestCase):
             def compile_trial(
                 project: Project, policy: Policy, path: Path, scratch: Path, versions: list[str] | None = None
             ) -> trial.Trial:
-                words = [0x03E00008, 0]
+                confirmed = "confirmed" in path.read_text()
                 comparisons = {
-                    version: compare_words(
-                        version, words, words if "confirmed" in path.read_text() else [0x03E00008, 1]
+                    version: Compare(
+                        version,
+                        2 if confirmed else 1,
+                        2,
+                        {kind: int(kind == "changed" and not confirmed) for kind in TYPES},
+                        [],
+                        100 if confirmed else 50,
+                        (),
                     )
                     for version in (project.versions if versions is None else versions)
                 }
@@ -105,7 +111,7 @@ class SearchIntegrationTests(unittest.TestCase):
                     (work / "trial.elf").write_bytes(b"ELF")
                     for name in ("baserom", "draft"):
                         (work / (name + ".bin")).write_bytes(bytes.fromhex("03e0000800000000"))
-                return trial.Trial("f", hashlib.sha256(path.read_bytes()).hexdigest(), comparisons, [], "try again", [])
+                return trial.Trial("f", hashlib.sha256(path.read_bytes()).hexdigest(), comparisons, [], "try again")
 
             seen = []
 
@@ -186,7 +192,7 @@ class SearchIntegrationTests(unittest.TestCase):
                     )
                 return "int f(int a){return a;}"
 
-            proof = trial.Trial("f", "0" * 64, {"us": Compare("us", 1, 1, {}, [])}, [], "", [])
+            proof = trial.Trial("f", "0" * 64, {"us": Compare("us", 1, 1, {}, [], 100.0, ())}, [], "")
             with (
                 patch.object(toolchain, "verify", return_value={}),
                 patch.object(trial_compile, "run_tool", side_effect=tools),

@@ -254,7 +254,12 @@ def load(root: Path) -> Project:
             raise Held("config", f"{label}: {error.reason}") from error
         cflags = _strings(table["cflags"], label + ".cflags") if "cflags" in table else spec.cflags
         compilers[ident] = Compiler(
-            ident, spec.kind, tools / ident / spec.cc, tools / ident / spec.as_, cflags, tools / "compiler.sha256"
+            ident,
+            spec.kind,
+            tools / ident / spec.cc,
+            Path(spec.as_) if spec.as_.startswith("policy:") else tools / ident / spec.as_,
+            cflags,
+            tools / "compiler.sha256",
         )
     default_compiler = _text(value(project, "project", "default_compiler"), _label(path, "project", "default_compiler"))
     if default_compiler not in compilers:

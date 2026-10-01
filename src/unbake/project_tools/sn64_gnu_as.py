@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ASN64 from a short working directory and convert its object to ELF."""
+"""Normalize SN64 assembly and assemble directly with GNU MIPS as."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ import argparse
 import re
 import shlex
 import subprocess
-import tempfile
 from pathlib import Path
 
 from unbake.project_tools.resolve_external_branches import read_symbols, resolve
+from unbake.project_tools.sn64_schedule import schedule
 
 
 def run(command: list[str], *, cwd: str | Path | None = None) -> str:
@@ -23,7 +23,17 @@ def run(command: list[str], *, cwd: str | Path | None = None) -> str:
 def string_bytes(operands: str) -> bytes:
     """Decode compiler assembly strings, including one NUL per operand."""
     result = bytearray()
-    escapes = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, '"': 34, "\\": 92}
+    escapes = {
+        "a": 7,
+        "b": 8,
+        "f": 12,
+        "n": 10,
+        "r": 13,
+        "t": 9,
+        "v": 11,
+        '"': 34,
+        "\\": 92,
+    }
     remaining = operands.strip()
     while remaining:
         match = re.match(r'"((?:\\.|[^"\\])*)"', remaining)
@@ -61,7 +71,7 @@ def string_bytes(operands: str) -> bytes:
     return bytes(result)
 
 
-def normalize(text: str) -> bytes:
+def directives(text: str) -> bytes:
     lines = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -81,39 +91,36 @@ def normalize(text: str) -> bytes:
     return ("\r\n".join(lines) + "\r\n").encode()
 
 
-def assemble(text: str, output: Path, assembler: Path, wibo: Path, obj_parser: Path, asflags: list[str]) -> None:
-    output = output.resolve()
+def normalize(text: str) -> bytes:
+    return schedule(directives(text).decode()).encode()
+
+
+def assemble(text: str, output: Path, assembler: Path, asflags: list[str]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".a-", dir=output.parent) as temporary:
-        work = Path(temporary)
-        source, psyq, elf = work / "a.s", work / "a.obj", work / "a.o"
-        source.write_bytes(normalize(text))
-        # Absolute inputs avoid the assembler's limit on working-directory length.
-        options = []
-        previous = False
-        for flag in asflags:
-            if previous:
-                options.append(str(Path(flag).resolve()))
-                previous = False
-            elif flag == "-I":
-                options.append(flag)
-                previous = True
-            elif flag.startswith("-I"):
-                options.append("-I" + str(Path(flag[2:]).resolve()))
-            else:
-                options.append(flag)
-        if previous:
-            raise ValueError("[build].asflags contains -I without a directory")
-        run([str(wibo.resolve()), str(assembler.resolve()), *options, "-o", str(psyq), str(source)], cwd="/")
-        run([str(obj_parser.resolve()), str(psyq), "-o", str(elf), "-b", "-n"])
-        if not elf.is_file() or not elf.stat().st_size:
-            raise ValueError(f"obj_parser produced no object for {output}")
-        elf.replace(output)
+    options = [flag for flag in asflags if flag not in {"-mips3"}]
+    completed = subprocess.run(
+        [
+            str(assembler),
+            "-march=vr4300",
+            "-mabi=32",
+            "-EB",
+            "-G0",
+            "--no-pad-sections",
+            *options,
+            "-o",
+            str(output),
+            "-",
+        ],
+        input=normalize(text),
+        capture_output=True,
+    )
+    if completed.returncode:
+        raise ValueError(completed.stderr.decode(errors="replace"))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    for name in ("assembler", "wibo", "obj-parser", "symbols", "source", "output", "depfile"):
+    for name in ("assembler", "symbols", "source", "output", "depfile"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--cpp", required=True)
     parser.add_argument("--asflags", required=True)
@@ -152,7 +159,7 @@ def main() -> None:
         )
         symbols, units = read_symbols(args.symbols)
         text = resolve(text, args.source.stem, symbols, units)
-        assemble(text, args.output, args.assembler, args.wibo, args.obj_parser, options)
+        assemble(text, args.output, args.assembler, options)
     except (OSError, ValueError) as error:
         parser.exit(1, f"HELD(assembly): {args.source}: {error}\n")
 

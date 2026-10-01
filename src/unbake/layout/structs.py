@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
-from unbake.decomp.needs import LayoutNeed, Need, register_deriver, register_resolver
+from unbake.decomp.needs import LayoutNeed, Need, register_resolver
 from unbake.layout.split import Edit
 from unbake.project.config import Held
 
@@ -101,24 +101,6 @@ def layouts(source: str | Path, *, project: Any = None, policy: Any = None, vers
     return Parser(source).parse()
 
 
-def derive(context: Any) -> list[Need]:
-    """Read VERSION-specific declarations into serializable layout evidence."""
-
-    result: list[Need] = []
-    for version in context.artifacts:
-        for record in layouts(Path(context.source), project=context.project, policy=context.policy, version=version):
-            result.append(
-                LayoutNeed(
-                    version,
-                    record.name,
-                    [asdict(member) for member in record.fields],
-                    str(context.source),
-                    dict(kind=record.kind, size=record.size, alignment=record.alignment, aliases=list(record.aliases)),
-                )
-            )
-    return result
-
-
 def resolve(pending: list[Need], project: Any, policy: Any) -> list[Edit]:
     """Fold proved layouts into shared headers before rebuilding includers."""
 
@@ -158,5 +140,4 @@ def resolve(pending: list[Need], project: Any, policy: Any) -> list[Edit]:
     return fold(records, project) if records else []
 
 
-register_deriver(derive)
 register_resolver(LayoutNeed, 30, resolve)

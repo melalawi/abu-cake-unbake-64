@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from tests.decomp.test_trial import SCRATCH_ROOT, fixture
+from tests.decomp.support import SCRATCH_ROOT, fixture
 from unbake.decomp import m2c
 from unbake.project.config import Held, Policy
 

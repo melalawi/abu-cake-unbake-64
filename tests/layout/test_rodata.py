@@ -1,18 +1,12 @@
-import dataclasses
-import json
 import struct
 import tempfile
 import unittest
-from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
-from unbake.decomp import needs as registry
 from unbake.families.gcc import Gcc
 from unbake.families.ido import Ido
-from unbake.layout import rodata
 from unbake.project.config import Held
-from unbake.project_tools.rodata import placement, relocated
+from unbake.project_tools.rodata import fragment, placement, relocated
 
 
 def words(*values: int) -> Any:
@@ -92,54 +86,7 @@ def Object(
         return ElfObject(temporary.name)
 
 
-def trial(obj: Any, family: Any = DEFAULT_FAMILY, owners: Any = None, memory: Any = None) -> Any:
-    section = family.rodata_section()
-    return rodata.TrialObject(
-        obj,
-        family,
-        "func_80401D74",
-        0x80401D74,
-        {0: 0x3C01800E, 4: 0xC420B7F8},
-        (lambda address, size: obj.content(obj.section(section))) if memory is None else memory,
-        {(section, 0): ("func_80401D74", "other")} if owners is None else owners,
-    )
-
-
 class RodataTests(unittest.TestCase):
-    def test_real_function_behaviors(self) -> None:
-        # Text prefixes cut from the three existing BattleTanx objects.
-        cases = [
-            ("func_8011588C", Gcc(), "27bdffc8afa400388fae0038afbf001cafa5003cafa0002c"),
-            ("func_80115C80", Gcc(), "27bdffc0afa400408fae0040afbf001491cf006511e0000a"),
-            ("func_800E3460", Ido(), "908203503842000203e000082c420001"),
-        ]
-        for name, family, code in cases:
-            with self.subTest(function=name):
-                obj = Object(section=None, code=bytes.fromhex(code), text_rels=[])
-                item = dataclasses.replace(trial(obj, family), function=name)
-                self.assertEqual(rodata.needs(item, "us"), [])
-        # Real RageWars load instruction forms and resident address D_800DB7F8.
-        result = rodata.needs(trial(Object()), "us")
-        self.assertEqual((result[0].kind, result[0].address), ("literals", 0x800DB7F8))
-        self.assertEqual(registry.decode(json.loads(json.dumps(registry.encode(result[0])))), result[0])
-
-    def test_real_local_jump_table(self) -> None:
-        # Three local-label addends cut from func_8021E27C's .rdata.
-        data = bytes.fromhex("000003040000031400000314")
-        symbol = dict(name=".text", value=0, section=0)
-        obj = Object(data=data, data_rels=[(at, 2, symbol) for at in (0, 4, 8)])
-        image = words(0x8021E580, 0x8021E590, 0x8021E590)
-        item = dataclasses.replace(
-            trial(obj),
-            function="func_8021E27C",
-            text_address=0x8021E27C,
-            read_memory=lambda address, size: image,
-            owners={(".rdata", 0): ("func_8021E27C",)},
-        )
-        result = rodata.needs(item, "us")
-        self.assertEqual([(n.kind, n.size) for n in result], [("jumptable", 12)])
-        self.assertEqual(result[0].evidence["owners"], ["func_8021E27C"])
-
     def test_pool_partition_boundaries(self) -> None:
         for family in (Gcc(), Ido()):
             for size in (0, 1, 2, 3, 4, 7, 8, 15, 16):
@@ -200,82 +147,15 @@ class RodataTests(unittest.TestCase):
             with self.subTest(at=at, kind=kind, section=section), self.assertRaisesRegex(Held, reason):
                 Gcc().jump_tables(Object(data_rels=[(at, kind, dict(name="label", value=0, section=section))]))
 
-    def test_named_missing_trial_facts(self) -> None:
-        for key in rodata.TrialObject.__dataclass_fields__:
-            with self.subTest(key=key), self.assertRaisesRegex(Held, key):
-                rodata.needs(dataclasses.replace(trial(Object()), **{key: None}), "us")
-        for change, version, reason in [
-            ({}, "", "version"),
-            ({"function": ""}, "us", "function"),
-            ({"owners": {}}, "us", "owners"),
-            ({"owners": {(".rdata", 0): ("other",)}}, "us", "excludes"),
-            ({"read_memory": lambda a, s: b""}, "us", "bytes"),
-        ]:
-            with self.subTest(reason=reason), self.assertRaisesRegex(Held, reason):
-                rodata.needs(dataclasses.replace(trial(Object()), **change), version)
-
-    def test_migration_and_shared_resident_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            layout = root / "split.yaml"
-            symbols = root / "symbols.txt"
-            symbols.write_text("func_80401D74 = 0x80000000;\n")
-            before = (
-                "segments:\n  - name: main\n    type: code\n    start: 0x0\n    vram: 0x80000000\n"
-                "    subsegments:\n      - [0x0, c, func_80401D74]\n      - [0x20, rodata, pool]\n  - [0x40]\n"
-            )
-            layout.write_text(before)
-            # The pool row's ROM bytes are also copied to a resident runtime address.
-            (root / "config.toml").write_text(
-                '[build]\nld = "ld"\nobjcopy = "objcopy"\nsplat = "splat"\nas = "as"\nasflags = []\n'
-                "[build.resident_mappings]\n"
-                "us = [{ address = 0x800C0000, start = 0x20, end = 0x40, table_entry_bias = 0x80000000 }]\n"
-            )
-            project = SimpleNamespace(
-                root=root,
-                versions=("us",),
-                compilers={},
-                version=lambda v: SimpleNamespace(split=layout, symbols=symbols),
-            )
-            for shared in (True, False):
-                with self.subTest(shared=shared):
-                    evidence = dict(
-                        function="func_80401D74",
-                        owners=["func_80401D74", "other"] if shared else ["func_80401D74"],
-                        base=0x80000024,
-                        offset=0,
-                        dissent=0,
-                        section_size=8,
-                    )
-                    need = registry.RodataNeed("us", ".rdata", "jumptable", 0x80000024, 8, evidence)
-                    edits = rodata.resolve([need], project, SimpleNamespace())
-                    self.assertEqual(len(edits), 0 if shared else 1)
-                    if not shared:
-                        self.assertIn('[0x24, .rodata, "func_80401D74"]', edits[0].after)
-                        self.assertIn('[0x2C, rodata, "pool_at_2C"]', edits[0].after)
-                        self.assertEqual(layout.read_text(), before)
-                        with self.assertRaisesRegex(Held, "overlapping"):
-                            rodata.resolve([need, need], project, SimpleNamespace())
-                    for field in ("function", "owners", "base", "offset", "dissent", "section_size"):
-                        bad = dict(evidence)
-                        del bad[field]
-                        with self.assertRaisesRegex(Held, field):
-                            rodata.resolve([dataclasses.replace(need, evidence=bad)], project, SimpleNamespace())
-                    with self.assertRaisesRegex(Held, "complete section|resident split row"):
-                        rodata.resolve([dataclasses.replace(need, address=0x80000080)], project, SimpleNamespace())
-                    # A pool reached at its resident copy needs no split edit, shared or not.
-                    resident = dataclasses.replace(need, address=0x800C0004, evidence={**evidence, "base": 0x800C0004})
-                    self.assertEqual(rodata.resolve([resident], project, SimpleNamespace()), [])
-
     def test_fragment_required_facts_and_selector(self) -> None:
         for section in (".rdata", ".rodata"):
             row = dict(object="obj/src/function.o", section=section, address=0x80001000)
-            self.assertIn(f"obj/src/function.o({section})", rodata.linker_fragment([row]))
+            self.assertIn(f"obj/src/function.o({section})", fragment([row]))
             for key in row:
                 bad = dict(row)
                 del bad[key]
-                with self.subTest(missing=key), self.assertRaisesRegex(Held, key):
-                    rodata.linker_fragment([bad])
+                with self.subTest(missing=key), self.assertRaisesRegex(ValueError, key):
+                    fragment([bad])
             for key, value in [
                 ("object", "../x.o"),
                 ("section", ".text"),
@@ -283,9 +163,9 @@ class RodataTests(unittest.TestCase):
                 ("address", True),
                 ("address", 0x100000000),
             ]:
-                with self.subTest(key=key, value=value), self.assertRaisesRegex(Held, key):
-                    rodata.linker_fragment([{**row, key: value}])
-        self.assertEqual(rodata.linker_fragment([]), "")
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, key):
+                    fragment([{**row, key: value}])
+        self.assertEqual(fragment([]), "")
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ def publish(
                 key for key in latest.keys() | fingerprint.keys() if latest.get(key) != fingerprint.get(key)
             )
             held(f"project build inputs changed during match build: {', '.join(changed)}")
-        with queue_lock(project, policy):
+        with queue_lock(project):
             rows = queue(project)
             for draft in candidates:
                 if draft.row not in rows:

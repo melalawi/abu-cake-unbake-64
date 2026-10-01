@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import struct
-from collections import Counter, defaultdict, deque
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -41,6 +41,12 @@ class Compare:
     of: int
     typed: dict[str, int]
     lines: list[str]
+    match_percent: float
+    register_changes: tuple[tuple[int, int, int, int], ...]
+
+
+def words(data: bytes) -> list[int]:
+    return [word[0] for word in struct.iter_unpack(">I", data)]
 
 
 def fields(word: int) -> tuple[int, int]:
@@ -75,98 +81,175 @@ def fields(word: int) -> tuple[int, int]:
     return 0, 0
 
 
-def classify(target: int, candidate: int, relocated: int) -> str:
-    difference = target ^ candidate
-    if not difference:
-        return "same"
-    if relocated and not difference & ~relocated:
-        return "relocation"
-    registers, immediate = fields(target)
-    candidate_registers, candidate_immediate = fields(candidate)
-    if (registers, immediate) != (candidate_registers, candidate_immediate):
-        return "changed"
-    if registers and not difference & ~registers:
-        return "register"
-    if immediate and not difference & ~immediate:
-        return "immediate"
-    return "changed"
+def register_number(name: str) -> int | None:
+    """Decode objdiff's MIPS register spelling for allocator diagnostics."""
+    general = (
+        "zero",
+        "at",
+        "v0",
+        "v1",
+        "a0",
+        "a1",
+        "a2",
+        "a3",
+        "t0",
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t5",
+        "t6",
+        "t7",
+        "s0",
+        "s1",
+        "s2",
+        "s3",
+        "s4",
+        "s5",
+        "s6",
+        "s7",
+        "t8",
+        "t9",
+        "k0",
+        "k1",
+        "gp",
+        "sp",
+        "fp",
+        "ra",
+    )
+    name = name.removeprefix("$")
+    if name in general:
+        return general.index(name)
+    floating = (
+        "fv0",
+        "fv1",
+        "ft0",
+        "ft1",
+        "ft2",
+        "ft3",
+        "fa0",
+        "fa1",
+        "ft4",
+        "ft5",
+        "fs0",
+        "fs1",
+        "fs2",
+        "fs3",
+        "fs4",
+        "fs5",
+    )
+    for index, prefix in enumerate(floating):
+        if name in (prefix + "f", prefix):
+            return 32 + index * 2
+        if name == prefix + "e":
+            return 33 + index * 2
+    if name.startswith("f") and name[1:].isdigit() and int(name[1:]) < 32:
+        return 32 + int(name[1:])
+    return None
 
 
-def compare_words(
-    version: str, target: list[int], candidate: list[int], relocations: dict[int, int] | None = None
-) -> Compare:
-    relocations = {} if relocations is None else relocations
-    operations: list[tuple[str, int | None, int | None]] = []
+def compare_object(version: str, document: dict[str, object], function: str) -> Compare:
+    """Classify objdiff's aligned instruction rows, including relocation names."""
+    from typing import Any, cast
 
-    def align(left: int, right: int, start: int, stop: int, shape: bool) -> None:
-        def key(word: int) -> int:
-            if not shape:
-                return word
-            registers, immediate = fields(word)
-            return word & ~(registers | immediate)
+    from unbake.decomp.score import percent
 
-        if shape:
-            opcodes = SequenceMatcher(
-                None, [key(w) for w in target[left:right]], [key(w) for w in candidate[start:stop]], autojunk=False
-            ).get_opcodes()
-        else:
-            opcodes = align_words(
-                target[left:right], candidate[start:stop], {i - start: mask for i, mask in relocations.items()}
-            )
-        for tag, a, b, c, d in opcodes:
-            a, b, c, d = a + left, b + left, c + start, d + start
-            if tag == "equal":
-                operations.extend(
-                    (classify(target[i], candidate[j], relocations.get(j, 0)), i, j)
-                    for i, j in zip(range(a, b), range(c, d), strict=False)
+    left = cast(dict[str, Any], document["left"])
+    right = cast(dict[str, Any], document["right"])
+    target = next(s for s in left["symbols"] if s.get("name") == function and s.get("kind") == "SYMBOL_FUNCTION")
+    draft = next(s for s in right["symbols"] if s.get("name") == function and s.get("kind") == "SYMBOL_FUNCTION")
+    a, b = target.get("instructions", []), draft.get("instructions", [])
+    typed = dict.fromkeys(TYPES, 0)
+    identical = 0
+    register_changes = []
+    details = []
+    missing: dict[str, list[int]] = defaultdict(list)
+    inserted: dict[str, list[int]] = defaultdict(list)
+
+    def relocation(row: dict[str, Any], side: dict[str, Any]) -> tuple[object, ...] | None:
+        value = row.get("instruction", {}).get("relocation")
+        if value is None:
+            return None
+        symbol = side["symbols"][int(value.get("target_symbol", 0))]
+        return symbol["name"], value.get("type", 0), value.get("addend", "0")
+
+    for i in range(max(len(a), len(b))):
+        x, y = a[i] if i < len(a) else {}, b[i] if i < len(b) else {}
+        before, after = x.get("instruction"), y.get("instruction")
+        kind = "same"
+        if before is None and after is None:
+            continue
+        if before is None:
+            kind = "inserted"
+        elif after is None:
+            kind = "missing"
+        elif relocation(x, left) != relocation(y, right):
+            kind = "relocation"
+        elif x.get("diff_kind", "DIFF_NONE") != "DIFF_NONE" or y.get("diff_kind", "DIFF_NONE") != "DIFF_NONE":
+            if x.get("diff_kind") == "DIFF_ARG_MISMATCH":
+                args1 = [p["arg"] for p in before.get("parts", []) if "arg" in p]
+                args2 = [p["arg"] for p in after.get("parts", []) if "arg" in p]
+                changes = [(u, v) for u, v in zip(args1, args2, strict=False) if u != v]
+                register_args = [
+                    "opaque" in u
+                    and "opaque" in v
+                    and register_number(u["opaque"]) is not None
+                    and register_number(v["opaque"]) is not None
+                    for u, v in changes
+                ]
+                kind = (
+                    "register"
+                    if register_args and all(register_args)
+                    else "changed"
+                    if any(register_args)
+                    else "immediate"
                 )
-            elif tag == "replace" and not shape:
-                align(a, b, c, d, True)
             else:
-                paired = min(b - a, d - c) if tag == "replace" else 0
-                operations.extend(
-                    (classify(target[a + k], candidate[c + k], relocations.get(c + k, 0)), a + k, c + k)
-                    for k in range(paired)
-                )
-                operations.extend(("missing", i, None) for i in range(a + paired, b))
-                operations.extend(("inserted", None, j) for j in range(c + paired, d))
+                kind = "changed"
+        if kind == "same":
+            identical += 1
+            continue
+        typed[kind] += 1
+        if kind == "register":
+            assert before is not None and after is not None
+            for u, v in changes:
+                before_register, after_register = register_number(u["opaque"]), register_number(v["opaque"])
+                if before_register is not None and after_register is not None:
+                    register_changes.append(
+                        (int(before.get("address", 0)), int(after.get("address", 0)), before_register, after_register)
+                    )
 
-    align(0, len(target), 0, len(candidate), False)
-    extras: defaultdict[int, deque[int]] = defaultdict(deque)
-    for position, (kind, _, j) in enumerate(operations):
-        if kind == "inserted" and j is not None:
-            extras[candidate[j]].append(position)
-    removed = set()
-    for position, (kind, i, _) in enumerate(operations):
-        if kind == "missing" and i is not None and extras[target[i]]:
-            extra = extras[target[i]].popleft()
-            operations[position] = ("order", i, operations[extra][2])
-            removed.add(extra)
-    operations = [op for position, op in enumerate(operations) if position not in removed]
-    if len(target) == len(candidate):
-        positional: list[tuple[str, int | None, int | None]] = [
-            (classify(a, b, relocations.get(i, 0)), i, i)
-            for i, (a, b) in enumerate(zip(target, candidate, strict=False))
-        ]
-        if sum(op[0] == "same" for op in positional) > sum(op[0] == "same" for op in operations):
-            operations = positional
-    counts = Counter(kind for kind, _, _ in operations)
-    typed = {kind: counts[kind] for kind in TYPES}
+        def description(instruction: dict[str, Any] | None) -> str:
+            return (
+                "-"
+                if instruction is None
+                else f"+0x{int(instruction.get('address', 0)):04X} {instruction.get('formatted', '')}"
+            )
+
+        details.append(f"{kind}: target {description(before)}; draft {description(after)}")
+        if kind == "missing" and before:
+            missing[before.get("formatted", "")].append(len(details) - 1)
+        elif kind == "inserted" and after:
+            inserted[after.get("formatted", "")].append(len(details) - 1)
+    for instruction, positions in missing.items():
+        for old, new in zip(positions, inserted[instruction], strict=False):
+            typed["missing"] -= 1
+            typed["inserted"] -= 1
+            typed["order"] += 1
+            details[old] = (
+                details[old].split("; draft ")[0].replace("missing:", "order:", 1)
+                + "; draft "
+                + details[new].split("; draft ")[1]
+            )
+            details[new] = ""
+    total = sum("instruction" in row for row in a)
+    match = percent(target.get("match_percent", 0), f"{function}.match_percent", "try")
     lines = [
-        f"{version}: identical {counts['same']} of {len(target)} words",
+        f"VERSION {version}: identical {identical} of {total} instructions; objdiff {match:.6f}%",
         "typed: " + ", ".join(f"{kind}={typed[kind]}" for kind in TYPES),
     ]
-    for kind, i, j in operations:
-        if kind == "same":
-            continue
-        before = "-" if i is None else f"+0x{i * 4:04X} {target[i]:08X}"
-        after = "-" if j is None else f"+0x{j * 4:04X} {candidate[j]:08X}"
-        detail = f"{kind}: target {before}; draft {after}"
-        if len(lines) == 2:
-            lines.append(f"first divergence: {detail}")
-        lines.append(detail)
-    return Compare(version, counts["same"], len(target), typed, lines)
-
-
-def words(data: bytes) -> list[int]:
-    return [word[0] for word in struct.iter_unpack(">I", data)]
+    details = [line for line in details if line]
+    if details:
+        lines.append("first divergence: " + details[0])
+        lines.extend(details)
+    return Compare(version, identical, total, typed, lines, match, tuple(register_changes))

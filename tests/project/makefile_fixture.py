@@ -128,24 +128,14 @@ def fixture(root: Path, kind: str = "ido") -> Any:
                 "middle\\n.ent middle\\nmiddle:\\n nop\\n.end middle\\n')\n"
             ),
         )
-        (root / "tools/fixture/asn64.exe").write_bytes(b"assembler")
+    if kind == "sn64":
         executable(
-            root / "tools/fixture/wibo",
-            prelude + "record('asn64')\nPath(arg('-o')).write_bytes(Path(a[-1]).read_bytes())\n",
+            root / "tools/as",
+            prelude + "record('as')\nPath(arg('-o')).write_bytes(sys.stdin.buffer.read())\n",
         )
-        executable(
-            root / "tools/fixture/psyq-obj-parser",
-            prelude + "record('parser')\nPath(arg('-o')).write_bytes(Path(a[0]).read_bytes())\n",
-        )
-    pins = (
-        ["tools/fixture/cc", "tools/as"]
-        if kind == "ido"
-        else ["tools/fixture/cc", "tools/fixture/asn64.exe", "tools/fixture/wibo", "tools/fixture/psyq-obj-parser"]
-    )
-    if kind == "ido":
-        (root / "tools/fixture/as").write_bytes((root / "tools/as").read_bytes())
-        (root / "tools/fixture/as").chmod(0o755)
-        pins[1] = "tools/fixture/as"
+    (root / "tools/fixture/as").write_bytes((root / "tools/as").read_bytes())
+    (root / "tools/fixture/as").chmod(0o755)
+    pins = ["tools/fixture/cc", "tools/fixture/as"]
     digests = {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in pins}
     (root / "tools/compiler.sha256").write_text(
         "".join(digest + "  " + name + "\n" for name, digest in digests.items())
@@ -157,7 +147,7 @@ def fixture(root: Path, kind: str = "ido") -> Any:
         + "\nfamily = "
         + json.dumps("gcc" if kind == "sn64" else "ido")
         + '\ndecompme = "fixture"\nsource = "supplied"\nhost = "linux-x86_64"\ncc = "cc"\nas = '
-        + json.dumps("asn64.exe" if kind == "sn64" else "as")
+        + json.dumps("as")
         + "\ncflags = []\ndrivers = []\n[compilers.fixture.pins]\n"
         + "".join(json.dumps(Path(name).name) + " = " + json.dumps(digest) + "\n" for name, digest in digests.items())
     )
@@ -166,7 +156,7 @@ def fixture(root: Path, kind: str = "ido") -> Any:
         "fixture",
         kind,
         root / "tools/fixture/cc",
-        root / ("tools/fixture/asn64.exe" if kind == "sn64" else "tools/fixture/as"),
+        root / "tools/fixture/as",
         ("-O2",) if kind == "sn64" else (),
         root / "tools/compiler.sha256",
     )

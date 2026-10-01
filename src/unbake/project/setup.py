@@ -82,6 +82,12 @@ def run(project: Project, policy: Policy, *, new_rom: Path | None = None) -> lis
             except (AttributeError, OSError, ValueError) as error:
                 raise Held("setup", f"policy.{name}: {error}") from error
             config_text = re.sub(rf"^{field}\s*=.*$", f"{field} = {json.dumps(portable)}", config_text, flags=re.M)
+    for compiler in project.compilers.values():
+        if str(compiler.as_).startswith("policy:"):
+            try:
+                resolve_tool(str(compiler.as_))
+            except ValueError as error:
+                raise Held("setup", str(error)) from error
     files = makefile.render(project)
     files[".gitignore"] = hygiene.ignore_text(project)
     toolchain.ensure(project, policy)
@@ -120,10 +126,31 @@ def run(project: Project, policy: Policy, *, new_rom: Path | None = None) -> lis
             compiler_files.atomic_bytes(destination, content.encode())
     manifest = project.tools / "compiler.sha256"
     generated = set(files)
+    # The manifest identifies generated helpers that the tool owns.
+    for row in manifest.read_text().splitlines():
+        fields = row.split(maxsplit=1)
+        if len(fields) != 2 or not re.fullmatch(r"[0-9a-f]{64}", fields[0]):
+            continue
+        obsolete = Path(fields[1])
+        if (
+            obsolete.parent == project.tools.relative_to(project.root)
+            and obsolete.suffix == ".py"
+            and str(obsolete) not in generated
+        ):
+            target = project.root / obsolete
+            if target.is_file() or target.is_symlink():
+                target.unlink()
     pins = "".join(
         line + "\n"
         for line in manifest.read_text().splitlines()
-        if len(line.split(maxsplit=1)) != 2 or line.split(maxsplit=1)[1] not in generated
+        if len(line.split(maxsplit=1)) != 2
+        or (
+            line.split(maxsplit=1)[1] not in generated
+            and (
+                Path(line.split(maxsplit=1)[1]).parent != project.tools.relative_to(project.root)
+                or Path(line.split(maxsplit=1)[1]).suffix != ".py"
+            )
+        )
     )
     for relative in files:
         if relative.startswith(str(project.tools.relative_to(project.root)) + "/"):

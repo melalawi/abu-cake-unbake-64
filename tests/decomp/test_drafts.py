@@ -1,7 +1,6 @@
 """Draft history, ranking, publication, and refused incomplete trial records."""
 
 import hashlib
-import json
 import os
 import tempfile
 import unittest
@@ -53,10 +52,11 @@ class DraftsTest(unittest.TestCase):
             function=function,
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares=compares,
-            needs=[],
             preconditions=[],
             next_command="unbake match submit sample.c",
-            identical_everywhere=all(x == 10 for x in identical) and not any(differences.values()),
+            identical_everywhere=all(x == 10 for x in identical)
+            and not any(differences.values())
+            and all(value == 100 for value in scores.values()),
         )
         return self.store.add(trial, source, scores), trial, source
 
@@ -105,27 +105,6 @@ class DraftsTest(unittest.TestCase):
         with self.assertRaisesRegex(Held, "next_command"):
             self.store.add(trial, source, {"us": 50, "eu": 60})
         self.assertEqual(len(self.store.rows("sample")), 1)
-
-    def test_trial_needs_are_required_and_round_trip(self) -> None:
-        from unbake.decomp import needs
-
-        _sha, trial, source = self.add("draft", {"us": 50, "eu": 60})
-        finding = needs.GuardFinding("empty-loop", 1, "do {} while (0);", "measured")
-        trial.needs = [finding]
-        self.store.add(trial, source, {"us": 50, "eu": 60})
-        self.assertEqual(needs.decode(self.store.history()[-1]["needs"][0]), finding)
-        for value in (None, ()):
-            with self.subTest(value=value), self.assertRaisesRegex(Held, "trial.needs"):
-                trial.needs = value
-                self.store.add(trial, source, {"us": 50, "eu": 60})
-        del trial.needs
-        with self.assertRaisesRegex(Held, "trial.needs"):
-            self.store.add(trial, source, {"us": 50, "eu": 60})
-        rows = self.store.history()
-        del rows[0]["needs"]
-        (self.store.root / "trials.jsonl").write_text(json.dumps(rows[0]) + "\n")
-        with self.assertRaisesRegex(Held, "needs"):
-            self.store.history()
 
     def test_invalid_scores_and_function_paths_are_refused(self) -> None:
         for value in (float("nan"), float("inf"), -1, 101, True):

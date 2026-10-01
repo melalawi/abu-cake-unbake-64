@@ -1,21 +1,16 @@
 """Draft and trial share resident table mapping and pointer bias handling."""
 
-import io
-import shutil
 import struct
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import patch
 
-from tests.decomp.test_trial import assemble, fixture
-from unbake.decomp import trial
+from tests.decomp.support import fixture
 from unbake.decomp.draft_input import jump_tables
-from unbake.project import build, makefile
-from unbake.project.config import Policy, Project
+from unbake.project import makefile
+from unbake.project.config import Project
 
 
 def resident(project: Project, bias: int) -> SimpleNamespace:
@@ -33,33 +28,6 @@ def resident(project: Project, bias: int) -> SimpleNamespace:
 
 
 class ResidentJumpTableTests(unittest.TestCase):
-    def test_trial_scores_resident_bin_table(self) -> None:
-        target = [0x00051080, 0x3C018000, 0x00220821, 0x8C223000, 0x00400008, 0, 0x24020001, 0x03E00008, 0, 0]
-        for bias in (0, 0x80000000):
-            with self.subTest(bias=bias), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                project, policy, source = fixture(root, words=target)
-                recipe = resident(project, bias)
-
-                def compiler(project: object, policy: object, source: Path, version: str, out: Path) -> Path:
-                    body = (
-                        ".set noreorder\n.text\n.globl alpha\n.type alpha, @function\nalpha:\n"
-                        "sll $v0,$a1,2\nlui $at,%hi(pool)\naddu $at,$at,$v0\nlw $v0,%lo(pool)($at)\n"
-                        "jr $v0\nnop\ncase:\naddiu $v0,$zero,1\njr $ra\nnop\nnop\n"
-                        ".size alpha,.-alpha\n.section .rodata\npool:\n.word case,case\n"
-                    )
-                    shutil.copyfile(assemble(out.parent, "compiled", body), out)
-                    return out
-
-                with (
-                    patch.object(makefile, "recipe", return_value=recipe),
-                    patch.object(build, "compile_object", side_effect=compiler),
-                    redirect_stdout(io.StringIO()) as output,
-                ):
-                    result = trial.try_draft(project, cast(Policy, policy), source, root / "scratch")
-                self.assertTrue(result.identical_everywhere, output.getvalue())
-                self.assertIn("ROM offset 0x100; size 0x8; resident bin resident", output.getvalue())
-
     def test_draft_reads_biased_resident_entries_and_stops_at_mapping_end(self) -> None:
         for bias in (0, 0x80000000):
             with self.subTest(bias=bias), tempfile.TemporaryDirectory() as temporary:

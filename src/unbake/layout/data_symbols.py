@@ -1,16 +1,31 @@
 """Resolve data correspondence between explicit VERSION symbol placements."""
 
+import re
+
 from unbake.layout import split
 from unbake.project.config import Held, Policy, Project
+
+
+def encoded_address(name: str) -> int | None:
+    """An unnamed data label encodes its address in its naming VERSION."""
+    return int(name[2:], 16) if re.fullmatch(r"D_[0-9A-Fa-f]{8}", name) else None
+
+
+def _source_address(project: Project, name: str) -> int:
+    _, source = split.symbols(project.version(project.names_from).symbols)
+    if name in source:
+        return source[name][0]
+    address = encoded_address(name)
+    if address is None:
+        raise Held("split", f"data symbol {name}: missing in names_from VERSION {project.names_from}")
+    return address
 
 
 def counterparts(project: Project, name: str) -> dict[str, str]:
     """Use existing names or two agreeing surrounding cross-VERSION anchors."""
     source_version = project.names_from
     _, source = split.symbols(project.version(source_version).symbols)
-    if name not in source:
-        raise Held("split", f"data symbol {name}: missing in names_from VERSION {source_version}")
-    address = source[name][0]
+    address = _source_address(project, name)
     result = {}
     for version in project.versions:
         _, target = split.symbols(project.version(version).symbols)
@@ -52,14 +67,14 @@ def addresses(project: Project, name: str) -> dict[str, int]:
     name = split.name(name)
     source_version = project.names_from
     _, source = split.symbols(project.version(source_version).symbols)
-    if name not in source:
-        raise Held("split", f"data symbol {name}: missing in names_from VERSION {source_version}")
-    address = source[name][0]
+    address = _source_address(project, name)
     result = {
         version: table[name][0]
         for version in project.versions
         if name in (table := split.symbols(project.version(version).symbols)[1])
     }
+    if source_version in project.versions:
+        result[source_version] = address
     missing = [version for version in project.versions if version not in result]
     if not missing:
         return result

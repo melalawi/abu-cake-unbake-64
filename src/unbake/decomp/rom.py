@@ -27,7 +27,6 @@ class FunctionSpan:
     address: int
     offset: int
     size: int
-    subalign: int
 
 
 def symbol_values(path: Path) -> dict[str, int]:
@@ -55,7 +54,7 @@ def function_span(version: Version, function: str, values: dict[str, int]) -> Fu
             continue
         if len(named) != 1:
             raise Held("try", f"{version.split}: ambiguous split rows for {function}")
-        for key in ("start", "vram", "subalign"):
+        for key in ("start", "vram"):
             if key not in segment.fields:
                 raise Held("try", f"{version.split}: segment for {function} is missing {key}")
         row = named[0]
@@ -72,12 +71,9 @@ def function_span(version: Version, function: str, values: dict[str, int]) -> Fu
                 f"{version.split} offset 0x{row.start:X}; cut a merged row first",
             )
         end = split.end(row)
-        align = split.number(segment.fields["subalign"], f"{version.split}: subalign")
-        if align <= 0 or align & (align - 1):
-            raise Held("try", f"{version.split}: subalign {align} must be a positive power of two")
         if end <= offset or offset < start or (end - offset) % 4 or address % 4:
             raise Held("try", f"{version.split}: invalid word range for {function}: 0x{offset:X}..0x{end:X}")
-        return FunctionSpan(address, offset, end - offset, align)
+        return FunctionSpan(address, offset, end - offset)
     if function not in values:
         return None
     raise Held("try", f"{version.split}: asm/c split row for symbol {function} is missing")
@@ -168,7 +164,7 @@ class RomReader:
 
     def __call__(self, address: int, size: int) -> bytes:
         mapping = self.span(address, size)
-        return target(self.version, FunctionSpan(address, mapping.offset + address - mapping.address, size, 1))
+        return target(self.version, FunctionSpan(address, mapping.offset + address - mapping.address, size))
 
     def table_entry(self, address: int) -> int:
         mapping = self.span(address, 4)

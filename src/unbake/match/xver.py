@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from types import SimpleNamespace
 
 from unbake.decomp.needs import PlacementNeed
 from unbake.layout import xver
@@ -25,7 +24,6 @@ def expand(project: Project, draft: Draft, receipts: list[str]) -> Draft:
         reference = draft.versions[0]
     selected = list(draft.versions)
     pending = list(draft.needs)
-    trial = SimpleNamespace(function=draft.function, needs=[])
     for version in project.versions:
         if version in selected:
             continue
@@ -43,7 +41,7 @@ def expand(project: Project, draft: Draft, receipts: list[str]) -> Draft:
             )
             if actual != expected:
                 raise Held("match", f"VERSION {version} function {draft.function}: bytes differ")
-            placements = xver.needs(view, draft.function, trial)
+            placements = xver.needs(view, draft.function)
             pending.extend(need for need in placements if need.version == version and need not in pending)
             selected.append(version)
         except Held as error:

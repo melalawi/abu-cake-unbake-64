@@ -9,10 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.decomp.test_trial import fixture
+from tests.decomp.support import fixture
 from unbake.decomp import guide, m2c
 from unbake.decomp.draft_input import whole_body
-from unbake.project.config import Held
 
 
 class DraftInputTests(unittest.TestCase):
@@ -38,12 +37,14 @@ class DraftInputTests(unittest.TestCase):
         self.assertIn("struct one", source.read_text())
         self.assertIn("struct two", source.read_text())
 
-    def test_guide_infers_only_a_single_version(self) -> None:
-        with patch.object(guide, "load_policy", return_value=self.policy), redirect_stdout(io.StringIO()):
-            self.assertEqual(guide.run(self.project, "alpha", None), guide.run(self.project, "alpha", "us"))
+    def test_guide_labels_all_selected_versions(self) -> None:
         project = replace(self.project, versions=("us", "eu"))
-        with self.assertRaisesRegex(Held, "--version is ambiguous; choose from us, eu"):
-            guide.run(project, "alpha", None)
+        with patch.object(guide, "for_version", return_value="frame: 0x20"), redirect_stdout(io.StringIO()) as output:
+            result = guide.run(project, "alpha", None)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(result, "VERSION us\nframe: 0x20\n\nVERSION eu\nframe: 0x20")
+        with patch.object(guide, "for_version", return_value="frame: 0x20"):
+            self.assertEqual(guide.run(project, "alpha", "us"), "VERSION us\nframe: 0x20")
 
     def test_draft_announces_function_filename_and_written_path(self) -> None:
         with redirect_stdout(io.StringIO()) as output:

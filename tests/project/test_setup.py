@@ -103,7 +103,27 @@ class SetupTests(unittest.TestCase):
         project, policy = fixture(self.root, "sn64")
         setup.run(project, policy)
         self.assertTrue((self.root / "tools/sn64_cc.py").is_file())
-        self.assertTrue((self.root / "tools/asn64.py").is_file())
+        self.assertTrue((self.root / "tools/sn64_gnu_as.py").is_file())
+
+    def test_setup_retires_only_manifest_owned_helpers_and_compiler_files(self) -> None:
+        stale_helper = self.root / "tools/retired.py"
+        stale_compiler = self.root / "tools/fixture/retired"
+        user_file = self.root / "tools/user_notes.py"
+        stale_helper.write_bytes(b"obsolete helper")
+        stale_compiler.write_bytes(b"obsolete executable")
+        user_file.write_bytes(b"user content")
+        manifest = self.root / "tools/compiler.sha256"
+        with manifest.open("a") as output:
+            for path in (stale_helper, stale_compiler):
+                output.write(
+                    hashlib.sha256(path.read_bytes()).hexdigest() + "  " + str(path.relative_to(self.root)) + "\n"
+                )
+        setup.run(self.project, self.policy)
+        self.assertFalse(stale_helper.exists())
+        self.assertFalse(stale_compiler.exists())
+        self.assertEqual(user_file.read_bytes(), b"user content")
+        self.assertNotIn("retired", manifest.read_text())
+        self.assertTrue((self.root / "tools/as").is_file())
 
     def test_supply_restores_every_version_by_sha1(self) -> None:
         setup.run(self.project, self.policy)

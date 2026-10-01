@@ -15,10 +15,7 @@ class TrialTests(MainCase):
         self.assertEqual(code, 0, error)
         self.assertEqual(captured["versions"], ["us"])
         self.assertTrue(captured["scratch"].is_relative_to(self.scratch))
-        directory = captured["scratch"] / "alpha.unique/us"
-        fuzzy.assert_called_once_with(
-            self.project, self.policy, "us", "alpha", directory / "baserom.score.o", directory / "draft.score.o"
-        )
+        fuzzy.assert_not_called()
         store.add.assert_called_once_with(result, self.source, {"us": 88.5})
         self.assertIn("retained NON_MATCHING draft alpha", out)
 
@@ -41,16 +38,6 @@ class TrialTests(MainCase):
         self.assertEqual(code, 1)
         self.assertIn("build/us: generation changed", error)
         fuzzy.assert_not_called()
-        store.add.assert_not_called()
-
-    def test_try_refuses_missing_elf_by_version_and_path(self) -> None:
-        modules, _result, captured, _target, _fuzzy, store = self.trial_modules(omit_artifact=True)
-        code, _out, error = self.run_main(
-            self.args("decomp", "try", str(self.source), "--scratch", str(self.scratch)), modules
-        )
-        self.assertEqual(code, 1)
-        self.assertIn("VERSION us draft ELF", error)
-        self.assertIn(str(captured["scratch"]), error)
         store.add.assert_not_called()
 
     def test_try_refuses_project_scratch_before_calling_trial(self) -> None:

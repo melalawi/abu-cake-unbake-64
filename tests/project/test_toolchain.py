@@ -90,6 +90,16 @@ class ToolchainTests(unittest.TestCase):
         self.project.compilers[ident] = SimpleNamespace(id=ident, kind="ido")
         return archive, pins
 
+    def test_registry_host_assembler_requires_only_the_compiler_pin(self) -> None:
+        self.compiler(files={"cc": b"compiler"})
+        self.registry_path.write_text(self.registry_path.read_text().replace('as="as"', 'as="policy:mips_as"'))
+        specification = toolchain.registry()["fixture"]
+        self.assertEqual(specification.pins, {"cc": digest(b"compiler")})
+        self.assertEqual(specification.as_, "policy:mips_as")
+        toolchain.ensure(self.project, self.policy)
+        self.assertEqual((self.project.tools / "fixture/cc").read_bytes(), b"compiler")
+        self.assertFalse((self.project.tools / "fixture/as").exists())
+
     def test_download_copies_and_project_relative_manifest(self) -> None:
         _, pins = self.compiler()
         manifest = toolchain.ensure(self.project, self.policy)

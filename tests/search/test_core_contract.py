@@ -11,38 +11,57 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
-from tests.match import test_match
 from tests.support import tool
 from unbake.cli.decomp import run
 from unbake.cli.main import make_parser
 from unbake.decomp import explain, features, needs, score, trial
 from unbake.decomp.drafts import Store
-from unbake.decomp.trial_artifacts import TrialContext
 from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.families import Family, family_for
-from unbake.layout.split import Edit
-from unbake.match import queue as match
 from unbake.project.config import Compiler, Held, Policy, Project, Version
 from unbake.search import core, methods, permute, register
 
 
 class CoreTests(unittest.TestCase):
+    def test_permuter_without_improvements_retains_the_object_baseline(self) -> None:
+        source = self.root / "f.c"
+        source.write_text("int f(void) { return 1; }")
+        project = SimpleNamespace(root=self.root / "project", versions=("us",), build_link=lambda v: self.root / v)
+        policy = SimpleNamespace(search_beam=1, stall_trials=1)
+        comparison = Compare("us", 1, 2, {kind: int(kind == "changed") for kind in TYPES}, [], 50.0, ())
+        baseline = trial.Trial(
+            "f", hashlib.sha256(source.read_bytes()).hexdigest(), {"us": comparison}, [], "try again"
+        )
+        generator = permute.Permuter("us", self.root / "target.o", 5)
+
+        def completed(*args: object) -> Iterator[core.Mutation]:
+            object.__setattr__(generator, "ran", True)
+            return iter(())
+
+        with (
+            patch.object(core, "preprocess", return_value=source.read_text()),
+            patch.object(explain, "allocation", return_value=SimpleNamespace(differences=[], pseudos=[])),
+            patch.object(core, "_retain", return_value=50.0),
+            patch.object(trial, "try_draft", return_value=baseline),
+            patch.object(permute.Permuter, "propose", side_effect=completed),
+        ):
+            result = core.run(cast(Project, project), cast(Policy, policy), source, [generator], self.root / "out", 5)
+        self.assertEqual(result.trials, 1)
+        self.assertEqual(result.fuzzy, 50.0)
+        self.assertIs(result.trial, baseline)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.enterContext(patch.object(features, "load"))
         self.enterContext(patch.dict(needs.RESOLVERS, {}, clear=True))
-        derivers: list[needs.Deriver] = []
-        self.enterContext(patch.object(needs, "derivers", return_value=derivers))
-        self.enterContext(patch.object(needs, "register_deriver", side_effect=derivers.append))
 
     def test_evidence_roundtrip_and_named_refusals(self) -> None:
         cases: list[needs.Need] = [
             needs.SymbolNeed("us", "D_800C7C94", 0x800C7C94, -32768, ".data", "f32", 4, "3c01800d"),
             needs.LabelNeed("us", "inner", 0x80001004, "data", "3f800000"),
             needs.LayoutNeed("us", "Player", [["team", 3, "u8", 1]], "function.c", "offset"),
-            needs.RodataNeed("us", ".rdata", "literals", 0x80002000, 4, "3f800000"),
             needs.PlacementNeed("us", "callee", 0x1000, 0x1010, "cut", "asm", "03e00008"),
             needs.GuardFinding("inline-asm", 2, "asm", None),
         ]
@@ -58,9 +77,6 @@ class CoreTests(unittest.TestCase):
                 del row[field]
                 with self.assertRaisesRegex(Held, field):
                     needs.decode(row)
-        context = cast(TrialContext, object())
-        needs.register_deriver(lambda ctx: cases if ctx is context else [])
-        self.assertEqual(needs.derive(context), cases)
 
     def test_family_registry_and_protocol(self) -> None:
         for ident, section, move in [
@@ -76,53 +92,6 @@ class CoreTests(unittest.TestCase):
         for value, refusal in [(None, "compiler.id"), ("absent", "absent")]:
             with self.subTest(value=value), self.assertRaisesRegex(Held, refusal):
                 family_for(cast(str, value))
-
-    def test_match_resolves_in_stage_and_refuses_unknown_before_build(self) -> None:
-        for unresolved in (False, True):
-            with self.subTest(unresolved=unresolved):
-                helper = test_match.MatchTests("runTest")
-                helper.setUp()
-                try:
-                    pending: list[needs.Need] = [
-                        needs.LabelNeed("us", "inner", 0x80001004, "data", "word"),
-                        needs.SymbolNeed("us", "literal", 0x80002000, 0, ".data", "f32", 4, "word"),
-                    ]
-                    if unresolved:
-                        pending.append(needs.RodataNeed("us", "unresolved_pool", "literals", 0x80003000, 4, "word"))
-                    source = helper.draft("alpha", pending=pending)
-                    calls: list[str] = []
-
-                    def resolver(
-                        batch: list[needs.Need],
-                        project: Project,
-                        policy: Policy,
-                        helper: test_match.MatchTests = helper,
-                        calls: list[str] = calls,
-                    ) -> list[Edit]:
-                        self.assertNotEqual(project.root, helper.project.root)
-                        path = project.version("us").symbols
-                        before = path.read_text()
-                        if isinstance(batch[0], needs.LabelNeed):
-                            self.assertIn("literal = ", before)
-                        calls.append(type(batch[0]).__name__)
-                        return [Edit(path, before, before + f"{needs.name(batch[0])} = 0x80002000;\n", ("us",))]
-
-                    with patch.dict(needs.RESOLVERS, {}, clear=True):
-                        needs.register_resolver(needs.LabelNeed, 20, resolver)
-                        needs.register_resolver(needs.SymbolNeed, 10, resolver)
-                        match.submit(helper.project, helper.policy, source)
-                        receipts = match.run(helper.project, helper.policy)
-                    if unresolved:
-                        self.assertEqual(helper.calls, [])
-                        self.assertEqual(calls, [])
-                        self.assertTrue(any("unresolved_pool" in receipt for receipt in receipts))
-                        helper.assert_untouched()
-                    else:
-                        self.assertEqual(calls, ["SymbolNeed", "LabelNeed"], receipts)
-                        self.assertTrue(any("resolved need literal" in receipt for receipt in receipts))
-                        self.assertIn("inner = ", helper.project.version("us").symbols.read_text())
-                finally:
-                    helper.doCleanups()
 
     def test_search_cli_real_loop_cache_store_and_cross_version_score(self) -> None:
         project_root = self.root / "project"
@@ -175,7 +144,7 @@ class CoreTests(unittest.TestCase):
                     (directory / (name + ".bin")).write_bytes(words)
                 typed = dict.fromkeys(TYPES, 0)
                 typed["changed"] = 294 - count
-                comparisons[version] = Compare(version, count, 294, typed, [])
+                comparisons[version] = Compare(version, count, 294, typed, [], 100 * count / 294, ())
             return trial.Trial(path.stem, hashlib.sha256(path.read_bytes()).hexdigest(), comparisons, [], "try again")
 
         class Proposals:
@@ -258,6 +227,8 @@ class CoreTests(unittest.TestCase):
                             20,
                             dict.fromkeys(TYPES, 0),
                             [],
+                            50.0,
+                            (),
                         )
                         for version in (project.versions if versions is None else versions)
                     }

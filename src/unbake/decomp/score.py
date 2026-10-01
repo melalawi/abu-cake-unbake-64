@@ -8,6 +8,7 @@ import math
 import subprocess
 import threading
 from pathlib import Path
+from typing import cast
 
 from unbake.project.cache import Cache, key
 from unbake.project.config import Held, Policy, Project
@@ -128,3 +129,29 @@ def _read_score(path: Path, function: str) -> float:
     except (OSError, ValueError) as error:
         raise Held("score", f"objdiff JSON {path}: {error}") from error
     return _symbol_score(document, function)
+
+
+def diff(policy: Policy, version: str, function: str, target: Path, candidate: Path, output: Path) -> dict[str, object]:
+    """Retain instruction rows from a real relocatable-object comparison."""
+    tool = objdiff_cli(policy, "try")
+    result = subprocess.run(
+        [
+            str(tool),
+            "diff",
+            "-1",
+            str(target),
+            "-2",
+            str(candidate),
+            function,
+            "--format",
+            "json",
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        raise Held("try", f"objdiff {function} VERSION {version}: {result.stderr.strip()}")
+    return cast(dict[str, object], json.loads(output.read_bytes()))

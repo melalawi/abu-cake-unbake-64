@@ -6,14 +6,12 @@ import fcntl
 import hashlib
 import json
 import re
-import shlex
 import tempfile
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-from unbake.decomp import needs
 from unbake.decomp.score import percent, weakest
 from unbake.layout import split
 from unbake.project.config import Held, Policy, Project
@@ -31,7 +29,6 @@ class ComparisonRecord(TypedDict):
 
 
 class TrialRecord(TypedDict):
-    needs: list[dict[str, Any]]
     function: str
     source_sha256: str
     sha256: str
@@ -123,15 +120,12 @@ class Store:
             raise Held("drafts", "trial.next_command is missing")
         identical_everywhere = _required(trial, "identical_everywhere")
         proven = all(
-            item["identical"] == item["of"] and not any(item["typed"].values()) for item in comparisons.values()
+            scores[version] == 100 and item["identical"] == item["of"] and not any(item["typed"].values())
+            for version, item in comparisons.items()
         )
         if not isinstance(identical_everywhere, bool) or identical_everywhere != proven:
             raise Held("drafts", "trial.identical_everywhere differs from compares word counts/differences")
-        pending = _required(trial, "needs")
-        if not isinstance(pending, list):
-            raise Held("drafts", "trial.needs must be a list")
         row: TrialRecord = {
-            "needs": [needs.encode(need) for need in pending],
             "function": function,
             "source_sha256": sha,
             "sha256": sha,
@@ -192,22 +186,10 @@ class Store:
                         "preconditions",
                         "next_command",
                         "identical_everywhere",
-                        "needs",
                         "at",
                     ):
                         if name not in row:
-                            recovery = ""
-                            if name == "needs":
-                                command = shlex.join(["python", "-m", "unbake.decomp.ledger", "--ledger", str(path)])
-                                recovery = (
-                                    f"; preserve the old ledger: {command}; then rerun decomp try"
-                                    " for the submitted source with the same --policy and --scratch"
-                                )
-                            raise Held("drafts", f"{path}:{number}: {name} is missing{recovery}")
-                    if not isinstance(row["needs"], list):
-                        raise Held("drafts", f"{path}:{number}: needs must be a list")
-                    for pending in row["needs"]:
-                        needs.decode(pending)
+                            raise Held("drafts", f"{path}:{number}: {name} is missing")
                     _function(row["function"])
                     sha = row["sha256"]
                     if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):

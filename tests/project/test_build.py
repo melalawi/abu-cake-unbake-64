@@ -87,7 +87,7 @@ class BuildTests(unittest.TestCase):
         first = out.read_bytes()
         build.compile_object(project, policy, source, "us", out)
         self.assertEqual(out.read_bytes(), first)
-        self.assertEqual((self.root / "calls").read_text().splitlines(), ["cc1", "asn64", "parser"])
+        self.assertEqual((self.root / "calls").read_text().splitlines(), ["cc1", "as"])
         self.assertIn(b"\r\n", first)
         self.assertNotIn(b".rodata", first)
 

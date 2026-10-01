@@ -8,7 +8,7 @@ from pathlib import Path
 from re import Match
 from typing import Any, cast
 
-from unbake.decomp.needs import Need, PlacementNeed, register_deriver, register_resolver
+from unbake.decomp.needs import PlacementNeed, register_resolver
 from unbake.layout import split, xver_edits
 from unbake.project.config import Held
 
@@ -226,48 +226,16 @@ def _placement(project: Any, span: Span) -> list[PlacementNeed]:
     return result
 
 
-def callee_span(project: Any, function: str, version: str) -> Span | None:
-    """Use a callee's explicit VERSION entry before shared-name correspondence.
-
-    The compiled object's active relocations select the callee. A regional entry
-    may have no names_from counterpart, or contain real instruction differences.
-    """
-    function = split.name(function)
-    rows = _inventory(project, version)
-    named = _named(project, version, function, rows)
-    if named is None:
-        return locate(project, function).get(version)
-    row, start = named
-    data = _image(project, version)
-    words = body(data, start, split.end(row), function)
-    return _span(project, version, function, row, start, words, data)
-
-
-def needs(project: Any, function: str, trial: Any) -> list[PlacementNeed]:
-    """Plan caller placements and the function symbols requested by a trial."""
-    from unbake.decomp.needs import SymbolNeed
-
-    if trial is None:
-        raise Held("placement", "trial: required")
-    if trial.function != function:
-        raise Held("placement", f"trial.function: expected {function}")
-    result = []
-    for span in locate(project, function).values():
-        if span is not None:
-            result.extend(_placement(project, span))
-    requested = getattr(trial, "needs", None)
-    if requested is None:
-        raise Held("placement", "trial.needs: required")
-    for need in requested:
-        if not isinstance(need, SymbolNeed) or need.type != "func":
-            continue
-        if need.address is None:
-            raise Held("placement", f"symbol {need.name} address: required")
-        span = callee_span(project, need.name, need.version)
-        if span is None or span.address != need.address + need.addend:
-            raise Held("placement", f"VERSION {need.version} callee {need.name}: no proved twin at requested address")
-        result.extend(_placement(project, span))
-    return list(dict.fromkeys(result))
+def needs(project: Any, function: str) -> list[PlacementNeed]:
+    """Plan named function placement edits for match expansion."""
+    return list(
+        dict.fromkeys(
+            need
+            for span in locate(project, function).values()
+            if span is not None
+            for need in _placement(project, span)
+        )
+    )
 
 
 def twins(project: Any) -> list[PlacementNeed]:
@@ -290,56 +258,4 @@ def twins(project: Any) -> list[PlacementNeed]:
     ]
 
 
-def derive(context: Any) -> list[Need]:
-    """Decode called function symbols from trial objects and plan their text twins."""
-    from types import SimpleNamespace
-
-    from unbake.decomp.needs import SymbolNeed
-    from unbake.project_tools.elf import Object
-
-    requested = []
-    for version, artifact in context.artifacts.items():
-        for field in ("unit", "target_words", "span"):
-            if field not in artifact:
-                raise Held("placement", f"artifacts.{version}.{field}: required")
-        try:
-            obj = Object(artifact["unit"].path)
-            section = obj.section(".text")
-            if section is None:
-                raise Held("placement", f"artifacts.{version}.text: required")
-            for offset, kind, symbol in obj.relocations(section):
-                if kind != 4 or symbol["section"] != 0:
-                    continue
-                name = symbol["name"]
-                if offset % 4:
-                    raise Held("placement", f"callee {name} offset: invalid instruction boundary")
-                addend = struct.unpack_from(">I", obj.content(section), offset)[0] & 0x03FFFFFF
-                if addend:
-                    raise Held("placement", f"callee {name} addend: nonzero function entry")
-                # Named VERSION entries and correspondence establish the address
-                # independently of an imperfect draft's instruction alignment.
-                span = callee_span(context.project, name, version)
-                if span is None:
-                    raise Held("placement", f"VERSION {version} callee {name}: no proved twin")
-                requested.append(
-                    SymbolNeed(
-                        version,
-                        name,
-                        span.address,
-                        0,
-                        ".text",
-                        "func",
-                        span.end - span.start,
-                        f"R_MIPS_26 text+0x{offset:X}",
-                    )
-                )
-        except (OSError, ValueError, IndexError, struct.error) as error:
-            raise Held("placement", f"artifacts.{version}.unit: {error}") from error
-    trial = SimpleNamespace(function=context.trial.function, needs=requested)
-    result: list[Need] = list(dict.fromkeys(requested))
-    result.extend(needs(context.project, trial.function, trial))
-    return result
-
-
 register_resolver(PlacementNeed, 50, xver_edits.resolve)
-register_deriver(derive)

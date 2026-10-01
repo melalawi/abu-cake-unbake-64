@@ -1,6 +1,5 @@
 # Linux x86_64 compiler registry. Fetched and measured 2026-09-30.
 # Downloads are pinned by archive and installed file SHA-256.
-# ASN64, wibo and psyq-obj-parser retain the existing measured pins.
 # The KMC main asset is content-pinned despite its mutable release label.
 # SN64 cc1 is the native mips-nintendo-nu64 build, not cc1n64.exe.
 
@@ -82,19 +81,16 @@ files = ["acpp", "as0", "as1", "c++filt", "cc", "cfe", "copt", "crt1.o", "crtn.o
 [compilers."gcc-2.7.2-kmc"]
 kind = "sn64"
 family = "gcc"
-source = "mixed"
+source = "download"
 host = "linux-x86_64"
 cc = "cc1"
-as = "asn64.exe"
+as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-mgp32", "-mfp32", "-O2"]
-drivers = ["sn64_cc.py", "asn64.py", "resolve_external_branches.py"]
+drivers = ["sn64_cc.py", "sn64_gnu_as.py", "sn64_schedule.py", "sn64_literals.py", "sn64_macros.py", "resolve_external_branches.py"]
 decompme = "gcc2.7.2kmc"
 
 [compilers."gcc-2.7.2-kmc".pins]
-"asn64.exe" = "1e04e1195f6504fe711c3db67ad94eb50d47f2a0f21e87dbbe20cbac4d83db39"
 "cc1" = "c4976e94ebf81d0ab1336f631fb752fbe6e0e0810e90a24da11e6ed1d5223b8a"
-"psyq-obj-parser" = "7b90d21f0315cd9158531502a9fafcd95e1e4db0ef9d1244e46828b4203acb75"
-"wibo" = "d926a72202c420f6535904a4d49481d2bb4f138462ed639c8908d0a305323908"
 
 [[compilers."gcc-2.7.2-kmc".downloads]]
 url = "https://github.com/decompals/mips-gcc-2.7.2/releases/download/main/gcc-2.7.2-linux.tar.gz"
@@ -107,14 +103,11 @@ family = "gcc"
 source = "supplied"
 host = "linux-x86_64"
 cc = "cc1"
-as = "asn64.exe"
+as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float", "-mgp32", "-mfp64", "-mno-fix4300"]
-drivers = ["sn64_cc.py", "asn64.py", "resolve_external_branches.py"]
+drivers = ["sn64_cc.py", "sn64_gnu_as.py", "sn64_schedule.py", "sn64_literals.py", "sn64_macros.py", "resolve_external_branches.py"]
 decompme = "gcc2.8.1sn"
 
 [compilers."gcc-2.8.1-sn64".pins]
-"asn64.exe" = "1e04e1195f6504fe711c3db67ad94eb50d47f2a0f21e87dbbe20cbac4d83db39"
 "cc1" = "83894592be24de2aa63bdff9322c35c170d96484ca0049a51c300a073e69bdc1"
-"psyq-obj-parser" = "7b90d21f0315cd9158531502a9fafcd95e1e4db0ef9d1244e46828b4203acb75"
-"wibo" = "d926a72202c420f6535904a4d49481d2bb4f138462ed639c8908d0a305323908"
 

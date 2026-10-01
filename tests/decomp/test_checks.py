@@ -133,7 +133,6 @@ class ChecksTest(unittest.TestCase):
             (lambda: checks.run("/* FAKEMATCH: */"), "FAKEMATCH.reason"),
             (lambda: checks.resolve([invalid], None, None), "GuardFinding"),
             (lambda: checks.resolve(invalid, None, None), "findings"),
-            (lambda: checks.derive(None), "trial_context.source"),
         ]
         for operation, name in cases:
             with self.subTest(name=name), self.assertRaisesRegex(Held, name):

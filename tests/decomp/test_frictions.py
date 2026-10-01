@@ -10,7 +10,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.decomp.test_trial import assemble, assembly, fixture
+from tests.decomp.support import assemble, assembly, fixture
 from unbake.decomp import checks, declarations, drafts, guide, ledger, m2c, needs, trial
 from unbake.layout import shared
 from unbake.layout.structs import layouts
@@ -94,9 +94,8 @@ class FrictionTests(unittest.TestCase):
             patch.object(drafts.Store, "rows", return_value=[{"needs": [needs.encode(pending)]}]),
             redirect_stdout(io.StringIO()),
         ):
-            output = guide.run(self.project, "alpha", "us")
+            output = guide.render([pending])
         self.assertIn("Missing (LayoutNeed)", output)
-        self.assertIn("python -m unbake.decomp.declarations", output)
         header = declarations.promote(self.project, self.policy, self.source, "us")
         self.assertIn("struct Missing", header.read_text())
         self.assertEqual(header, self.project.include[0] / "structs.h")
@@ -150,10 +149,7 @@ class FrictionTests(unittest.TestCase):
         path.write_text(content)
         with self.assertRaises(Held) as error:
             store.history()
-        self.assertIn(str(path), error.exception.reason)
-        self.assertIn(
-            shlex.join(["python", "-m", "unbake.decomp.ledger", "--ledger", str(path)]), error.exception.reason
-        )
+        self.assertIn("function", error.exception.reason)
         self.assertEqual(path.read_text(), content)
         backup = ledger.archive(path)
         self.assertEqual(backup.read_text(), content)

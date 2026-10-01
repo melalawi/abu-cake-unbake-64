@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from unbake.decomp import trial_layout
+from unbake.decomp import rom
 from unbake.project.config import Held, Version
 
 
@@ -12,7 +12,7 @@ def resident_copy() -> list[dict[str, int]]:
     return [{"address": 0x800C0000, "start": 0x40, "end": 0x50, "table_entry_bias": 0}]
 
 
-class TrialLayoutTests(unittest.TestCase):
+class RomTests(unittest.TestCase):
     def test_aligned_row_uses_shared_boundaries_and_rom_mapping(self) -> None:
         endings = (
             "  - [0x50]\n",
@@ -23,9 +23,9 @@ class TrialLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = root / "game.yaml"
-            rom = root / "baserom.z64"
-            rom.write_bytes(bytes(0x40) + words + bytes(0x10))
-            version = Version("us", rom, "", path, root / "symbols.txt", ())
+            image = root / "baserom.z64"
+            image.write_bytes(bytes(0x40) + words + bytes(0x10))
+            version = Version("us", image, "", path, root / "symbols.txt", ())
             for ending in endings:
                 with self.subTest(ending=ending):
                     path.write_text(
@@ -34,16 +34,16 @@ class TrialLayoutTests(unittest.TestCase):
                         "      - [0x40, c, alpha, {align: 16}]\n" + ending,
                         encoding="utf-8",
                     )
-                    span = trial_layout.function_span(version, "alpha", {})
-                    self.assertEqual(span, trial_layout.FunctionSpan(0x80001000, 0x40, 0x10, 4))
+                    span = rom.function_span(version, "alpha", {})
+                    self.assertEqual(span, rom.FunctionSpan(0x80001000, 0x40, 0x10))
                     assert span is not None
-                    self.assertEqual(trial_layout.target(version, span), words)
-                    reader = trial_layout.rom_reader(version, list)
+                    self.assertEqual(rom.target(version, span), words)
+                    reader = rom.rom_reader(version, list)
                     self.assertEqual(reader(0x80001000, 0x10), words)
                     with self.assertRaisesRegex(Held, "unmapped"):
                         reader(0x80001010, 4)
                     # A configured resident copy of the same ROM bytes is readable at its runtime address.
-                    copied = trial_layout.rom_reader(version, resident_copy)
+                    copied = rom.rom_reader(version, resident_copy)
                     self.assertEqual(copied(0x800C0004, 4), words[4:8])
                     self.assertEqual(copied(0x80001000, 0x10), words)
                     with self.assertRaisesRegex(Held, "unmapped"):

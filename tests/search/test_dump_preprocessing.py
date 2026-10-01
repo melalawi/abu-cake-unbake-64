@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
-from unbake.decomp.explain import _gcc_input, function_dump, render
+from unbake.decomp.explain import function_dump, gcc_input, render
 from unbake.families.gcc.allocation import allocation
 from unbake.search.core import preprocess
 
@@ -36,7 +36,7 @@ class DumpPreprocessingTests(unittest.TestCase):
                             patch("unbake.project.makefile.recipe", return_value=NS(cpp=cpp, cppflags=["-P"])),
                             patch("unbake.project.makefile.host_executable", return_value=cpp),
                         ):
-                            expanded, _ = _gcc_input(project, NS(), source, "us-rev1", work)
+                            expanded, _ = gcc_input(project, NS(), source, "us-rev1", work, preserve_lines=False)
                             search_input = preprocess(project, NS(), source, "us-rev1", time.monotonic() + 10)
                         for text in (expanded, search_input):
                             self.assertIn("int selected(int x)", text)

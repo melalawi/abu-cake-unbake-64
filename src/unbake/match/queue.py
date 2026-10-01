@@ -94,12 +94,7 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     edits: list[split.Edit] = declarations.match_edits(project, function, text, versions)
     for edit in edits:
         relative(project, edit.path)
-    proof_row = next(record for record in reversed(identical) if all(v in record["compares"] for v in versions))
-    if "needs" not in proof_row:
-        held(f"{function}: trial.needs missing from draft store")
-    pending = [needs.decode(item) for item in proof_row["needs"]]
-    pending.extend(finding for finding in findings if finding not in pending)
-    declarations.preflight(project, policy, pending)
+    pending: list[needs.Need] = list(findings)
     return Draft(row, content, versions, pending)
 
 
@@ -110,7 +105,7 @@ def submit(
     if source is None:
         held("source: missing value")
     features.load()
-    source = proof.source(project, policy, Path(source).resolve())
+    source = proof.source(project, Path(source).resolve())
     selected = holding_versions(project, function(source.stem)) if versions is None else versions
     for version in selected:
         project.version(version)
@@ -118,8 +113,8 @@ def submit(
     row: dict[str, Any] = {"function": function(source.stem), "source": str(source), "source_sha256": sha(read(source))}
     if versions is not None:
         row["versions"] = list(versions)
-    validate(project, policy, row)
-    with queue_lock(project, policy):
+    stage.compile_fold(project, policy, validate(project, policy, row))
+    with queue_lock(project):
         rows = [existing for existing in queue(project) if existing["function"] != row["function"]]
         rows.append(row)
         write_queue(project, rows)
@@ -129,7 +124,7 @@ def submit(
 def withdraw(function: str, *, project: Project, policy: Policy | None = None) -> list[str]:
     """Remove one explicitly named function from this project's queue."""
     common.function(function)
-    with queue_lock(project, policy):
+    with queue_lock(project):
         rows = queue(project)
         remaining = [row for row in rows if row["function"] != function]
         if len(remaining) == len(rows):
@@ -140,7 +135,7 @@ def withdraw(function: str, *, project: Project, policy: Policy | None = None) -
 
 def status(*, project: Project, policy: Policy | None = None) -> list[str]:
     """Return the current queue without deriving any project selection."""
-    with queue_lock(project, policy):
+    with queue_lock(project):
         rows = queue(project)
     return [f"OK(match): {row['function']} queued {row['source_sha256']} {row['source']}" for row in rows]
 
@@ -181,7 +176,7 @@ def run(project: Project, policy: Policy) -> list[str]:
     """Build outside build/.lock, isolate failures, then publish verified files."""
     features.load()
     receipts: list[str] = []
-    with queue_lock(project, policy):
+    with queue_lock(project):
         rows = queue(project)
     candidates = []
     for row in rows:

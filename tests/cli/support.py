@@ -77,10 +77,9 @@ class MainCase(unittest.TestCase):
         result = Trial(
             "alpha",
             hashlib.sha256(self.source.read_bytes()).hexdigest(),
-            {"us": Compare("us", 0, 1, {}, [])},
+            {"us": Compare("us", 0, 1, {}, [], 88.5, ())},
             [],
             "",
-            [],
         )
         captured = {}
 
