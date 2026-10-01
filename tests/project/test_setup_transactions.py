@@ -64,6 +64,8 @@ class SetupTransactionTests(unittest.TestCase):
         self.project = config.load(self.root)
         setup.run(self.project, self.policy)
         self.project = config.load(self.root)
+        (self.project.include[0] / "types.h").write_text("typedef unsigned int u32;\ntypedef unsigned long long u64;\n")
+        setup._sdk_headers(self.project)
         self.settings = config.load_policy(stage="setup")
         for name, content in {
             "README.md": b"Owner README\r\n\xff",
@@ -85,7 +87,7 @@ class SetupTransactionTests(unittest.TestCase):
         generation.mkdir(parents=True)
         project.build_link(version).symlink_to(generation.name)
         (generation / f"{project.name}.{version}.z64").write_bytes(data)
-        project.asm.mkdir(parents=True)
+        project.asm.mkdir(parents=True, exist_ok=True)
         (project.asm / "generated.s").write_bytes(b".text\n")
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text("check: OK\n")
@@ -335,3 +337,52 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(dependency.read_text(), original)
         self.assertEqual((self.project.asm / "example.s").read_bytes(), b"original assembly")
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
+
+    def test_duplicate_gfx_definition_refuses_without_overwriting_human_header(self) -> None:
+        header = self.project.include[0] / "human.h"
+        content = "/* Owner header */\ntypedef union { unsigned int words[2]; } Gfx;\n"
+        header.write_text(content)
+        with self.assertRaisesRegex(config.Held, r"setup.gfx_type: include/human.h:2"):
+            setup._sdk_headers(self.project)
+        self.assertEqual(header.read_text(), content)
+
+    def test_open_gbi_and_one_shared_sdk_type_are_installed(self) -> None:
+        root = self.project.include[0]
+        self.assertEqual((root / "gbi.h").read_bytes(), (setup.makefile.TEMPLATES / "gbi.h").read_bytes())
+        self.assertIn("MIT License", (root / "gbi.h").read_text())
+        self.assertIn('include "shared/gfx.h"', (root / "n64sdk.h").read_text())
+        from unbake.decomp.gbi_source import gfx_typedefs
+
+        declarations = [path for path in root.rglob("*.h") if gfx_typedefs(path.read_text())]
+        self.assertEqual(declarations, [root / "shared/gfx.h"])
+        before = {path: path.stat().st_mtime_ns for path in root.rglob("*.h")}
+        setup._sdk_headers(self.project)
+        self.assertEqual({path: path.stat().st_mtime_ns for path in before}, before)
+
+    def test_one_version_failure_prevents_all_version_publication(self) -> None:
+        data = tomllib.loads((self.root / "config.toml").read_text())
+        data["project"]["versions"] = ["us", "eu"]
+        data["version"]["eu"] = dict(data["version"]["us"])
+        data["version"]["eu"]["baserom"] = "roms/baserom.eu.z64"
+        (self.root / "roms/baserom.eu.z64").write_bytes(b"ABC")
+        (self.root / "config.toml").write_text(toml.dumps(data))
+        project = config.load(self.root)
+        before = setup._inputs(project)
+        completed = []
+
+        def proof(selected: config.Project, version: str, raw: bytes, cores: int, *, log: Path) -> None:
+            if version == "eu":
+                raise config.Held("setup", "setup.sha1.eu: injected second-version failure")
+            self.proof(selected, version, raw, cores, log=log)
+            completed.append(version)
+
+        with (
+            patch.object(setup_proof, "proof", side_effect=proof),
+            self.assertRaisesRegex(config.Held, "setup.sha1.eu"),
+        ):
+            setup.refresh(project, self.settings)
+        self.assertEqual(completed, ["us"])
+        self.assertEqual(setup._inputs(project), before)
+        self.assertEqual(os.readlink(project.build_link("us")), "us.0")
+        self.assertFalse(project.build_link("eu").exists())
+        self.assertFalse(project.asm.exists())

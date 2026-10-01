@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -309,6 +310,46 @@ def _ready_readme(project: PendingProject | Project, census: Census, layout: Lay
     _write(tree, "README.md", render(template, reports))
 
 
+def _sdk_headers(project: Project) -> None:
+    """Install the open macro asset and one shared SDK display-list type."""
+    from unbake.decomp.gbi_source import gfx_typedefs
+
+    root = project.include[0]
+    shared_type = root / "shared/gfx.h"
+    for directory in project.include:
+        if directory.is_dir():
+            for path in directory.rglob("*.h"):
+                if path != shared_type:
+                    spans = gfx_typedefs(path.read_text())
+                    if spans:
+                        line = path.read_text()[: spans[0][0]].count("\n") + 1
+                        raise Held(
+                            "setup", f"setup.gfx_type: {path.relative_to(project.root)}:{line}: duplicate SDK Gfx"
+                        )
+    files = {
+        "shared/gfx.h": (
+            '#ifndef UNBAKE_SHARED_GFX_H\n#define UNBAKE_SHARED_GFX_H\n#include "types.h"\n\n'
+            "typedef union Gfx {\n"
+            "    struct { u32 w0; u32 w1; } words;\n"
+            "    u64 force_structure_alignment;\n"
+            "} Gfx;\n\n#endif\n"
+        ),
+        "n64sdk.h": '#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n#include "shared/gfx.h"\n#endif\n',
+        "gbi.h": (makefile.TEMPLATES / "gbi.h").read_text(),
+    }
+    for name, content in files.items():
+        target = root / name
+        if target.exists() and target.read_bytes() != content.encode():
+            key = "setup.gbi_header" if name == "gbi.h" else "setup.gfx_type"
+            raise Held(
+                "setup", f"{key}: {target.relative_to(project.root)}: existing header differs; preserve human input"
+            )
+    for name, content in files.items():
+        target = root / name
+        if not target.exists():
+            _write(project.root, target.relative_to(project.root).as_posix(), content)
+
+
 def _publish(
     project: PendingProject | Project,
     staged: Project,
@@ -330,7 +371,10 @@ def _publish(
             and not shell_readme
             and (
                 path.is_relative_to(staged.src)
-                or any(path.is_relative_to(directory) for directory in staged.include)
+                or (
+                    any(path.is_relative_to(directory) for directory in staged.include)
+                    and (project.root / relative).exists()
+                )
                 or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
                 or relative in {"README.md", "CONTRIBUTING.md", "config.toml", ".gitignore"}
                 or relative.startswith("docs/")
@@ -459,15 +503,22 @@ def _prove_publish(
     contributing = tree / "CONTRIBUTING.md"
     previous = contributing.read_bytes() if contributing.exists() and not fresh else None
     run(staged, policy, supply=supply)
+    _sdk_headers(staged)
     if previous is not None:
         contributing.write_bytes(previous)
-    receipts = []
-    for version in staged.versions:
+    workers = min(policy.cores, len(staged.versions))
+    cores = max(1, policy.cores // workers)
+
+    def prove_version(version: str) -> str:
         data = staged.version(version).baserom.read_bytes()
         log = project.build / "setup/logs" / f"{version}.log"
-        setup_proof.proof(staged, version, data, policy.cores, log=log)
+        setup_proof.proof(staged, version, data, cores, log=log)
         digest = hashlib.sha1(data).hexdigest()
-        receipts.append(f"{version}: SHA1 {digest}; every cartridge byte proved")
+        return f"{version}: SHA1 {digest}; every cartridge byte proved"
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(prove_version, version) for version in staged.versions]
+        receipts = [future.result() for future in futures]
     if before_publish is not None:
         before_publish()
     _publish(project, staged, fingerprint, fresh=fresh, generations=generations)
