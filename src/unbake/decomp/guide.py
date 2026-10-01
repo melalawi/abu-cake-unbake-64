@@ -178,7 +178,13 @@ def run(project: Project, function: str, version: str | None) -> str:
     for ref in refs:
         if ref.address in settled or any(row.start <= ref.address < row.end for row in rows):
             continue
-        mapping = reader.span(ref.address, ref.size)
+        mapping = reader.find_span(ref.address, ref.size)
+        if mapping is None:
+            settled.add(ref.address)
+            field_guidance.append(
+                f"reference: 0x{ref.address:08X}; size 0x{ref.size:X}; runtime data without ROM contents"
+            )
+            continue
         rows += (DataRow(f"resident_{mapping.address:08X}", mapping.address, mapping.end, ".rodata"),)
     inferred = from_words(target, version, (), rows, values.get("_gp"), family, frozenset(settled))
     bindings = []

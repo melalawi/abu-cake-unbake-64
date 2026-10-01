@@ -473,7 +473,7 @@ class SymbolTests(unittest.TestCase):
             target = (*pair(0x800E0000), *pair(0x800E0010))
             assembly = root / "alpha.s"
             assembly.write_text(
-                ".set noreorder\n.rdata\nlocal: .float 1.0\n.text\n"
+                ".set noreorder\n.rdata\nlocal: .float 1.0\n.text\n.globl alpha\n.type alpha, @function\nalpha:\n"
                 "lui $2, %hi(resident)\nlwc1 $f4, %lo(resident)($2)\n"
                 "lui $2, %hi(local)\nlwc1 $f4, %lo(local)($2)\n"
             )
@@ -519,7 +519,7 @@ class SymbolTests(unittest.TestCase):
             target = (0x3C03800E, 0x24630000, 0xAC620004, *pair(0x800F0010), *pair(0x800C000C))
             assembly = root / "alpha.s"
             assembly.write_text(
-                ".set noreorder\n.text\n"
+                ".set noreorder\n.text\n.globl alpha\n.type alpha, @function\nalpha:\n"
                 "lui $3, %hi(resident)\naddiu $3, $3, %lo(resident)\nsw $2, 4($3)\n"
                 "lui $2, 0x800f\nlwc1 $f4, 0x10($2)\n"
                 "lui $2, 0x800c\nlwc1 $f4, 0xc($2)\n"
@@ -568,7 +568,10 @@ class SymbolTests(unittest.TestCase):
             target = pair(0x800C000C)
             version.baserom.write_bytes(bytes(0x40) + struct.pack(">II", *target) + bytes(8))
             assembly = root / "alpha.s"
-            assembly.write_text(".set noreorder\n.text\nlui $2, %hi(value)\nlwc1 $f4, %lo(value)($2)\n")
+            assembly.write_text(
+                ".set noreorder\n.text\n.globl alpha\n.type alpha, @function\nalpha:\n"
+                "lui $2, %hi(value)\nlwc1 $f4, %lo(value)($2)\n"
+            )
             output = root / "alpha.o"
             subprocess.run(
                 [str(self.policy.mips_as), "-EB", "-mips3", "--no-pad-sections", "-o", str(output), str(assembly)],
@@ -652,7 +655,8 @@ class SymbolTests(unittest.TestCase):
                 )
                 assembly = root / "alpha.s"
                 assembly.write_text(
-                    f".set noreorder\n.text\nlui $3, %hi(value{addend:+d})\nlwc1 $f6, %lo(value{addend:+d})($3)\n"
+                    ".set noreorder\n.text\n.globl alpha\n.type alpha, @function\nalpha:\n"
+                    f"lui $3, %hi(value{addend:+d})\nlwc1 $f6, %lo(value{addend:+d})($3)\n"
                 )
                 output = root / "alpha.o"
                 subprocess.run(

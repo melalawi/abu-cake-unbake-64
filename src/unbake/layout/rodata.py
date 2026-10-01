@@ -26,7 +26,7 @@ class TrialObject:
     owners: dict[tuple[str, int], tuple[str, ...]]
 
 
-def needs(trial_obj: TrialObject, version: str) -> list[RodataNeed]:
+def needs(trial_obj: TrialObject, version: str, *, private_sections: frozenset[str] = frozenset()) -> list[RodataNeed]:
     """Derive literal/table needs after proving every relocated constant byte."""
     for key in TrialObject.__dataclass_fields__:
         if not hasattr(trial_obj, key) or getattr(trial_obj, key) is None:
@@ -42,6 +42,8 @@ def needs(trial_obj: TrialObject, version: str) -> list[RodataNeed]:
     result = []
     for kind, pool in sorted(grouped, key=lambda item: (item[1].section, item[1].offset)):
         section = pool.section
+        if section in private_sections:
+            continue
         if section not in bases:
             try:
                 base, dissent = placement(obj, section, trial_obj.target_words)
@@ -245,7 +247,14 @@ def derive(context: Any) -> list[Need]:
         if "rodata" not in artifact:
             raise Held("rodata", f"artifacts.{version}.rodata: missing TrialObject evidence")
         try:
-            result.extend(needs(artifact["rodata"], version))
+            private = frozenset(artifact.get("private_rodata", ()))
+            if private:
+                context.trial.preconditions.append(
+                    f"VERSION {version}: private draft constants {', '.join(sorted(private))} "
+                    "require publication placement proof"
+                )
+                context.trial.compares[version].typed["rodata"] = 1
+            result.extend(needs(artifact["rodata"], version, private_sections=private))
         except Held as error:
             if "placements" not in artifact or ".bytes: disagree" not in str(error):
                 raise

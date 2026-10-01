@@ -1,7 +1,7 @@
 """Resolve data correspondence between explicit VERSION symbol placements."""
 
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.project.config import Held, Policy, Project
 
 
 def counterparts(project: Project, name: str) -> dict[str, str]:
@@ -40,3 +40,89 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
             )
         result[version] = candidates[0]
     return result
+
+
+def addresses(project: Project, name: str) -> dict[str, int]:
+    """Carry a data address through aligned references in corresponding code."""
+    from unbake.decomp.symbols import references
+    from unbake.decomp.trial_compare import align_words, words
+    from unbake.layout import xver
+    from unbake.project.rom import normalise
+
+    name = split.name(name)
+    source_version = project.names_from
+    _, source = split.symbols(project.version(source_version).symbols)
+    if name not in source:
+        raise Held("split", f"data symbol {name}: missing in names_from VERSION {source_version}")
+    address = source[name][0]
+    result = {
+        version: table[name][0]
+        for version in project.versions
+        if name in (table := split.symbols(project.version(version).symbols)[1])
+    }
+    missing = [version for version in project.versions if version not in result]
+    if not missing:
+        return result
+    anchor_errors: dict[str, Held] = {}
+    try:
+        counterpart_names = counterparts(project, name)
+    except Held as error:
+        anchor_errors = dict.fromkeys(missing, error)
+    else:
+        for version in missing:
+            result[version] = split.symbols(project.version(version).symbols)[1][counterpart_names[version]][0]
+    missing = [version for version in missing if version not in result]
+    if not missing:
+        return result
+    try:
+        images = {
+            version: normalise(project.version(version).baserom.read_bytes())
+            for version in dict.fromkeys((source_version, *missing))
+        }
+    except (OSError, Held):
+        raise anchor_errors[missing[0]] from None
+    evidence: dict[str, set[int]] = {version: set() for version in missing}
+    for function in split.functions(project, source_version):
+        source_words = words(images[source_version][function.start : function.end])
+        source_refs = references(source_words, source.get("_gp", (None,))[0])
+        offsets = {ref.offset // 4 for ref in source_refs if ref.address == address}
+        if not offsets:
+            continue
+        spans = xver.locate(project, function.name)
+        masks = {
+            index: 0xFFFF if word >> 26 != 3 else 0x03FFFFFF
+            for index, word in enumerate(source_words)
+            if word >> 26 in (3, 15) or index in {ref.offset // 4 for ref in source_refs}
+        }
+        for version in missing:
+            span = spans.get(version)
+            if span is None:
+                continue
+            target_words = words(images[version][span.start : span.end])
+            _, target_symbols = split.symbols(project.version(version).symbols)
+            target_refs = {
+                ref.offset // 4: ref.address for ref in references(target_words, target_symbols.get("_gp", (None,))[0])
+            }
+            for tag, a, b, c, _ in align_words(target_words, source_words, masks):
+                if tag == "equal":
+                    evidence[version].update(
+                        target_refs[a + index - c]
+                        for index in offsets
+                        if c <= index < c + b - a and a + index - c in target_refs
+                    )
+    for version, candidates in evidence.items():
+        if len(candidates) != 1:
+            raise Held("split", f"data symbol {name}: no unambiguous aligned reference in VERSION {version}")
+        result[version] = candidates.pop()
+    return result
+
+
+def correspondence(project: Project, policy: Policy, name: str) -> list[split.Edit]:
+    """Compose each proved placement with the data-symbol command's edit owner."""
+    from unbake.decomp.symbols_edits import data_symbol
+
+    return [
+        edit
+        for version, address in addresses(project, name).items()
+        for edit in data_symbol(project, policy, version, name, address, None)
+    ]

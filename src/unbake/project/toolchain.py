@@ -190,7 +190,11 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
         supplied = {name: pin for name, pin in spec.pins.items() if name not in covered}
         if supplied and source is None:
             raise Held(
-                "setup", f"[compilers.{spec.id}].supply: missing archive/directory for {', '.join(sorted(supplied))}"
+                "setup",
+                f"[compilers.{spec.id}].supply: missing archive/directory for {', '.join(sorted(supplied))}. "
+                "Run setup --supply DIR with files matching the registry SHA-256 pins. "
+                "See README Compiler setup and the project compiler acquisition docs. "
+                "Supplied files are not downloaded automatically.",
             )
         with tempfile.TemporaryDirectory(dir=cache, prefix=f".{spec.id}-") as temporary:
             stage = Path(temporary) / "install"
@@ -204,7 +208,12 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None) -> Path:
                 contents.update(compiler_files.supplied_files(source, set(supplied.values())))
             for name, pin in spec.pins.items():
                 if pin not in contents:
-                    raise Held("setup", f"[compilers.{spec.id}].pins.{name}: missing supplied/downloaded SHA-256 {pin}")
+                    raise Held(
+                        "setup",
+                        f"[compilers.{spec.id}].pins.{name}: missing supplied/downloaded SHA-256 {pin}. "
+                        "Supply the exact pinned file using setup --supply DIR. "
+                        "See the project compiler acquisition docs. Keep the authoritative pin unchanged.",
+                    )
                 target = stage / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(contents[pin])

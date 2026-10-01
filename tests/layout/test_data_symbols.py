@@ -1,13 +1,15 @@
 """Data renames preserve proved cross-VERSION addresses."""
 
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 from typing import cast
 
 from tests.layout.test_split import ProjectFixture
-from unbake.layout import split_edits
-from unbake.project.config import Held, Project
+from unbake.decomp.symbols_edits import data_symbol
+from unbake.layout import data_symbols, split_edits
+from unbake.project.config import Held, Policy, Project
 
 
 class DataProjectFixture(ProjectFixture):
@@ -53,3 +55,48 @@ class DataRenameTests(unittest.TestCase):
             fixture.names_from = "eu"
             with self.assertRaisesRegex(Held, "data symbol data: missing in names_from VERSION eu"):
                 split_edits.rename(project, "data", "shared_data")
+
+    def test_missing_rows_follow_aligned_code_and_validated_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = DataProjectFixture(Path(temporary))
+            project = cast(Project, fixture)
+            policy = cast(Policy, fixture.policy)
+            for version in project.versions:
+                fixture.layout(version, [(0x10, "asm", "alpha"), (0x30, "asm", "beta"), (0x40, "data", "pool")])
+                layout = project.version(version).split
+                layout.write_text(layout.read_text().replace("    subsegments:", "    subalign: 4\n    subsegments:"))
+                code = ([0] if version == "eu" else []) + [
+                    0x3C038000,
+                    0x8C642034 if version == "us" else 0x8C643034,
+                    0x03E00008,
+                    0,
+                ]
+                image = bytearray(128)
+                image[:4] = bytes.fromhex("80371240")
+                image[0x10 : 0x10 + len(code) * 4] = struct.pack(f">{len(code)}I", *code)
+                project.version(version).baserom.write_bytes(image)
+            source = project.version("us").symbols
+            source.write_text(source.read_text() + "value = 0x80002034;\n")
+            self.assertEqual(data_symbols.addresses(project, "value"), {"us": 0x80002034, "eu": 0x80003034})
+            edits = data_symbols.correspondence(project, policy, "value")
+            self.assertEqual(len(edits), 1)
+            self.assertIn("value = 0x80003034;", edits[0].after)
+            edits[0].path.write_text(edits[0].after)
+            self.assertEqual(data_symbols.correspondence(project, policy, "value"), [])
+            alias = data_symbol(project, policy, "eu", "alias", 0x80003034, None)
+            self.assertIn("alias = 0x80003034; // absolute:True", alias[0].after)
+            renamed = data_symbol(project, policy, "eu", "shared", 0x80003034, "value")
+            self.assertIn("shared = 0x80003034;", renamed[0].after)
+            for name, address, old in (
+                ("value", 0x80003038, None),
+                ("bad", 0x80001000, None),
+                ("shared", 0x80003038, "value"),
+                ("bad", -1, None),
+            ):
+                with self.subTest(name=name, address=address, old=old), self.assertRaises(Held):
+                    data_symbol(project, policy, "eu", name, address, old)
+            target = project.version("eu")
+            target.symbols.write_text(target.symbols.read_text().replace("value = 0x80003034;\n", ""))
+            target.baserom.write_bytes(bytes(128))
+            with self.assertRaises(Held):
+                data_symbols.addresses(project, "value")

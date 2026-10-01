@@ -147,6 +147,24 @@ def generation_entry(layout: Elf, function: str, address: int) -> Symbol:
     return function_symbol(layout, next(iter(entries)))
 
 
+def function_range(elf: Elf, function: str, span_size: int) -> tuple[Symbol, Section, int]:
+    """Select the named body, retaining split residue but excluding private helpers."""
+    symbol = function_symbol(elf, function)
+    section = elf.sections[symbol.section]
+    boundaries = [
+        entry.address
+        for entry in elf.symbols
+        if entry.kind == "FUNC"
+        and entry.section == symbol.section
+        and entry.address > symbol.address
+        and (entry.binding == "LOCAL" or entry.address - symbol.address >= span_size)
+    ]
+    end = min(boundaries, default=section.address + section.size)
+    if symbol.address < section.address or symbol.address + symbol.size > end:
+        raise Held("try", f"{elf.path}: {function} symbol size exceeds its text body")
+    return symbol, section, end
+
+
 def generation_elf(generation: Path) -> Path:
     paths = sorted(Path(generation).rglob("*.elf"))
     if len(paths) != 1:
@@ -176,20 +194,7 @@ def link(
     readelf: str,
     work: Path,
 ) -> tuple[bytes, dict[int, int], Path]:
-    symbol = function_symbol(unit, function)
-    section = unit.sections[symbol.section]
-    if symbol.address != 0:
-        raise Held("try", f"{unit.path}: {function} must start its text section; offset is 0x{symbol.address:X}")
-    extra_functions = [
-        s.name
-        for s in unit.symbols
-        if s.kind == "FUNC"
-        and s.section in unit.sections
-        and s.name != function
-        and (s.section != symbol.section or s.address <= 0)
-    ]
-    if extra_functions:
-        raise Held("try", f"{unit.path}: functions outside the draft split span: {', '.join(extra_functions)}")
+    symbol, section, _ = function_range(unit, function, span.size)
     placements: dict[str, int] = {}
     for need in pending:
         if isinstance(need, SectionPlacement):
@@ -201,7 +206,12 @@ def link(
             if need.section in placements and placements[need.section] != base:
                 raise Held("try", f"{need.section}: conflicting proved placements")
             placements[need.section] = base
+    private_address = span.address - symbol.address + section.size
     for other in unit.sections.values():
+        if "X" in other.flags and other.size and other.index != section.index:
+            private_address = (private_address + 15) & ~15
+            placements[other.name] = private_address
+            private_address += other.size
         if (
             "A" in other.flags
             and other.size
@@ -244,7 +254,8 @@ def link(
         "\n".join(
             [f"{name} = 0x{addresses[name]:08X};" for name in undefined]
             + [
-                f"SECTIONS {{ .text 0x{span.address:08X} : SUBALIGN({span.subalign}) {{ *({section.name}) }}",
+                f"SECTIONS {{ .text 0x{span.address - symbol.address:08X} : "
+                f"SUBALIGN({span.subalign}) {{ *({section.name}) }}",
                 *(f"{name} 0x{address:08X} : SUBALIGN(1) {{ *({name}) }}" for name, address in placements.items()),
                 "/DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.pdr) *(.mdebug*) *(.comment) *(.note*) } }",
             ]
@@ -255,29 +266,21 @@ def link(
     linked = work / "trial.elf"
     run_tool([linker, "-T", str(script), "-o", str(linked), str(unit.path)], work, "try")
     output = inspect(linked, readelf, work)
-    placed = function_symbol(output, function)
-    text = output.sections[placed.section]
-    if placed.address != span.address or text.address != span.address:
+    placed, text, end = function_range(output, function, span.size)
+    if placed.address != span.address:
         raise Held("try", f"{linked}: linker moved {function} away from 0x{span.address:X}")
     try:
         with linked.open("rb") as binary:
-            binary.seek(text.offset)
-            # A translation unit may contain later split functions. Keep all
-            # residue in this span, stopping only at a defined function boundary.
-            following = [
-                entry.address - span.address
-                for entry in output.symbols
-                if entry.kind == "FUNC"
-                and entry.section == placed.section
-                and entry.address - span.address >= span.size
-            ]
-            size = min(text.size, min(following, default=text.size))
-            if placed.size > text.size:
-                raise Held("try", f"{linked}: {function} symbol size exceeds its text section")
+            binary.seek(text.offset + placed.address - text.address)
+            size = end - placed.address
             data = binary.read(size)
     except OSError as error:
         raise Held("try", f"{linked}: {error}") from error
     if len(data) != size or len(data) % 4:
         raise Held("try", f"{linked}: complete MIPS text words are missing")
-    masks = {offset // 4: mask for offset, mask in unit.relocations.get(section.name, {}).items()}
+    masks = {
+        (offset - symbol.address) // 4: mask
+        for offset, mask in unit.relocations.get(section.name, {}).items()
+        if symbol.address <= offset < symbol.address + size
+    }
     return data, masks, linked

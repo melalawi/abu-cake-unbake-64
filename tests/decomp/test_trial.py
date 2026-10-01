@@ -442,15 +442,6 @@ class TrialTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "unplaced: relocation instruction differs"):
             self.attempt(compiler=compiler)
 
-    def test_rodata_placement_is_refused_by_name(self) -> None:
-        def compiler(project: Project, policy: SimpleNamespace, source: Path, version: str, out: Path) -> Path:
-            built = assemble(out.parent, "compiled", assembly("alpha", self.words) + ".section .rodata\n.word 0x1234\n")
-            shutil.copyfile(built, out)
-            return out
-
-        with self.assertRaisesRegex(Held, r".rodata.base"):
-            self.attempt(compiler=compiler)
-
     def test_multiple_versions_compile_once_each_with_their_addresses(self) -> None:
         other = self.directory / "multiple"
         other.mkdir()

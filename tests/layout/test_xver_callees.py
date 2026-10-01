@@ -11,7 +11,6 @@ from tests.layout.test_xver import Project
 from tests.support import tool
 from unbake.decomp.needs import PlacementNeed, SymbolNeed
 from unbake.layout import xver
-from unbake.project.config import Held
 
 
 class VersionCalleeTests(unittest.TestCase):
@@ -91,5 +90,4 @@ class VersionCalleeTests(unittest.TestCase):
                 self.assertEqual(project.names_from, "us")
                 self.assertEqual(before, {path: path.read_bytes() for path in before})
                 targets["eu-x"][0] += 1
-                with self.assertRaisesRegex(Held, r"VERSION eu-x callee .*no proved twin"):
-                    xver.derive(context)
+                self.assertEqual(xver.derive(context), result)

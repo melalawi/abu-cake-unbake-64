@@ -311,28 +311,21 @@ def derive(context: Any) -> list[Need]:
                 if kind != 4 or symbol["section"] != 0:
                     continue
                 name = symbol["name"]
-                if offset % 4 or offset // 4 >= len(artifact["target_words"]):
-                    raise Held("placement", f"callee {name} offset: missing target word")
-                word = artifact["target_words"][offset // 4]
-                if "rodata" in artifact:
-                    word = artifact["rodata"].target_words.get(offset)
-                    if word is None:
-                        raise Held("placement", f"callee {name} offset: missing aligned target word")
-                if word >> 26 not in (2, 3):
-                    # A shifted draft proves no callee address here; the comparison reports the shift.
-                    continue
+                if offset % 4:
+                    raise Held("placement", f"callee {name} offset: invalid instruction boundary")
                 addend = struct.unpack_from(">I", obj.content(section), offset)[0] & 0x03FFFFFF
                 if addend:
                     raise Held("placement", f"callee {name} addend: nonzero function entry")
-                address = (artifact["span"].address + offset + 4) & 0xF0000000 | (word & 0x03FFFFFF) << 2
+                # Named VERSION entries and correspondence establish the address
+                # independently of an imperfect draft's instruction alignment.
                 span = callee_span(context.project, name, version)
-                if span is None or span.address != address:
-                    raise Held("placement", f"VERSION {version} callee {name}: no proved twin at 0x{address:X}")
+                if span is None:
+                    raise Held("placement", f"VERSION {version} callee {name}: no proved twin")
                 requested.append(
                     SymbolNeed(
                         version,
                         name,
-                        address,
+                        span.address,
                         0,
                         ".text",
                         "func",

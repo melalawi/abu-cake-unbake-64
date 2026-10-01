@@ -125,7 +125,8 @@ class RomReader:
                 end = min(end, min(bss))
             self.mappings.append(MemorySpan(vram, vram + end - start, start, 0))
 
-    def span(self, address: int, size: int) -> MemorySpan:
+    def find_span(self, address: int, size: int) -> MemorySpan | None:
+        """Find ROM backing, distinguishing absent bytes from ambiguous mappings."""
         matches = [row for row in self.mappings if row.address <= address and address + size <= row.end]
         if not matches:
             if self.copies is None:
@@ -139,9 +140,15 @@ class RomReader:
                     for row in self.resident()
                 ]
             matches = [row for row in self.copies if row.address <= address and address + size <= row.end]
-        if size <= 0 or len(matches) != 1:
+        if size <= 0 or len(matches) > 1:
             raise Held("try", f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
-        return matches[0]
+        return matches[0] if matches else None
+
+    def span(self, address: int, size: int) -> MemorySpan:
+        mapping = self.find_span(address, size)
+        if mapping is None:
+            raise Held("try", f"{self.version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
+        return mapping
 
     def backing_row(self, address: int, size: int) -> tuple[int, split.Row]:
         """Resolve a runtime span to its unique ROM-backed data split row."""

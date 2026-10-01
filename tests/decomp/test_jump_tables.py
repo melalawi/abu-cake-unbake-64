@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
-from tests.decomp.test_trial import assemble, fixture
-from unbake.decomp import needs, trial
+from tests.decomp.test_trial import READELF, assemble, fixture
+from unbake.decomp import needs, trial, trial_compare, trial_link
 from unbake.decomp.indexed import indexed_references, table_guidance
 from unbake.decomp.trial_layout import FunctionSpan
 from unbake.project import build
@@ -69,16 +69,17 @@ class JumpTableTests(unittest.TestCase):
                     result = trial.try_draft(project, cast(Policy, policy), source, scratch)
                 self.assertFalse(result.identical_everywhere)
                 self.assertGreater(result.compares["us"].identical, 0)
-                self.assertEqual(result.compares["us"].typed["rodata"], 2)
+                self.assertEqual(result.compares["us"].typed["rodata"], 1)
                 self.assertFalse(any(isinstance(need, needs.RodataNeed) for need in result.needs))
-                self.assertTrue(any("bytes: disagree" in line for line in result.preconditions))
+                self.assertTrue(any("publication placement proof" in line for line in result.preconditions))
+                linked = next(scratch.glob("alpha.*/us/trial.elf"))
+                output_elf = trial_link.inspect(linked, READELF, linked.parent)
+                pool = next(section for section in output_elf.sections.values() if section.name == ".rodata")
+                case = next(symbol for symbol in output_elf.symbols if symbol.name == "case")
+                self.assertEqual(case.address, 0x8000101C)
+                table = linked.read_bytes()[pool.offset : pool.offset + pool.size]
+                self.assertEqual(trial_compare.words(table), [case.address, case.address])
+                self.assertEqual(version.baserom.read_bytes()[-8:], struct.pack(">II", 0x80001018, 0x80001018))
                 text = output.getvalue()
-                for expected in (
-                    "alpha owns .rodata table 0x80001040",
-                    "ROM offset 0x80",
-                    "size 0x8",
-                    "resident data dispatch",
-                    "rodata .rodata+0x0: target",
-                    "draft",
-                ):
-                    self.assertIn(expected, text)
+                self.assertIn("compiler-generated .rodata: private draft constants; text scoring only", text)
+                self.assertNotIn("rodata .rodata+", text)

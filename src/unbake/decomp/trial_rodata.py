@@ -9,7 +9,28 @@ from unbake.decomp.trial_compare import Compare, words
 from unbake.decomp.trial_layout import RomReader, project_reader
 from unbake.decomp.trial_link import SectionPlacement, inspect
 from unbake.project.config import Held, Project
-from unbake.project_tools.rodata import placement
+from unbake.project_tools.rodata import placement, relocated
+
+
+def private_address(artifact: Artifact, name: str) -> int:
+    """Allocate scratch constants beyond both the generation and draft text."""
+    cursor = max(
+        artifact["span"].address + max(artifact["span"].size, len(artifact["target_words"]) * 4),
+        *(section.address + section.size for section in artifact["layout"].sections.values() if "A" in section.flags),
+    )
+    cursor = max(
+        cursor, artifact["span"].address + max(s.size for s in artifact["unit"].sections.values() if "X" in s.flags)
+    )
+    for section in sorted(artifact["unit"].sections.values(), key=lambda item: item.name):
+        if section.name not in (".rodata", ".rdata"):
+            continue
+        cursor = (cursor + 15) & ~15
+        if section.name == name:
+            if cursor + section.size > 0x100000000:
+                raise Held("try", f"{name}: private constants cross address space")
+            return cursor
+        cursor += section.size
+    raise Held("try", f"{name}: private constant section is missing")
 
 
 def rodata_reader(reader: RomReader, obj: Any, bases: dict[str, int]) -> Callable[[int, int], bytes]:
@@ -36,9 +57,20 @@ def section_placements(project: Project, artifact: Artifact, function: str) -> l
     constants = artifact["rodata"]
     pools = constants.family.jump_tables(constants.obj) + constants.family.literal_pools(constants.obj)
     result: dict[str, SectionPlacement] = {}
+    private = artifact.setdefault("private_rodata", set())
+    private.update(pool.section for pool in pools if function not in constants.owners[(pool.section, pool.offset)])
+    for name in {pool.section for pool in pools} - private:
+        base, _ = placement(constants.obj, name, constants.target_words)
+        expected = relocated(constants.obj, name, constants.text_address)
+        try:
+            if constants.read_memory(base, len(expected)) != expected:
+                private.add(name)
+        except Held:
+            private.add(name)
     for pool in pools:
-        if function not in constants.owners[(pool.section, pool.offset)]:
-            raise Held("rodata", f"owners[{pool.section},{pool.offset}]: excludes {function}")
+        if pool.section in private:
+            result[pool.section] = SectionPlacement(pool.section, private_address(artifact, pool.section))
+            continue
         if pool.section not in result:
             base, _ = placement(constants.obj, pool.section, constants.target_words)
             constants.read_memory(base, len(constants.obj.content(constants.obj.section(pool.section))))
@@ -49,9 +81,15 @@ def section_placements(project: Project, artifact: Artifact, function: str) -> l
 def pool_guidance(project: Project, artifact: Artifact) -> list[str]:
     constants = artifact["rodata"]
     tables = constants.family.jump_tables(constants.obj)
-    result = []
+    result: list[str] = []
+    private = artifact.get("private_rodata", set())
+    result.extend(
+        f"compiler-generated {section}: private draft constants; text scoring only" for section in sorted(private)
+    )
     reader = project_reader(project, artifact["version"].name)
     for table in tables:
+        if table.section in private:
+            continue
         base, _ = placement(constants.obj, table.section, constants.target_words)
         address = base + table.offset
         offset, row = reader.backing_row(address, table.size)
@@ -68,6 +106,8 @@ def compare_rodata(artifact: Artifact, linked: Path, readelf: str, comparison: C
     binary = linked.read_bytes()
     differences = 0
     for placed in artifact["placements"]:
+        if placed.section in artifact.get("private_rodata", set()):
+            continue
         matches = [section for section in output.sections.values() if section.name == placed.section]
         if len(matches) != 1:
             raise Held("try", f"{placed.section}: linked section is missing or ambiguous")

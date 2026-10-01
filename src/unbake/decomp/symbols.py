@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from unbake.decomp.needs import LabelNeed, Need, SymbolNeed, register_deriver
 from unbake.families import Family, family_for
 from unbake.families.mips import relocation_value
-from unbake.layout.data_symbols import counterparts
+from unbake.layout.data_symbols import addresses
 from unbake.project.config import Held
 
 
@@ -349,6 +349,7 @@ def derive_trial(context: TrialContext) -> list[Need]:
     from unbake.decomp.guide import data_rows, render, resident_row, words
     from unbake.decomp.trial_compare import align_words
     from unbake.decomp.trial_layout import project_reader, symbol_values
+    from unbake.decomp.trial_link import function_range
     from unbake.project_tools.elf import Object
 
     result = []
@@ -358,10 +359,15 @@ def derive_trial(context: TrialContext) -> list[Need]:
                 raise Held("symbols", f"artifacts.{version}.{field}: missing value")
         try:
             obj = Object(artifact["unit"].path)
-            text = obj.section(".text")
+            entry, text_section, end = function_range(artifact["unit"], context.trial.function, artifact["span"].size)
+            text = obj.section(text_section.name)
             text = required(text, f"{version}.text")
-            draft = words(obj.content(text), "big")
-            pending = obj.relocations(text)
+            draft = words(obj.content(text)[entry.address : end], "big")
+            pending = [
+                (offset - entry.address, kind, symbol)
+                for offset, kind, symbol in obj.relocations(text)
+                if entry.address <= offset < end
+            ]
         except (OSError, ValueError, IndexError, struct.error) as error:
             raise Held("symbols", f"{version}.trial_elf: {error}") from error
         rows = data_rows(context.project, version)
@@ -376,11 +382,11 @@ def derive_trial(context: TrialContext) -> list[Need]:
             try:
                 # Resolve only this VERSION: another VERSION's missing evidence must
                 # not prevent an independently selected trial from being scored.
-                counterpart = counterparts(replace(context.project, versions=(version,)), name)[version]
+                address = addresses(replace(context.project, versions=(version,)), name)[version]
             except Held as error:
                 raise Held("symbols", f"{name}: VERSION {version}: {error.reason}") from error
-            declared[name] = values[counterpart]
-            correspondence[name] = counterpart
+            declared[name] = address
+            correspondence[name] = f"0x{address:08X}"
         refs = references(artifact["target_words"], values.get("_gp"))
         # Declared addresses outside data rows are settled by the symbol file; object-local
         # sections are owned by the constant-pool deriver.
@@ -409,7 +415,11 @@ def derive_trial(context: TrialContext) -> list[Need]:
         alignment = align_words(
             artifact["target_words"],
             draft,
-            {offset // 4: mask for offset, mask in artifact["unit"].relocations.get(".text", {}).items()},
+            {
+                (offset - entry.address) // 4: mask
+                for offset, mask in artifact["unit"].relocations.get(text_section.name, {}).items()
+                if entry.address <= offset < end
+            },
         )
         aligned = [0] * len(draft)
         matched = set()
@@ -444,9 +454,11 @@ def derive_trial(context: TrialContext) -> list[Need]:
         for name, counterpart in correspondence.items():
             if not any(isinstance(need, SymbolNeed) and need.name == name for need in derived):
                 address = declared[name]
-                section = next((row.section for row in rows if row.start <= address < row.end), "absolute")
+                section_name = next((row.section for row in rows if row.start <= address < row.end), "absolute")
                 derived.append(
-                    SymbolNeed(version, name, address, 0, section, "address", 0, f"data correspondence: {counterpart}")
+                    SymbolNeed(
+                        version, name, address, 0, section_name, "address", 0, f"data correspondence: {counterpart}"
+                    )
                 )
         result.extend(derived)
         guidance = render(derived)

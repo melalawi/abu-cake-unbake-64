@@ -28,6 +28,13 @@ def register(phases: Subparsers) -> None:
     place.add_argument("--version", required=True, metavar="V")
     place.add_argument("--address", type=integer, required=True, help="VRAM address.")
     place.add_argument("--apply", action="store_true")
+    data = split_verbs.add_parser("data-symbol", phase="split", help="Add or rename a data symbol row.")
+    data.add_argument("name")
+    data.add_argument("--version", metavar="V")
+    data.add_argument("--address", type=integer)
+    data.add_argument("--rename-from")
+    data.add_argument("--correspond", action="store_true", help="Infer placements in all VERSIONs from aligned code.")
+    data.add_argument("--apply", action="store_true")
     twins = split_verbs.add_parser("twins", phase="split")
     twins.add_argument("function")
     twins.add_argument("--version", required=True, metavar="V")
@@ -37,7 +44,20 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.layout import split_apply, split_edits, split_partition
 
-    if args.verb == "classify":
+    if args.verb == "data-symbol":
+        from unbake.decomp.symbols_edits import data_symbol
+        from unbake.layout.data_symbols import correspondence
+        from unbake.project.config import Held
+
+        if args.correspond:
+            if args.version is not None or args.address is not None or args.rename_from is not None:
+                raise Held("split", "--correspond cannot be combined with explicit placement or rename")
+            edits = correspondence(project, policy, args.name)
+        else:
+            if args.version is None or args.address is None:
+                raise Held("split", "data-symbol requires --version and --address, or --correspond")
+            edits = data_symbol(project, policy, args.version, args.name, args.address, args.rename_from)
+    elif args.verb == "classify":
         edits = split_partition.classify(project, args.version)
     elif args.verb in ("cut", "data-cut"):
         operation = split_edits.cut if args.verb == "cut" else split_edits.data_cut

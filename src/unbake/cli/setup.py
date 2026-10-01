@@ -8,7 +8,11 @@ from unbake.project.config import Held, Policy, Project
 
 
 def register(phases: Subparsers) -> None:
-    setup = phases.add_parser("setup", phase="setup", help="Verify inputs and generate the standalone build.")
+    setup = phases.add_parser(
+        "setup",
+        phase="setup",
+        help="Verify inputs and generate the standalone build. See README Dependencies and Policy first.",
+    )
     setup.add_argument("--new", type=Path, metavar="ROM")
     setup.add_argument(
         "--compilers", action="store_true", help="Verify project compilers and show optional registry entries."
@@ -17,7 +21,9 @@ def register(phases: Subparsers) -> None:
         "--supply",
         type=Path,
         metavar="DIR",
-        help="Directory containing each VERSION ROM, located recursively by SHA-1, and pinned compiler files.",
+        help="Supply verified compiler files and optional VERSION ROMs. ROMs are verified by SHA-1. "
+        "Files are found recursively by digest. "
+        "See the project compiler acquisition docs.",
     )
 
 

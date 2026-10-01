@@ -94,6 +94,8 @@ def resolve(needs: list[Need], project: Project, policy: Policy) -> list[Edit]:
                             lines[index] += " //"
                         lines[index] += f" {field}:{suffix}"
             else:
+                if need.type == "address" and any(address == need.address for address, _, _ in existing.values()):
+                    rendered += " // absolute:True"
                 lines.append(rendered)
         after = "\n".join(lines) + ("\n" if lines else "")
         if after != before:
@@ -103,3 +105,35 @@ def resolve(needs: list[Need], project: Project, policy: Policy) -> list[Edit]:
 
 register_resolver(SymbolNeed, 10, resolve)
 register_resolver(LabelNeed, 20, resolve)
+
+
+def data_symbol(
+    project: Project, policy: Policy, version: str, name: str, address: int, rename_from: str | None
+) -> list[Edit]:
+    """Add or rename one validated address-only data declaration."""
+    from unbake.layout import split
+
+    name = split.name(name)
+    if name.startswith("func_") or not 0x80000000 <= address <= 0xFFFFFFFF:
+        raise Held("symbols", "data symbol: required data name and runtime address")
+    path = project.version(version).symbols
+    before, rows = split.symbols(path)
+    if any(
+        name in function.aliases or function.address <= address < function.address + function.end - function.start
+        for function in split.functions(project, version)
+    ):
+        raise Held("symbols", f"{name}: data symbol overlaps text")
+    if rename_from is not None:
+        rename_from = split.name(rename_from)
+        if rename_from not in rows or rows[rename_from][0] != address:
+            raise Held("symbols", f"{rename_from}: rename requires existing symbol at 0x{address:08X}")
+        if name in rows and name != rename_from:
+            raise Held("symbols", f"{name}: rename target already exists")
+        _, index, match = rows[rename_from]
+        lines = before.splitlines(keepends=True)
+        line = lines[index]
+        lines[index] = line[: match.start("name")] + name + line[match.end("name") :]
+        after = "".join(lines)
+        return [Edit(path, before, after, (version,))] if after != before else []
+    need = SymbolNeed(version, name, address, 0, "absolute", "address", 0, "data symbol placement")
+    return resolve([need], project, policy)
