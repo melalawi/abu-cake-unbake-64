@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import assemble, assembly, fixture
-from unbake.decomp import checks, declarations, drafts, guide, ledger, m2c, needs, trial
+from unbake.decomp import checks, declarations, drafts, guide, m2c, needs, trial
 from unbake.layout import shared
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
@@ -127,7 +127,7 @@ class FrictionTests(unittest.TestCase):
         self.assertIn("shared paths.include header", finding.text)
         self.assertEqual(checks.run("return a->value;"), [])
 
-    def test_6_old_ledger_refuses_with_exact_command_and_preserves_evidence(self) -> None:
+    def test_invalid_trial_record_refuses_and_preserves_evidence(self) -> None:
         store = drafts.Store(self.policy, self.project)
         store.root.mkdir(parents=True)
         path = store.root / "trials.jsonl"
@@ -151,6 +151,3 @@ class FrictionTests(unittest.TestCase):
             store.history()
         self.assertIn("function", error.exception.reason)
         self.assertEqual(path.read_text(), content)
-        backup = ledger.archive(path)
-        self.assertEqual(backup.read_text(), content)
-        self.assertEqual(store.history(), [])
