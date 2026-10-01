@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -10,11 +11,16 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
+from typing import cast
 from unittest.mock import patch
 
+from unbake.decomp import explain, trial
 from unbake.decomp.explain import Allocation
-from unbake.project.config import Held
-from unbake.search import permute
+from unbake.decomp.trial import Trial
+from unbake.decomp.trial_compare import TYPES, Compare
+from unbake.project import makefile, toolchain
+from unbake.project.config import Held, Policy, Project
+from unbake.search import core, permute
 from unbake.search.core import Context
 
 SOURCE = """void func_802C4F58(int *arg0, int arg1) {
@@ -94,28 +100,101 @@ class PermuteTests(unittest.TestCase):
             permuter_sha256=hashlib.sha256(self.archive.read_bytes()).hexdigest(),
             cache_root=self.home / "cache",
             cores=1,
+            search_beam=1,
+            stall_trials=1,
         )
         self.target = self.home / "target.o"
         # First three instructions of the real function: addu t2,a0,zero;
         # addu t1,a1,zero; addu a3,zero,zero.
         self.target.write_bytes(bytes.fromhex("0080502100a0482100003821"))
         self.ctx = Context(
-            self.project,
-            self.policy,
+            cast(Project, self.project),
+            cast(Policy, self.policy),
             self.home / "out",
             root / "src/func_802C4F58.c",
             Allocation((), (), (), ()),
             (),
             time.monotonic() + 30,
         )
-        self.trial = NS(function="func_802C4F58", compares={"us": NS(), "eu-x": NS()})
+        self.trial = cast(Trial, NS(function="func_802C4F58", compares={"us": NS(), "eu-x": NS()}))
         self.generator = permute.Permuter("us", self.target, 5)
         self.addCleanup(patch.stopall)
-        patch.object(permute.toolchain, "verify", return_value={}).start()
-        self.spec = patch.object(permute.toolchain, "specification", return_value=NS(family="gcc")).start()
-        patch.object(
-            permute.makefile, "helpers", return_value={"tools/compile.py": HELPER, "tools/build.json": "{}"}
-        ).start()
+        patch.object(toolchain, "verify", return_value={}).start()
+        self.spec = patch.object(toolchain, "specification", return_value=NS(family="gcc")).start()
+        patch.object(makefile, "helpers", return_value={"tools/compile.py": HELPER, "tools/build.json": "{}"}).start()
+
+    def test_early_exit_reports_permuter_status_and_stderr(self) -> None:
+        with tarfile.open(self.archive, "w") as archive:
+            content = b"import sys\nprint('fixture cannot start', file=sys.stderr)\nsys.exit(23)\n"
+            member = tarfile.TarInfo("release/permuter.py")
+            member.size = len(content)
+            archive.addfile(member, io.BytesIO(content))
+        self.policy.permuter_sha256 = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(Held, r"permuter .*permuter\.py exited 23: fixture cannot start") as refusal:
+            list(self.generator.propose(SOURCE, self.trial, self.ctx))
+        self.assertEqual(refusal.exception.phase, "permute")
+        self.assertTrue(self.generator.ran)
+        work = next(self.ctx.out.glob("permute-*"))
+        self.assertEqual((work / "permuter.log").read_bytes(), b"")
+        self.assertEqual((work / "permuter.log.stderr").read_text(), "fixture cannot start\n")
+
+    def test_setup_exhausts_budget_without_launching_or_reading_missing_log(self) -> None:
+        clock = [time.monotonic()]
+        deadline = clock[0] + 30
+
+        # Capture the real checkout before patching the module attribute.
+        real_checkout = permute.checkout
+
+        def exhausted_checkout(archive: Path, digest: str, work: Path) -> Path:
+            entry = real_checkout(archive, digest, work)
+            clock[0] = deadline
+            return entry
+
+        with (
+            patch.object(time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(permute, "checkout", side_effect=exhausted_checkout),
+            patch.object(subprocess, "Popen") as launch,
+        ):
+            self.assertEqual(list(self.generator.propose(SOURCE, self.trial, self.ctx)), [])
+        launch.assert_not_called()
+        self.assertFalse(self.generator.ran)
+        work = next(self.ctx.out.glob("permute-*"))
+        self.assertEqual((work / "permuter.log").read_bytes(), b"")
+        self.assertEqual((work / "permuter.log.stderr").read_bytes(), b"")
+
+    def test_successful_permuter_search_selects_confirmed_best_result(self) -> None:
+        source = self.home / "func_802C4F58.c"
+        source.write_text(SOURCE)
+        calls: list[list[str] | None] = []
+
+        def measure(
+            project: Project, policy: Policy, path: Path, scratch: Path, versions: list[str] | None = None
+        ) -> Trial:
+            text = path.read_text()
+            calls.append(versions)
+            if "/* refused */" in text:
+                raise Held("try", "fixture rejected")
+            score = 1 if "j2" in text else (2 if "/* zero */" in text else 3)
+            compares = {
+                version: Compare(version, score, 3, dict.fromkeys(TYPES, 0), [], 100 * score / 3, ())
+                for version in (versions if versions is not None else ("us", "eu-x"))
+            }
+            return Trial(source.stem, hashlib.sha256(path.read_bytes()).hexdigest(), compares, [], "try again")
+
+        with (
+            patch.object(
+                core, "preprocess", side_effect=lambda project, policy, path, version, deadline: path.read_text()
+            ),
+            patch.object(explain, "allocation", return_value=Allocation((), (), (), ())),
+            patch.object(core, "_retain", return_value=100.0),
+            patch.object(trial, "try_draft", side_effect=measure),
+        ):
+            result = core.run(self.ctx.project, self.ctx.policy, source, [self.generator], self.ctx.out, 5)
+        self.assertTrue(self.generator.ran)
+        self.assertEqual(result.source.read_text(), SOURCE.replace("j2", "j"))
+        self.assertEqual(result.score, 3)
+        self.assertEqual(set(result.trial.compares), {"us", "eu-x"})
+        self.assertEqual(calls, [None, ["us"], None, ["us"], ["us"], None])
 
     def test_family_recipe_and_improvements_pass_to_core(self) -> None:
         for family in ("gcc", "ido"):
@@ -138,7 +217,7 @@ class PermuteTests(unittest.TestCase):
             with (
                 self.subTest(dependency=dependency),
                 patch.object(
-                    permute.importlib.util,
+                    importlib.util,
                     "find_spec",
                     side_effect=lambda name, missing=dependency: None if name == missing else object(),
                 ),
@@ -156,7 +235,7 @@ class PermuteTests(unittest.TestCase):
         self.assertEqual((work / "target.o").read_bytes(), self.target.read_bytes())
 
     def test_refusals_name_missing_or_invalid_value(self) -> None:
-        rows = [
+        rows: list[tuple[str, str, object]] = [
             ("context", "deadline", None),
             ("context", "deadline", float("inf")),
             ("policy", "permuter_archive", None),
@@ -250,7 +329,7 @@ class PermuteTests(unittest.TestCase):
         (work / "recipe/compile.py").write_text(HELPER)
         (work / "recipe/build.json").write_text("{}")
         script = work / "compile.sh"
-        script.write_text(permute.compile_script(self.project, self.policy, self.ctx.source, "us", work))
+        script.write_text(permute.compile_script(self.ctx.project, self.ctx.policy, self.ctx.source, "us", work))
         source = work / "input with spaces.c"
         source.write_text(SOURCE)
         for output, code in ((work / "output with spaces.o", 0), (self.project.root / "forbidden.o", 2)):

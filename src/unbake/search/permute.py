@@ -101,11 +101,18 @@ def compile_script(project: Project, policy: Policy, source_path: Path, version:
     )
 
 
-def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budget: float, log: Path) -> bool:
-    if budget <= 0:
-        return False
+@dataclass(frozen=True)
+class _RunResult:
+    ran: bool
+    # None means skipped or stopped at the deadline, rather than an early exit.
+    returncode: int | None
+
+
+def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budget: float, log: Path) -> _RunResult:
     try:
         with log.open("wb") as output, log.with_suffix(log.suffix + ".stderr").open("wb") as errors:
+            if budget <= 0:
+                return _RunResult(False, None)
             process = subprocess.Popen(
                 command, cwd=cwd, env=environment, stdout=output, stderr=errors, start_new_session=True
             )
@@ -114,16 +121,14 @@ def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budg
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
-                return False
+                return _RunResult(True, None)
             except BaseException:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
                 raise
-        if status:
-            raise Held("permute", f"{command[0]} exited {status}; inspect {log}")
-        return True
+        return _RunResult(True, status)
     except OSError as error:
-        raise Held("permute", f"{command[0]}: {error}") from error
+        raise Held("permute", f"permuter {shlex.join(command)}: {error}") from error
 
 
 def outputs(work: Path) -> Iterator[tuple[int, str]]:
@@ -224,14 +229,21 @@ class Permuter:
                 "--quiet",
             ]
             # Leave time to evaluate emitted candidates in the common search loop.
-            finished = _run(command, work, environment, max(0, deadline - time.monotonic()) / 2, work / "permuter.log")
-            log = (work / "permuter.log").read_text(encoding="utf-8")
+            log_path = work / "permuter.log"
+            result = _run(command, work, environment, max(0, deadline - time.monotonic()) / 2, log_path)
+            if not result.ran:
+                return
+            object.__setattr__(self, "ran", True)
+            if result.returncode not in (None, 0):
+                stderr_path = log_path.with_suffix(log_path.suffix + ".stderr")
+                stderr = stderr_path.read_text(encoding="utf-8", errors="replace").strip()
+                raise Held("permute", f"permuter {entry} exited {result.returncode}: {stderr}; inspect {stderr_path}")
+            log = log_path.read_text(encoding="utf-8")
             baseline = re.findall(r"base score = (\d+)", log)
-            if not finished and not baseline:
+            if result.returncode is None and not baseline:
                 return
             if len(baseline) != 1:
                 raise Held("permute", "permuter.log base score is required")
-            object.__setattr__(self, "ran", True)
             seen = {hashlib.sha256(source.encode()).hexdigest()}
             for score, candidate in outputs(work):
                 if score >= int(baseline[0]):
