@@ -181,7 +181,13 @@ def _need(
     return needs
 
 
-def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> list[Need]:
+def derive(
+    trial_elf: TrialElf,
+    target_words: Sequence[int],
+    version: str,
+    declared: dict[str, int] | None = None,
+    aligned: Sequence[int] | None = None,
+) -> list[Need]:
     """Bind relocation symbols using paired target immediates and object addends."""
     required(version, "version")
     required(trial_elf, "trial_elf")
@@ -206,7 +212,13 @@ def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> li
         offset, kind = relocation.offset, relocation.kind
         if kind in (0, 4, 10):
             continue
-        effective, addend = relocation_value(highs, relocation, trial_elf.words, target_words, trial_elf.gp)
+        if declared is not None and name in declared:
+            _, addend = relocation_value(highs, relocation, trial_elf.words, trial_elf.words, trial_elf.gp)
+            effective = (declared[name] + addend) & 0xFFFFFFFF
+        else:
+            effective, addend = relocation_value(
+                highs, relocation, trial_elf.words, target_words if aligned is None else aligned, trial_elf.gp
+            )
         address = (effective - addend) & 0xFFFFFFFF
         if name in observed and observed[name] != address:
             raise Held("symbols", f"{name}: two-addresses")
@@ -214,6 +226,8 @@ def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> li
         if address in trial_elf.settled and (binding is None or binding.address == address):
             continue
         ref = access.get(offset)
+        if aligned is not None and ref is not None and ref.address != effective:
+            ref = None
         if ref:
             type_, size = ref.type, ref.size
         elif binding:
@@ -290,6 +304,7 @@ def symbol_line(need: SymbolNeed) -> str:
 def derive_trial(context: TrialContext) -> list[Need]:
     """Consume TrialContext artifacts and add exact declarations to try comparisons."""
     from unbake.decomp.guide import data_rows, render, words
+    from unbake.decomp.trial_compare import align_words
     from unbake.decomp.trial_layout import symbol_values
     from unbake.project_tools.elf import Object
 
@@ -331,10 +346,35 @@ def derive_trial(context: TrialContext) -> list[Need]:
             if matches and len(containing) == 1:
                 bindings.append(Binding(name, address, containing[0].section, matches[0].type, matches[0].size))
         family = family_for(context.project.compiler_for(context.source).id)
+        # Declared symbols link at their established addresses. Their exact relocated
+        # words are checked after linking, rather than inferred again at draft offsets.
+        alignment = align_words(
+            artifact["target_words"],
+            draft,
+            {offset // 4: mask for offset, mask in artifact["unit"].relocations.get(".text", {}).items()},
+        )
+        aligned = [0] * len(draft)
+        matched = set()
+        for tag, left, right, start, stop in alignment:
+            if tag == "equal":
+                for i, j in zip(range(left, right), range(start, stop), strict=True):
+                    aligned[j] = artifact["target_words"][i]
+                    matched.add(j)
+        for relocation in relocations:
+            if (
+                relocation.name not in values
+                and relocation.kind not in (0, 4, 10)
+                and relocation.offset // 4 not in matched
+            ):
+                raise Held(
+                    "symbols",
+                    f"{relocation.name}: relocation instruction differs: "
+                    f"no aligned evidence at +0x{relocation.offset:X}",
+                )
         object_evidence = TrialElf(
             draft, relocations, tuple(bindings), rows, values.get("_gp"), family, frozenset(placed)
         )
-        derived = derive(object_evidence, artifact["target_words"], version)
+        derived = derive(object_evidence, artifact["target_words"], version, values, aligned)
         result.extend(derived)
         guidance = render(derived)
         if guidance:

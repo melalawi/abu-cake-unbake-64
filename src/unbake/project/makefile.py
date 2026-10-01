@@ -226,7 +226,7 @@ def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
 
 def helpers(project: Project) -> dict[str, str]:
     tools = relative(project, project.tools)
-    names = ["extract.py", "compile.py", "elf.py", "layout.py", "rodata.py", "host.py"]
+    names = ["extract.py", "compile.py", "elf.py", "layout.py", "rodata.py", "literal_layout.py", "host.py"]
     if any(c.kind == "sn64" for c in project.compilers.values()):
         names.extend(["sn64_cc.py", "asn64.py", "resolve_external_branches.py"])
     files = {

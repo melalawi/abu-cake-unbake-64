@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import pairwise
@@ -48,7 +49,8 @@ def rodata_object(
     from unbake.layout import split
     from unbake.layout.rodata import TrialObject
     from unbake.project_tools.elf import Object
-    from unbake.project_tools.rodata import placement
+    from unbake.project_tools.literal_layout import arrange
+    from unbake.project_tools.rodata import placement, relocated
 
     obj = Object(artifact["unit"].path)
     family = family_for(project.compiler_for(source).id)
@@ -70,14 +72,37 @@ def rodata_object(
         for delta in range(block.size):
             aligned[(block.b + delta) * 4] = target[block.a + delta]
     read_memory = project_reader(project, artifact["version"].name)
+
+    def read_table(address: int, size: int) -> bytes:
+        return b"".join(read_memory.table_entry(address + at).to_bytes(4, "big") for at in range(0, size, 4))
+
     pools = family.literal_pools(obj) + family.jump_tables(obj)
     bases = {}
     for pool in pools:
         if pool.section not in bases:
             try:
-                bases[pool.section] = placement(obj, pool.section, aligned)[0]
+                try:
+                    base = placement(obj, pool.section, aligned)[0]
+                except ValueError as initial:
+                    try:
+                        base = arrange(obj, pool.section, aligned, artifact["span"].address, read_memory, read_table)
+                    except ValueError:
+                        raise initial from None
+                else:
+                    section_index = obj.section(pool.section)
+                    assert section_index is not None
+                    if read_memory(base, len(obj.content(section_index))) != relocated(
+                        obj, pool.section, artifact["span"].address
+                    ):
+                        # Imperfect pools retain their ordinary scoring placement.
+                        with suppress(ValueError):
+                            base = arrange(
+                                obj, pool.section, aligned, artifact["span"].address, read_memory, read_table
+                            )
+                bases[pool.section] = base
             except ValueError as error:
                 raise Held("try", str(error)) from error
+    pools = family.literal_pools(obj) + family.jump_tables(obj)
     owners: dict[tuple[str, int], set[str]] = {(pool.section, pool.offset): set() for pool in pools}
     if pools:
         for symbol in split.functions(project, artifact["version"].name):

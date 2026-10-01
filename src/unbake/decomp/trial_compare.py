@@ -4,10 +4,34 @@ from __future__ import annotations
 
 import struct
 from collections import Counter, defaultdict, deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import Literal
 
 TYPES = ("register", "order", "immediate", "relocation", "inserted", "missing", "changed")
+
+
+def align_words(
+    target: Sequence[int], candidate: Sequence[int], relocations: dict[int, int]
+) -> list[tuple[Literal["replace", "delete", "insert", "equal"], int, int, int, int]]:
+    """Align instruction sequences with relocation operands masked on both sides.
+
+    Masks apply only to instruction forms present in the object's relocation records.
+    The returned offsets retain the original words for exact identity checks.
+    """
+    forms: defaultdict[int, set[int]] = defaultdict(set)
+    for offset, mask in relocations.items():
+        if 0 <= offset < len(candidate):
+            forms[mask].add(candidate[offset] & ~mask)
+
+    def key(word: int) -> int:
+        for mask, instructions in forms.items():
+            if word & ~mask in instructions:
+                return word & ~mask
+        return word
+
+    return SequenceMatcher(None, [key(w) for w in target], [key(w) for w in candidate], autojunk=False).get_opcodes()
 
 
 @dataclass
@@ -81,10 +105,15 @@ def compare_words(
             registers, immediate = fields(word)
             return word & ~(registers | immediate)
 
-        matcher = SequenceMatcher(
-            None, [key(w) for w in target[left:right]], [key(w) for w in candidate[start:stop]], autojunk=False
-        )
-        for tag, a, b, c, d in matcher.get_opcodes():
+        if shape:
+            opcodes = SequenceMatcher(
+                None, [key(w) for w in target[left:right]], [key(w) for w in candidate[start:stop]], autojunk=False
+            ).get_opcodes()
+        else:
+            opcodes = align_words(
+                target[left:right], candidate[start:stop], {i - start: mask for i, mask in relocations.items()}
+            )
+        for tag, a, b, c, d in opcodes:
             a, b, c, d = a + left, b + left, c + start, d + start
             if tag == "equal":
                 operations.extend(
@@ -132,7 +161,10 @@ def compare_words(
             continue
         before = "-" if i is None else f"+0x{i * 4:04X} {target[i]:08X}"
         after = "-" if j is None else f"+0x{j * 4:04X} {candidate[j]:08X}"
-        lines.append(f"{kind}: target {before}; draft {after}")
+        detail = f"{kind}: target {before}; draft {after}"
+        if len(lines) == 2:
+            lines.append(f"first divergence: {detail}")
+        lines.append(detail)
     return Compare(version, counts["same"], len(target), typed, lines)
 
 
