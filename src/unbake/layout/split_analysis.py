@@ -171,13 +171,16 @@ def loaded_bounds(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def copied_spans(data: bytes) -> list[tuple[int, int]]:
+def copy_evidence(data: bytes) -> list[tuple[int, int, int | None]]:
     """Measure ROM copies from constant call arguments and counted word loops."""
-    words = struct.unpack(f">{len(data) // 4}I", data[: len(data) // 4 * 4])
+    bounds = loaded_bounds(data)
+    entry = struct.unpack_from(">I", data, 8)[0] if len(data) >= 12 else 0
+    scan_end = bounds[0] - entry + 0x1000 if bounds is not None else len(data)
+    words = struct.unpack(f">{scan_end // 4}I", data[: scan_end // 4 * 4])
     values: dict[int, int] = {0: 0}
-    spans: set[tuple[int, int]] = set()
+    spans: set[tuple[int, int, int | None]] = set()
     loads: dict[int, int] = {}
-    stores: set[int] = set()
+    stores: dict[int, int] = {}
     clobber = -1
     rom_sources: set[int] = set()
     for index in range(0x1000 // 4, len(words)):
@@ -188,7 +191,7 @@ def copied_spans(data: bytes) -> list[tuple[int, int]]:
         immediate = word & 65535
         signed = immediate - 65536 if immediate & 32768 else immediate
         if word & 0xFFFF0000 == 0x27BD0000 and signed < 0:
-            values, loads, stores = {0: 0}, {}, set()
+            values, loads, stores = {0: 0}, {}, {}
         if op == 15:
             values[target] = immediate << 16
         elif op in (8, 9, 13) and source in values:
@@ -203,14 +206,14 @@ def copied_spans(data: bytes) -> list[tuple[int, int]]:
         elif op == 43 and immediate == 0 and target in loads and source in values:
             address = loads[target]
             if 0xB0000000 <= address < 0xB0000000 + len(data) and 0x80000000 <= values[source] < 0x80800000:
-                stores.add(address - 0xB0000000)
+                stores[address - 0xB0000000] = values[source]
         elif op == 5 and target == 0 and signed < 0 and source in values and index + 1 < len(words):
             delay = words[index + 1]
             if delay >> 26 == 9 and delay & 65535 == 65535:
                 count = values.get(delay >> 21 & 31, -1) + 1
                 for begin in stores:
                     if 0 < count <= len(data) // 4 and begin + count * 4 <= len(data):
-                        spans.add((begin, begin + count * 4))
+                        spans.add((begin, begin + count * 4, stores[begin]))
         elif op == 3 and index + 1 < len(words):
             clobber = index + 2
             # Argument setup can occupy the call's delay slot.
@@ -221,13 +224,48 @@ def copied_spans(data: bytes) -> list[tuple[int, int]]:
             if 0xB0000000 <= begin < 0xB0000000 + len(data):
                 begin -= 0xB0000000
             if begin in rom_sources and 0x1000 <= begin < len(data) and 0x1000 <= size <= len(data) - begin:
-                spans.add((begin, begin + size))
+                spans.add((begin, begin + size, values.get(4) if 0x80000000 <= values.get(4, 0) < 0x80800000 else None))
         elif word == 0x03E00008 or not instruction(word):
-            values, loads, stores = {0: 0}, {}, set()
-        rom_sources.update(
-            value - 0xB0000000 for value in values.values() if 0xB0001000 <= value < 0xB0000000 + len(data)
-        )
-    return sorted(spans)
+            values, loads, stores = {0: 0}, {}, {}
+        if op in (8, 9, 13, 15) or (op == 0 and word & 63 in (33, 37)):
+            rom_sources.update(
+                value - 0xB0000000 for value in values.values() if 0xB0001000 <= value < 0xB0000000 + len(data)
+            )
+    return sorted(spans, key=lambda row: (row[0], row[1], row[2] or 0))
+
+
+def copied_spans(data: bytes) -> list[tuple[int, int]]:
+    """Retain source extents for callers that do not need runtime mappings."""
+    return sorted({(begin, end) for begin, end, _ in copy_evidence(data)})
+
+
+def copied_mappings(data: bytes, text: Sequence[tuple[int, int, int]]) -> list[dict[str, int]]:
+    """Keep full copied extents, including constants beyond the executable tail."""
+    rows = []
+    for begin, end, destination in copy_evidence(data):
+        fitted = {bias for start, stop, bias in text if begin <= start < stop <= end}
+        # A copy destination and a later executable placement can describe
+        # different loading stages. Keep the independently fitted executable
+        # mapping here; copy_evidence retains the original destination too.
+        if len(fitted) == 1:
+            bias = fitted.pop()
+        elif destination is not None:
+            bias = destination - begin
+        else:
+            continue
+        rows.append(dict(start=begin, end=end, address=begin + bias, table_entry_bias=0))
+    merged: list[dict[str, int]] = []
+    for row in sorted(rows, key=lambda item: item["start"]):
+        if merged and row["start"] <= merged[-1]["end"]:
+            previous = merged[-1]
+            if row["address"] - row["start"] != previous["address"] - previous["start"]:
+                from unbake.project.config import Held
+
+                raise Held("setup", "layout.loaded_mapping: conflicting copied spans")
+            previous["end"] = max(previous["end"], row["end"])
+        else:
+            merged.append(row)
+    return merged
 
 
 def copied_text(data: bytes) -> list[tuple[int, int, int]]:

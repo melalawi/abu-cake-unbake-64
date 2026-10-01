@@ -36,6 +36,7 @@ def arrange(
     read_table: Callable[[int, int], bytes] | None = None,
     *,
     emit_resident: bool = False,
+    slices: list[dict[str, int]] | None = None,
 ) -> int:
     """Expand shared literal uses and preserve resident gaps, proving each emitted word.
 
@@ -118,9 +119,32 @@ def arrange(
     end = max(address + size for _, address, size in chunks)
     if not anchors:
         end = (end + 3) & ~3
-    if end - base > max(0x10000, len(source) * 16):
+    if slices:
+        for _, address, size in chunks:
+            if not any(
+                row["address"] <= address < address + size <= row["address"] + row["end"] - row["start"]
+                for row in slices
+            ):
+                raise ValueError(f"layout.pool_owner: {section}: unassigned compiler bytes at 0x{address:08X}")
+        base = min(row["address"] for row in slices)
+        end = max(row["address"] + row["end"] - row["start"] for row in slices)
+    if not slices and end - base > max(0x10000, len(source) * 16):
         raise ValueError(f"{section}: pool references cross unrelated resident spans")
-    result = bytearray(read_memory(base, end - base))
+    if slices:
+        result = bytearray(end - base)
+        for row in slices:
+            size = row["end"] - row["start"]
+            content = read_memory(row["address"], size)
+            if len(content) != size:
+                raise ValueError(f"layout.pool_span: {section}: incomplete private slice")
+            result[row["address"] - base : row["address"] - base + size] = content
+        # Every nonzero resident byte needs compiler-owned material; padding may
+        # be retained only after the slice's complete bytes have been proved.
+        supplied = {address + i for _, address, size in chunks for i in range(size)}
+        if any(value and base + i not in supplied for i, value in enumerate(result)):
+            raise ValueError(f"layout.pool_span: {section}: unaccounted private slice bytes")
+    else:
+        result = bytearray(read_memory(base, end - base))
     if len(result) != end - base:
         raise ValueError(f"{section}: incomplete resident pool words")
     moved: dict[int, int] = {}

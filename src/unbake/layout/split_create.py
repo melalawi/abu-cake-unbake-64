@@ -9,11 +9,12 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 
 from unbake.layout import split_analysis
-from unbake.project.config import Held, Policy
+from unbake.project.config import Held, Policy, SetupPolicy
 
 
 def without_comments(text: str) -> str:
@@ -39,7 +40,14 @@ def without_comments(text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def create(rom: Path, stem: str, version: str, *, policy: Policy | None = None) -> str:
+def create(
+    rom: Path,
+    stem: str,
+    version: str,
+    *,
+    policy: Policy | SetupPolicy | None = None,
+    code_ranges: Sequence[tuple[int, int, int]] | None = None,
+) -> str:
     """Keep Splat's measured layout, anchoring every output in a VERSION tree."""
     from unbake.project.config import load_policy
     from unbake.project.rom import stem as valid_stem
@@ -75,11 +83,11 @@ def create(rom: Path, stem: str, version: str, *, policy: Policy | None = None) 
     title = decode(data[:64]).title
     text = re.sub(r"^name:.*$", "name: " + json.dumps(title), text, flags=re.M)
     text = re.sub(r"^sha1:.*$", "sha1: " + hashlib.sha1(data).hexdigest(), text, flags=re.M)
-    text = complete_executable(text, data)
+    text = complete_executable(text, data, code_ranges=code_ranges)
     options, segments = text.split("segments:\n", 1)
     replacements = {
         "basename": stem,
-        "target_path": f"baserom.{version}.z64",
+        "target_path": f"roms/baserom.{version}.z64",
         "base_path": "../..",
         "elf_path": f"build/{version}/{stem}.{version}.elf",
         "ld_script_path": f"build/{version}/{stem}.ld",
@@ -138,8 +146,8 @@ def loaded_match(match: re.Match[str], *, data: bytes, end: int, bias: int, offs
     return loaded_rows(data, begin, min(stop, end), bias).rstrip()
 
 
-def complete_executable(text: str, data: bytes) -> str:
-    copied = split_analysis.copied_text(data)
+def complete_executable(text: str, data: bytes, *, code_ranges: Sequence[tuple[int, int, int]] | None = None) -> str:
+    copied = list(code_ranges) if code_ranges is not None else split_analysis.copied_text(data)
     if copied and copied[0][0] == 0x1000:
         # Keep Splat's header/boot facts and replace only proved loaded spans.
         prefix, _ = text.split("  - name: entry\n", 1)

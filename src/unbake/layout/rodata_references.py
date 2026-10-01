@@ -42,6 +42,29 @@ def collect(owner: str, target: bytes, obj: Object | None, gp: int | None) -> tu
         if code
         else []
     )
+    constants = {0: 0}
+    reset = False
+    for index, word in enumerate(code):
+        reset_now, reset = reset, False
+        op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
+        if op == 15 and rt:
+            constants[rt] = (word & 65535) << 16
+        elif op in (9, 13) and rt:
+            if rs in constants:
+                value = (constants[rs] + signed(word) if op == 9 else constants[rs] | (word & 65535)) & 0xFFFFFFFF
+                constants[rt] = value
+                if value >= 0x80000000:
+                    result.append(Reference(owner, value, "address", index * 4, op, "constant address pair"))
+            else:
+                constants.pop(rt, None)
+        elif op == 0 and word >> 11 & 31:
+            constants.pop(word >> 11 & 31, None)
+        elif op in (*range(8, 15), *range(32, 40)):
+            constants.pop(rt, None)
+        if op in (1, 2, 3, 4, 5, 6, 7, 20, 21, 22, 23) or (op == 0 and word & 63 in (8, 9)):
+            reset = True
+        if reset_now:
+            constants = {0: 0}
     result.extend(
         Reference(owner, r.address, "indexed", r.offset, code[r.offset // 4] >> 26, "indexed anchor", scale=r.scale)
         for r in indexed_references(code)
@@ -49,7 +72,7 @@ def collect(owner: str, target: bytes, obj: Object | None, gp: int | None) -> tu
     errors: list[str] = []
     text = obj.section(".text") if obj is not None else None
     if obj is None or text is None:
-        return result, [f"{owner}: missing target relocation object"]
+        return result, []
     source = words(obj.content(text))
     groups: dict[tuple[str, int, int], list[Relocation]] = defaultdict(list)
     for at, kind, symbol in obj.relocations(text):

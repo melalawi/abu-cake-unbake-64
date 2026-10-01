@@ -23,6 +23,9 @@ class ProjectFixture:
     def __init__(self, root: Path, versions: tuple[str, ...] = ("us", "eu")) -> None:
         self.root = root
         self.name = "fixture"
+        self.build = root / "build"
+        self.roms = root / "roms"
+        self.roms.mkdir()
         self.versions = versions
         self.src = root / "src"
         self.include = (root / "include",)
@@ -30,7 +33,7 @@ class ProjectFixture:
         for index, v in enumerate(versions):
             directory = root / "versions" / v
             directory.mkdir(parents=True)
-            rom = root / f"baserom.{v}.z64"
+            rom = self.roms / f"baserom.{v}.z64"
             rom.write_bytes(bytes(range(128)))
             self.version_map[v] = SimpleNamespace(
                 name=v, split=directory / "fixture.yaml", symbols=directory / "symbol_addrs.txt", baserom=rom
@@ -382,7 +385,7 @@ class SplitTests(unittest.TestCase):
                 launcher.chmod(0o755)
                 output = split_create.create(source, "game", "us", policy=replace(policy, splat=launcher))
                 self.assertIn("vram: 0x80000440", output)
-                self.assertIn("target_path: baserom.us.z64", output)
+                self.assertIn("target_path: roms/baserom.us.z64", output)
                 self.assertIn("symbol_addrs_path: versions/us/symbol_addrs.txt", output)
                 self.assertIn("[0x10D0, data, data_0010D0]", output)
                 self.assertIn("name: " + json.dumps(title), output)
@@ -423,11 +426,11 @@ class SplitTests(unittest.TestCase):
                 self.assertEqual(calls[0][0], expected)
                 self.assertEqual(path.exists(), failure is None)
         path = self.project.src / "new.c"
-        split_apply.apply(self.project, self.project.policy, [split.Edit(path, "", "int value;", ("us",))], staged=True)
+        split_apply._write_staging(self.project, [split.Edit(path, "", "int value;", ("us",))])
         self.assertEqual(path.read_text(), "int value;")
         outside = self.project.root / "outside.c"
         with self.assertRaisesRegex(Held, "configured"):
-            split_apply.apply(self.project, self.project.policy, [split.Edit(outside, "", "x", ("us",))], staged=True)
+            split_apply._write_staging(self.project, [split.Edit(outside, "", "x", ("us",))])
 
     def test_bss_end_uses_explicit_segment_facts(self) -> None:
         path = self.project.version("us").split

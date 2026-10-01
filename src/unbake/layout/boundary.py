@@ -48,7 +48,12 @@ def shape(words: dict[int, int], start: int, end: int) -> tuple[str, ...]:
 
 
 def closure(
-    words: dict[int, int], start: int, end: int, bias: int, known: set[int]
+    words: dict[int, int],
+    start: int,
+    end: int,
+    bias: int,
+    known: set[int],
+    jump_tables: dict[int, tuple[int, ...]] | None = None,
 ) -> tuple[set[int], tuple[str, ...], tuple[str, ...]]:
     """Follow a single entry; a jump to another entry is a tail call only after frame restore."""
     pending = [start]
@@ -110,6 +115,9 @@ def closure(
                         for restored in (delay, words.get(offset - 4, 0), words.get(offset - 8, 0))
                     ):
                         failures.add("compiler-frame-restore-missing")
+                elif jump_tables and offset in jump_tables:
+                    pending.extend(jump_tables[offset])
+                    tags.add("proved-local-jump-table")
                 else:
                     failures.add("unresolved-indirect-jump-table-ownership")
             else:
@@ -124,9 +132,16 @@ def closure(
 
 
 def evidence(
-    words: dict[int, int], start: int, end: int, bias: int, sources: set[str], known: set[int], alignment: int
+    words: dict[int, int],
+    start: int,
+    end: int,
+    bias: int,
+    sources: set[str],
+    known: set[int],
+    alignment: int,
+    jump_tables: dict[int, tuple[int, ...]] | None = None,
 ) -> Boundary:
-    seen, tags, failures = closure(words, start, end, bias, known)
+    seen, tags, failures = closure(words, start, end, bias, known, jump_tables)
     reasons = list(failures)
     result = [*sorted(sources), *shape(words, start, end), *tags]
     if not sources:

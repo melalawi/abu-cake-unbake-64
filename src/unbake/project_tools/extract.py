@@ -12,7 +12,9 @@ import re
 import subprocess
 import sys
 import tempfile
+from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 from unbake.project_tools.rodata import defer_bss
 
@@ -132,9 +134,57 @@ def unit_addresses(text: str) -> dict[str, int]:
     return found
 
 
-def unit_ranges(text: str) -> dict[str, dict[str, int]]:
+def pool_rows(text: str) -> list[dict[str, Any]]:
+    """Derive all native pool slices, with structural owner paths preserved."""
     blocks = re.split(r"(?=^  - )", text, flags=re.M)
-    found: dict[str, dict[str, int]] = {}
+    found: list[dict[str, Any]] = []
+    for block_index, block in enumerate(blocks):
+        if not re.search(r"^    type: code$", block, re.M):
+            continue
+        start = re.search(r"^    start: (\S+)", block, re.M)
+        vram = re.search(r"^    vram: (\S+)", block, re.M)
+        if not start or not vram:
+            raise ValueError("layout.pool_span: code segment requires start and vram")
+        rows = re.findall(r"^      - \[\s*(0x[\da-fA-F]+|\d+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)", block, re.M)
+        for index, (offset, kind, name) in enumerate(rows):
+            if kind.strip().lstrip(".") not in ("rodata", "rdata"):
+                continue
+            if index + 1 < len(rows):
+                end = int(rows[index + 1][0], 0)
+            else:
+                following = blocks[block_index + 1] if block_index + 1 < len(blocks) else ""
+                boundary = re.search(r"^  - \[\s*(0x[\da-fA-F]+|\d+)|^    start: (\S+)", following, re.M)
+                if boundary is None:
+                    raise ValueError(f"layout.pool_span: {name}: end missing")
+                end = int(boundary[1] or boundary[2], 0)
+            path = scalar(name)
+            parts = Path(path).parts
+            structural = len(parts) == 3 and parts[0] == "rodata"
+            owner = parts[1] if structural and parts[1] not in ("shared", "unresolved", "writable") else None
+            if kind.strip().startswith(".") and not structural:
+                owner = Path(path).name
+            rom = int(offset, 0)
+            if rom >= end:
+                raise ValueError(f"layout.pool_span: {name}: empty or reversed slice")
+            found.append(
+                dict(
+                    start=rom,
+                    end=end,
+                    address=int(vram[1], 0) + rom - int(start[1], 0),
+                    path=path,
+                    owner=owner,
+                    kind="private" if owner else "shared" if structural and parts[1] == "shared" else "unresolved",
+                )
+            )
+    ordered = sorted(found, key=lambda row: row["start"])
+    if any(a["end"] > b["start"] for a, b in pairwise(ordered)):
+        raise ValueError("layout.pool_span: overlapping pool slices")
+    return found
+
+
+def unit_ranges(text: str) -> dict[str, dict[str, Any]]:
+    blocks = re.split(r"(?=^  - )", text, flags=re.M)
+    found: dict[str, dict[str, Any]] = {}
     for block_index, block in enumerate(blocks):
         if not re.search(r"^    type: code$", block, re.M):
             continue
@@ -155,22 +205,16 @@ def unit_ranges(text: str) -> dict[str, dict[str, int]]:
                     raise ValueError(f"{name}: C row end missing")
                 end = int(boundary[1] or boundary[2], 0)
             rom_offset = int(offset, 0)
-            found[Path(scalar(name)).name] = {
-                "start": rom_offset,
-                "end": end,
-                "address": int(vram[1], 0) + rom_offset - int(start[1], 0),
-            }
-    for block in blocks:
-        start = re.search(r"^    start: (\S+)", block, re.M)
-        vram = re.search(r"^    vram: (\S+)", block, re.M)
-        if not start or not vram:
-            continue
-        for offset, name in re.findall(
-            r"^      - \[\s*(0x[\da-fA-F]+|\d+)\s*,\s*\.rodata\s*,\s*([^,\]]+)", block, re.M
-        ):
-            unit = Path(scalar(name)).name
-            if unit in found:
-                found[unit]["rodata_address"] = int(vram[1], 0) + int(offset, 0) - int(start[1], 0)
+            found[Path(scalar(name)).name] = dict(
+                start=rom_offset, end=end, address=int(vram[1], 0) + rom_offset - int(start[1], 0)
+            )
+    for row in pool_rows(text):
+        if row["owner"] in found:
+            interval = found[row["owner"]]
+            interval.setdefault("rodata_slices", []).append(row)
+            # A contiguous native .rodata row remains a supported representation.
+            if not row["path"].startswith("rodata/"):
+                interval["rodata_address"] = row["address"]
     return found
 
 
@@ -395,6 +439,7 @@ def extract(args: argparse.Namespace) -> None:
         )
         publish(args.build / "symbol-addresses.txt", addresses.encode())
         publish(args.build / "unit-ranges.json", json.dumps(unit_ranges(text), sort_keys=True).encode())
+        publish(args.build / "pool-providers.json", json.dumps(pool_rows(text), sort_keys=True).encode())
         publish(args.build / (args.name + ".ld"), rewritten.encode())
         graph.extend(["LINK_SCRIPTS := " + " ".join(link_scripts), f"ROM_BYTES := {args.baserom.stat().st_size}"])
         # This file is the successful extraction receipt; replace it last.

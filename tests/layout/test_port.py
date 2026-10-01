@@ -69,7 +69,7 @@ class PortTests(unittest.TestCase):
         self.assertIn("target-version try is not identical", lines[0])
         self.assertIn(", asm, alpha]", self.project.version("eu").split.read_text())
 
-    def test_bulk_stages_only_proved_rows_and_preserves_other_lines(self) -> None:
+    def test_bulk_applies_only_proved_rows_after_whole_rom_proof(self) -> None:
         row = port.candidates(self.project, "us", ["eu"])[0]
         before = self.project.version("eu").split.read_text()
         work = self.scratch / "alpha-eu"
@@ -78,11 +78,17 @@ class PortTests(unittest.TestCase):
         with (
             patch.object(port, "required_placements", return_value={}),
             patch("unbake.decomp.trial.try_draft", return_value=SimpleNamespace(identical_everywhere=True)) as trial,
+            patch.object(
+                port.split_apply,
+                "apply",
+                side_effect=lambda project, policy, edits: port.split_apply._write_staging(project, edits) or [],
+            ) as publish,
         ):
             lines = port.port(self.project, self.policy, [row], self.scratch, apply=True)
         self.assertEqual(self.project.version("eu").split.read_text(), before.replace(", asm, alpha]", ", c, alpha]"))
         self.assertEqual(trial.call_args.kwargs["versions"], ["eu"])
-        self.assertIn("staged 1 proved rows", lines[-1])
+        self.assertIn("applied 1 proved rows", lines[-1])
+        publish.assert_called_once()
 
     def test_missing_alias_that_conflicts_with_canonical_name_is_refused(self) -> None:
         row = port.candidates(self.project, "us", ["eu"])[0]

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, SetupPolicy
 
 TEMPLATES = Path(__file__).parents[1] / "project_tools"
 
@@ -121,7 +121,7 @@ def host_tool(project: Project, value: str, name: str) -> str:
     return value
 
 
-def host_executable(policy: Policy, value: str, field: str) -> str:
+def host_executable(policy: Policy | SetupPolicy, value: str, field: str) -> str:
     """Resolve a recipe host tool; policy:NAME references read the operator policy, as the build does."""
     if not value:
         raise Held("config", f"build.{field}: missing value")
@@ -221,7 +221,16 @@ def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
 
 def helpers(project: Project) -> dict[str, str]:
     tools = relative(project, project.tools)
-    names = ["extract.py", "compile.py", "elf.py", "layout.py", "rodata.py", "literal_layout.py", "host.py"]
+    names = [
+        "extract.py",
+        "compile.py",
+        "elf.py",
+        "layout.py",
+        "rodata.py",
+        "literal_layout.py",
+        "pool_slices.py",
+        "host.py",
+    ]
     if any(c.kind == "sn64" for c in project.compilers.values()):
         names.extend(
             [
@@ -253,8 +262,11 @@ def render(project: Project) -> dict[str, str]:
     project.version(project.names_from)
     values = {
         "TITLE": project.title,
+        "NAMES_FROM": project.names_from,
+        "ROM_INPUTS": "\n".join("- `" + relative(project, project.version(v).baserom) + "`" for v in project.versions),
         "NAME": project.name,
         "VERSIONS": " ".join(project.versions),
+        "BUILD_ROOT": relative(project, project.build),
         "TOOLS": relative(project, project.tools),
         "SRC": relative(project, project.src),
         "ASM": relative(project, project.asm),
@@ -282,7 +294,8 @@ def render(project: Project) -> dict[str, str]:
         version = project.version(name)
         blocks.append(
             f"ifeq ($(VERSION),{name})\nSPLIT := {relative(project, version.split)}\n"
-            f"SYMBOLS := {relative(project, version.symbols)}\nendif"
+            f"SYMBOLS := {relative(project, version.symbols)}\n"
+            f"BASEROM := {relative(project, version.baserom)}\nendif"
         )
     values["VERSION_BLOCKS"] = "\n".join(blocks)
 

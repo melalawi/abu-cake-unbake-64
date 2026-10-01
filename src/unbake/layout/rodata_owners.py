@@ -91,10 +91,11 @@ def scan(project: Project, version: str) -> Census:
     image = configured.baserom.read_bytes()
     build = project.build_link(version)
     elfpath = build / (project.name + ".elf")
-    elf = Object(elfpath)
+    elf = Object(elfpath) if elfpath.is_file() else None
     _, configured_symbols = split.symbols(configured.symbols)
     values = {name: entry[0] for name, entry in configured_symbols.items()}
-    values.update({s["name"]: s["value"] for entries in elf.symbols.values() for s in entries if s["name"]})
+    if elf is not None:
+        values.update({s["name"]: s["value"] for entries in elf.symbols.values() for s in entries if s["name"]})
     _, _, segments = split.layout(configured.split)
     spans = [
         Span(m["address"], m["start"], m["end"], m["table_entry_bias"], "resident")
@@ -110,6 +111,62 @@ def scan(project: Project, version: str) -> Census:
     if any(a.stop > b.address for a, b in itertools.pairwise(spans)):
         raise Held("rodata", "overlapping constant runtime spans")
     functions = split.functions(project, version)
+    units = json.loads((build / "objdiff.json").read_text())["units"] if (build / "objdiff.json").is_file() else []
+    targets = {u["name"]: build / u["target_path"] for u in units}
+    refs: list[Reference] = []
+    errors: list[str] = []
+    for f in functions:
+        path = build / "obj/asm" / (f.path + ".o")
+        if not path.is_file():
+            path = targets.get(Path(f.path).stem, path)
+        found, failures = collect(
+            Path(f.path).stem, image[f.start : f.end], Object(path) if path.is_file() else None, values.get("_gp")
+        )
+        refs.extend(r for r in found if any(span.address <= r.address < span.stop for span in spans))
+        errors.extend(failures)
+    datarefs: dict[int, set[str]] = defaultdict(set)
+    for path in sorted((build / "obj").rglob("*.o")):
+        obj = Object(path)
+        for index, header in enumerate(obj.sections):
+            if header[1] != 1 or not header[2] & 2 or obj.names[index] == ".text":
+                continue
+            material = obj.content(index)
+            for offset, relocation_kind, symbol in obj.relocations(index):
+                if relocation_kind == 2 and offset + 4 <= len(material) and symbol["name"] in values:
+                    address = (
+                        values[symbol["name"]] + int.from_bytes(material[offset : offset + 4], "big")
+                    ) & 0xFFFFFFFF
+                    if any(span.address <= address < span.stop for span in spans):
+                        datarefs[address].add(path.relative_to(build).as_posix())
+    objects = classify(image, functions, spans, refs, values, datarefs)
+    snapshot = {
+        "rom_sha1": hashlib.sha1(image).hexdigest(),
+        "split_sha256": hashlib.sha256(configured.split.read_bytes()).hexdigest(),
+        "symbols_sha256": hashlib.sha256(configured.symbols.read_bytes()).hexdigest(),
+        "elf_sha256": hashlib.sha256(elfpath.read_bytes()).hexdigest() if elf is not None else "",
+    }
+    return Census(version, objects, refs, errors, spans, snapshot, functions)
+
+
+def private(census: Census, function: str) -> list[Constant]:
+    return [o for o in census.objects if o.safe_sole_candidate and o.owners == {function}]
+
+
+def material(project: Project, version: str, item: Constant) -> bytes:
+    return project_reader(project, version)(item.address, item.end - item.address)
+
+
+def classify(
+    image: bytes,
+    functions: list[split.Function],
+    spans: list[Span],
+    refs: list[Reference],
+    values: dict[str, int] | None = None,
+    datarefs: dict[int, set[str]] | None = None,
+) -> list[Constant]:
+    """Partition every mapped constant byte using ROM-only or enriched evidence."""
+    values = values or {}
+    datarefs = datarefs or {}
     text = sorted(functions, key=lambda f: f.address)
     textstarts = [f.address for f in text]
 
@@ -128,33 +185,6 @@ def scan(project: Project, version: str) -> Census:
         offset = span.start + address - span.address
         return image[offset : min(offset + size, span.end)]
 
-    units = json.loads((build / "objdiff.json").read_text())["units"]
-    targets = {u["name"]: build / u["target_path"] for u in units}
-    refs: list[Reference] = []
-    errors: list[str] = []
-    for f in functions:
-        path = build / "obj/asm" / (f.path + ".o")
-        if not path.is_file():
-            path = targets.get(Path(f.path).stem, path)
-        found, failures = collect(
-            Path(f.path).stem, image[f.start : f.end], Object(path) if path.is_file() else None, values.get("_gp")
-        )
-        refs.extend(r for r in found if span_at(r.address) is not None)
-        errors.extend(failures)
-    datarefs: dict[int, set[str]] = defaultdict(set)
-    for path in sorted((build / "obj").rglob("*.o")):
-        obj = Object(path)
-        for index, header in enumerate(obj.sections):
-            if header[1] != 1 or not header[2] & 2 or obj.names[index] == ".text":
-                continue
-            material = obj.content(index)
-            for offset, relocation_kind, symbol in obj.relocations(index):
-                if relocation_kind == 2 and offset + 4 <= len(material) and symbol["name"] in values:
-                    address = (
-                        values[symbol["name"]] + int.from_bytes(material[offset : offset + 4], "big")
-                    ) & 0xFFFFFFFF
-                    if span_at(address) is not None:
-                        datarefs[address].add(path.relative_to(build).as_posix())
     byaddr: dict[int, list[Reference]] = defaultdict(list)
     for ref in refs:
         byaddr[ref.address].append(ref)
@@ -273,18 +303,4 @@ def scan(project: Project, version: str) -> Census:
             located = object_at(value)
             if located is not None:
                 located.rom_pointer_candidates.append(span.address + offset * 4)
-    snapshot = {
-        "rom_sha1": hashlib.sha1(image).hexdigest(),
-        "split_sha256": hashlib.sha256(configured.split.read_bytes()).hexdigest(),
-        "symbols_sha256": hashlib.sha256(configured.symbols.read_bytes()).hexdigest(),
-        "elf_sha256": hashlib.sha256(elfpath.read_bytes()).hexdigest(),
-    }
-    return Census(version, objects, refs, errors, spans, snapshot, functions)
-
-
-def private(census: Census, function: str) -> list[Constant]:
-    return [o for o in census.objects if o.safe_sole_candidate and o.owners == {function}]
-
-
-def material(project: Project, version: str, item: Constant) -> bytes:
-    return project_reader(project, version)(item.address, item.end - item.address)
+    return objects

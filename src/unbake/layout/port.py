@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.layout import split, split_apply
-from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 from unbake.project_tools.elf import Object
 
@@ -294,9 +293,11 @@ def port(project: Project, policy: Policy, rows: list[Candidate], scratch: Path,
         if after != before:
             planned.append(split.Edit(path, before, after, (version,)))
     if apply:
-        with build.lock(project):
-            split_apply.apply(project, policy, planned, staged=True)
-        receipts.append(f"OK(port): staged {len(accepted)} proved rows; run the full project check")
+        results = split_apply.apply(project, policy, planned)
+        receipts.extend(
+            f"{'OK' if result.ok else 'HELD'}(port): {result.version}: {result.sha1_line}" for result in results
+        )
+        receipts.append(f"OK(port): applied {len(accepted)} proved rows")
     else:
         print(split_apply.diff(planned), end="")
     return receipts

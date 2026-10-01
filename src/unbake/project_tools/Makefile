@@ -13,11 +13,10 @@ $(error HELD(build): NON_MATCHING must be 0 or 1)
 endif
 ifeq ($(NON_MATCHING),1)
 override COMPARE := 0
-BUILD ?= build/$(VERSION).nonmatching
+BUILD ?= @BUILD_ROOT@/$(VERSION).nonmatching
 else
-BUILD ?= build/$(VERSION)
+BUILD ?= @BUILD_ROOT@/$(VERSION)
 endif
-BASEROM := baserom.$(VERSION).z64
 ROM := $(BUILD)/@NAME@.$(VERSION).z64
 ELF := $(BUILD)/@NAME@.elf
 LD_SCRIPT := $(BUILD)/@NAME@.ld
@@ -45,7 +44,7 @@ endef
 $(foreach goal,$(GOALS),$(foreach version,$(VERSIONS),$(eval $(call dispatch,$(goal),$(version)))))
 
 distclean:
-	rm -rf -- build @ASM@
+	rm -rf -- @BUILD_ROOT@ @ASM@
 
 .PHONY: $(GOALS) distclean
 else
@@ -67,7 +66,7 @@ setup: verify
 
 extract: $(BUILD)/.split
 
-ifeq ($(BUILD),build/$(VERSION))
+ifeq ($(BUILD),@BUILD_ROOT@/$(VERSION))
 prepare-build:
 	python3 $(TOOLS)/extract.py prepare-build --build $(BUILD)
 
@@ -86,14 +85,14 @@ $(BUILD)/.split.mk: $(wildcard $(SRC)/*.c) $(BASEROM) $(SPLIT) $(SYMBOLS) $(TOOL
 $(BUILD)/.split: $(BUILD)/.split.mk
 	@touch $@
 
-$(LD_SCRIPT) $(LINK_SCRIPTS) $(BUILD)/symbol-addresses.txt: | $(BUILD)/.split
+$(LD_SCRIPT) $(LINK_SCRIPTS) $(BUILD)/symbol-addresses.txt $(BUILD)/unit-ranges.json: | $(BUILD)/.split
 	@test -f $@ || { printf '%s\n' 'HELD(extract): missing $@; remove $(BUILD)/.split.mk and make extract'; exit 1; }
 
 # Group only missing receipts. Existing objects retain their individual rules,
 # including header dependency tracking and unchanged-object timestamp behavior.
 C_COLD := $(filter-out $(wildcard $(C_OBJECTS:.o=.built)),$(C_OBJECTS:.o=.built))
 define compile-chunk
-$(1) &: $(patsubst $(BUILD)/obj/src/%.built,$(SRC)/%.c,$(1)) $(RECIPE) $(DRIVERS) | verify
+$(1) &: $(patsubst $(BUILD)/obj/src/%.built,$(SRC)/%.c,$(1)) $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.json | verify
 	python3 $(TOOLS)/compile.py --kind cc --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit batch --source $(SRC) --output $(BUILD)/obj/src --batch $(patsubst $(BUILD)/obj/src/%.built,$(SRC)/%.c,$(1))
 endef
 define compile-chunks
@@ -101,7 +100,7 @@ $(if $(strip $(1)),$(eval $(call compile-chunk,$(wordlist 1,128,$(1))))$(call co
 endef
 $(call compile-chunks,$(C_COLD))
 
-$(BUILD)/obj/src/%.built: $(SRC)/%.c $(RECIPE) $(DRIVERS) | verify
+$(BUILD)/obj/src/%.built: $(SRC)/%.c $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.json | verify
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/compile.py --kind cc --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $(SRC)/$*.c --source $< --output $(@:.built=.o) --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/src/$*.built'
 	@touch $@
@@ -121,7 +120,7 @@ $(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin
 	@mkdir -p $(@D)
 	$(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
 
-$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py
+$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/layout.py --script $(LD_SCRIPT) --output $(BUILD)/@NAME@.link.ld --build $(BUILD) --ranges $(BUILD)/unit-ranges.json --recipe $(RECIPE) --version $(VERSION) --baserom $(BASEROM) --non-matching $(NON_MATCHING)
 	cd $(BUILD) && LC_ALL=C $(LD) $$(cat @NAME@.link.flags) -T @NAME@.link.ld $(addprefix -T ,$(abspath $(LINK_SCRIPTS))) -Map @NAME@.map -o @NAME@.elf $(patsubst $(BUILD)/%,%,$(OBJECTS))
