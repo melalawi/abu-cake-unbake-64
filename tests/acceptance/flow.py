@@ -380,13 +380,84 @@ class Proof:
             if path.is_file()
         }
 
-    def cycle(self, project: Path, source: Path | None = None) -> None:
+    def map_solve(self, project: Path) -> None:
+        self.cli("map", cwd=project)
+        config = read_config(project)
+        facts = json.loads((project / config["paths"]["build"] / "map/facts.json").read_bytes())
+        require(set(facts["rom_sha1"]) == set(config["version"]), "map.versions: missing configured ROM")
+        require(facts["functions"], "map.functions: missing whole-program items")
+        self.cli("solve", cwd=project)
+        database = project / config["paths"]["build"] / "types/database.json"
+        require(database.is_file(), "solve.database: missing shared type database")
+        for name in ("typemap.h", "prototypes.h"):
+            require((project / "include/shared" / name).is_file(), f"solve.header: missing {name}")
+
+    def measure(self, project: Path, label: str, fuzzy_bar: float | None) -> None:
+        config = read_config(project)
+        facts = json.loads((project / config["paths"]["build"] / "map/facts.json").read_bytes())
+        with (self.root / "policy.toml").open("rb") as stream:
+            policy = tomllib.load(stream)
+        state = Path(policy["state_root"]) / config["project"]["id"] / config["workspace"]["id"]
+        ledger = state / "drafts/trials.jsonl"
+        trials = {}
+        if ledger.is_file():
+            for line in ledger.read_text().splitlines():
+                row = json.loads(line)
+                trials[row["function"]] = row
+        attempts = []
+        for path in self.logs.glob("*.command.json"):
+            row = json.loads(path.read_text())
+            if row.get("cwd") == str(project) and "try" in row["argv"] and "returncode" in row:
+                text = (self.logs / row["stdout"]).read_text()
+                attempts.append(row["returncode"] == 0 and "retained " in text and "HELD(" not in text)
+        sources = {path.stem for path in (project / config["paths"]["src"]).rglob("*.c")}
+        items = facts["functions"]
+        matched = sources & items.keys()
+        fuzzy = None if fuzzy_bar is None else sum(min(row["score"].values()) >= fuzzy_bar for row in trials.values())
+        result = {
+            "label": label,
+            "project": str(project),
+            "items": len(items),
+            "compile_attempts": len(attempts),
+            "compile_ok": sum(attempts),
+            "compile_ok_percent": 100 * sum(attempts) / len(attempts) if attempts else None,
+            "trial_items": len(trials),
+            "owner_fuzzy_bar": fuzzy_bar,
+            "owner_fuzzy_pass_percent": 100 * fuzzy / len(trials) if fuzzy is not None and trials else None,
+            "matched_items": len(matched),
+            "matched_percent": 100 * len(matched) / len(items),
+            "versions": {
+                version: {
+                    "items": sum(version in item["versions"] for item in items.values()),
+                    "matched": sum(version in items[name]["versions"] for name in matched),
+                }
+                for version in config["version"]
+            },
+        }
+        (self.logs / (project.name + "." + label + ".metrics.json")).write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps(result, indent=2))
+        if fuzzy_bar is None:
+            print("GAP: owner.fuzzy_bar is missing. No threshold was inferred.")
+
+    @staticmethod
+    def clean_source(path: Path) -> None:
+        text = path.read_text()
+        for key, pattern in (
+            ("raw_gfx", r"\bwords\s*\.\s*w[01]\s*="),
+            ("local_macro", r"(?m)^\s*#\s*define\s+(?:_SHIFTL|g[sd]SP\w*|g[sd]DP\w*)\b"),
+            ("local_type", r"\btypedef\b|\bfunc_\w+_S\d+\b"),
+        ):
+            require(not re.search(pattern, text), f"accept.{key}: {path}")
+
+    def cycle(self, project: Path, source: Path | None = None, function: str | None = None) -> None:
         output = self.cli("next", cwd=project)
         suggestion = next(line.removeprefix("Next: ") for line in output.splitlines() if line.startswith("Next: "))
         tokens = shlex.split(suggestion)
         require(tokens and tokens[0] == "unbake" and "draft" in tokens, "next.action: expected executable draft")
         if source is not None:
             tokens = ["unbake", "draft", source.stem]
+        if function is not None:
+            tokens = ["unbake", "draft", function]
         before = self.canonical(project)
         output = self.cli(*tokens[1:], cwd=project)
         action = next(line.removeprefix("Next: ") for line in output.splitlines() if line.startswith("Next: "))
@@ -396,6 +467,7 @@ class Proof:
         if not draft.is_absolute():
             draft = project / draft
         require(draft.is_file(), f"draft.source: missing file {draft}")
+        self.clean_source(draft)
         require(self.canonical(project) == before, "draft.overlay: canonical files changed")
         if source is not None:
             shutil.copyfile(source, draft)
@@ -409,6 +481,9 @@ class Proof:
         draft.write_bytes(exact)
         self.cli("try", draft, cwd=project)
         self.cli("submit", draft, cwd=project)
+        published = project / read_config(project)["paths"]["src"] / draft.name
+        require(published.is_file(), "submit.source: missing published C")
+        self.clean_source(published)
         self.verify(project)
         self.cli("next", cwd=project)
 
@@ -503,12 +578,17 @@ def main() -> int:
     propose.add_argument("--supply", type=Path)
     cycle = phases.add_parser("cycle", help="Execute next/draft/try/submit and refuse a changed untried source.")
     cycle.add_argument("--source", type=Path, help="Reviewed matching C to copy into the generated draft.")
+    cycle.add_argument("--function", help="Explicit evidenced item, including a subset-version item.")
+    mapping = phases.add_parser("map-solve", help="Map all ROMs and solve one shared type database.")
+    measure = phases.add_parser("measure", help="Record observed compile, fuzzy and matched round measures.")
+    measure.add_argument("--label", required=True)
+    measure.add_argument("--fuzzy-bar", type=float, help="Explicit owner threshold on the weakest version score.")
     resubmit = phases.add_parser(
         "resubmit", help="Re-submit each read-only authored C input through public work commands."
     )
     resubmit.add_argument("--source-dir", type=Path, required=True)
     verify = phases.add_parser("verify", help="Check digests, generated docs, hygiene and repeat setup.")
-    for command in (prepare, propose, confirm, cycle, resubmit, verify):
+    for command in (prepare, propose, confirm, cycle, resubmit, verify, mapping, measure):
         command.add_argument("--project", type=Path, required=True)
     phases.add_parser("retirement", help="Refuse every retired route and check removed imports.")
     refusals = phases.add_parser("refusals", help="Prove named input refusals and pending-state protection.")
@@ -538,7 +618,11 @@ def main() -> int:
             elif args.phase == "propose":
                 proof.propose(project, args.compiler, args.supply)
             elif args.phase == "cycle":
-                proof.cycle(project, args.source)
+                proof.cycle(project, args.source, args.function)
+            elif args.phase == "map-solve":
+                proof.map_solve(project)
+            elif args.phase == "measure":
+                proof.measure(project, args.label, args.fuzzy_bar)
             elif args.phase == "verify":
                 proof.verify(project)
             else:
