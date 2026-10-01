@@ -3,7 +3,7 @@
 import struct
 import unittest
 
-from unbake.layout.planner import carve, complete_providers
+from unbake.layout.planner import carve, complete_providers, correspondence
 from unbake.layout.rodata_owners import Span
 from unbake.layout.split import Function
 from unbake.layout.split_analysis import copy_evidence
@@ -30,6 +30,13 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual([p["start"] for p in providers[1:]], [p["end"] for p in providers[:-1]])
         self.assertEqual(providers[0]["start"], 0)
         self.assertEqual(providers[-1]["end"], len(image))
+
+    def test_cross_version_canonical_names_do_not_collide_with_address_labels(self) -> None:
+        image = struct.pack(">4I", 0x24020001, 0x03E00008, 0, 0)
+        source = Function("us", "func_80001000", 0, 16, 0x80001000, "entry", "asm", ())
+        target = Function("eu", "func_80002000", 0, 16, 0x80002000, "entry", "asm", ())
+        names = correspondence({"us": image, "eu": image}, {"us": [source], "eu": [target]}, "us")
+        self.assertEqual(names, {"us": {0: "func_80001000_us"}, "eu": {0: "func_80001000_us"}})
 
     def test_copied_loop_retains_destination_and_complete_extent(self) -> None:
         data = bytearray(0x4000)

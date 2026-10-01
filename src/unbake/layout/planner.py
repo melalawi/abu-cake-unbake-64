@@ -181,9 +181,18 @@ def correspondence(
             canonical = indexes[reference].get(signature, [])
             for f in ff:
                 if version == reference:
-                    name = f.name
+                    name = (
+                        f.name + "_" + reference.replace("-", "_")
+                        if re.fullmatch(r"func_[0-9A-Fa-f]+", f.name)
+                        else f.name
+                    )
                 elif len(ff) == len(canonical) == 1:
-                    name = canonical[0].name
+                    source = canonical[0].name
+                    name = (
+                        source + "_" + reference.replace("-", "_")
+                        if re.fullmatch(r"func_[0-9A-Fa-f]+", source)
+                        else source
+                    )
                 else:
                     name = f.name + "_" + version.replace("-", "_")
                 names[version][f.start] = name
@@ -451,6 +460,13 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                         sort_keys=True,
                     )
                 )
+            invalid = {
+                (offset, offset + 4)
+                for f in measured.functions
+                for offset in range(f.start, f.end, 4)
+                if not split_analysis.instruction(int.from_bytes(cartridge.data[offset : offset + 4], "big"))
+            }
+            measured = split.ExtractedText(measured.functions, tuple(sorted(set(measured.data) | invalid)))
             measured_by_version[version] = measured
             templates[version] = template
             inventories[version] = functions(cartridge.data, version, ranges_by_version[version], measured)
