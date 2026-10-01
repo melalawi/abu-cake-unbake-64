@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.cli.support import MainCase
-from unbake.cli import common, guidance
+from unbake.cli import common
 from unbake.cli.main import main
 from unbake.project import config, init
 from unbake.project.config import Held
@@ -83,4 +83,3 @@ class GuidanceTests(MainCase):
         self.assertEqual(error, "")
         action = out.split("Then run ", 1)[1].removesuffix(".\n")
         self.assertEqual(shlex.split(action), ["unbake", "--project", str(self.root), "--policy", str(policy), "setup"])
-        self.assertTrue(guidance.resolve(self.root).endswith("next"))

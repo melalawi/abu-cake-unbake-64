@@ -22,26 +22,14 @@ class MainTests(MainCase):
             ("decomp", ["decomp", "assign", "--holder", "person", "--tier", "manual", "--count", "2"]),
             ("decomp", ["decomp", "assign", "--holder", "person", "--tier", "manual", "--function", "alpha"]),
             ("decomp", ["decomp", "release", "assignment"]),
-            ("decomp", ["decomp", "draft", "alpha", "--version", "us", "--scratch", str(self.scratch)]),
-            (
-                "decomp",
-                [
-                    "decomp",
-                    "try",
-                    str(self.source),
-                    "--scratch",
-                    str(self.scratch),
-                    "--version",
-                    "us",
-                    "--version",
-                    "us-rev1",
-                ],
-            ),
+            ("draft", ["draft", "alpha"]),
+            ("try", ["try", str(self.source)]),
+            ("try", ["try", str(self.source), "--flags"]),
+            ("submit", ["submit", str(self.source)]),
+            ("next", ["next"]),
             ("decomp", ["decomp", "best", "alpha"]),
             ("decomp", ["decomp", "publish", "--all"]),
-            ("match", ["match", "submit", str(self.source)]),
             ("match", ["match", "withdraw", "alpha"]),
-            ("match", ["match", "run"]),
             ("match", ["match", "status"]),
             ("report", ["report"]),
             ("check", ["check"]),
@@ -59,25 +47,25 @@ class MainTests(MainCase):
                 self.assertEqual(parsed.phase, phase)
                 self.assertEqual(parsed.project, self.root)
 
-    def test_version_selection_is_explicit(self) -> None:
-        parsed = cli.make_parser().parse_args(
-            self.args("decomp", "try", str(self.source), "--scratch", str(self.scratch))
-        )
-        self.assertIsNone(parsed.version)
-        parsed = cli.make_parser().parse_args(
-            self.args(
-                "decomp",
-                "try",
-                str(self.source),
-                "--scratch",
-                str(self.scratch),
-                "--version",
-                "us",
-                "--version",
-                "us-rev1",
-            )
-        )
-        self.assertEqual(parsed.version, ["us", "us-rev1"])
+    def test_work_selection_uses_project_facts_without_required_scratch(self) -> None:
+        parsed = cli.make_parser().parse_args(self.args("draft", "alpha"))
+        self.assertEqual(parsed.function, "alpha")
+        parsed = cli.make_parser().parse_args(self.args("try", str(self.source)))
+        self.assertEqual(parsed.source, self.source)
+        self.assertFalse(parsed.flags)
+
+    def test_retired_nested_work_routes_refuse(self) -> None:
+        for operands in (
+            ("decomp", "draft", "alpha"),
+            ("decomp", "try", str(self.source)),
+            ("match", "submit", str(self.source)),
+            ("match", "run"),
+        ):
+            with self.subTest(operands=operands):
+                code, out, error = self.run_main(self.args(*operands))
+                self.assertEqual(code, 1)
+                self.assertIn("HELD(", out)
+                self.assertEqual(error, "")
 
     def test_required_cli_values_name_the_missing_argument(self) -> None:
         cases = (
@@ -89,10 +77,10 @@ class MainTests(MainCase):
             (self.args("decomp", "assign", "--tier", "manual", "--count", "1"), "decomp", "--holder"),
             (self.args("decomp", "assign", "--holder", "person", "--count", "1"), "decomp", "--tier"),
             (self.args("decomp", "assign", "--holder", "person", "--tier", "manual"), "decomp", "--count"),
-            (self.args("decomp", "draft", "alpha", "--scratch", str(self.scratch)), "decomp", "--version"),
-            (self.args("decomp", "try", str(self.source)), "decomp", "--scratch"),
+            (self.args("draft"), "draft", "FUNCTION"),
+            (self.args("try"), "try", "FILE"),
             (self.args("decomp", "publish"), "decomp", "--all"),
-            (self.args("match", "submit"), "match", "FILE"),
+            (self.args("submit"), "submit", "FILE"),
         )
         for args, phase, field in cases:
             with self.subTest(args=args):

@@ -107,4 +107,6 @@ def complete_setup(
     confirm: str | None = None,
 ) -> list[str]:
     """Confirm, stage, prove all versions, then publish readiness atomically."""
-    raise Unfinished("setup", "setup.publication")
+    from unbake.project.setup import complete_setup as implementation
+
+    return implementation(project, census, layout, proposal, policy, confirm=confirm)

@@ -33,13 +33,19 @@ class Census:
 
 def ingest_manifest(project: PendingProject) -> dict[str, Any] | None:
     manifest = project.build / "setup/roms.json"
-    if manifest.is_symlink():
+    if manifest.is_symlink() or any(parent.is_symlink() for parent in manifest.parents):
         raise Held("setup", f"setup.roms.manifest: {manifest}: symlink")
     if not manifest.is_file():
         return None
     try:
         previous = json.loads(manifest.read_text())
-        if not isinstance(previous, dict) or previous.get("schema") != 1 or previous.get("project_id") != project.id:
+        if (
+            not isinstance(previous, dict)
+            or type(previous.get("schema")) is not int
+            or previous.get("schema") != 1
+            or previous.get("project_id") != project.id
+            or previous.get("workspace_id") != project.workspace_id
+        ):
             raise ValueError("incompatible manifest")
         if previous.get("ingestion_complete") is not True:
             raise ValueError("incomplete manifest")

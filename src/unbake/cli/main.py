@@ -7,7 +7,25 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from unbake.cli import check, clone, common, decomp, guidance, init, match, report, rodata, setup, split
+from unbake.cli import (
+    check,
+    clone,
+    common,
+    decomp,
+    draft,
+    guidance,
+    init,
+    match,
+    report,
+    rodata,
+    setup,
+    split,
+    submit,
+    trial,
+)
+from unbake.cli import (
+    next as next_command,
+)
 from unbake.cli.common import Parser
 from unbake.project import config
 from unbake.project.config import Held, Policy, Project
@@ -18,7 +36,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", type=Path, metavar="DIR")
     parser.add_argument("--policy", type=Path, metavar="FILE")
     phases = parser.add_subparsers(dest="phase", required=True)
-    for command in (setup, init, split, decomp, match, report, check, clone, rodata):
+    for command in (setup, init, split, decomp, match, report, check, clone, rodata, draft, trial, submit):
         command.register(phases)
     phases.add_parser("next", phase="next", help="Show the next required project action.")
     return parser
@@ -29,6 +47,9 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
         decomp.run(args, project, policy)
         return False
     commands = {
+        "draft": draft.run,
+        "try": trial.run,
+        "submit": submit.run,
         "rodata": rodata.run,
         "clone": clone.run,
         "split": split.run,
@@ -68,8 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             tokens = shlex.split(retry)
             retry = shlex.join([*tokens[:-1], "--policy", str(args.policy.expanduser().absolute()), tokens[-1]])
         if phase == "next":
-            config.load_pending(root)
-            return 0
+            return int(next_command.run(args, config.load_pending(root)) or invocation.refused)
         if phase == "setup":
             return int(setup.run(args, config.load_pending(root)) or invocation.refused)
         project = config.load(root)

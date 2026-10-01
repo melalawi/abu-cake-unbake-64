@@ -20,6 +20,11 @@ def run(target: Path) -> list[str]:
     git = shutil.which("git")
     if git is None:
         raise Held("init", "git: missing executable")
+    template = Path(__file__).parents[1] / "project_tools" / "CONTRIBUTING.pending.md"
+    try:
+        contributing = template.read_text()
+    except OSError as error:
+        raise Held("init", f"init.docs: {template}: {error}") from error
     existed = target.exists()
     target.mkdir(parents=True, exist_ok=True)
     try:
@@ -39,10 +44,7 @@ def run(target: Path) -> list[str]:
         (target / "README.md").write_text(
             f"# {target.name}\n\nPut your ROMs in `roms/`. Run `unbake setup` in this repo.\n"
         )
-        (target / "CONTRIBUTING.md").write_text(
-            "Put your ROMs in `roms/`. Input filenames can be arbitrary.\n\n"
-            "Run `unbake setup` in this repo. Setup reads headers and asks for the naming version.\n"
-        )
+        (target / "CONTRIBUTING.md").write_text(contributing)
     except BaseException:
         shutil.rmtree(target)
         if existed:

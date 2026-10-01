@@ -144,6 +144,8 @@ class CensusTests(unittest.TestCase):
             {
                 "schema": 1,
                 "project_id": self.project.id,
+                "workspace_id": self.project.workspace_id,
+                "names_from": "us",
                 "ingestion_complete": True,
                 "generated_inputs": [
                     {"original_path": "../elsewhere", "normalized_path": "roms/input", "sha1": "0" * 40}
@@ -158,6 +160,23 @@ class CensusTests(unittest.TestCase):
         manifest.unlink()
         with self.assertRaisesRegex(Held, "project.state"):
             setup_config.write_facts(replace(self.project, state="ready"), self.run_census())
+
+    def test_foreign_workspace_manifest_and_symlinked_setup_folder_refuse(self) -> None:
+        self.supply("one")
+        result = self.run_census()
+        document = json.loads(result.manifest.read_text())
+        document["workspace_id"] = "00000000-0000-4000-8000-000000000000"
+        result.manifest.write_text(json.dumps(document))
+        with self.assertRaisesRegex(Held, "setup.roms.manifest"):
+            census.candidates(self.project)
+        result.manifest.unlink()
+        result.manifest.parent.rmdir()
+        outside = self.root / "authored"
+        outside.mkdir()
+        result.manifest.parent.symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(Held, "setup.roms.manifest"):
+            self.run_census()
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_normalization_failure_rolls_back_new_copies_and_preserves_sources(self) -> None:
         from unbake.project import compiler_files
