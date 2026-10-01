@@ -49,6 +49,9 @@ def register(phases: Subparsers) -> None:
     trial.add_argument("source", type=Path, metavar="FILE")
     trial.add_argument("--scratch", type=Path, required=True, metavar="DIR")
     trial.add_argument("--version", action="append", metavar="V", help="Repeat to select VERSIONs.")
+    trial.add_argument(
+        "--flags", action="store_true", help="Rank the source compiler's registry flag variants per VERSION."
+    )
     search = decomp_verbs.add_parser("search", phase="decomp")
     search.add_argument("source", type=Path, metavar="FILE")
     search.add_argument("--method", required=True)

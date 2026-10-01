@@ -2,6 +2,15 @@
 # Downloads are pinned by archive and installed file SHA-256.
 # KMC and SN64 assets are content-pinned despite mutable release labels.
 # SN64 cc1 is the native mips-nintendo-nu64 build, not cc1n64.exe.
+# Flag probes extend project cflags; [] always measures the project baseline.
+# Tested against the pinned binaries with an integer loop, char load, double
+# arithmetic and calls. --help is rejected by all four historical compilers.
+# IDO accepts -O1/-O2/-O3; it rejects the GCC -f* and -mgp*/-mfp* probes below
+# as malformed or unknown options. GCC accepts every listed variant and its
+# output assembles with the project's GNU MIPS assembler.
+# -mgp64 -mfp64 also compiles, but changes the N64 project's GP32 calling ABI;
+# it is deliberately excluded from matching probes. -fno-defer-pop is accepted
+# by GCC but does not change this MIPS sample (there is no callee-pop ABI).
 
 [compilers."ido-7.1"]
 kind = "ido"
@@ -11,6 +20,7 @@ host = "linux-x86_64"
 cc = "cc"
 as = "as1"
 cflags = ["-c", "-G0", "-non_shared", "-mips2", "-O2"]
+flag_variants = [[], ["-O1"], ["-O2"], ["-O3"]]
 drivers = []
 decompme = "ido7.1"
 
@@ -44,6 +54,7 @@ host = "linux-x86_64"
 cc = "cc"
 as = "as1"
 cflags = ["-c", "-G0", "-non_shared", "-mips2", "-O2"]
+flag_variants = [[], ["-O1"], ["-O2"], ["-O3"]]
 drivers = []
 decompme = "ido5.3"
 
@@ -86,6 +97,16 @@ host = "linux-x86_64"
 cc = "cc1"
 as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-mgp32", "-mfp32", "-O2"]
+# KMC: O1, strength reduction, scheduling, FP64, unsigned char and delayed
+# branches changed the probe's .text; O2/O3 matched its O2 baseline.
+flag_variants = [
+    [], ["-O1"], ["-O2"], ["-O3"],
+    ["-fno-strength-reduce"], ["-fno-expensive-optimizations"],
+    ["-fno-schedule-insns2"], ["-mgp32"], ["-mfp32"],
+    ["-mgp32", "-mfp32"], ["-mgp32", "-mfp64"],
+    ["-funsigned-char"], ["-fno-defer-pop"], ["-ffast-math"],
+    ["-fno-delayed-branch"], ["-fforce-addr"],
+]
 drivers = ["sn64_cc.py", "resolve_external_branches.py"]
 decompme = "gcc2.7.2kmc"
 
@@ -105,6 +126,17 @@ host = "linux-x86_64"
 cc = "cc1"
 as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float", "-mgp32", "-mfp64", "-mno-fix4300"]
+# SN64: O1, strength reduction, scheduling, FP32, unsigned char and delayed
+# branches changed the probe's .text; O2/O3 matched its O2 baseline. FP32 is
+# also used by real RageWars unit overrides, alongside strength/fast-math flags.
+flag_variants = [
+    [], ["-O1"], ["-O2"], ["-O3"],
+    ["-fno-strength-reduce"], ["-fno-expensive-optimizations"],
+    ["-fno-schedule-insns2"], ["-mgp32"], ["-mfp32"],
+    ["-mgp32", "-mfp32"], ["-mgp32", "-mfp64"],
+    ["-funsigned-char"], ["-fno-defer-pop"], ["-ffast-math"],
+    ["-fno-delayed-branch"], ["-fforce-addr"],
+]
 drivers = ["sn64_cc.py", "resolve_external_branches.py"]
 decompme = "gcc2.8.1sn"
 
