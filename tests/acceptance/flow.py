@@ -546,11 +546,17 @@ class Proof:
         result = self.run([self.python, "-c", code])
         require(result.returncode == 0, "retire.imports: retired API remains")
 
-    def resubmit(self, project: Path, source_dir: Path, *, cleanup: bool = False) -> None:
+    def resubmit(
+        self, project: Path, source_dir: Path, *, cleanup: bool = False, only: list[str] | None = None
+    ) -> None:
         require(source_dir.is_dir(), "accept.source_dir: missing authored C directory")
         sources = sorted(source_dir.rglob("*.c"))
         require(sources, "accept.sources: no authored C inputs")
         require(len({source.stem for source in sources}) == len(sources), "accept.sources: duplicate function names")
+        if only:
+            missing = set(only) - {source.stem for source in sources}
+            require(not missing, f"accept.sources: missing named inputs {sorted(missing)}")
+            sources = [source for source in sources if source.stem in only]
         config = read_config(project)
         drafts = project / config["paths"]["drafts"]
         summary_path = self.logs / (project.name + ".resubmit.json")
@@ -626,6 +632,7 @@ def main() -> int:
     )
     resubmit.add_argument("--source-dir", type=Path, required=True)
     resubmit.add_argument("--cleanup", action="store_true", help="Prepare copied authored C through public cleanup.")
+    resubmit.add_argument("--only", action="append", metavar="FUNCTION", help="Retry explicit named authored inputs.")
     verify = phases.add_parser("verify", help="Check digests, generated docs, hygiene and repeat setup.")
     for command in (prepare, propose, confirm, cycle, resubmit, verify, mapping, measure):
         command.add_argument("--project", type=Path, required=True)
@@ -665,7 +672,7 @@ def main() -> int:
             elif args.phase == "verify":
                 proof.verify(project)
             else:
-                proof.resubmit(project, args.source_dir, cleanup=args.cleanup)
+                proof.resubmit(project, args.source_dir, cleanup=args.cleanup, only=args.only)
         print("PASS: " + args.phase)
         return 0
     except (ProofError, OSError, ValueError, KeyError, IndexError) as error:
