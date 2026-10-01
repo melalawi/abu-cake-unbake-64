@@ -359,7 +359,7 @@ def _publish(
     generations: dict[str, str | None],
 ) -> None:
     """Publish proved files and generations under the shared lock; config is last."""
-    writes: dict[Path, tuple[bytes, int]] = {}
+    writes: dict[Path, tuple[bytes, int, int]] = {}
     staged_inputs = _inputs(staged)
     for relative in staged_inputs:
         path = staged.root / relative
@@ -383,15 +383,19 @@ def _publish(
             continue
         target = project.root / relative
         if not target.exists() or target.read_bytes() != path.read_bytes():
-            writes[target] = (path.read_bytes(), path.stat().st_mode & 0o777)
+            writes[target] = (path.read_bytes(), path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
     # Extracted assembly is a generated, ignored input for standalone make.
     if staged.asm.is_dir():
         for path in staged.asm.rglob("*"):
             if path.is_file():
-                writes[project.asm / path.relative_to(staged.asm)] = (path.read_bytes(), path.stat().st_mode & 0o777)
+                target = project.asm / path.relative_to(staged.asm)
+                content = path.read_bytes()
+                if not target.exists() or target.read_bytes() != content:
+                    writes[target] = (content, path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
     config_path = project.root / "config.toml"
     if fresh:
-        writes[config_path] = ((staged.root / "config.toml").read_bytes(), 0o644)
+        staged_config = staged.root / "config.toml"
+        writes[config_path] = (staged_config.read_bytes(), 0o644, staged_config.stat().st_mtime_ns)
     obsolete = []
     manifest = project.tools / "compiler.sha256"
     if manifest.is_file():
@@ -408,7 +412,7 @@ def _publish(
                 ):
                     obsolete.append(project.root / obsolete_path)
     project.build.mkdir(parents=True, exist_ok=True)
-    before: dict[Path, tuple[bytes, int] | None] = {}
+    before: dict[Path, tuple[bytes, int, int] | None] = {}
     previous_links: dict[Path, str | None] = {}
     moved: list[Path] = []
     directories: list[Path] = []
@@ -421,7 +425,11 @@ def _publish(
             for target in [*writes, *obsolete]:
                 if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
                     raise Held("setup", f"setup.publication: output symlink {target}")
-                before[target] = (target.read_bytes(), target.stat().st_mode & 0o777) if target.exists() else None
+                before[target] = (
+                    (target.read_bytes(), target.stat().st_mode & 0o777, target.stat().st_mtime_ns)
+                    if target.exists()
+                    else None
+                )
                 parent = target.parent
                 while not parent.exists():
                     directories.append(parent)
@@ -442,16 +450,18 @@ def _publish(
                 # Extraction dependencies normally use project-relative paths.
                 # Relocate explicit temporary paths in generated text receipts.
                 _relocate_generation(destination, staged.root, project.root)
-            for target, (content, mode) in writes.items():
+            for target, (content, mode, mtime) in writes.items():
                 if target != config_path:
                     compiler_files.atomic_bytes(target, content, mode=mode)
+                    os.utime(target, ns=(target.stat().st_atime_ns, mtime))
             for target in obsolete:
                 target.unlink()
             for version, generation in zip(staged.versions, moved, strict=True):
                 _swap(project.build / version, generation.name)
             if config_path in writes:
-                content, mode = writes[config_path]
+                content, mode, mtime = writes[config_path]
                 compiler_files.atomic_bytes(config_path, content, mode=mode)
+                os.utime(config_path, ns=(config_path.stat().st_atime_ns, mtime))
         except BaseException:
             for link, previous in previous_links.items():
                 if previous is None:
@@ -462,8 +472,9 @@ def _publish(
                 if previous_file is None:
                     target.unlink(missing_ok=True)
                 else:
-                    content, mode = previous_file
+                    content, mode, mtime = previous_file
                     compiler_files.atomic_bytes(target, content, mode=mode)
+                    os.utime(target, ns=(target.stat().st_atime_ns, mtime))
             for generation in moved:
                 shutil.rmtree(generation)
             for directory in sorted(set(directories), key=lambda path: len(path.parts), reverse=True):

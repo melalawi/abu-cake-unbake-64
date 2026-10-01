@@ -102,6 +102,19 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
         self.assertEqual((self.project.asm / "generated.s").read_bytes(), b".text\n")
 
+    def test_publication_preserves_proved_assembly_mtime(self) -> None:
+        timestamp = 1_600_000_000_123_456_789
+
+        def proof(*args: object, **kwargs: object) -> None:
+            self.proof(*args, **kwargs)  # type: ignore[arg-type]
+            project = args[0]
+            assert isinstance(project, config.Project)
+            os.utime(project.asm / "generated.s", ns=(timestamp, timestamp))
+
+        with patch.object(setup_proof, "proof", side_effect=proof):
+            setup.refresh(self.project, self.settings)
+        self.assertEqual((self.project.asm / "generated.s").stat().st_mtime_ns, timestamp)
+
     def test_proof_failure_leaves_files_and_generations_unchanged(self) -> None:
         before = setup._inputs(self.project)
         with (
@@ -169,6 +182,7 @@ class SetupTransactionTests(unittest.TestCase):
 
     def test_failure_after_ready_write_restores_previous_config(self) -> None:
         before = setup._inputs(self.project)
+        original_mtime = (self.root / "config.toml").stat().st_mtime_ns
         atomic = setup.compiler_files.atomic_bytes
         failed = False
 
@@ -192,6 +206,7 @@ class SetupTransactionTests(unittest.TestCase):
                     self.project, staged, before, fresh=True, generations=setup._generations(self.project, ("us",))
                 )
         self.assertEqual(setup._inputs(self.project), before)
+        self.assertEqual((self.root / "config.toml").stat().st_mtime_ns, original_mtime)
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
         self.assertFalse(self.project.asm.exists())
         self.assertFalse((self.project.build / "us.1").exists())
