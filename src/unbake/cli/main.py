@@ -12,7 +12,6 @@ from unbake.cli import (
     clone,
     common,
     decomp,
-    draft,
     guidance,
     init,
     match,
@@ -20,8 +19,6 @@ from unbake.cli import (
     rodata,
     setup,
     split,
-    submit,
-    trial,
 )
 from unbake.cli import (
     next as next_command,
@@ -32,6 +29,8 @@ from unbake.project.config import Held, Policy, Project
 
 
 def make_parser() -> argparse.ArgumentParser:
+    from unbake.cli import draft, submit, trial
+
     parser = Parser(prog="unbake", description="Build and match N64 decompilation projects.")
     parser.add_argument("--project", type=Path, metavar="DIR")
     parser.add_argument("--policy", type=Path, metavar="FILE")
@@ -43,6 +42,8 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+    from unbake.cli import draft, submit, trial
+
     if args.phase == "decomp":
         decomp.run(args, project, policy)
         return False

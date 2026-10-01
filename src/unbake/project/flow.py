@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict
 
 from unbake.project.census import Census
-from unbake.project.config import PendingProject, SetupPolicy, Unfinished
+from unbake.project.config import PendingProject, SetupPolicy
 
 
 class Identity(TypedDict):
@@ -82,7 +82,9 @@ class WorkManifest(Identity):
 
 def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) -> LayoutManifest:
     """Build the pure joint plan; implementation supplied by the layout owner."""
-    raise Unfinished("setup", "layout.plan")
+    from unbake.layout.planner import plan_layout as implementation
+
+    return implementation(project, census, policy)
 
 
 def propose_compilers(
@@ -94,7 +96,9 @@ def propose_compilers(
     choices: dict[str, str] | None = None,
 ) -> CompilerProposal:
     """Rank candidates without confirming or publishing compiler assignments."""
-    raise Unfinished("setup", "setup.compiler_proposal")
+    from unbake.project.fingerprint import propose_compilers as implementation
+
+    return implementation(project, census, layout, policy, choices=choices)
 
 
 def complete_setup(
