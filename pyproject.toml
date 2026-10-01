@@ -10,7 +10,7 @@ readme = "README.md"
 license = { file = "LICENSE" }
 classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)"]
 requires-python = ">=3.11"
-dependencies = ["pycparser"]
+dependencies = ["pycparser", "toml==0.10.2"]
 
 [project.scripts]
 unbake = "unbake.cli.main:main"

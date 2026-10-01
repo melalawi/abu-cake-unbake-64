@@ -211,6 +211,8 @@ def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> li
         if name in observed and observed[name] != address:
             raise Held("symbols", f"{name}: two-addresses")
         observed[name] = address
+        if address in trial_elf.settled and (binding is None or binding.address == address):
+            continue
         ref = access.get(offset)
         if ref:
             type_, size = ref.type, ref.size

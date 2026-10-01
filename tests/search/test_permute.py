@@ -37,6 +37,7 @@ SOURCE = """void func_802C4F58(int *arg0, int arg1) {
 
 EXTERNAL = """import pathlib, subprocess, sys
 work = pathlib.Path(sys.argv[1])
+(work / 'arguments.json').write_text(__import__('json').dumps(sys.argv[2:]))
 print('[fixture] base score = 8', flush=True)
 subprocess.run([str(work / 'compile.sh'), str(work / 'base.c'), '-o', str(work / 'probe.o')], check=True)
 source = (work / 'base.c').read_text()
@@ -131,6 +132,28 @@ class PermuteTests(unittest.TestCase):
                 self.assertEqual(Path(probe["cache_root"]), self.policy.cache_root)
                 self.assertEqual((work / "base.c").read_text(), SOURCE)
                 self.assertEqual((work / "target.o").read_bytes(), self.target.read_bytes())
+
+    def test_missing_permuter_dependencies_are_refused_by_name(self) -> None:
+        for dependency in ("pycparser", "toml"):
+            with (
+                self.subTest(dependency=dependency),
+                patch.object(
+                    permute.importlib.util,
+                    "find_spec",
+                    side_effect=lambda name, missing=dependency: None if name == missing else object(),
+                ),
+            ):
+                with self.assertRaisesRegex(Held, f"dependency {dependency}: missing from interpreter"):
+                    list(self.generator.propose(SOURCE, self.trial, self.ctx))
+                self.assertFalse(self.ctx.out.exists())
+
+    def test_assembly_target_uses_supported_branch_scoring_flags(self) -> None:
+        list(self.generator.propose(SOURCE, self.trial, self.ctx))
+        work = next(self.ctx.out.glob("permute-*"))
+        arguments = json.loads((work / "arguments.json").read_text())
+        self.assertNotIn("--no-ignore-branch-targets", arguments)
+        self.assertIn("--stack-diffs", arguments)
+        self.assertEqual((work / "target.o").read_bytes(), self.target.read_bytes())
 
     def test_refusals_name_missing_or_invalid_value(self) -> None:
         rows = [

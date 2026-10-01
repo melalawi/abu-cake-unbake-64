@@ -25,8 +25,11 @@ def preflight(project: Project, policy: Policy, pending: list[needs.Need]) -> li
 
 def final_source(project: Project, text: str) -> str:
     """Move local aggregate definitions to their shared homes and remove draft markers."""
+    from unbake.layout.structs_fold import scalar_edits
+
     parser = Parser(text)
     records = parser.parse()
+    includes, replacements = scalar_edits(project, parser)
     if records:
         headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
         destinations: dict[str, Path] = {}
@@ -39,7 +42,6 @@ def final_source(project: Project, text: str) -> str:
                     for name in (record.name, *record.aliases):
                         destinations[name] = path
             cursor += len(content) + 1
-        includes: set[str] = set()
         spans: list[tuple[int, int]] = []
         for record in records:
             destination = destinations.get(record.name, shared.home(project))
@@ -53,11 +55,12 @@ def final_source(project: Project, text: str) -> str:
             name = base if isinstance(base, str) else base.name
             if name in names and not declaration.operations:
                 spans.append((declaration.start, declaration.end))
-        for start, end in sorted(set(spans), reverse=True):
-            text = text[:start] + text[end:]
-        for include in sorted(includes):
-            if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', text, re.M):
-                text = f'#include "{include}"\n' + text
+        replacements.extend((start, end, "") for start, end in set(spans))
+    for start, end, replacement in sorted(replacements, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    for include in sorted(includes):
+        if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', text, re.M):
+            text = f'#include "{include}"\n' + text
     return re.sub(r"^[ \t]*/\*\s*NON_MATCHING:\s*draft\b[^\n]*\*/[ \t]*\n?", "", text, flags=re.M)
 
 

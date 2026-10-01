@@ -222,6 +222,23 @@ def _placement(project: Any, span: Span) -> list[PlacementNeed]:
     return result
 
 
+def callee_span(project: Any, function: str, version: str) -> Span | None:
+    """Use a callee's explicit VERSION entry before shared-name correspondence.
+
+    The compiled object's active relocations select the callee. A regional entry
+    may have no names_from counterpart, or contain real instruction differences.
+    """
+    function = split.name(function)
+    rows = _inventory(project, version)
+    named = _named(project, version, function, rows)
+    if named is None:
+        return locate(project, function).get(version)
+    row, start = named
+    data = _image(project, version)
+    words = body(data, start, split.end(row), function)
+    return _span(project, version, function, row, start, words, data)
+
+
 def needs(project: Any, function: str, trial: Any) -> list[PlacementNeed]:
     """Plan caller placements and the function symbols requested by a trial."""
     from unbake.decomp.needs import SymbolNeed
@@ -242,8 +259,7 @@ def needs(project: Any, function: str, trial: Any) -> list[PlacementNeed]:
             continue
         if need.address is None:
             raise Held("placement", f"symbol {need.name} address: required")
-        spans = locate(project, need.name)
-        span = spans.get(need.version)
+        span = callee_span(project, need.name, need.version)
         if span is None or span.address != need.address + need.addend:
             raise Held("placement", f"VERSION {need.version} callee {need.name}: no proved twin at requested address")
         result.extend(_placement(project, span))
@@ -305,7 +321,7 @@ def derive(context: Any) -> list[Need]:
                 if addend:
                     raise Held("placement", f"callee {name} addend: nonzero function entry")
                 address = (artifact["span"].address + offset + 4) & 0xF0000000 | (word & 0x03FFFFFF) << 2
-                span = locate(context.project, name).get(version)
+                span = callee_span(context.project, name, version)
                 if span is None or span.address != address:
                     raise Held("placement", f"VERSION {version} callee {name}: no proved twin at 0x{address:X}")
                 requested.append(

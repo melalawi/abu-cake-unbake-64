@@ -32,37 +32,79 @@ def _padding(item: Field) -> bool:
     )
 
 
-def _scalar_include(project: Any, texts: dict[Path, str], records: list[Layout]) -> str:
-    """Prefer a guarded scalar home: older compilers reject repeated typedefs."""
+def _scalar_headers(texts: dict[Path, str]) -> list[tuple[bool, dict[str, str], Path]]:
     candidates = []
-    required = set(
-        re.findall(
-            r"\b[A-Za-z_]\w*\b",
-            " ".join(member.declaration for record in records for _, member, _ in _leaves(record.fields)),
-        )
-    )
     for path, text in texts.items():
         parser = Parser(text)
         if any(token[0] in ("struct", "union") for token in parser.tokens):
             continue
         parser.parse()
         scalars = {
-            name
+            name: parser.type_name(target[0], target[1])
             for name, target in parser.types.items()
-            if isinstance(target, tuple) and isinstance(target[0], str) and target[0] in SCALARS and not target[1]
+            if isinstance(target, tuple) and parser.type_name(target[0], target[1]) in SCALARS
         }
         if scalars:
             guarded = bool(re.search(r"^\s*#\s*ifndef\b", text, re.M))
             candidates.append((guarded, scalars, path))
+    return candidates
+
+
+def _scalar_include(project: Any, texts: dict[Path, str], records: list[Layout]) -> str:
+    """Prefer a guarded scalar home: older compilers reject repeated typedefs."""
+    candidates = _scalar_headers(texts)
+    required = set(
+        re.findall(
+            r"\b[A-Za-z_]\w*\b",
+            " ".join(member.declaration for record in records for _, member, _ in _leaves(record.fields)),
+        )
+    )
     if not candidates:
         return ""
-    required &= set().union(*(names for _, names, _ in candidates))
-    compatible = [(not guarded, -len(names), path) for guarded, names, path in candidates if required <= names]
+    required &= set().union(*(names.keys() for _, names, _ in candidates))
+    compatible = [(not guarded, -len(names), path) for guarded, names, path in candidates if required <= names.keys()]
     if not compatible:
         held("scalar headers", "no common declaration home for " + ", ".join(sorted(required)))
     path = min(compatible)[2]
     relative = next(path.relative_to(root) for root in project.include if path.is_relative_to(root))
     return f'#include "{relative.as_posix()}"\n'
+
+
+def scalar_edits(project: Any, parser: Parser) -> tuple[set[str], list[tuple[int, int, str]]]:
+    """Plan matching scalar typedef removal and required project header includes."""
+    headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
+    homes: dict[str, tuple[str, Path]] = {}
+    for _, scalars, path in sorted(_scalar_headers(headers), key=lambda item: (not item[0], -len(item[1]), item[2])):
+        for name, spelling in scalars.items():
+            if name in homes and homes[name][0] != spelling:
+                held(name, "conflicting project scalar typedef")
+            homes.setdefault(name, (spelling, path))
+    if not homes:
+        return set(), []
+    includes = set()
+    replacements = []
+    for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
+        local = Parser(parser.source[start:end])
+        if local.peek() != "typedef":
+            continue
+        local.take("typedef")
+        members = local.declaration(typedef=True)
+        retained = []
+        for member in members:
+            if member.name not in homes:
+                retained.append(member)
+                continue
+            spelling, path = homes[member.name]
+            if parser.type_name(member.base, member.operations) != spelling or re.search(
+                r"\b(?:const|volatile|restrict|__restrict)\b", member.declaration
+            ):
+                held(member.name, "conflicting draft scalar typedef")
+            includes.add(
+                next(path.relative_to(root).as_posix() for root in project.include if path.is_relative_to(root))
+            )
+        if len(retained) != len(members):
+            replacements.append((start, end, "\n".join("typedef " + member.declaration for member in retained)))
+    return includes, replacements
 
 
 def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | None = None) -> list[Edit]:

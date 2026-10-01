@@ -151,6 +151,30 @@ class SymbolTests(unittest.TestCase):
         self.assertEqual([ref.address for ref in symbols.references(target, None)], [address])
         self.assertEqual(symbols.derive(obj, target, "us"), [])
 
+    def test_settled_relocations_need_no_data_row(self) -> None:
+        # A configured resident-copy address has no row at its runtime location.
+        # Settling the base also covers accesses to its fields through an addend.
+        address = 0x800FE2E0
+        for compiler in ("ido-7.1", "gcc-2.7.2-kmc", "gcc-2.8.1-sn64"):
+            for addend in (0, 4, 8):
+                with self.subTest(compiler=compiler, addend=addend):
+                    obj = symbols.TrialElf(
+                        pair(addend, 0x23),
+                        (symbols.Relocation(0, 5, "resident"), symbols.Relocation(4, 6, "resident")),
+                        (),
+                        (),
+                        None,
+                        family_for(compiler),
+                        frozenset({address, address + addend}),
+                    )
+                    target = pair(address + addend, 0x23)
+                    self.assertEqual(symbols.derive(obj, target, "us"), [])
+                    with self.assertRaisesRegex(Held, "data row"):
+                        symbols.derive(replace(obj, settled=frozenset()), target, "us")
+                    conflicting = symbols.Binding("resident", address + 0x10, ".data", "s32", 4)
+                    with self.assertRaisesRegex(Held, "placed-elsewhere"):
+                        symbols.derive(replace(obj, bindings=(conflicting,)), target, "us")
+
     def test_named_function_float_fixtures(self) -> None:
         cases = (
             ("func_80227014", (0x800C7C94, 0x800C7C9C, 0x800C7CA4, 0x800C7CAC)),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import math
 import os
 import re
@@ -181,6 +182,9 @@ class Permuter:
         cores = _required(policy, "cores", "policy")
         if type(cores) is not int or cores <= 0:
             raise Held("permute", "policy.cores must be a positive integer")
+        for dependency in ("pycparser", "toml"):
+            if importlib.util.find_spec(dependency) is None:
+                raise Held("permute", f"dependency {dependency}: missing from interpreter {sys.executable}")
         compiler = project.compiler_for(source_path)
         family = toolchain.specification(compiler.id).family
         if family not in ("gcc", "ido"):
@@ -214,7 +218,8 @@ class Permuter:
                 "-j",
                 str(cores),
                 "--stack-diffs",
-                "--no-ignore-branch-targets",
+                # The pinned scorer ignores branch targets by default. Its strict
+                # branch mode cannot decode R_MIPS_PC16 relocations in assembly objects.
                 "--quiet",
             ]
             finished = _run(command, work, environment, max(0, deadline - time.monotonic()), work / "permuter.log")

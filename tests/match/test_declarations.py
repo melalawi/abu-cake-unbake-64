@@ -1,6 +1,8 @@
 """Shared declaration preflight and final source regressions."""
 
 import hashlib
+import shutil
+import subprocess
 from collections.abc import Callable
 from dataclasses import asdict
 from itertools import pairwise
@@ -18,6 +20,66 @@ from unbake.project.config import Held
 
 
 class DeclarationTests(MatchFixture):
+    def test_folded_scalar_typedefs_use_project_home_or_refuse_by_name(self) -> None:
+        header = self.root / "include" / "basetypes.h"
+        header.write_text(
+            "#ifndef BASETYPES_H\n#define BASETYPES_H\n"
+            "typedef signed char s8; typedef unsigned char u8; typedef short s16; "
+            "typedef int s32; typedef unsigned int u32; typedef long long s64; "
+            "typedef float f32; typedef double f64; typedef int ScalarAlias;\n#endif\n"
+        )
+        (self.root / "include" / "structs.h").write_text('#include "basetypes.h"\nstruct Record { s32 value; };\n')
+        cases = (
+            ("typedef signed int s32; typedef unsigned char u8;", ""),
+            ("typedef signed short s16; typedef unsigned char u8, LocalByte;", ""),
+            ('#include "basetypes.h"\ntypedef signed int s32;', ""),
+            ("typedef int Integer; typedef Integer s32;", ""),
+            ("typedef int ScalarAlias;", ""),
+            ("typedef signed char u8;", "u8"),
+            ("typedef unsigned int s32;", "s32"),
+            ("typedef long s32;", "s32"),
+            ("typedef int *s32;", "s32"),
+            ("typedef int s32[1];", "s32"),
+            ("typedef const int s32;", "s32"),
+            ("typedef struct Other { int value; } u8;", "u8"),
+            ("typedef unsigned int s32; typedef int s32;", "s32"),
+        )
+        for aliases, conflict in cases:
+            with self.subTest(aliases=aliases):
+                body = "int alpha(struct Record *arg) { return arg->value; }"
+                field_type = "ScalarAlias" if "ScalarAlias" in aliases else "s32"
+                text = f"{aliases}\nstruct Record {{ {field_type} value; }};\n/* retained */\n{body}\n"
+                if conflict:
+                    with self.assertRaisesRegex(Held, rf"{conflict}: conflicting draft scalar typedef"):
+                        declarations.final_source(self.project, text)
+                    continue
+                final = declarations.final_source(self.project, text)
+                self.assertEqual(final.count('#include "basetypes.h"'), 1)
+                self.assertIn(body, final)
+                self.assertIn("/* retained */", final)
+                self.assertNotIn("typedef signed int s32;", final)
+                if "LocalByte" in aliases:
+                    self.assertIn("typedef unsigned char LocalByte;", final)
+                compiler = shutil.which("cc")
+                assert compiler is not None
+                result = subprocess.run(
+                    [
+                        compiler,
+                        "-std=c89",
+                        "-Wno-long-long",
+                        "-pedantic-errors",
+                        "-fsyntax-only",
+                        "-x",
+                        "c",
+                        f"-I{self.root / 'include'}",
+                        "-",
+                    ],
+                    input=final,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_forward_typedef_spans_preserve_externs_and_function_body(self) -> None:
         for kind in ("struct", "union"):
             with self.subTest(kind=kind):
