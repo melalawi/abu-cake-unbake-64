@@ -54,6 +54,12 @@ def _inputs(
         "choices": digest(choices),
         "layout": digest(layout),
         "pending_config": hashlib.sha256(config).hexdigest(),
+        "evidence_engine": digest(
+            {
+                name: compiler_files.sha(Path(__file__).with_name(name))
+                for name in ("compiler_proposal.py", "compiler_profiles.py", "fingerprint.py")
+            }
+        ),
     }
     layout_file = project.build / "setup/layout.json"
     if layout_file.exists():
@@ -175,6 +181,10 @@ def propose_compilers(
                     "address": address,
                     "body_sha256": hashlib.sha256(body).hexdigest(),
                     "prologue": prologue(words),
+                    "prologue_words": [
+                        {"rom_offset": start + index * 4, "word": f"0x{word:08X}"}
+                        for index, word in enumerate(words[:16])
+                    ],
                     "features": measured,
                     "exemplar_matches": matches,
                     "ranks": compiler_profiles.rank(measured, matches, profiles),

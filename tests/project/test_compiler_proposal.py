@@ -143,6 +143,13 @@ class ProposalTests(unittest.TestCase):
             self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
+    def test_exact_prologue_words_and_interpreter_digest_are_evidence(self) -> None:
+        census, layout = self.layout(SN64)
+        proposal = self.propose(census, layout)
+        measured = proposal["regions"]["us:gcc"][0]
+        self.assertEqual(measured["prologue_words"][0], {"rom_offset": 0x1000, "word": "0x00801021"})
+        self.assertIn("evidence_engine", proposal["inputs_sha256"])
+
     def test_explicit_choices_persist_and_digest_covers_exact_utf8_bytes(self) -> None:
         census, layout = self.layout(IDO)
         chosen = self.propose(census, layout, {"us:ido": "ido-7.1"})
