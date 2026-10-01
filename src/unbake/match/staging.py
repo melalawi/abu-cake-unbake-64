@@ -13,6 +13,7 @@ from unbake.decomp import needs
 from unbake.layout import split, split_apply
 from unbake.match import declarations
 from unbake.match.common import (
+    QUEUE_PATH,
     Attempt,
     Draft,
     held,
@@ -24,7 +25,19 @@ from unbake.project import build
 from unbake.project.config import Policy, Project
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
-_OUTPUTS = frozenset({"build", ".git", "artifacts"})
+_OUTPUTS = frozenset({"build", ".git", "artifacts", ".unbake", ".splat"})
+
+
+def project_input(path: Path) -> bool:
+    """Classify a project-relative path for both staging and publication checks."""
+    return (
+        bool(path.parts)
+        and path.parts[0] not in _OUTPUTS
+        and path != QUEUE_PATH
+        and not any(part in {"__pycache__", ".venv", "venv"} for part in path.parts)
+        and path.name != "clone-policy.toml"
+        and path.suffix not in {".pyc", ".pyo"}
+    )
 
 
 def compare_failure(project: Project, version: str, result: build.BuildResult) -> str:
@@ -68,7 +81,7 @@ def compare_failure(project: Project, version: str, result: build.BuildResult) -
 def copy_tree(source: Path, destination: Path) -> None:
 
     def ignore(directory: str, names: list[str]) -> list[str]:
-        return [name for name in names if Path(directory) == source and name in _OUTPUTS]
+        return [name for name in names if not project_input((Path(directory) / name).relative_to(source))]
 
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
 
@@ -76,11 +89,12 @@ def copy_tree(source: Path, destination: Path) -> None:
 def fingerprint(root: Path) -> dict[str, str]:
     result = {}
     for directory, names, files in os.walk(root, followlinks=True):
-        if Path(directory) == root:
-            names[:] = [name for name in names if name not in _OUTPUTS | {"data"}]
+        parent = Path(directory).relative_to(root)
+        names[:] = [name for name in names if project_input(parent / name)]
         for name in files:
             path = Path(directory) / name
-            result[str(path.relative_to(root))] = sha(read(path))
+            if project_input(path.relative_to(root)):
+                result[str(path.relative_to(root))] = sha(read(path))
     return result
 
 
@@ -138,6 +152,11 @@ def attempt(
     generations = {}
     try:
         shutil.copytree(base, tree, symlinks=True)
+        # Clone Make graphs select this runtime configuration relative to their
+        # build tree. Supply it without treating policy/cache state as inputs.
+        local_policy = project.tools / "clone-policy.toml"
+        if local_policy.is_file():
+            shutil.copy2(local_policy, tree / relative(project, local_policy))
         staged_project = replace(
             project,
             root=tree,

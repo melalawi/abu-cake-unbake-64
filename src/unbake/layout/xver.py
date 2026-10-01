@@ -145,6 +145,10 @@ def _span(project: Any, version: str, function: str, row: Any, start: int, words
         address = split.address(row, project.version(version).split) + end - row.start
         if (address + value - 1) // value * value == address + limit - end:
             alignment, end = value, limit
+        elif start == row.start and Path(row.path).name == function:
+            # A named row already owns its zero tail, including explicit object
+            # padding beyond subalign. Trimming a signature must not split it.
+            end = limit
     address = split.address(row, project.version(version).split) + start - row.start
     return Span(version, function, start, end, address, row.path, row.kind, alignment)
 

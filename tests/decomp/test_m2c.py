@@ -6,10 +6,11 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from tests.decomp.test_trial import SCRATCH_ROOT, fixture
 from unbake.decomp import m2c
-from unbake.project.config import Held
+from unbake.project.config import Held, Policy
 
 
 class M2cTests(unittest.TestCase):
@@ -33,7 +34,7 @@ class M2cTests(unittest.TestCase):
         self.policy.m2c = self.tool
 
     def test_draft_uses_version_asm_and_project_headers(self) -> None:
-        source = m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+        source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
         self.assertTrue(source.is_relative_to(self.scratch))
         self.assertEqual(source.name, "alpha.c")
         self.assertIn("NON_MATCHING", source.read_text())
@@ -54,12 +55,12 @@ class M2cTests(unittest.TestCase):
 
     def test_sn64_target(self) -> None:
         project = replace(self.project, compilers={"ido-7.1": replace(self.project.compilers["ido-7.1"], kind="sn64")})
-        source = m2c.draft(project, self.policy, "alpha", "us", self.scratch)
+        source = m2c.draft(project, cast(Policy, self.policy), "alpha", "us", self.scratch)
         invocation = json.loads((source.parent / "invocation.json").read_text())
         self.assertIn("mips-gcc-c", invocation["argv"])
 
     def test_shared_types_precede_headers_without_explicit_includes(self) -> None:
-        from pycparser import c_parser
+        from pycparser import c_parser  # type: ignore[import-untyped]
 
         for name in ("Vector3f", "Position"):
             with self.subTest(type=name):
@@ -75,7 +76,7 @@ class M2cTests(unittest.TestCase):
                     "print('s32 alpha(Game *v, s32 index) { "
                     "return (s32)v->position.x + M2C_FIELD((v + index), s32 *, 0); }')\n"
                 )
-                source = m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+                source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
                 # Both the actual m2c input and the standalone candidate must parse.
                 c_parser.CParser().parse(source.read_text().split("*/", 1)[1])
                 self.assertLess(source.read_text().index(f"}} {name};"), source.read_text().index("} Game;"))
@@ -85,7 +86,7 @@ class M2cTests(unittest.TestCase):
         nested.mkdir()
         (nested / "value.h").write_text('#include "types.h"\nstruct Value { s32 value; };\n', encoding="utf-8")
         project = replace(self.project, include=(*self.project.include, self.project.include[0]))
-        source = m2c.draft(project, self.policy, "alpha", "us", self.scratch)
+        source = m2c.draft(project, cast(Policy, self.policy), "alpha", "us", self.scratch)
         context = (source.parent / "context.c").read_text()
         self.assertEqual(context.count("typedef int s32"), 1)
         initial_context = json.loads((source.parent / "invocation.json").read_text())["context"]
@@ -98,31 +99,78 @@ class M2cTests(unittest.TestCase):
     def test_missing_context_include_is_named(self) -> None:
         (self.project.include[0] / "types.h").write_text('#include "missing.h"\n', encoding="utf-8")
         with self.assertRaisesRegex(Held, "context header missing.h"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
 
-    def test_missing_or_ambiguous_asm_is_held(self) -> None:
+    def test_selected_headers_keep_include_only_dependencies(self) -> None:
+        include = self.project.include[0]
+        (include / "basetypes.h").write_text("typedef int s32;\n")
+        (include / "types.h").write_text('#include "basetypes.h"\n')
+        (include / "value.h").write_text('#include "types.h"\ntypedef struct { s32 value; } Value;\n')
+        self.tool.write_text(f"#!{sys.executable}\nprint('s32 alpha(Value *v) {{ return v->value; }}')\n")
+        source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+        self.assertEqual(source.read_text().count("typedef int s32;"), 1)
+        self.assertIn("} Value;", source.read_text())
+
+    def test_current_split_source_excludes_stale_assembly(self) -> None:
         original = self.project.asm / "us" / "nonmatchings" / "alpha.s"
         second = self.project.asm / "us" / "alpha.s"
-        second.write_bytes(original.read_bytes())
-        with self.assertRaisesRegex(Held, "alpha.s.*found 2"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
-        original.unlink()
+        current = original.read_text()
+        original.write_text("stale assembly\n")
+        second.write_text(current)
+        configured = self.project.version("us")
+        configured.split.write_text(configured.split.read_text().replace("asm, nonmatchings/alpha", "asm, alpha"))
+        source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+        self.assertEqual((source.parent / "alpha.s").read_text(), current)
+        nested = self.project.asm / "us" / "nonmatchings" / "alpha" / "alpha.s"
+        nested.parent.mkdir()
+        nested.write_text(current)
+        configured.split.write_text(configured.split.read_text().replace("asm, alpha", "c, alpha"))
+        source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+        self.assertEqual((source.parent / "alpha.s").read_text(), current)
+        configured.split.write_text(configured.split.read_text().replace("c, alpha", "asm, alpha"))
         second.unlink()
-        with self.assertRaisesRegex(Held, "alpha.s.*found 0"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+        with self.assertRaisesRegex(Held, "alpha.s.*current assembly source is missing"):
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+
+    def test_entry_label_uses_build_address_correspondence(self) -> None:
+        original = self.project.asm / "us" / "nonmatchings" / "alpha.s"
+        dump = self.project.build_link("us").resolve() / "splat_symbols.csv"
+        for label, address, expected in (
+            ("alpha_auto", "80001000", None),
+            ("renamed_entry", "80001000", None),
+            ("alpha_auto", "80001004", "expected one entry label.*found 0"),
+        ):
+            with self.subTest(label=label, address=address):
+                original.write_text(f"glabel {label}\nbnez $v0, tail\nglabel tail\njr $ra\nnop\n")
+                dump.write_text(f"name,vram_start\n{label},{address}\ntail,80001004\n")
+                if expected:
+                    with self.assertRaisesRegex(Held, expected):
+                        m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+                    continue
+                source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
+                prepared = (source.parent / "alpha.s").read_text()
+                self.assertIn("glabel alpha\n", prepared)
+                self.assertIn("bnez $v0, .L_tail", prepared)
+                self.assertNotIn(label, prepared)
+                invocation = json.loads((source.parent / "invocation.json").read_text())
+                self.assertEqual(invocation["argv"][invocation["argv"].index("--function") + 1], "alpha")
+                self.assertIn("int alpha(void)", source.read_text())
+        dump.unlink()
+        with self.assertRaisesRegex(Held, "entry correspondence for alpha"):
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
 
     def test_missing_tool_and_headers_are_named(self) -> None:
         del self.policy.m2c
         with self.assertRaisesRegex(Held, "policy.m2c"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
         self.policy.m2c = self.tool
         (self.project.include[0] / "types.h").unlink()
         with self.assertRaisesRegex(Held, "project headers are missing"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
 
     def test_scratch_inside_project_is_held(self) -> None:
         with self.assertRaisesRegex(Held, "scratch.*inside project.root"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.project.root / "scratch")
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.project.root / "scratch")
 
     def test_version_and_function_are_required(self) -> None:
         for function, version, expected in (
@@ -131,7 +179,7 @@ class M2cTests(unittest.TestCase):
             ("alpha", "missing", "unknown VERSION"),
         ):
             with self.subTest(function=function, version=version), self.assertRaisesRegex(Held, expected):
-                m2c.draft(self.project, self.policy, function, version, self.scratch)
+                m2c.draft(self.project, cast(Policy, self.policy), function, version, self.scratch)
 
     def test_failed_or_empty_tool_output_is_held(self) -> None:
         self.tool.write_text(
@@ -139,10 +187,10 @@ class M2cTests(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(Held, "exited 2.*unsupported assembly"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
         self.tool.write_text(f"#!{sys.executable}\n", encoding="utf-8")
         with self.assertRaisesRegex(Held, "produced no draft"):
-            m2c.draft(self.project, self.policy, "alpha", "us", self.scratch)
+            m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
 
 
 if __name__ == "__main__":

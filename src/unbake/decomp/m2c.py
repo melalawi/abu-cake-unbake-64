@@ -10,7 +10,14 @@ from pathlib import Path
 from unbake.decomp import similar
 from unbake.decomp.commands import prefix
 from unbake.decomp.draft_context import ordered_headers, required_headers
-from unbake.decomp.draft_input import header_types, jump_tables, version_for, whole_body
+from unbake.decomp.draft_input import (
+    assembly_source,
+    canonical_entry,
+    header_types,
+    jump_tables,
+    version_for,
+    whole_body,
+)
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
 from unbake.layout.structs import preprocess
@@ -37,7 +44,7 @@ def _headers(project: Project) -> list[tuple[Path, str]]:
     return headers
 
 
-def _context(headers: list[tuple[Path, str]]) -> str:
+def _context(headers: list[tuple[Path, str]], selected: set[Path]) -> str:
     paths = {path for path, _ in headers}
     contents = {path: read_text(path, "m2c") for path, _ in headers}
     relative_paths: dict[str, Path] = {}
@@ -64,7 +71,7 @@ def _context(headers: list[tuple[Path, str]]) -> str:
                 lines.append(line)
         return "\n".join(lines) + "\n"
 
-    return "\n".join(expand(path) for path in ordered_headers(contents))
+    return "\n".join(expand(path) for path in ordered_headers(contents) if path in selected)
 
 
 def draft(project: Project, policy: Policy, function: str | None, v: str | None, scratch: Path) -> Path:
@@ -75,15 +82,7 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
         raise Held("m2c", f"version {v!r} cannot name a scratch directory")
     project.version(v)
     directory = scratch_directory(project, scratch, "m2c")
-    assembly_root = Path(project.asm) / v
-    paths = sorted(assembly_root.rglob(function + ".s"))
-    if len(paths) != 1:
-        command = shlex.join(["make", "-C", str(project.root), f"VERSION={v}", "extract"])
-        raise Held(
-            "m2c",
-            f"{assembly_root}: exactly one assembly file {function}.s is required; "
-            f"found {len(paths)}; generate: {command}",
-        )
+    assembly_path, address = assembly_source(project, v, function)
     executable_path = executable(getattr(policy, "m2c", None), "m2c", "m2c")
     targets = {"sn64": "mips-gcc-c", "ido": "mips-ido-c"}
     compiler = project.compiler_for(project.src / (function + ".c"))
@@ -100,7 +99,7 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     # Headers are expanded once above; includes in landed units would repeat
     # them. Preserve their definitions and macros for the context preprocessor.
     landed = "\n".join(re.sub(r"^\s*#\s*include[^\n]*", "", item.c, flags=re.M) for item in examples)
-    context.write_text(_context(headers) + "\n" + landed, encoding="utf-8")
+    context.write_text(_context(headers, {path for path, _ in headers}) + "\n" + landed, encoding="utf-8")
     context.write_text(preprocess(context, project, policy, v) + "\n" + examples_context, encoding="utf-8")
     print(
         "similar context used: "
@@ -112,7 +111,7 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
         )
     )
     assembly = work / (function + ".s")
-    body = whole_body(read_text(paths[0], "m2c"), function)
+    body = whole_body(canonical_entry(project, v, function, address, read_text(assembly_path, "m2c")), function)
     assembly.write_text(jump_tables(project, v, function, body), encoding="utf-8")
     output = run_tool(
         [
@@ -137,15 +136,16 @@ def draft(project: Project, policy: Policy, function: str | None, v: str | None,
     print(f"draft_path: {source}")
     print(f"source filename: {function}.c (decomp try identifies the function from the filename)")
     selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
-    headers = [(path, relative) for path, relative in headers if path in selected]
-    context.write_text(_context(headers), encoding="utf-8")
+    context.write_text(_context(headers, selected), encoding="utf-8")
     context.write_text(preprocess(context, project, policy, v), encoding="utf-8")
     output, shared = share(project, function, output, context.read_text())
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:
         headers.append((shared.resolve(), shared.relative_to(project.include[0]).as_posix()))
+    if shared is not None:
+        selected.add(shared.resolve())
     # A single expansion also handles unguarded dependency headers included by
     # multiple roots. Keep the draft standalone without repeating their types.
-    context.write_text(_context(headers), encoding="utf-8")
+    context.write_text(_context(headers, selected), encoding="utf-8")
     declarations = preprocess(context, project, policy, v)
     source.write_text(
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"

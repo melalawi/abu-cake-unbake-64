@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -11,10 +12,56 @@ from unittest.mock import patch
 from tests.match.support import MatchFixture
 from unbake.match import publication, staging
 from unbake.match import queue as match
+from unbake.project import build
 from unbake.project.config import Held
 
 
 class PublicationTests(MatchFixture):
+    def test_tool_local_files_do_not_block_publication(self) -> None:
+        local_paths = (
+            ".unbake/cache/cc/00/object",
+            ".unbake/state/trials.json",
+            "tools/clone-policy.toml",
+            "tools/__pycache__/compile.cpython-311.pyc",
+            ".splat/cache",
+            ".venv/bin/python",
+        )
+        for name in local_paths:
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("before\n")
+        self.queue("alpha")
+
+        def during_build(tree: Path, generation_for: Callable[[str], Path]) -> None:
+            for name in local_paths:
+                if name == "tools/clone-policy.toml":
+                    self.assertEqual((tree / name).read_text(), "before\n")
+                else:
+                    self.assertFalse((tree / name).exists(), name)
+                (self.root / name).write_text("changed during build\n")
+            (self.root / ".unbake/cache/cc/new-object").write_text("new cached object\n")
+
+        self.on_build = during_build
+        receipts = match.run(self.project, self.policy)
+        self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts), receipts)
+        self.assertEqual(self.queued(), [])
+        for name in (
+            "src/alpha.c",
+            "include/types.h",
+            "Makefile",
+            "project.toml",
+            "versions/us/fixture.yaml",
+            "versions/us/symbol_addrs.txt",
+            "tools/compile.py",
+            "data/blob.bin",
+        ):
+            with self.subTest(input=name):
+                before = staging.fingerprint(self.root)
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("changed input\n")
+                self.assertNotEqual(before, staging.fingerprint(self.root))
+
     def test_retained_artifacts_are_not_staged_or_publication_inputs(self) -> None:
         artifacts = self.root / "artifacts" / "candidate-trials"
         artifacts.mkdir(parents=True)
@@ -40,7 +87,7 @@ class PublicationTests(MatchFixture):
     def test_success_moves_sources_flips_rows_records_and_collects(self) -> None:
         self.queue("alpha", "beta")
         expected = {function: (self.sources / f"{function}.c").read_bytes() for function in ("alpha", "beta")}
-        with patch.object(staging.subprocess, "run", wraps=staging.subprocess.run) as copy:
+        with patch.object(subprocess, "run", wraps=subprocess.run) as copy:
             receipts = match.run(self.project, self.policy)
         self.assertEqual(self.calls, [("alpha", "beta")])
         self.assertTrue(all(line.startswith("OK(match):") for line in receipts))
@@ -171,9 +218,15 @@ class PublicationTests(MatchFixture):
 
     def test_withdraw_during_build_prevents_publication(self) -> None:
         self.queue("alpha")
-        self.on_build = lambda tree, generation_for: match.withdraw("alpha", project=self.project, policy=self.policy)
+
+        def during_build(tree: Path, generation_for: Callable[[str], Path]) -> None:
+            before = staging.fingerprint(self.root)
+            match.withdraw("alpha", project=self.project, policy=self.policy)
+            self.assertEqual(staging.fingerprint(self.root), before)
+
+        self.on_build = during_build
         receipts = match.run(self.project, self.policy)
-        self.assertTrue(any("alpha" in line and "withdrawn" in line for line in receipts))
+        self.assertTrue(any("alpha" in line and "withdrawn" in line for line in receipts), receipts)
         self.assert_untouched()
         self.assertEqual(self.queued(), [])
 
@@ -196,7 +249,7 @@ class PublicationTests(MatchFixture):
 
     def test_missing_build_result_is_refused(self) -> None:
         self.queue("alpha")
-        with patch.object(match.build, "build", return_value={}):
+        with patch.object(build, "build", return_value={}):
             receipts = match.run(self.project, self.policy)
         self.assertTrue(any("alpha" in line and "missing VERSION us result" in line for line in receipts))
         self.assert_untouched()

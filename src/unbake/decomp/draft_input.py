@@ -3,8 +3,49 @@
 from __future__ import annotations
 
 import re
+import shlex
+from pathlib import Path
 
+from unbake.layout import split
 from unbake.project.config import Held, Project
+from unbake.project_tools.extract import discovered_symbols
+
+
+def assembly_source(project: Project, version: str, function: str) -> tuple[Path, int]:
+    """Select the current split unit, excluding stale nonmatching copies."""
+    rows = [row for row in split.functions(project, version) if function in row.aliases]
+    if len(rows) != 1:
+        raise Held("m2c", f"{function}: expected one function row in VERSION {version}, found {len(rows)}")
+    row = rows[0]
+    root = project.asm / version
+    if row.kind == "asm":
+        path = root / (row.path + ".s")
+    else:
+        directory = root / "nonmatchings" / row.path
+        paths = sorted(directory.rglob(function + ".s"))
+        if len(paths) != 1:
+            raise Held("m2c", f"{directory}: expected one current assembly file {function}.s, found {len(paths)}")
+        path = paths[0]
+    if not path.is_file():
+        command = shlex.join(["make", "-C", str(project.root), f"VERSION={version}", "extract"])
+        raise Held("m2c", f"{path}: current assembly source is missing; generate: {command}")
+    return path, row.address
+
+
+def canonical_entry(project: Project, version: str, function: str, address: int, assembly: str) -> str:
+    """Use the build's discovered symbol placements to name the entry."""
+    labels = re.findall(r"^\s*glabel\s+(\S+)\s*$", assembly, re.M)
+    if function in labels or re.search(rf"^\s*{re.escape(function)}:\s*$", assembly, re.M):
+        return assembly
+    dump = project.build_link(version) / "splat_symbols.csv"
+    try:
+        values = discovered_symbols(dump, {})
+    except (OSError, ValueError, KeyError) as error:
+        raise Held("m2c", f"{dump}: entry correspondence for {function}: {error}") from error
+    entries = [name for name in labels if values.get(name) == address]
+    if len(entries) != 1:
+        raise Held("m2c", f"{function}: expected one entry label at 0x{address:08X}, found {len(entries)}")
+    return re.sub(rf"(?<![\w.$]){re.escape(entries[0])}(?![\w.$])", function, assembly)
 
 
 def version_for(project: Project, version: str | None, phase: str) -> str:

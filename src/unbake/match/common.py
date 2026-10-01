@@ -18,6 +18,7 @@ from unbake.layout import split
 from unbake.project.config import Held, Policy, Project, load_policy
 
 _FUNCTION = re.compile("[A-Za-z_][A-Za-z_0-9]*\\Z")
+QUEUE_PATH = Path("data") / "match-queue.jsonl"
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,7 @@ def relative(project: Project, path: str | Path) -> Path:
 
 
 def queue_path(project: Project) -> Path:
-    return project.root / "data" / "match-queue.jsonl"
+    return project.root / QUEUE_PATH
 
 
 @contextmanager
