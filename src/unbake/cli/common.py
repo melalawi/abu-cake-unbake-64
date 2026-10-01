@@ -1,10 +1,41 @@
 """Argument validation and phase receipts."""
 
 import argparse
+import sys
 from collections.abc import Iterable
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, NoReturn, Protocol
 
 from unbake.project.config import Held
+
+
+@dataclass
+class Invocation:
+    refused: bool = False
+    next_action: str | None = None
+    missing_input: str | None = None
+
+
+_invocation: ContextVar[Invocation | None] = ContextVar("invocation", default=None)
+
+
+def begin() -> Invocation:
+    invocation = Invocation()
+    _invocation.set(invocation)
+    return invocation
+
+
+def suggest(action: str) -> None:
+    """Commands hand their next action to the single terminal receipt owner."""
+    invocation = _invocation.get()
+    if invocation is not None:
+        invocation.next_action = action.removeprefix("Next: ")
+
+
+def finish(action: str, *, json_output: bool = False) -> None:
+    print(f"Next: {action}", file=sys.stderr if json_output else sys.stdout)
+    _invocation.set(None)
 
 
 class Parser(argparse.ArgumentParser):
@@ -14,6 +45,10 @@ class Parser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
 
     def error(self, message: str) -> NoReturn:
+        if self.phase == "init" and "NAME" in message:
+            message = "init.target: missing NAME"
+        elif message.startswith("the following arguments are required: "):
+            message = message.removeprefix("the following arguments are required: ") + ": missing required input"
         raise Held(self.phase, message)
 
 
@@ -38,14 +73,22 @@ def receipt(phase: str, lines: Iterable[object]) -> bool:
     for entry in lines:
         emitted = True
         line = str(entry)
-        if line.startswith("HELD("):
+        if line.startswith(("HELD(", "HELD:")):
             refused = True
+            invocation = _invocation.get()
+            if invocation is not None and invocation.missing_input is None:
+                invocation.missing_input = line.split(":", 1)[1].strip().split(":", 1)[0]
+        if line.startswith("HELD:"):
+            line = f"HELD({phase}): {line.removeprefix('HELD:').strip()}"
         if line.startswith(("OK(", "HELD(")):
             print(line)
         else:
             print(f"OK({phase}): {line}")
     if not emitted:
         print(f"OK({phase}): no entries")
+    invocation = _invocation.get()
+    if invocation is not None:
+        invocation.refused |= refused
     return refused
 
 

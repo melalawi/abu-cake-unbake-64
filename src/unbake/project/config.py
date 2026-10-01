@@ -18,6 +18,13 @@ class Held(Exception):
         super().__init__(reason)
 
 
+class Unfinished(Held, NotImplementedError):
+    """Named refusal for an interface whose implementation has not landed."""
+
+    def __init__(self, phase: str, key: str) -> None:
+        super().__init__(phase, f"{key}: implementation required")
+
+
 @dataclass(frozen=True)
 class Compiler:
     id: str
@@ -53,6 +60,12 @@ class Project:
     default_compiler: str
     units: dict[str, str]
     version_map: dict[str, Version]
+    id: str
+    workspace_id: str
+    roms: Path
+    build: Path
+    work: Path
+    drafts: Path
 
     def compiler_for(self, unit: str | Path) -> Compiler:
         path = Path(unit)
@@ -95,7 +108,27 @@ class Project:
 
     def build_link(self, v: str) -> Path:
         self.version(v)
-        return self.root / "build" / v
+        return self.build / v
+
+
+@dataclass(frozen=True)
+class CensusPolicy:
+    same_game_similarity: float
+
+
+@dataclass(frozen=True)
+class SetupPolicy(CensusPolicy):
+    cores: int
+    cache_root: Path
+    splat: Path
+    mips_as: Path
+    mips_ld: Path
+    mips_objcopy: Path
+    cpp: Path
+    asflags: tuple[str, ...]
+    cppflags: tuple[str, ...]
+    sn64_asflags: tuple[str, ...]
+    probe_count: int
 
 
 @dataclass(frozen=True)
@@ -113,9 +146,8 @@ class Policy:
     mips_ld: Path
     mips_objdump: Path
     mips_readelf: Path
-    init_same_game_similarity: float
-    init_split: str
-    init_probe_count: int
+    same_game_similarity: float
+    probe_count: int
     mips_as: Path
     mips_objcopy: Path
     cpp: Path
@@ -206,9 +238,119 @@ def _positive(value: object, label: str, *, integer: bool) -> int | float:
     return int(value) if integer else float(value)
 
 
+SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class PendingProject:
+    root: Path
+    id: str
+    workspace_id: str
+    state: str
+    roms: Path
+    build: Path
+    work: Path
+    drafts: Path
+    src: Path
+    include: tuple[Path, ...]
+    asm: Path
+    tools: Path
+
+
+def discover(start: Path | None = None) -> Path:
+    directory = (start or Path.cwd()).expanduser().resolve()
+    for root in (directory, *directory.parents):
+        if (root / "config.toml").is_file():
+            return root
+    raise Held("config", "project.root: no created project found from cwd; supply --project DIR")
+
+
+def _relative(value: object, label: str, root: Path) -> Path:
+    spelling = _text(value, label)
+    path = Path(spelling)
+    if path.is_absolute() or ".." in path.parts or path == Path(".") or any(ord(char) < 32 for char in spelling):
+        raise Held("config", f"{label}: expected project-relative path")
+    if path.parts[0] in (".git", "config.toml", ".gitignore", "README.md", "CONTRIBUTING.md"):
+        raise Held("config", f"{label}: overlaps repository metadata")
+    target = root / path
+    try:
+        resolved = target.resolve()
+    except (OSError, RuntimeError) as error:
+        raise Held("config", f"{label}: {error}") from error
+    if not resolved.is_relative_to(root):
+        raise Held("config", f"{label}: symlink escapes project")
+    return target
+
+
+def load_pending(root: Path) -> PendingProject:
+    root = Path(root).expanduser().resolve()
+    path = root / "config.toml"
+    data = _read(path)
+    schema = _required(data, "schema", "schema")
+    if type(schema) is not int or schema != SCHEMA_VERSION:
+        raise Held("config", f"schema: expected {SCHEMA_VERSION}")
+    project = _table(data, "project", "project")
+    workspace = _table(data, "workspace", "workspace")
+    paths = _table(data, "paths", "paths")
+    state = _required(project, "state", "project.state")
+    if state not in ("awaiting-roms", "ready"):
+        raise Held("config", "project.state: expected awaiting-roms or ready")
+    if state == "awaiting-roms" and ("compilers" in data or "default_compiler" in project or "units" in data):
+        raise Held("config", "project.state: pending config cannot contain compiler assignments")
+
+    def identity(table: dict[str, Any], field: str) -> str:
+        from uuid import UUID
+
+        value = _text(_required(table, "id", field), field)
+        try:
+            if str(UUID(value)) != value:
+                raise ValueError("expected canonical UUID")
+        except ValueError as error:
+            raise Held("config", f"{field}: expected canonical UUID") from error
+        return value
+
+    def structural(field: str) -> Path:
+        return _relative(_required(paths, field, "paths." + field), "paths." + field, root)
+
+    roms, build, work, drafts = (structural(field) for field in ("roms", "build", "work", "drafts"))
+    src, asm, tools = (structural(field) for field in ("src", "asm", "tools"))
+    includes = _strings(_required(paths, "include", "paths.include"), "paths.include")
+    include = tuple(_relative(item, "paths.include", root) for item in includes)
+    if not include:
+        raise Held("config", "paths.include: expected nonempty array")
+    if not work.is_relative_to(build) or work == build:
+        raise Held("config", "paths.work: expected subtree of paths.build")
+    if not drafts.is_relative_to(build) or drafts == build:
+        raise Held("config", "paths.drafts: expected subtree of paths.build")
+    protected = (roms, src, asm, tools, *include, root / "versions")
+    for output in (build, work, drafts):
+        for source in protected:
+            if output.resolve().is_relative_to(source.resolve()) or source.resolve().is_relative_to(output.resolve()):
+                raise Held("config", f"paths.build: overlaps protected path {source.relative_to(root)}")
+    if work.resolve().is_relative_to(drafts.resolve()) or drafts.resolve().is_relative_to(work.resolve()):
+        raise Held("config", "paths.work: overlaps paths.drafts")
+    return PendingProject(
+        root,
+        identity(project, "project.id"),
+        identity(workspace, "workspace.id"),
+        state,
+        roms,
+        build,
+        work,
+        drafts,
+        src,
+        include,
+        asm,
+        tools,
+    )
+
+
 def load(root: Path) -> Project:
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
+    pending = load_pending(root)
+    if pending.state != "ready":
+        raise Held("config", "project.state: awaiting-roms; run unbake setup")
     data = _read(path)
     project = _table(data, "project", f"{path} [project]")
     paths = _table(data, "paths", f"{path} [paths]")
@@ -227,16 +369,16 @@ def load(root: Path) -> Project:
         raise Held("config", f"{versions_label}: expected distinct nonempty VERSIONs")
     for v in versions:
         _name(v, versions_label)
-    names_from = (
-        versions[0]
-        if len(versions) == 1 and "names_from" not in project
-        else _text(value(project, "project", "names_from"), _label(path, "project", "names_from"))
-    )
+        for mutable in (pending.work, pending.drafts):
+            first = mutable.relative_to(pending.build).parts[0]
+            if first == v or re.fullmatch(re.escape(v) + r"\.\d+", first):
+                raise Held("config", "paths.work/paths.drafts: overlaps version generation")
+    names_from = _text(value(project, "project", "names_from"), _label(path, "project", "names_from"))
     if names_from not in versions:
         raise Held("config", f"{_label(path, 'project', 'names_from')}: unknown VERSION {names_from}")
 
     def project_path(table: dict[str, Any], section: str, field: str) -> Path:
-        return _path(value(table, section, field), _label(path, section, field), root)
+        return _relative(value(table, section, field), _label(path, section, field), root)
 
     from unbake.project.toolchain import specification
 
@@ -252,7 +394,7 @@ def load(root: Path) -> Project:
             spec = specification(ident)
         except Held as error:
             raise Held("config", f"{label}: {error.reason}") from error
-        cflags = _strings(table["cflags"], label + ".cflags") if "cflags" in table else spec.cflags
+        cflags = _strings(_required(table, "cflags", label + ".cflags"), label + ".cflags")
         compilers[ident] = Compiler(
             ident,
             spec.kind,
@@ -279,12 +421,15 @@ def load(root: Path) -> Project:
         table = _table(version_tables, v, f"{path} [{section}]")
         version_map[v] = Version(
             v,
-            root / f"baserom.{v}.z64",
+            project_path(table, section, "baserom"),
             _digest(value(table, section, "baserom_sha1"), 40, _label(path, section, "baserom_sha1")),
             project_path(table, section, "split"),
             project_path(table, section, "symbols"),
             _strings(value(table, section, "macros"), _label(path, section, "macros")),
         )
+    for version in version_map.values():
+        if not version.baserom.is_relative_to(pending.roms):
+            raise Held("config", f"version.{version.name}.baserom: expected path under paths.roms")
     includes = _strings(value(paths, "paths", "include"), _label(path, "paths", "include"))
     return Project(
         root,
@@ -300,54 +445,132 @@ def load(root: Path) -> Project:
         default_compiler,
         units,
         version_map,
+        pending.id,
+        pending.workspace_id,
+        pending.roms,
+        pending.build,
+        pending.work,
+        pending.drafts,
     )
 
 
-def load_policy(path: Path | None = None) -> Policy:
+def policy_path(path: Path | None = None) -> Path:
     if path is None:
         explicit = os.environ.get("UNBAKE_POLICY")
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         path = Path(explicit) if explicit else base / "unbake" / "policy.toml"
-        if not explicit and not path.expanduser().is_file():
-            raise Held("config", f"UNBAKE_POLICY unset and {path.expanduser().absolute()} missing")
-    path = Path(path).expanduser().absolute()
+    return path.expanduser().absolute()
+
+
+def policy_template(path: Path) -> None:
+    """Create an incomplete template without inventing host facts."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = (
+        "splat",
+        "mips_as",
+        "mips_ld",
+        "mips_objcopy",
+        "cpp",
+        "cache_root",
+        "state_root",
+        "mips_objdump",
+        "mips_readelf",
+        "m2c",
+        "objdiff_cli",
+        "objdiff_sha256",
+        "permuter_archive",
+        "permuter_sha256",
+        "asflags",
+        "cppflags",
+        "sn64_asflags",
+    )
+    with path.open("x") as output:
+        output.write(POLICY_PATH.read_text())
+        output.write("\n# Supply required host fields for the command you run.\n")
+        for field in fields:
+            output.write(f"# {field} = <required value>\n")
+
+
+@overload
+def load_policy(path: Path | None = None, *, stage: Literal["all"] = "all") -> Policy: ...
+
+
+@overload
+def load_policy(path: Path | None = None, *, stage: Literal["census"]) -> CensusPolicy: ...
+
+
+@overload
+def load_policy(path: Path | None = None, *, stage: Literal["setup"]) -> SetupPolicy: ...
+
+
+def load_policy(path: Path | None = None, *, stage: str = "all") -> Policy | CensusPolicy | SetupPolicy:
+    path = policy_path(path)
+    if not path.exists():
+        policy_template(path)
     data = {**_read(POLICY_PATH), **_read(path)}
 
     def value(field: str) -> Any:
-        return _required(data, field, _label(path, "", field))
+        return _required(data, field, "policy." + field)
 
     def host_path(field: str) -> Path:
-        return _path(value(field), _label(path, "", field), None)
+        return _path(value(field), "policy." + field, None)
 
-    similarity = value("init_same_game_similarity")
+    def executable(field: str) -> Path:
+        target = host_path(field)
+        if not target.is_file() or not os.access(target, os.X_OK):
+            raise Held("config", f"policy.{field}: missing executable {target}")
+        return target
+
+    def number(field: str) -> int:
+        return _positive(value(field), "policy." + field, integer=True)
+
+    def flags(field: str) -> tuple[str, ...]:
+        return _strings(value(field), "policy." + field)
+
+    similarity = value("same_game_similarity")
     if type(similarity) not in (int, float) or not 0 < similarity <= 1:
-        raise Held("config", f"{path} init_same_game_similarity: expected number in (0, 1]")
-    mode = value("init_split")
-    if mode not in ("functions", "files"):
-        raise Held("config", f"{path} init_split: expected functions or files")
+        raise Held("config", "policy.same_game_similarity: expected number in (0, 1]")
+    if stage == "census":
+        return CensusPolicy(float(similarity))
+    if stage == "setup":
+        return SetupPolicy(
+            float(similarity),
+            number("cores"),
+            host_path("cache_root"),
+            executable("splat"),
+            executable("mips_as"),
+            executable("mips_ld"),
+            executable("mips_objcopy"),
+            executable("cpp"),
+            flags("asflags"),
+            flags("cppflags"),
+            flags("sn64_asflags"),
+            number("probe_count"),
+        )
+    if stage != "all":
+        raise Held("config", f"policy.stage: unknown stage {stage}")
     return Policy(
-        _positive(value("cores"), _label(path, "", "cores"), integer=True),
-        _positive(value("stall_trials"), _label(path, "", "stall_trials"), integer=True),
-        _positive(value("search_beam"), _label(path, "", "search_beam"), integer=True),
-        _positive(value("assignment_idle_hours"), _label(path, "", "assignment_idle_hours"), integer=False),
+        number("cores"),
+        number("stall_trials"),
+        number("search_beam"),
+        _positive(value("assignment_idle_hours"), "policy.assignment_idle_hours", integer=False),
         host_path("cache_root"),
         host_path("state_root"),
-        host_path("objdiff_cli"),
-        _digest(value("objdiff_sha256"), 64, _label(path, "", "objdiff_sha256")),
-        host_path("m2c"),
-        host_path("splat"),
-        host_path("mips_ld"),
-        host_path("mips_objdump"),
-        host_path("mips_readelf"),
+        executable("objdiff_cli"),
+        _digest(value("objdiff_sha256"), 64, "policy.objdiff_sha256"),
+        executable("m2c"),
+        executable("splat"),
+        executable("mips_ld"),
+        executable("mips_objdump"),
+        executable("mips_readelf"),
         float(similarity),
-        mode,
-        _positive(value("init_probe_count"), _label(path, "", "init_probe_count"), integer=True),
-        host_path("mips_as"),
-        host_path("mips_objcopy"),
-        host_path("cpp"),
-        _strings(value("asflags"), _label(path, "", "asflags")),
-        _strings(value("cppflags"), _label(path, "", "cppflags")),
-        _strings(value("sn64_asflags"), _label(path, "", "sn64_asflags")),
+        number("probe_count"),
+        executable("mips_as"),
+        executable("mips_objcopy"),
+        executable("cpp"),
+        flags("asflags"),
+        flags("cppflags"),
+        flags("sn64_asflags"),
         host_path("permuter_archive"),
-        _digest(value("permuter_sha256"), 64, _label(path, "", "permuter_sha256")),
+        _digest(value("permuter_sha256"), 64, "policy.permuter_sha256"),
     )

@@ -1,5 +1,6 @@
 """N64 cartridge header fields, IPL3 identification and integrity checks."""
 
+import re
 import struct
 import zlib
 from collections.abc import Mapping
@@ -96,6 +97,10 @@ def decode(data: bytes) -> Fields:
     except UnicodeDecodeError as error:
         field = "title" if any(b > 127 for b in data[0x20:0x34]) else "game_code"
         raise Held("header", f"header.{field}: expected ASCII") from error
+    if not title or any(ord(character) < 32 for character in title):
+        raise Held("header", "header.title: expected nonempty printable ASCII")
+    if not re.fullmatch(r"[A-Z0-9]{2}", code):
+        raise Held("header", "header.game_code: expected two uppercase ASCII letters or digits")
     return Fields(
         pi,
         clock,

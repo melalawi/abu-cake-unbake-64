@@ -17,8 +17,8 @@ def register(phases: Subparsers) -> None:
 
 
 def validate(args: argparse.Namespace) -> None:
-    if args.project is None or args.extra_destinations:
-        raise Held("clone", "CLI form: unbake --project SRC clone DEST [--version VERSION]")
+    if args.extra_destinations:
+        raise Held("clone", "CLI form: unbake [--project SRC] clone DEST [--version VERSION]")
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:

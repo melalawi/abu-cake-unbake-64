@@ -15,7 +15,15 @@ def compiler_directories(project: Project) -> tuple[Path, ...]:
 def ignore_text(project: Project) -> str:
     path = project.root / ".gitignore"
     existing = path.read_text() if path.exists() else ""
-    entries = ["__pycache__/", "*.py[cod]", "baserom.*", "/build/", "/asm/", "/.splat/", "/.unbake/"]
+    entries = [
+        "__pycache__/",
+        "*.py[cod]",
+        f"/{project.roms.relative_to(project.root).as_posix()}/",
+        f"/{project.build.relative_to(project.root).as_posix()}/",
+        f"/{project.asm.relative_to(project.root).as_posix()}/",
+        "/.splat/",
+        "/.unbake/",
+    ]
     entries.extend(f"/{directory.as_posix()}/" for directory in compiler_directories(project))
     entries.append(f"/{project.tools.relative_to(project.root).as_posix()}/clone-policy.toml")
     required = {entry.removeprefix("/") for entry in entries}
@@ -86,6 +94,9 @@ def tracked_findings(project: Project, policy: Policy) -> list[str]:
         path = project.root / relative
         if mode == b"120000" or path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
             findings.append(f"HELD(check): {name}: tracked symlink")
+            continue
+        if path.is_relative_to(project.roms) or path.is_relative_to(project.build) or path.is_relative_to(project.asm):
+            findings.append(f"HELD(check): {name}: tracked ROM or generated output")
             continue
         if any(relative.is_relative_to(directory) for directory in directories):
             findings.append(f"HELD(check): {name}: tracked compiler file (local-only directory)")

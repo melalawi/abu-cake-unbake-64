@@ -40,15 +40,17 @@ def load(path: Path) -> Rom:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise Held("init", f"{path}: {error}") from error
+        raise Held("setup", f"{path}: {error}") from error
     try:
         data = normalise(data)
     except Held as error:
-        raise Held("init", f"{path}: {error.reason}") from error
+        field, reason = error.reason.split(":", 1)
+        raise Held("setup", f"{field}: {path}:{reason}") from error
     try:
         facts = header.parse(data, header.RETAIL)
     except Held as error:
-        raise Held("init", f"{path}: {error.reason}") from error
+        field, reason = error.reason.split(":", 1)
+        raise Held("setup", f"{field}: {path}:{reason}") from error
     return Rom(path, data, facts, hashlib.sha1(data).hexdigest())
 
 
@@ -57,10 +59,10 @@ def normalise(data: bytes) -> bytes:
     magic = data[:4]
     widths = {bytes.fromhex("80371240"): 1, bytes.fromhex("37804012"): 2, bytes.fromhex("40123780"): 4}
     if magic not in widths:
-        raise Held("init", f"rom.magic: not an N64 ROM (magic {magic.hex()})")
+        raise Held("setup", f"rom.magic: not an N64 ROM (magic {magic.hex()})")
     width = widths[magic]
-    if len(data) < 0x40 or len(data) % width:
-        raise Held("init", f"rom.size: truncated N64 ROM (size 0x{len(data):X})")
+    if len(data) < 0x40 or len(data) % 4:
+        raise Held("setup", f"rom.size: truncated N64 ROM (size 0x{len(data):X})")
     if width != 1:
         normalised = bytearray(len(data))
         for index in range(width):
@@ -69,30 +71,17 @@ def normalise(data: bytes) -> bytes:
     return data
 
 
-def same_game(
-    cartridges: list[Rom], inventories: Mapping[Path, Sequence["Function"]], threshold: float
-) -> Mapping[tuple[Rom, Rom], float]:
-    """Compare measured function ranges, with symmetric pairs keyed by ROMs."""
-    if not cartridges:
-        raise Held("init", "rompath: no ROM files")
-    if type(threshold) not in (int, float) or not 0 < threshold <= 1:
-        raise Held("init", "policy.init_same_game_similarity: required fraction in (0, 1]")
+def similarity_matrix(
+    cartridges: list[Rom], inventories: Mapping[Path, Sequence["Function"]]
+) -> dict[tuple[Rom, Rom], float]:
+    """Compute every symmetric pair using measured code, excluding assets/IPL3."""
     if not isinstance(inventories, Mapping):
-        raise Held("init", "inventories: required mapping of ROM paths to detected code ranges")
-    seen: dict[str, Path] = {}
+        raise Held("setup", "inventories: required mapping of ROM paths to detected code ranges")
     signatures: dict[Rom, frozenset[bytes]] = {}
-    first = cartridges[0]
     for cartridge in cartridges:
-        if cartridge.sha1 in seen:
-            raise Held("init", f"{cartridge.path}: duplicate sha1 {cartridge.sha1} ({seen[cartridge.sha1]})")
-        seen[cartridge.sha1] = cartridge.path
-        if (cartridge.header.category, cartridge.header.game_code) != (first.header.category, first.header.game_code):
-            code = cartridge.header.category + cartridge.header.game_code
-            reference = first.header.category + first.header.game_code
-            raise Held("init", f"{cartridge.path}: game code {code} differs from {reference} ({first.path})")
         functions = inventories.get(cartridge.path)
         if not functions:
-            raise Held("init", f"{cartridge.path}: detected code ranges missing")
+            raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: detected code ranges missing")
         signature: set[bytes] = set()
         for function in functions:
             start, end = function.start, function.end
@@ -103,30 +92,69 @@ def same_game(
                 or start % 4
                 or end % 4
             ):
-                raise Held("init", f"{cartridge.path}: detected code range {start!r}-{end!r}: invalid word range")
+                raise Held("setup", f"{cartridge.path}: detected code range {start!r}-{end!r}: invalid word range")
             signature.update(shingles(cartridge.data[start:end]))
         if not signature:
-            raise Held("init", f"{cartridge.path}: detected code shingles missing")
+            raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: detected code shingles missing")
         signatures[cartridge] = frozenset(signature)
     matrix = {(cartridge, cartridge): 1.0 for cartridge in cartridges}
     for index, cartridge in enumerate(cartridges):
         for other in cartridges[index + 1 :]:
             left, right = signatures[cartridge], signatures[other]
-            score = len(left & right) / len(left | right)
-            matrix[cartridge, other] = matrix[other, cartridge] = score
-    if len(cartridges) > 1:
-        for cartridge in cartridges:
-            best = max(matrix[cartridge, other] for other in cartridges if other != cartridge)
-            if best < threshold:
+            matrix[cartridge, other] = matrix[other, cartridge] = len(left & right) / len(left | right)
+    return matrix
+
+
+def same_game(
+    cartridges: list[Rom],
+    inventories: Mapping[Path, Sequence["Function"]],
+    threshold: float,
+    *,
+    reference: Rom,
+    matrix: Mapping[tuple[Rom, Rom], float] | None = None,
+) -> Mapping[tuple[Rom, Rom], float]:
+    """Require header identity and similarity to the reference and every peer."""
+    if not cartridges:
+        raise Held("setup", "setup.roms: no ROM files")
+    if type(threshold) not in (int, float) or not 0 < threshold <= 1:
+        raise Held("setup", "policy.same_game_similarity: required fraction in (0, 1]")
+    if reference not in cartridges:
+        raise Held("setup", "project.names_from: reference ROM is absent")
+    seen: dict[str, Path] = {}
+    for cartridge in cartridges:
+        if cartridge.sha1 in seen:
+            raise Held(
+                "setup",
+                f"setup.roms.duplicate_sha1: {cartridge.path}: duplicate sha1 "
+                f"{cartridge.sha1} ({seen[cartridge.sha1]})",
+            )
+        seen[cartridge.sha1] = cartridge.path
+        if (cartridge.header.category, cartridge.header.game_code) != (
+            reference.header.category,
+            reference.header.game_code,
+        ):
+            raise Held(
+                "setup",
+                f"setup.same_game.game_code: {cartridge.path}: game code "
+                f"{cartridge.header.category + cartridge.header.game_code} differs from "
+                f"{reference.header.category + reference.header.game_code} ({reference.path})",
+            )
+    matrix = similarity_matrix(cartridges, inventories) if matrix is None else matrix
+    for cartridge in cartridges:
+        for other in cartridges:
+            if matrix[cartridge, other] < threshold:
                 raise Held(
-                    "init", f"{cartridge.path}: code similarity {best:.3f} below {threshold:.2f} to every other ROM"
+                    "setup",
+                    f"setup.same_game.similarity: {cartridge.path} vs {other.path}: "
+                    f"code similarity {matrix[cartridge, other]:.6f} below {threshold:.6f}; "
+                    f"reference {reference.path}",
                 )
     return matrix
 
 
 def stem(value: str, label: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value):
-        raise Held("init", f"{label}: expected a valid file stem")
+        raise Held("setup", f"{label}: expected a valid file stem")
     return value
 
 
@@ -140,9 +168,13 @@ def version_names(roms: list[Rom], renames: dict[str, str]) -> dict[Path, str]:
         if old in renames:
             used.add(old)
         if name in seen:
-            raise Held("init", f"{cartridge.path}: VERSION {name} also names {seen[name]}; pass --version-name")
+            raise Held(
+                "setup",
+                f"setup.roms.duplicate_version: {cartridge.path}: VERSION {name} also names {seen[name]}; "
+                "supply ROMs with distinct header labels",
+            )
         names[cartridge.path] = name
         seen[name] = cartridge.path
     for unused in renames.keys() - used:
-        raise Held("init", f"--version-name {unused}: unknown derived VERSION")
+        raise Held("setup", f"--version-name {unused}: unknown derived VERSION")
     return names
