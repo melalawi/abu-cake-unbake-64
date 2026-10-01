@@ -94,6 +94,26 @@ class FingerprintTests(unittest.TestCase):
         ):
             self.assertIsNone(fingerprint.choose(matches, probes).id)
 
+    def test_failed_candidate_probe_is_not_an_exclusive_match(self) -> None:
+        decision = fingerprint.choose(
+            {"a": (True, True), "b": (False, True)}, ("failed", "shared"), {"b/failed": "compile failed"}
+        )
+        self.assertIsNone(decision.id)
+        self.assertEqual(decision.scores, {"a": 1, "b": 1})
+        self.assertEqual(decision.comparable, ("shared",))
+        with self.assertRaisesRegex(Held, "setup.compiler_proposal:.*denominator"):
+            fingerprint.choose({"a": (True,)}, ("one", "two"))
+
+    def test_unsorted_generator_and_unknown_leaf_keep_their_own_evidence(self) -> None:
+        data = struct.pack(">I", move(0x21)) * 8 + bytes(8) + struct.pack(">I", move(0x21)) * 8
+        functions = [
+            split.Function("us", name, start, end, 0x80000000 + start, name, "asm", ())
+            for name, start, end in (("last", 40, 72), ("first", 0, 32), ("leaf", 32, 40))
+        ]
+        regions = fingerprint.regions(iter(functions), image(data))
+        self.assertEqual([region.family for region in regions], ["gcc", None, "gcc"])
+        self.assertEqual([region.functions[0].name for region in regions], ["first", "leaf", "last"])
+
     def test_probes_need_branch_or_call_and_eight_to_sixty_instructions(self) -> None:
         function = SimpleNamespace(start=0, end=32)
         self.assertFalse(fingerprint.probe(function, struct.pack(">I", move(0x21)) * 8))
@@ -142,6 +162,12 @@ class FingerprintTests(unittest.TestCase):
                 default_compiler="first",
                 units={},
                 version_map={"us": version},
+                id="00000000-0000-4000-8000-000000000001",
+                workspace_id="00000000-0000-4000-8000-000000000002",
+                roms=root / "roms",
+                build=root / "build",
+                work=root / "build/work",
+                drafts=root / "build/drafts",
             )
             function = split.Function("us", "probe", 0x1000, 0x1020, 0x80001000, "probe", "asm", ())
             region = fingerprint.Region(0x80001000, 0x80001020, "ido", fingerprint.Counts(0, 8), "ido", (function,))
@@ -162,7 +188,7 @@ class FingerprintTests(unittest.TestCase):
                 patch("unbake.project.build.compile_object", side_effect=compile_object),
             ):
                 decision = fingerprint.prove(
-                    project, region, candidates, SimpleNamespace(m2c=Path(sys.executable), init_probe_count=20)
+                    project, region, candidates, SimpleNamespace(m2c=Path(sys.executable), probe_count=20)
                 )
             self.assertEqual(decision.id, "first")
             self.assertEqual(decision.scores, {"first": 1, "second": 0})

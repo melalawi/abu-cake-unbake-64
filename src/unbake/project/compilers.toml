@@ -147,3 +147,186 @@ decompme = "gcc2.8.1sn"
 url = "https://github.com/pmret/gcc-papermario/releases/download/master/linux.tar.gz"
 sha256 = "1156cf0d6a88a64c20e2a10fc9445d99cb9a38518f432b1669528dfa82ebb45f"
 files = ["cc1"]
+
+# Fingerprints calibrated using the exact compiler pins and baseline flags above.
+# These features rank evidence; they do not certify a release or infer source.
+# Frame epilogues were compared on loop/saved exemplars; flag changes may change
+# scheduling. IDO releases share these exemplars and deliberately remain tied.
+[fingerprint_policy]
+schema = 1
+minimum_moves = 8
+agreement_numerator = 4
+agreement_denominator = 5
+rank = ["exclusive_exemplars", "matching_exemplars", "feature_agreement", "negative_contradictions"]
+
+[fingerprints."ido-7.1"]
+compiler_sha256 = "d886205c468987e49d1b294cc01c3d6bc886a879f4babb2f5035728d1df6029b"
+calibration_cflags = ["-c", "-G0", "-non_shared", "-mips2", "-O2"]
+abi = "gp32"
+features = ["or_moves"]
+calibration_source_sha256 = "240535f76e8ee04ed2a3d219afc18d2ae61774ebacf271b306006d896c6c29a9"
+calibration_source = "extern int call(int);\nint loop(int *p,int n) { int s=0; while(n--) s+=*p++; return s; }\nint byte(char *p) { return p[2]; }\nint saved(int a,int b) { int x=call(a); return call(b)+x; }\ndouble fp(double a,double b,double c) { return a*b+c; }\nint divi(int x,int y) {return x/y;}\nint shift(unsigned x) { return (x<<3)|(x>>29); }\nint minimum(int a,int b){return a<b?a:b;}\n"
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "loop"
+words = ["00a01025", "00001825", "10a00007", "24a5ffff", "8c8e0000", "00a01025", "24840004", "006e1821", "14a0fffb", "24a5ffff", "03e00008", "00601025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "byte"
+words = ["03e00008", "90820002"]
+relocation_masks = ["00000000", "00000000"]
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "saved"
+words = ["27bdffe0", "afbf0014", "0c000000", "afa50024", "afa2001c", "0c000000", "8fa40024", "8fbf0014", "8fae001c", "27bd0020", "03e00008", "004e1021"]
+relocation_masks = ["00000000", "00000000", "03ffffff", "00000000", "00000000", "03ffffff", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "fp"
+words = ["462e6102", "d7a60010", "03e00008", "46262000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "divi"
+words = ["0085001a", "00001012", "14a00002", "00000000", "0007000d", "2401ffff", "14a10004", "3c018000", "14810002", "00000000", "0006000d", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "shift"
+words = ["000470c0", "00047f42", "03e00008", "01cf1025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-7.1".exemplars]]
+name = "minimum"
+words = ["0085082a", "10200003", "00a01825", "03e00008", "00801025", "03e00008", "00601025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[fingerprints."ido-5.3"]
+compiler_sha256 = "76d796c9591c9f5504949f85b29c32a6039a663791afe2f36f34ca18425b64d0"
+calibration_cflags = ["-c", "-G0", "-non_shared", "-mips2", "-O2"]
+abi = "gp32"
+features = ["or_moves"]
+calibration_source_sha256 = "240535f76e8ee04ed2a3d219afc18d2ae61774ebacf271b306006d896c6c29a9"
+calibration_source = "extern int call(int);\nint loop(int *p,int n) { int s=0; while(n--) s+=*p++; return s; }\nint byte(char *p) { return p[2]; }\nint saved(int a,int b) { int x=call(a); return call(b)+x; }\ndouble fp(double a,double b,double c) { return a*b+c; }\nint divi(int x,int y) {return x/y;}\nint shift(unsigned x) { return (x<<3)|(x>>29); }\nint minimum(int a,int b){return a<b?a:b;}\n"
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "loop"
+words = ["00a01025", "00001825", "10a00007", "24a5ffff", "8c8e0000", "00a01025", "24840004", "006e1821", "14a0fffb", "24a5ffff", "03e00008", "00601025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "byte"
+words = ["03e00008", "90820002"]
+relocation_masks = ["00000000", "00000000"]
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "saved"
+words = ["27bdffe0", "afbf0014", "0c000000", "afa50024", "afa2001c", "0c000000", "8fa40024", "8fbf0014", "8fae001c", "27bd0020", "03e00008", "004e1021"]
+relocation_masks = ["00000000", "00000000", "03ffffff", "00000000", "00000000", "03ffffff", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "fp"
+words = ["462e6102", "d7a60010", "03e00008", "46262000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "divi"
+words = ["0085001a", "00001012", "14a00002", "00000000", "0007000d", "2401ffff", "14a10004", "3c018000", "14810002", "00000000", "0006000d", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "shift"
+words = ["000470c0", "00047f42", "03e00008", "01cf1025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."ido-5.3".exemplars]]
+name = "minimum"
+words = ["0085082a", "10200003", "00a01825", "03e00008", "00801025", "03e00008", "00601025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[fingerprints."gcc-2.7.2-kmc"]
+compiler_sha256 = "c4976e94ebf81d0ab1336f631fb752fbe6e0e0810e90a24da11e6ed1d5223b8a"
+calibration_cflags = ["-G0", "-mips3", "-mgp32", "-mfp32", "-O2"]
+abi = "gp32"
+features = ["addu_moves", "frame_restore_before_return"]
+calibration_source_sha256 = "240535f76e8ee04ed2a3d219afc18d2ae61774ebacf271b306006d896c6c29a9"
+calibration_source = "extern int call(int);\nint loop(int *p,int n) { int s=0; while(n--) s+=*p++; return s; }\nint byte(char *p) { return p[2]; }\nint saved(int a,int b) { int x=call(a); return call(b)+x; }\ndouble fp(double a,double b,double c) { return a*b+c; }\nint divi(int x,int y) {return x/y;}\nint shift(unsigned x) { return (x<<3)|(x>>29); }\nint minimum(int a,int b){return a<b?a:b;}\n"
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "loop"
+words = ["27bdfff8", "00003021", "10a00007", "24a3ffff", "2405ffff", "8c820000", "24840004", "2463ffff", "1465fffc", "00c23021", "00c01021", "27bd0008", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "byte"
+words = ["80820002", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "saved"
+words = ["27bdffe8", "afb00010", "afbf0014", "0c000000", "00a08021", "02002021", "0c000000", "00408021", "00501021", "8fbf0014", "8fb00010", "27bd0018", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000", "03ffffff", "00000000", "00000000", "03ffffff", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "fp"
+words = ["462e6302", "d7a00010", "03e00008", "46206000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "divi"
+words = ["0085001a", "14a00002", "00000000", "0007000d", "2401ffff", "14a10004", "3c018000", "14810002", "00000000", "0006000d", "00001012", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "shift"
+words = ["000410c0", "00042742", "03e00008", "00441025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.7.2-kmc".exemplars]]
+name = "minimum"
+words = ["00a4102a", "54400001", "00a02021", "03e00008", "00801021"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[fingerprints."gcc-2.8.1-sn64"]
+compiler_sha256 = "d1ddfe21dfa61840a83f833c8bd45ed7e2f606c3d9c351d2ec732fb6e4f97c89"
+calibration_cflags = ["-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float", "-mgp32", "-mfp64", "-mno-fix4300"]
+abi = "gp32"
+features = ["addu_moves", "frame_restore_delay"]
+calibration_source_sha256 = "240535f76e8ee04ed2a3d219afc18d2ae61774ebacf271b306006d896c6c29a9"
+calibration_source = "extern int call(int);\nint loop(int *p,int n) { int s=0; while(n--) s+=*p++; return s; }\nint byte(char *p) { return p[2]; }\nint saved(int a,int b) { int x=call(a); return call(b)+x; }\ndouble fp(double a,double b,double c) { return a*b+c; }\nint divi(int x,int y) {return x/y;}\nint shift(unsigned x) { return (x<<3)|(x>>29); }\nint minimum(int a,int b){return a<b?a:b;}\n"
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "loop"
+words = ["00003021", "10a00007", "24a3ffff", "2405ffff", "8c820000", "24840004", "2463ffff", "1465fffc", "00c23021", "03e00008", "00c01021"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "byte"
+words = ["80820002", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "saved"
+words = ["27bdffe8", "afb00010", "afbf0014", "0c000000", "00a08021", "02002021", "0c000000", "00408021", "00501021", "8fbf0014", "8fb00010", "03e00008", "27bd0018"]
+relocation_masks = ["00000000", "00000000", "00000000", "03ffffff", "00000000", "00000000", "03ffffff", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "fp"
+words = ["462e6302", "d7a00010", "03e00008", "46206000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "divi"
+words = ["0085001a", "14a00002", "00000000", "0007000d", "2401ffff", "14a10004", "3c018000", "14810002", "00000000", "0006000d", "00001012", "03e00008", "00000000"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "shift"
+words = ["000410c0", "00042742", "03e00008", "00441025"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000"]
+
+[[fingerprints."gcc-2.8.1-sn64".exemplars]]
+name = "minimum"
+words = ["0085102a", "54400001", "00802821", "03e00008", "00a01021"]
+relocation_masks = ["00000000", "00000000", "00000000", "00000000", "00000000"]

@@ -114,6 +114,23 @@ class ToolchainTests(unittest.TestCase):
             self.assertEqual(link.read_bytes(), (self.policy.cache_root / "compilers/fixture" / name).read_bytes())
         self.assertFalse((self.project.tools / "fixture").is_symlink())
 
+    def test_acquire_candidate_needs_no_project_and_writes_no_project_files(self) -> None:
+        self.compiler()
+        config_before = (self.project_root / "config.toml").read_bytes()
+        directory = toolchain.acquire(toolchain.specification("fixture"), self.policy)
+        self.assertEqual(directory, self.policy.cache_root / "compilers/fixture")
+        self.assertEqual((directory / "cc").read_bytes(), b"compiler")
+        self.assertEqual((self.project_root / "config.toml").read_bytes(), config_before)
+        self.assertFalse(self.project.tools.exists())
+
+    def test_acquire_refuses_a_changed_registry_specification(self) -> None:
+        self.compiler()
+        spec = toolchain.specification("fixture")
+        self.registry_path.write_text(self.registry_path.read_text().replace('cflags=["-O2"]', 'cflags=["-O1"]'))
+        with self.assertRaisesRegex(Held, "setup.proposal_stale:"):
+            toolchain.acquire(spec, self.policy)
+        self.assertFalse(self.project.tools.exists())
+
     def test_existing_verified_symlink_is_replaced_without_changing_cache(self) -> None:
         self.compiler()
         toolchain.ensure(self.project, self.policy)

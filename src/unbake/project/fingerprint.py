@@ -8,6 +8,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from unbake.layout.split import Function
+from unbake.project.compiler_proposal import (
+    confirm_proposal as confirm_proposal,
+)
+from unbake.project.compiler_proposal import (
+    propose_compilers as propose_compilers,
+)
+from unbake.project.compiler_proposal import (
+    receipt as receipt,
+)
 from unbake.project.config import Held, Policy, Project
 from unbake.project.rom import Rom, shingles
 from unbake.project.toolchain import CompilerSpec
@@ -50,6 +59,7 @@ class Decision:
     probes: tuple[str, ...]
     matches: dict[str, tuple[bool, ...]]
     errors: dict[str, str] = field(default_factory=dict)
+    comparable: tuple[str, ...] = ()
 
 
 def _counts(data: bytes) -> Counts:
@@ -71,7 +81,7 @@ def idioms(rom: Rom, ranges: Iterable[tuple[int, int]]) -> dict[tuple[int, int],
     result = {}
     for start, end in ranges:
         if not 0 <= start < end <= len(rom.data) or start % 4 or end % 4:
-            raise Held("init", f"idioms ROM range 0x{start:X}-0x{end:X}: invalid word range")
+            raise Held("setup", f"idioms ROM range 0x{start:X}-0x{end:X}: invalid word range")
         result[start, end] = _counts(rom.data[start:end])
     return result
 
@@ -80,7 +90,7 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
     """Classify instruction copies per function, then coalesce adjacent families."""
     ordered = sorted(functions, key=lambda function: function.start)
     if not ordered:
-        raise Held("init", f"{rom.path}: splat found no functions")
+        raise Held("setup", f"{rom.path}: splat found no functions")
     measured = idioms(rom, [(function.start, function.end) for function in ordered])
     families = []
     for function in ordered:
@@ -92,17 +102,8 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
         elif total and count.or_ / total >= 0.8:
             family = "ido"
         families.append(family)
-    # A function without copies inherits only agreement on both sides.
-    for index, family in enumerate(tuple(families)):
-        count = measured[ordered[index].start, ordered[index].end]
-        if family is not None or count.addu + count.or_:
-            continue
-        left = next((value for value in reversed(families[:index]) if value), None)
-        right = next((value for value in families[index + 1 :] if value), None)
-        if left is not None and left == right:
-            families[index] = left
     groups: list[tuple[str | None, list[Function]]] = []
-    for function, family in zip(functions, families, strict=False):
+    for function, family in zip(ordered, families, strict=True):
         if groups and groups[-1][0] == family and groups[-1][1][-1].end == function.start:
             groups[-1][1].append(function)
         else:
@@ -177,10 +178,10 @@ def _body(path: Path, function: str) -> tuple[bytes, dict[int, int]]:
     """Read a named ELF32 MIPS body and masks from its relocation sections."""
     data = path.read_bytes()
     if data[:6] != b"\x7fELF\x01\x02" or len(data) < 52:
-        raise Held("init", f"{path}: expected ELF32 big-endian object")
+        raise Held("setup", f"{path}: expected ELF32 big-endian object")
     header = struct.unpack_from(">16sHHIIIIIHHHHHH", data)
     if header[2] != 8:
-        raise Held("init", f"{path}: expected MIPS object")
+        raise Held("setup", f"{path}: expected MIPS object")
     offset, size, count = header[6], header[11], header[12]
     sections = [struct.unpack_from(">10I", data, offset + index * size) for index in range(count)]
     symbols = []
@@ -196,11 +197,11 @@ def _body(path: Path, function: str) -> tuple[bytes, dict[int, int]]:
                 symbols.append((label, address, length, info, section_index))
     definitions = [symbol for symbol in symbols if symbol[0] == function]
     if len(definitions) != 1:
-        raise Held("init", f"{path}: expected one defined symbol {function}")
+        raise Held("setup", f"{path}: expected one defined symbol {function}")
     _, start, length, _, section_index = definitions[0]
     section = sections[section_index]
     if not section[2] & 4:
-        raise Held("init", f"{path}: {function} is not executable")
+        raise Held("setup", f"{path}: {function} is not executable")
     end = (
         start + length
         if length
@@ -223,7 +224,7 @@ def _body(path: Path, function: str) -> tuple[bytes, dict[int, int]]:
             address, info = struct.unpack_from(">II", data, index)
             kind = info & 255
             if kind not in kinds:
-                raise Held("init", f"{path}: unsupported MIPS relocation {kind}")
+                raise Held("setup", f"{path}: unsupported MIPS relocation {kind}")
             if start <= address < end:
                 masks[address - start] = kinds[kind]
     return body, masks
@@ -245,21 +246,28 @@ def choose(
     matches: dict[str, tuple[bool, ...]], probes: tuple[str, ...], errors: dict[str, str] | None = None
 ) -> Decision:
     """A winner needs exclusive matches and no exclusive counterexample."""
+    if any(len(results) != len(probes) for results in matches.values()):
+        raise Held("setup", "setup.compiler_proposal: probe result denominator differs")
+    failures = errors or {}
+    comparable = tuple(
+        index
+        for index, name in enumerate(probes)
+        if name not in failures and not any(f"{ident}/{name}" in failures for ident in matches)
+    )
     winners = []
     for candidate, results in matches.items():
         others = [scores for ident, scores in matches.items() if ident != candidate]
-        exclusive = any(result and all(not other[index] for other in others) for index, result in enumerate(results))
-        counterexample = any(
-            not result and any(other[index] for other in others) for index, result in enumerate(results)
-        )
+        exclusive = any(results[index] and all(not other[index] for other in others) for index in comparable)
+        counterexample = any(not results[index] and any(other[index] for other in others) for index in comparable)
         if exclusive and not counterexample:
             winners.append(candidate)
     return Decision(
         winners[0] if len(winners) == 1 else None,
-        {ident: sum(results) for ident, results in matches.items()},
+        {ident: sum(results[index] for index in comparable) for ident, results in matches.items()},
         probes,
         matches,
-        errors or {},
+        failures,
+        tuple(probes[index] for index in comparable),
     )
 
 
@@ -270,15 +278,15 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
     from unbake.project.rom import load
 
     if not candidates:
-        raise Held("init", f"region {region.key}: compiler candidates missing")
-    if type(getattr(policy, "init_probe_count", None)) is not int or policy.init_probe_count <= 0:
-        raise Held("init", "policy.init_probe_count: required positive integer")
+        raise Held("setup", f"region {region.key}: compiler candidates missing")
+    if type(getattr(policy, "probe_count", None)) is not int or policy.probe_count <= 0:
+        raise Held("setup", "policy.probe_count: required positive integer")
     project = project_scratch
     executable(getattr(policy, "m2c", None), "m2c", "init")
     compilers = dict(project.compilers)
     for candidate in candidates:
         if candidate.id not in compilers:
-            raise Held("init", f"compilers.{candidate.id}: probe compiler is not installed")
+            raise Held("setup", f"compilers.{candidate.id}: probe compiler is not installed")
         toolchain.verify(project.tools / candidate.id, candidate)
     project = replace(project, compilers=compilers)
     version = project.names_from
@@ -286,10 +294,12 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
     probes = sorted(
         (function for function in region.functions if probe(function, data)),
         key=lambda function: (function.end - function.start, function.start),
-    )[: policy.init_probe_count]
+    )[: policy.probe_count]
     results: dict[str, list[bool]] = {candidate.id: [] for candidate in candidates}
     errors = {}
-    with tempfile.TemporaryDirectory(prefix=".probes-", dir=project.root.parent) as temporary:
+    probe_root = project.build / "setup/probes"
+    probe_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".probes-", dir=probe_root) as temporary:
         work = Path(temporary)
         include = work / "include"
         include.mkdir()

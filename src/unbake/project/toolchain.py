@@ -21,7 +21,7 @@ from unbake.project import compiler_files
 from unbake.project.config import Held
 
 if TYPE_CHECKING:
-    from unbake.project.config import Policy, Project
+    from unbake.project.config import Policy, Project, SetupPolicy
 
 REGISTRY_PATH = Path(__file__).with_name("compilers.toml")
 
@@ -151,7 +151,22 @@ def specification(ident: str) -> CompilerSpec:
     try:
         return registry()[ident]
     except KeyError as error:
-        raise Held("setup", f"[compilers.{ident}]: unknown registry id") from error
+        raise Held("setup", f"setup.compiler_candidate: {ident}: unknown registry id") from error
+
+
+def acquire(spec: CompilerSpec, policy: Policy | SetupPolicy, *, supply: Path | None = None) -> Path:
+    """Acquire a pinned candidate in the host cache without any project config."""
+    if not policy.cache_root.is_absolute():
+        raise Held("setup", "policy.cache_root: expected absolute path")
+    current = specification(spec.id)
+    if spec != current:
+        raise Held("setup", f"setup.proposal_stale: compiler {spec.id}: registry specification changed")
+    cache = policy.cache_root / "compilers"
+    cache.mkdir(parents=True, exist_ok=True)
+    try:
+        return _install(spec, cache, supply)
+    except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile, urllib.error.URLError) as error:
+        raise Held("setup", f"setup.compiler_candidate: {spec.id}: {error}") from error
 
 
 def verify(directory: Path, spec: CompilerSpec) -> dict[str, str]:
@@ -275,7 +290,7 @@ def _supplies(project: Project, override: Path | None) -> dict[str, Path]:
     return result
 
 
-def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
+def _ensure(project: Project, policy: Policy | SetupPolicy, override: Path | None) -> Path:
     try:
         compilers, tools, root, cache_root = project.compilers, project.tools, project.root, policy.cache_root
     except AttributeError as error:
@@ -360,7 +375,7 @@ def _ensure(project: Project, policy: Policy, override: Path | None) -> Path:
     return manifest_path
 
 
-def ensure(project: Project, policy: Policy, *, supply: Path | None = None) -> Path:
+def ensure(project: Project, policy: Policy | SetupPolicy, *, supply: Path | None = None) -> Path:
     """Install every declared compiler, verify every pin, copy files and return manifest."""
     try:
         return _ensure(project, policy, supply)
@@ -368,7 +383,7 @@ def ensure(project: Project, policy: Policy, *, supply: Path | None = None) -> P
         raise Held("setup", f"compiler setup: {error}") from error
 
 
-def supply(project: Project, policy: Policy, source: Path) -> Path:
+def supply(project: Project, policy: Policy | SetupPolicy, source: Path) -> Path:
     """Explicit setup --supply input, shared by all requested compiler installs."""
     if source is None:
         raise Held("setup", "--supply: missing archive/directory")
@@ -378,7 +393,7 @@ def supply(project: Project, policy: Policy, source: Path) -> Path:
         raise Held("setup", f"compiler supply {source}: {error}") from error
 
 
-def status(policy: Policy) -> list[tuple[str, str]]:
+def status(policy: Policy | SetupPolicy) -> list[tuple[str, str]]:
     """Registry ids and verified installation state for setup --compilers."""
     rows = []
     for ident, spec in registry().items():

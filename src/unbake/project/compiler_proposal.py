@@ -1,0 +1,421 @@
+"""Reviewable compiler evidence and confirmation before setup publication."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import struct
+import sys
+from collections import defaultdict
+from dataclasses import asdict
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
+
+from unbake.project import compiler_files, compiler_profiles, toolchain
+from unbake.project.config import Held, PendingProject, SetupPolicy
+
+if TYPE_CHECKING:
+    from unbake.project.census import Census
+    from unbake.project.flow import CompilerCandidate, CompilerProposal, LayoutManifest
+
+
+def encoded(value: object) -> bytes:
+    def serialize(item: object) -> str:
+        if isinstance(item, Path):
+            return str(item)
+        raise TypeError(f"unsupported proposal input {type(item).__name__}")
+
+    return (json.dumps(value, indent=2, sort_keys=True, default=serialize) + "\n").encode()
+
+
+def digest(value: object) -> str:
+    return hashlib.sha256(encoded(value)).hexdigest()
+
+
+def proposal_path(project: PendingProject) -> Path:
+    path = project.build / "setup/proposal.json"
+    if any(parent.is_symlink() for parent in (path, *path.parents)):
+        raise Held("setup", "setup.compiler_proposal: proposal path contains a symlink")
+    return path
+
+
+def _inputs(
+    project: PendingProject, layout: LayoutManifest, policy: SetupPolicy, choices: dict[str, str]
+) -> dict[str, str]:
+    try:
+        registry = toolchain.REGISTRY_PATH.read_bytes()
+        config = (project.root / "config.toml").read_bytes()
+    except OSError as error:
+        raise Held("setup", f"setup.compiler_proposal: {error}") from error
+    inputs = {
+        "policy": digest(asdict(policy)),
+        "registry": hashlib.sha256(registry).hexdigest(),
+        "profiles": digest(toolchain._read(toolchain.REGISTRY_PATH).get("fingerprints", {})),
+        "choices": digest(choices),
+        "layout": digest(layout),
+        "pending_config": hashlib.sha256(config).hexdigest(),
+    }
+    layout_file = project.build / "setup/layout.json"
+    if layout_file.exists():
+        inputs["layout_file"] = compiler_files.sha(layout_file)
+    return inputs
+
+
+def _verify_identity(project: PendingProject, census: Census, layout: LayoutManifest) -> dict[str, str]:
+    hashes = {census.names[rom.path]: rom.sha1 for rom in census.cartridges}
+    if (
+        layout["schema"] != 1
+        or layout["project_id"] != project.id
+        or layout["workspace_id"] != project.workspace_id
+        or layout["rom_sha1"] != hashes
+        or set(layout["versions"]) != set(hashes)
+        or layout["names_from"] != census.names_from
+    ):
+        raise Held("setup", "setup.proposal_stale: layout identity, ROM set or naming version differs")
+    if not hashes:
+        raise Held("setup", "setup.compiler_proposal: no ROMs")
+    return hashes
+
+
+def _choices(project: PendingProject, choices: dict[str, str] | None) -> dict[str, str]:
+    if choices is not None:
+        return dict(choices)
+    path = proposal_path(project)
+    if not path.exists():
+        return {}
+    try:
+        previous = json.loads(path.read_bytes())
+        if previous["project_id"] != project.id or previous["workspace_id"] != project.workspace_id:
+            raise ValueError("proposal belongs to another project or workspace")
+        saved = previous.get("choices", {})
+        if not isinstance(saved, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) for k, v in saved.items()
+        ):
+            raise ValueError("invalid compiler choices")
+        return saved
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Held("setup", f"setup.compiler_proposal: persisted proposal: {error}") from error
+
+
+def propose_compilers(
+    project: PendingProject,
+    census: Census,
+    layout: LayoutManifest,
+    policy: SetupPolicy,
+    *,
+    choices: dict[str, str] | None = None,
+) -> CompilerProposal:
+    """Persist measured ranks only; no config, compiler install or publication."""
+    from unbake.decomp.guide import prologue
+    from unbake.project.fingerprint import evidence
+
+    hashes = _verify_identity(project, census, layout)
+    specs = toolchain.registry()
+    profiles, rules = compiler_profiles.read()
+    selected = _choices(project, choices)
+    for region, ident in selected.items():
+        if ident not in specs:
+            raise Held("setup", f"setup.compiler_candidate: {region}={ident}: unknown registry ID")
+        if ident not in profiles:
+            raise Held("setup", f"setup.compiler_candidate: {region}={ident}: unsupported fingerprint profile/ABI")
+    # Regions collect measured family evidence across a loaded version. Unit
+    # measurements retain every ROM span; no unknown function inherits a family.
+    regions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    unit_regions: dict[str, list[str]] = defaultdict(list)
+    unit_measurements: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    clues = {}
+    for rom in census.cartridges:
+        version = census.names[rom.path]
+        functions = layout["versions"][version]["functions"]
+        if not functions:
+            raise Held("setup", f"setup.compiler_proposal: {version}: layout functions missing")
+        clues[version] = evidence(rom)
+        previous_end = -1
+        names = set()
+        for function in sorted(functions, key=lambda item: item["start"]):
+            start, end, address, name = (function["start"], function["end"], function["address"], function["name"])
+            if (
+                type(start) is not int
+                or type(end) is not int
+                or not 0 <= start < end <= len(rom.data)
+                or start % 4
+                or end % 4
+                or start < previous_end
+                or type(address) is not int
+                or not isinstance(name, str)
+                or not name
+                or name in names
+            ):
+                raise Held("setup", f"setup.compiler_proposal: {version}:{name}: invalid/overlapping function span")
+            names.add(name)
+            previous_end = end
+            body = rom.data[start:end]
+            words = tuple(word for (word,) in struct.iter_unpack(">I", body))
+            measured = compiler_profiles.measure(body)
+            moves = measured["addu_moves"] + measured["or_moves"]
+            family = "undecided"
+            if moves >= rules["minimum_moves"]:
+                numerator, denominator = rules["agreement_numerator"], rules["agreement_denominator"]
+                if measured["addu_moves"] * denominator >= moves * numerator:
+                    family = "gcc"
+                elif measured["or_moves"] * denominator >= moves * numerator:
+                    family = "ido"
+                else:
+                    family = "mixed"
+            region = f"{version}:{family}"
+            matches = {
+                ident: [example.name for example in profile.exemplars if example.matches(words)]
+                for ident, profile in profiles.items()
+            }
+            regions[region].append(
+                {
+                    "name": name,
+                    "start": start,
+                    "end": end,
+                    "address": address,
+                    "body_sha256": hashlib.sha256(body).hexdigest(),
+                    "prologue": prologue(words),
+                    "features": measured,
+                    "exemplar_matches": matches,
+                    "ranks": compiler_profiles.rank(measured, matches, profiles),
+                }
+            )
+            unit_regions[name].append(region)
+            unit_measurements[name].append(regions[region][-1])
+    unknown = set(selected) - (set(regions) | set(unit_regions) | {"default"})
+    if unknown:
+        key = "setup.proposal_stale" if choices is None else "setup.compiler_candidate"
+        raise Held("setup", f"{key}: unknown region/unit: {', '.join(sorted(unknown))}")
+    available = {}
+    availability = {}
+    for ident, spec in specs.items():
+        try:
+            toolchain.verify(policy.cache_root / "compilers" / ident, spec)
+        except Held as error:
+            available[ident] = False
+            availability[ident] = error.reason
+        else:
+            available[ident] = True
+            availability[ident] = "installed; pins verified"
+    candidates: dict[str, list[CompilerCandidate]] = {}
+    winners: dict[str, str | None] = {}
+    reasons: dict[str, str] = {}
+    for region, units in sorted(regions.items()):
+        measured = {feature: sum(unit["features"][feature] for unit in units) for feature in compiler_profiles.FEATURES}
+        matches = {
+            ident: [unit["name"] + "/" + name for unit in units for name in unit["exemplar_matches"].get(ident, [])]
+            for ident in profiles
+        }
+        ranks = compiler_profiles.rank(measured, matches, profiles)
+        rows: list[CompilerCandidate] = [
+            {
+                "id": ident,
+                "available": available[ident],
+                "rank": ranks.get(ident, [0, 0, 0, 0]),
+                "evidence": {
+                    "supported": ident in profiles,
+                    "abi": profiles[ident].abi if ident in profiles else None,
+                    "family": spec.family,
+                    "features": measured,
+                    "exemplar_matches": matches.get(ident, []),
+                    "comparable_exemplars": len(profiles[ident].exemplars) if ident in profiles else 0,
+                    "availability": availability[ident],
+                    "compiler_pins": spec.pins,
+                    "cflags": list(spec.cflags),
+                },
+            }
+            for ident, spec in specs.items()
+        ]
+        rows.sort(key=lambda row: (tuple(-value for value in row["rank"]), row["id"]))
+        candidates[region] = rows
+        supported = [row for row in rows if row["evidence"]["supported"]]
+        best = supported[0]["rank"] if supported else [0, 0, 0, 0]
+        tied = [row["id"] for row in supported if row["rank"] == best]
+        # Feature-only mixed functions require an explicit review rather than
+        # allowing the majority of a region to erase their contradictory moves.
+        mixed = region.endswith(":mixed")
+        choice = selected.get(region)
+        if choice:
+            winners[region] = choice
+        elif not mixed and len(tied) == 1 and any(best[:3]):
+            winners[region] = tied[0]
+        else:
+            winners[region] = None
+            reasons[region] = "mixed" if mixed else "tie" if len(tied) > 1 else "no evidence"
+    assignments: dict[str, str] = {}
+    unresolved = []
+    for name, holding in sorted(unit_regions.items()):
+        if name in selected:
+            assignments[name] = selected[name]
+            continue
+        resolved = {winners[region] for region in holding}
+        if None not in resolved and len(resolved) == 1:
+            regional = next(iter(resolved))
+            conflict = False
+            for region, unit in zip(holding, unit_measurements[name], strict=True):
+                ranks = unit["ranks"]
+                best = max(ranks.values())
+                top = [ident for ident, rank in ranks.items() if rank == best]
+                if region not in selected and regional not in top and any(best[:3]):
+                    conflict = True
+            if conflict:
+                unresolved.append(f"unit:{name}:mixed")
+                continue
+            # A regional majority cannot resolve an uninformative leaf. Only
+            # an explicit region/default decision may cover its missing facts.
+            if any(region.endswith(":undecided") and region not in selected for region in holding):
+                informative = all(
+                    len([ident for ident, rank in unit["ranks"].items() if rank == max(unit["ranks"].values())]) == 1
+                    and max(unit["ranks"].values())[:3] != [0, 0, 0]
+                    for unit in unit_measurements[name]
+                )
+                if not informative:
+                    if selected.get("default"):
+                        assignments[name] = selected["default"]
+                        continue
+                    unresolved.extend(region for region in holding if region not in selected)
+                    continue
+            assignments[name] = str(next(iter(resolved)))
+        elif resolved == {None} and selected.get("default"):
+            # Only an explicit default may cover uninformative leaves. A
+            # family/release tie still requires its region choice.
+            if all(region.endswith(":undecided") for region in holding):
+                assignments[name] = selected["default"]
+                continue
+            unresolved.extend(holding)
+        elif len(resolved - {None}) > 1:
+            unresolved.append(f"unit:{name}:mixed")
+        else:
+            unresolved.extend(region for region in holding if winners[region] is None)
+    used = set(assignments.values())
+    default = selected.get("default")
+    families = {region.rsplit(":", 1)[-1] for region in regions}
+    if default is None and (len(used) > 1 or {"gcc", "ido"} <= families):
+        unresolved.append("default:mixed")
+    elif default is None and len(used) == 1:
+        default = next(iter(used))
+    if not used and default is None:
+        unresolved.append("default:missing")
+    document: dict[str, Any] = {
+        "schema": 1,
+        "project_id": project.id,
+        "workspace_id": project.workspace_id,
+        "rom_sha1": hashes,
+        "layout_sha256": digest(layout),
+        "inputs_sha256": _inputs(project, layout, policy, selected),
+        "default_compiler": default,
+        "assignments": assignments,
+        "cflags": {ident: list(specs[ident].cflags) for ident in sorted(used | ({default} if default else set()))},
+        "candidates": candidates,
+        "unresolved": sorted(set(unresolved)),
+    }
+    # Additive evidence retains units and choices without changing the contract.
+    document.update(
+        choices=selected,
+        regions=dict(regions),
+        region_choices=winners,
+        unresolved_reasons=reasons,
+        clues=clues,
+        ranking_policy=rules,
+        source_reproduction_probes={
+            "attempted": 0,
+            "successful_comparable": 0,
+            "errors": [],
+            "reason": "static calibrated profiles only; no unconfirmed project compiler recipe",
+        },
+    )
+    compiler_files.atomic_bytes(proposal_path(project), encoded(document))
+    return cast("CompilerProposal", document)
+
+
+def receipt(proposal: CompilerProposal) -> list[str]:
+    lines = []
+    winners = cast(dict[str, str | None], proposal.get("region_choices", {}))
+    for region, candidates in proposal["candidates"].items():
+        lines.append(f"compiler region {region}: selection={winners.get(region) or 'unresolved'}")
+        for candidate in candidates:
+            features = candidate["evidence"]["features"]
+            measurements = " ".join(f"{key}={value}" for key, value in sorted(features.items()) if value)
+            lines.append(
+                f"  {candidate['id']}: rank={candidate['rank']} available={candidate['available']} "
+                f"supported={candidate['evidence']['supported']} {measurements} "
+                f"exemplars={len(candidate['evidence']['exemplar_matches'])}"
+            )
+    lines.append(f"compiler default: {proposal['default_compiler'] or 'unresolved'}")
+    counts: dict[str, int] = defaultdict(int)
+    for ident in proposal["assignments"].values():
+        counts[ident] += 1
+    for ident, count in sorted(counts.items()):
+        lines.append(f"compiler {ident}: {count} unit assignments; flags={' '.join(proposal['cflags'][ident])}")
+    lines.append("exact per-unit assignments and prologue/codegen evidence: build/setup/proposal.json")
+    if proposal["unresolved"]:
+        lines.append("unresolved compiler choices: " + ", ".join(proposal["unresolved"]))
+        lines.append("supply setup --compiler REGION=ID (or UNIT=ID); mixed compilers also need --compiler default=ID")
+    else:
+        lines.append(f"reviewed proposal: setup --confirm {hashlib.sha256(encoded(proposal)).hexdigest()}")
+    return lines
+
+
+def confirm_proposal(
+    project: PendingProject,
+    census: Census,
+    layout: LayoutManifest,
+    proposal: CompilerProposal,
+    policy: SetupPolicy,
+    *,
+    confirm: str | None = None,
+) -> None:
+    """Require the exact current proposal before the caller writes game facts."""
+    path = proposal_path(project)
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise Held("setup", f"setup.proposal_stale: persisted proposal missing: {error}") from error
+    token = hashlib.sha256(content).hexdigest()
+    choices = cast(dict[str, str], proposal.get("choices", {}))
+    current = _inputs(project, layout, policy, choices)
+    if (
+        content != encoded(proposal)
+        or proposal["inputs_sha256"] != current
+        or proposal["rom_sha1"] != _verify_identity(project, census, layout)
+        or proposal["layout_sha256"] != digest(layout)
+    ):
+        raise Held(
+            "setup", "setup.proposal_stale: proposal bytes or ROM/policy/registry/profile/layout/choices changed"
+        )
+    for rom in census.cartridges:
+        version = census.names[rom.path]
+        for source in {rom.path, project.roms / f"baserom.{version}.z64"}:
+            try:
+                actual = hashlib.sha1(source.read_bytes()).hexdigest()
+            except OSError as error:
+                raise Held("setup", f"setup.proposal_stale: {version}: {error}") from error
+            # Originals may use v64/n64 byte order; census.data is normalized.
+            if source == rom.path and actual != rom.sha1:
+                from unbake.project.rom import normalise
+
+                try:
+                    actual = hashlib.sha1(normalise(source.read_bytes())).hexdigest()
+                except Held as error:
+                    raise Held("setup", f"setup.proposal_stale: ROM {version}: {error.reason}") from error
+            if actual != proposal["rom_sha1"][version]:
+                raise Held("setup", f"setup.proposal_stale: ROM {version}: sha1 changed")
+    if confirm is not None and confirm != token:
+        raise Held("setup", f"setup.proposal_stale: confirmation digest differs; review setup --confirm {token}")
+    if proposal["unresolved"]:
+        mixed = any("mixed" in value for value in proposal["unresolved"])
+        key = "setup.compiler_mixed" if mixed else "setup.compiler_candidate"
+        raise Held("setup", f"{key}: unresolved/tied choices: {', '.join(proposal['unresolved'])}")
+    if not proposal["default_compiler"] or not proposal["assignments"]:
+        raise Held("setup", "setup.compiler_candidate: missing default compiler or unit assignments")
+    if confirm is None:
+        if not sys.stdin.isatty():
+            raise Held("setup", f"setup.compiler_confirmation: review and run setup --confirm {token}")
+        try:
+            answer = input(f"Accept displayed compiler assignments and flags ({token})? [yes/no]: ").strip()
+        except (EOFError, KeyboardInterrupt) as error:
+            raise Held("setup", "setup.compiler_confirmation: EOF or interrupted acceptance") from error
+        if answer.lower() != "yes":
+            raise Held("setup", "setup.compiler_confirmation: rejected; explicit yes required")
+        # A file edited while the TTY prompt is open invalidates acceptance.
+        confirm_proposal(project, census, layout, proposal, policy, confirm=token)
