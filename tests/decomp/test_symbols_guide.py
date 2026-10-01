@@ -85,23 +85,12 @@ class SymbolTests(unittest.TestCase):
         )
         self.rows = (symbols.DataRow("pool", 0x800C0000, 0x800D0000, ".rodata"),)
 
-    def test_absolute_pointer_binding_invalidates_loaded_register(self) -> None:
+    def test_settled_pointer_binding_invalidates_loaded_register(self) -> None:
         address = 0x800FDFCC
         target = (pair(address, 0x23)[0], pair(address, 0x23)[1] ^ (6 << 16), 0xAC400014, 0xAC400088)
-        relocations = (symbols.Relocation(0, 5, "external"), symbols.Relocation(4, 6, "external"))
-        binding = symbols.Binding("external", address, "ABS", "s32", 4)
-        obj = symbols.TrialElf(
-            (pair(0, 0x23)[0], pair(0, 0x23)[1] ^ (6 << 16), *target[2:]),
-            relocations,
-            (binding,),
-            (),
-            None,
-            self.family,
-        )
+        obj = symbols.TrialElf(target, (), (), (), None, self.family, frozenset({address}))
         self.assertEqual([ref.address for ref in symbols.references(target, None)], [address])
         self.assertEqual(symbols.derive(obj, target, "us"), [])
-        with self.assertRaisesRegex(Held, "placed-elsewhere"):
-            symbols.derive(replace(obj, bindings=(replace(binding, address=address + 4),)), target, "us")
 
     def test_named_function_float_fixtures(self) -> None:
         cases = (
@@ -118,7 +107,7 @@ class SymbolTests(unittest.TestCase):
                     draft.extend(pair(0))
                     name = f"D_{address:08X}"
                     relocations.extend((symbols.Relocation(offset, 5, name), symbols.Relocation(offset + 4, 6, name)))
-                obj = symbols.TrialElf(tuple(draft), tuple(relocations), (), self.rows, None, self.family)
+                obj = symbols.TrialElf(tuple(draft), tuple(relocations), (), self.rows, None, self.family, frozenset())
                 derived = symbols.derive(obj, target, "us")
                 found = [n for n in derived if isinstance(n, SymbolNeed)]
                 self.assertEqual([(n.address, n.type, n.size) for n in found], [(a, "f32", 4) for a in addresses])
@@ -138,7 +127,7 @@ class SymbolTests(unittest.TestCase):
                         relocations = (symbols.Relocation(0, 5, "hudGlobals"), symbols.Relocation(4, 6, "hudGlobals"))
                         binding = symbols.Binding("hudGlobals", address, ".rodata", "u8", 1)
                         obj = symbols.TrialElf(
-                            pair(addend & 0xFFFFFFFF), relocations, (binding,), self.rows, None, family
+                            pair(addend & 0xFFFFFFFF), relocations, (binding,), self.rows, None, family, frozenset()
                         )
                         actual = symbols.derive(obj, pair(address + addend), "us")
                         symbol = next(n for n in actual if isinstance(n, SymbolNeed))
@@ -190,13 +179,13 @@ class SymbolTests(unittest.TestCase):
                 target = (0x3C02800D, 0x3C02800D, 0xC4448000)
                 draft = (0x3C020000, 0x3C020000, 0xC4440000)
                 rels = (hi, hi2, symbols.Relocation(8, 6, "a"))
-                obj = symbols.TrialElf(draft, rels, (), self.rows, None, family)
+                obj = symbols.TrialElf(draft, rels, (), self.rows, None, family, frozenset())
                 self.assertEqual(symbols.derive(obj, target, "us")[0].address, 0x800C8000)
 
     def test_gp_relocation_and_missing_pair_refusals(self) -> None:
         target = (0xC7840004,)
         obj = symbols.TrialElf(
-            (0xC7840000,), (symbols.Relocation(0, 7, "value"),), (), self.rows, 0x800C8000, self.family
+            (0xC7840000,), (symbols.Relocation(0, 7, "value"),), (), self.rows, 0x800C8000, self.family, frozenset()
         )
         found = symbols.derive(obj, target, "us")
         self.assertEqual(found[0].address, 0x800C8004)
@@ -218,7 +207,7 @@ class SymbolTests(unittest.TestCase):
                 symbols.derive(obj, target, "us")
 
     def test_row_boundaries_and_refusals(self) -> None:
-        obj = symbols.TrialElf((), (), (), self.rows, None, self.family)
+        obj = symbols.TrialElf((), (), (), self.rows, None, self.family, frozenset())
         for target, version, reason in (
             (None, "us", "target_words"),
             ((), "", "version"),
@@ -318,6 +307,43 @@ class SymbolTests(unittest.TestCase):
             project.version("us").split.write_text(layout.format(boundary=""))
             with self.assertRaisesRegex(Held, "main.bss_size"):
                 guide.data_rows(project, "us")
+
+    def test_declared_resident_symbols_and_local_pools_need_no_declaration(self) -> None:
+        # Absolute or resident symbols already in the symbol file, and the object's own constant
+        # section, are placed elsewhere; the trial must still score the draft.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = project_for(root / "symbols")
+            version = project.version("us")
+            version.symbols.write_text("resident = 0x800E0000; // absolute:True\n")
+            version.split.write_text(
+                "segments:\n  - name: main\n    type: code\n    start: 0x40\n"
+                "    vram: 0x800C0000\n    subalign: 4\n    end: 0x50\n"
+                "    subsegments:\n      - [0x40, asm, alpha]\n      - [0x48, rodata, pool]\n"
+            )
+            target = (*pair(0x800E0000), *pair(0x800E0010))
+            assembly = root / "alpha.s"
+            assembly.write_text(
+                ".set noreorder\n.rdata\nlocal: .float 1.0\n.text\n"
+                "lui $2, %hi(resident)\nlwc1 $f4, %lo(resident)($2)\n"
+                "lui $2, %hi(local)\nlwc1 $f4, %lo(local)($2)\n"
+            )
+            output = root / "alpha.o"
+            subprocess.run(
+                [str(self.policy.mips_as), "-EB", "-mips3", "--no-pad-sections", "-o", str(output), str(assembly)],
+                check=True,
+                capture_output=True,
+            )
+            unit = inspect(output, str(self.policy.mips_readelf), root)
+            proof = trial.Trial("alpha", "0" * 64, {"us": Compare("us", 4, 4, {}, [])}, [], "", [])
+            context = TrialContext(
+                project,
+                self.policy,
+                project.src / "alpha.c",
+                proof,
+                {"us": {"unit": unit, "target_words": target, "version": version}},
+            )
+            self.assertEqual([n for n in symbols.derive_trial(context) if isinstance(n, SymbolNeed)], [])
 
     def test_real_elf_deriver_registration_and_guide(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from unbake.decomp.trial_compile import read_text
 from unbake.layout import split
-from unbake.project.config import Held, Version
+from unbake.project.config import Held, Project, Version
 
 NAME = r"[A-Za-z_.$][\w.$]*"
 NUMBER = r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)"
@@ -95,7 +95,11 @@ def target(version: Version, span: FunctionSpan) -> bytes:
     return data
 
 
-def rom_reader(version: Version) -> Callable[[int, int], bytes]:
+def rom_reader(version: Version, resident: Callable[[], list[dict[str, int]]]) -> Callable[[int, int], bytes]:
+    """Map split segments, then the project's explicit resident runtime copies of ROM spans.
+
+    Resident copies are read only when an address lies outside every split segment.
+    """
     _, _, segments = split.layout(version.split)
     mappings = []
     for segment in segments:
@@ -110,12 +114,26 @@ def rom_reader(version: Version) -> Callable[[int, int], bytes]:
         if bss:
             end = min(end, min(bss))
         mappings.append((vram, vram + end - start, start))
+    copies: list[tuple[int, int, int]] = []
 
     def read_memory(address: int, size: int) -> bytes:
         matches = [row for row in mappings if row[0] <= address and address + size <= row[1]]
+        if not matches and not copies:
+            copies.extend(
+                (row["address"], row["address"] + row["end"] - row["start"], row["start"]) for row in resident()
+            )
+        if not matches:
+            matches = [row for row in copies if row[0] <= address and address + size <= row[1]]
         if size <= 0 or len(matches) != 1:
             raise Held("try", f"{version.name}.read_memory: unmapped or ambiguous range 0x{address:X}+{size}")
         start, _, offset = matches[0]
         return target(version, FunctionSpan(address, offset + address - start, size, 1))
 
     return read_memory
+
+
+def project_reader(project: Project, name: str) -> Callable[[int, int], bytes]:
+    """Read a VERSION's memory, including its configured resident copies of ROM spans."""
+    from unbake.project import makefile
+
+    return rom_reader(project.version(name), lambda: makefile.recipe(project).resident_mappings.get(name, []))

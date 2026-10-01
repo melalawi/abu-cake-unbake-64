@@ -59,6 +59,23 @@ class StandaloneTests(unittest.TestCase):
         self.assertNotIn(f"{self.root}/src/unit.c: | $(BUILD)/.split", graph)
         self.assertIn(f"{self.root}/asm/unit.s: | $(BUILD)/.split", graph)
 
+    def test_local_rodata_metadata_does_not_include_shared_units(self) -> None:
+        for spelling in ('"local"', "local"):
+            with self.subTest(spelling=spelling):
+                text = (
+                    "  - name: main\n    type: code\n    start: 0x1000\n    vram: 0x80071000\n"
+                    f"    subsegments:\n      - [0x1350, .rodata, {spelling}]\n"
+                    "      - [0x1378, rodata, shared_pool]\n"
+                    "      - [0x2000, c, local]\n      - [0x2020, c, shared]\n  - [0x2040]\n"
+                )
+                ranges = extract.unit_ranges(text)
+                self.assertEqual(ranges["local"]["rodata_address"], 0x80071350)
+                self.assertNotIn("rodata_address", ranges["shared"])
+                script = f"{self.root}/src/shared.c.o(.rodata);"
+                for compiler in ("sn64", "ido", "gcc"):
+                    rewritten, _ = extract.inventory(script, self.root, self.root / "asm", self.root / "src", compiler)
+                    self.assertIn("obj/src/shared.o(.rodata)", rewritten)
+
     def test_plain_make_publishes_and_preserves_numbered_generation(self) -> None:
         project, _ = fixture(self.root)
         write_rendered(project)

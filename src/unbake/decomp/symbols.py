@@ -50,6 +50,7 @@ class TrialElf:
     rows: tuple[DataRow, ...]
     gp: int | None
     family: Family
+    settled: frozenset[int]
 
 
 @dataclass(frozen=True)
@@ -173,8 +174,6 @@ def _need(
     existing = bindings.get(name)
     if existing and existing.address != address:
         raise Held("symbols", f"{name}: placed-elsewhere at 0x{existing.address:08X}, inferred 0x{address:08X}")
-    if existing and existing.section == "ABS":
-        return []
     row = _row(rows, address, size, name)
     needs: list[Need] = [SymbolNeed(version, name, address, addend, row.section, type_, size, evidence)]
     if row.start < address and not existing:
@@ -188,7 +187,7 @@ def derive(trial_elf: TrialElf, target_words: Sequence[int], version: str) -> li
     required(trial_elf, "trial_elf")
     required(target_words, "target_words")
     bindings = _bindings(trial_elf.bindings)
-    access = {ref.offset: ref for ref in references(target_words, trial_elf.gp)}
+    access = {ref.offset: ref for ref in references(target_words, trial_elf.gp) if ref.address not in trial_elf.settled}
     family = required(trial_elf.family, "trial_elf.family")
     relocations = [
         relocation
@@ -294,30 +293,32 @@ def derive_trial(context: TrialContext) -> list[Need]:
             text = obj.section(".text")
             text = required(text, f"{version}.text")
             draft = words(obj.content(text), "big")
-            relocations = tuple(
-                Relocation(offset, kind, symbol["name"])
-                for offset, kind, symbol in obj.relocations(text)
-                if symbol["section"] != text
-                and not any(
-                    obj.section(placed.section) == symbol["section"] for placed in artifact.get("placements", [])
-                )
-            )
+            pending = obj.relocations(text)
         except (OSError, ValueError, IndexError, struct.error) as error:
             raise Held("symbols", f"{version}.trial_elf: {error}") from error
         rows = data_rows(context.project, version)
         values = symbol_values(artifact["version"].symbols)
         refs = references(artifact["target_words"], values.get("_gp"))
+        # Declared addresses outside data rows are settled by the symbol file; object-local
+        # sections are owned by the constant-pool deriver.
+        settled = {name for name, address in values.items() if not any(row.start <= address < row.end for row in rows)}
+        relocations = tuple(
+            Relocation(offset, kind, symbol["name"])
+            for offset, kind, symbol in pending
+            if not symbol["section"] and symbol["name"] not in settled
+        )
+        pooled = {offset for offset, _, symbol in pending if symbol["section"]}
+        placed = {values[name] for name in settled} | {ref.address for ref in refs if ref.offset in pooled}
         bindings = []
-        absolute = {symbol.name: symbol.address for symbol in artifact["layout"].symbols if symbol.section == "ABS"}
         for name, address in values.items():
             matches = [ref for ref in refs if ref.address == address]
             containing = [row for row in rows if row.start <= address < row.end]
-            if matches and absolute.get(name) == address and not containing:
-                bindings.append(Binding(name, address, "ABS", matches[0].type, matches[0].size))
-            elif matches and len(containing) == 1:
+            if matches and len(containing) == 1:
                 bindings.append(Binding(name, address, containing[0].section, matches[0].type, matches[0].size))
         family = family_for(context.project.compiler_for(context.source).id)
-        object_evidence = TrialElf(draft, relocations, tuple(bindings), rows, values.get("_gp"), family)
+        object_evidence = TrialElf(
+            draft, relocations, tuple(bindings), rows, values.get("_gp"), family, frozenset(placed)
+        )
         derived = derive(object_evidence, artifact["target_words"], version)
         result.extend(derived)
         guidance = render(derived)

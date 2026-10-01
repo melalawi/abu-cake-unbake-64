@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from unbake.decomp.trial_compare import fields, words
-from unbake.decomp.trial_layout import FunctionSpan, rom_reader
+from unbake.decomp.trial_layout import FunctionSpan, project_reader
 from unbake.decomp.trial_link import Elf, SectionPlacement
 from unbake.layout.rodata import TrialObject
 from unbake.project.config import Held, Policy, Project, Version
@@ -68,7 +68,7 @@ def rodata_object(
     for block in matcher.get_matching_blocks():
         for delta in range(block.size):
             aligned[(block.b + delta) * 4] = target[block.a + delta]
-    read_memory = rom_reader(artifact["version"])
+    read_memory = project_reader(project, artifact["version"].name)
     pools = family.literal_pools(obj) + family.jump_tables(obj)
     bases = {}
     for pool in pools:

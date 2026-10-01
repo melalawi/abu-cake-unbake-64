@@ -182,18 +182,14 @@ def allocation(project: Project, policy: Policy, source: Path, version: str) -> 
     root = _state_root(policy) / "explain"
     trial_compile.scratch_directory(project, root, "explain")
     flags = list(makefile.flags(project, version, source))
+    # The pinned native cc1 writes the allocator dumps itself; diagnostics use the exact build compiler.
     selected = compiler
-    if compiler.id == "gcc-2.8.1-sn64":
-        ident = "gcc-2.8.1-sn64-diag"
-        if ident not in project.compilers:
-            raise Held("explain", f"compilers.{ident}: missing diagnostic compiler")
-        selected = project.compilers[ident]
     toolchain.verify(project.tools / selected.id, toolchain.specification(selected.id))
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:
         work = Path(temporary)
         comparison = trial.try_draft(project, policy, source, work, versions=[version]).compares[version]
         if spec.family == "gcc":
-            expanded, codeflags = _gcc_input(project, source, version, work)
+            expanded, codeflags = _gcc_input(project, policy, source, version, work)
             input_path = work / "source.i"
             input_path.write_text(expanded)
             trial_compile.run_tool(
@@ -253,7 +249,7 @@ def _state_root(policy: Policy) -> Path:
     return Path(root)
 
 
-def _gcc_input(project: Project, source: Path, version: str, work: Path) -> tuple[str, list[str]]:
+def _gcc_input(project: Project, policy: Policy, source: Path, version: str, work: Path) -> tuple[str, list[str]]:
     from unbake.decomp import trial_compile
     from unbake.project import makefile
     from unbake.project_tools.sn64_cc import partition_flags
@@ -266,9 +262,7 @@ def _gcc_input(project: Project, source: Path, version: str, work: Path) -> tupl
         except ValueError as error:
             raise Held("explain", f"compiler.cflags: {error}") from error
         recipe = makefile.recipe(project)
-        if not recipe.cpp:
-            raise Held("explain", "build.cpp: missing value")
-        command = [str(recipe.cpp), *recipe.cppflags, *options, str(source)]
+        command = [makefile.host_executable(policy, recipe.cpp or "", "cpp"), *recipe.cppflags, *options, str(source)]
     else:
         codeflags = [flag for flag in flags if flag != "-c"]
         command = [str(compiler.cc), *codeflags, "-E", str(source)]
@@ -296,7 +290,7 @@ def order(project: Project, policy: Policy, source: Path, version: str) -> Sched
     root = trial_compile.scratch_directory(project, _state_root(policy) / "explain", "explain")
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:
         work = Path(temporary)
-        expanded, flags = _gcc_input(project, source, version, work)
+        expanded, flags = _gcc_input(project, policy, source, version, work)
         input_path = work / "source.i"
         input_path.write_text(expanded, encoding="utf-8")
         trial_compile.run_tool(

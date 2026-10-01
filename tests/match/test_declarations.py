@@ -1,16 +1,57 @@
 """Shared declaration preflight and final source regressions."""
 
 from dataclasses import asdict
+from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.decomp import needs
 from unbake.layout.structs import layouts
 from unbake.match import declarations
 from unbake.match import queue as match
+from unbake.project import build as project_build
 from unbake.project.config import Held
 
 
 class DeclarationTests(MatchFixture):
+    def test_shared_header_edits_acquire_and_check_unselected_versions(self) -> None:
+        for outcome in ("success", "missing", "compare", "scoped"):
+            with self.subTest(outcome=outcome):
+                if outcome != "success":
+                    self.doCleanups()
+                    self.setUp()
+                # The other cartridge already compiles this source, but its body
+                # is not part of the queued function's trial proof.
+                cartridge = self.project.version("eu")
+                cartridge.split.write_text(cartridge.split.read_text().replace("asm, text/alpha", "c, alpha"))
+                text = "struct Record { short x, y, z; };\nint alpha(void) { return 0; }\n"
+                pending = self.pending(text)[:1] if outcome != "scoped" else []
+                if outcome == "scoped":
+                    text = "int alpha(void) { return 0; }\n"
+                source = self.draft("alpha", text, versions=["us"], pending=pending)
+                match.submit(self.project, self.policy, source, versions=("us",))
+                if outcome == "missing":
+                    self.project.build_link("eu").unlink()
+                elif outcome == "compare":
+                    self.fail.add(("alpha", "eu"))
+                with patch.object(project_build, "build", wraps=self.build) as build:
+                    receipts = match.run(self.project, self.policy)
+                header = self.root / "include" / "structs.h"
+                if outcome == "missing":
+                    self.assertTrue(any("VERSION eu: cannot acquire generation" in line for line in receipts), receipts)
+                    build.assert_not_called()
+                else:
+                    self.assertEqual(build.call_args.args[2], ["us"] if outcome == "scoped" else ["us", "eu"])
+                if outcome in ("success", "scoped"):
+                    self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
+                    self.assertEqual(self.matched()[0]["versions"], ["us"])
+                    self.assertEqual(header.exists(), outcome == "success")
+                    self.assertEqual(self.current(self.project, "eu").name, "eu.0" if outcome == "scoped" else "eu.1")
+                else:
+                    self.assertTrue(any("eu" in line and "HELD(match)" in line for line in receipts), receipts)
+                    self.assertFalse(header.exists())
+                    self.assertFalse((self.src / "alpha.c").exists())
+                    self.assertEqual(len(self.queued()), 1)
+
     def pending(self, text: str) -> list[needs.Need]:
         record = layouts(text)[0]
         return [

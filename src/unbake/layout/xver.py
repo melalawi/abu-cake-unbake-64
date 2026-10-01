@@ -299,7 +299,8 @@ def derive(context: Any) -> list[Need]:
                     if word is None:
                         raise Held("placement", f"callee {name} offset: missing aligned target word")
                 if word >> 26 not in (2, 3):
-                    raise Held("placement", f"callee {name}: expected jump relocation")
+                    # A shifted draft proves no callee address here; the comparison reports the shift.
+                    continue
                 addend = struct.unpack_from(">I", obj.content(section), offset)[0] & 0x03FFFFFF
                 if addend:
                     raise Held("placement", f"callee {name} addend: nonzero function entry")

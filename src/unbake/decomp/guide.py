@@ -72,7 +72,8 @@ def from_words(
     family: Family,
 ) -> list[Need]:
     """Derive guidance before drafting, using the same constant-reference analysis."""
-    return derive(TrialElf(tuple(target_words), (), tuple(bindings), tuple(rows), gp, family), target_words, version)
+    evidence = TrialElf(tuple(target_words), (), tuple(bindings), tuple(rows), gp, family, frozenset())
+    return derive(evidence, target_words, version)
 
 
 def prologue(target_words: Iterable[int]) -> str:

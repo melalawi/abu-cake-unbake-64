@@ -89,7 +89,7 @@ def _retain(
     return min(scores.values())
 
 
-def preprocess(project: Project, source: Path, version: str, deadline: float) -> str:
+def preprocess(project: Project, policy: Policy, source: Path, version: str, deadline: float) -> str:
     """Use the selected unit's build preprocessor, includes and VERSION flags."""
     compiler = project.compiler_for(source)
     flags = list(makefile.flags(project, version, source))
@@ -101,9 +101,8 @@ def preprocess(project: Project, source: Path, version: str, deadline: float) ->
         except ValueError as error:
             raise Held("search", f"compiler.cflags: {error}") from error
         recipe = makefile.recipe(project)
-        if not recipe.cpp:
-            raise Held("search", "build.cpp: missing value")
-        command = [str(recipe.cpp), *recipe.cppflags, *options, str(source)]
+        cpp = makefile.host_executable(policy, recipe.cpp or "", "cpp")
+        command = [cpp, *recipe.cppflags, *options, str(source)]
     else:
         if not compiler.cc:
             raise Held("search", "compiler.cc: missing value")
@@ -231,7 +230,7 @@ def run(
                 )
                 key = parent_digest, version
                 if key not in prepared:
-                    expanded = preprocess(project, parent.path, version, generator_deadline)
+                    expanded = preprocess(project, policy, parent.path, version, generator_deadline)
                     allocation = explain.allocation(project, policy, parent.path, version)
                     prepared[key] = expanded, allocation, _focus_lines(allocation, parent.source, expanded)
                 expanded, allocation, focus_lines = prepared[key]

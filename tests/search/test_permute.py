@@ -194,6 +194,21 @@ class PermuteTests(unittest.TestCase):
                 with self.assertRaisesRegex(Held, "unsafe member"):
                     permute.checkout(archive, digest, work)
 
+    def test_archive_entry_is_the_top_level_permuter(self) -> None:
+        # The released archive ships the entry point and a same-named library module under src/.
+        archive = self.home / "release.tar"
+        with tarfile.open(archive, "w") as stream:
+            for name in ("permuter-1/permuter.py", "permuter-1/src/permuter.py"):
+                data = b"print('entry')\n"
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                stream.addfile(member, io.BytesIO(data))
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        work = self.home / "release"
+        work.mkdir()
+        entry = permute.checkout(archive, digest, work)
+        self.assertEqual(entry, work / "dependency" / "permuter-1" / "permuter.py")
+
     def test_results_require_matching_score_and_source(self) -> None:
         for score, source in (("bad", SOURCE), ("2", SOURCE), ("0", None)):
             with self.subTest(score=score, source=source is None):

@@ -218,9 +218,12 @@ class PlacementTests(unittest.TestCase):
         obj = Object(path)
         text_offset = obj.sections[obj.section(".text")][4]
         relocation_offset = obj.sections[obj.section(".rel.text")][4]
+        # A draft shifted against its target proves no callee address; the comparison reports the shift.
+        artifact["target_words"] = [0]
+        self.assertFalse(any(isinstance(need, SymbolNeed) for need in xver.derive(context)))
+        artifact["target_words"] = [jump]
         for offset, target, content, message in [
             (1, jump, bytes.fromhex("0c000000"), "offset"),
-            (0, 0, bytes.fromhex("0c000000"), "jump"),
             (0, jump, bytes.fromhex("0c000001"), "addend"),
         ]:
             data = bytearray(original)

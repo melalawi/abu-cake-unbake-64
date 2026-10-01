@@ -55,9 +55,10 @@ def checkout(archive: Path, digest: str, work: Path) -> Path:
                 if not destination.is_relative_to(checkout) or not (member.isdir() or member.isfile()):
                     raise Held("permute", f"policy.permuter_archive unsafe member {member.name}")
             package.extractall(checkout, filter="data")
-        entries = list(checkout.rglob("permuter.py"))
+        # The entry point sits at the archive root; src/permuter.py is the library module it imports.
+        entries = list(checkout.glob("*/permuter.py"))
         if len(entries) != 1:
-            raise Held("permute", "policy.permuter_archive must contain exactly one permuter.py")
+            raise Held("permute", "policy.permuter_archive must contain exactly one top-level permuter.py")
         return entries[0]
     except (OSError, tarfile.TarError) as error:
         raise Held("permute", f"policy.permuter_archive: {error}") from error

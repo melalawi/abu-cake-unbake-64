@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from unbake.decomp import explain, score, trial, trial_compile
 from unbake.decomp.explain import Allocation
-from unbake.decomp.trial_compare import compare_words
+from unbake.decomp.trial_compare import Compare, compare_words
 from unbake.families.gcc.schedule import schedule
 from unbake.families.ido.schedule import schedule as ido_schedule
 from unbake.project import toolchain
@@ -78,7 +78,7 @@ class SearchIntegrationTests(unittest.TestCase):
             )
             for version, value in (("us", "3"), ("eu", "5")):
                 with self.subTest(version=version):
-                    expanded = core.preprocess(project, source, version, time.monotonic() + 30)
+                    expanded = core.preprocess(project, policy, source, version, time.monotonic() + 30)
                     self.assertRegex(expanded, r"return\s+" + value + r"\s*\+\s*7;")
                     self.assertIn("typedef int Word;", expanded)
                     self.assertIn("FAKEMATCH:", expanded)
@@ -152,6 +152,44 @@ class SearchIntegrationTests(unittest.TestCase):
                         result = explain.order(project, policy, source, "us")
                     self.assertEqual(result.available, family == "gcc")
                     self.assertEqual(tuple(row.uid for row in result.sched2), (9,) if family == "gcc" else ())
+
+    def test_allocation_dumps_come_from_the_build_compiler(self) -> None:
+        # The pinned native SN64 cc1 writes lreg/greg itself; no separate diagnostic compiler exists.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = project_fixture(root / "project")
+            config = (root / "project" / "config.toml").read_text()
+            (root / "project" / "config.toml").write_text(
+                config.replace(f'cpp="{tomllib.loads(config)["build"]["cpp"]}"', 'cpp="policy:cpp"')
+            )
+            source = root / "f.c"
+            source.write_text("int f(int a){return a;}")
+            compiler = project.compiler_for(source)
+            compiler.id = "gcc-2.8.1-sn64"
+            policy = SimpleNamespace(state_root=root / "state", cpp=Path("/usr/bin/cpp"))
+            commands: list[list[str]] = []
+
+            def tools(command: list[str], work: Path, phase: str) -> str:
+                commands.append(command)
+                if "-o" in command:
+                    (work / "source.i.lreg").write_text(
+                        ";; Function f\nRegister 80 used 2 times across 4 insns; GR_REGS or none.\n"
+                    )
+                    (work / "source.i.greg").write_text(
+                        ";; Function f\n;; 1 regs to allocate: 80\n;; Register dispositions:\n80 in 2\n"
+                    )
+                return "int f(int a){return a;}"
+
+            proof = trial.Trial("f", "0" * 64, {"us": Compare("us", 1, 1, {}, [])}, [], "", [])
+            with (
+                patch.object(toolchain, "verify", return_value={}),
+                patch.object(trial_compile, "run_tool", side_effect=tools),
+                patch.object(trial, "try_draft", return_value=proof),
+            ):
+                result = explain.allocation(project, policy, source, "us")  # type: ignore[arg-type]
+            self.assertEqual([p.hard for p in result.pseudos], [2])
+            self.assertEqual(commands[0][0], "/usr/bin/cpp")
+            self.assertEqual(commands[1][0], str(compiler.cc))
 
 
 class OrderTests(unittest.TestCase):

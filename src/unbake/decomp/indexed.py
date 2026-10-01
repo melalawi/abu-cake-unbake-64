@@ -4,7 +4,7 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from unbake.decomp.trial_layout import FunctionSpan, rom_reader
+from unbake.decomp.trial_layout import FunctionSpan, project_reader
 from unbake.layout import split
 from unbake.project.config import Held, Project
 
@@ -76,7 +76,7 @@ def indexed_references(target_words: Sequence[int]) -> list[IndexedReference]:
 def table_guidance(project: Project, version: str, function: str, span: FunctionSpan, target: Sequence[int]) -> str:
     """Name ROM-backed indexed tables whose complete entries target this function."""
     configured = project.version(version)
-    read_memory = rom_reader(configured)
+    read_memory = project_reader(project, version)
     _, _, segments = split.layout(configured.split)
     lines = []
     for ref in indexed_references(target):

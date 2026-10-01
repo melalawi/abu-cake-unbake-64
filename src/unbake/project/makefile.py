@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from unbake.project.config import Held, Project
+from unbake.project.config import Held, Policy, Project
 
 TEMPLATES = Path(__file__).parents[1] / "project_tools"
 
@@ -119,6 +119,19 @@ def host_tool(project: Project, value: str, name: str) -> str:
             return relative(project, path)
         return "policy:" + name
     return value
+
+
+def host_executable(policy: Policy, value: str, field: str) -> str:
+    """Resolve a recipe host tool; policy:NAME references read the operator policy, as the build does."""
+    if not value:
+        raise Held("config", f"build.{field}: missing value")
+    if not value.startswith("policy:"):
+        return value
+    name = value.removeprefix("policy:")
+    configured = getattr(policy, name, None)
+    if configured is None or not str(configured):
+        raise Held("config", f"policy.{name}: missing executable for build.{field}")
+    return str(configured)
 
 
 def flags(project: Project, version: str, unit: str | Path) -> tuple[str, ...]:

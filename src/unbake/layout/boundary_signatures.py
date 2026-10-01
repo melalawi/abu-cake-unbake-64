@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +19,27 @@ class Signature:
     masks: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class CRCSignature(Signature):
+    """n64sym fingerprint of the complete relocation-masked function body."""
+
+    size: int
+    crc_head: int
+    crc_body: int
+
+
+def masked(data: bytes, masks: tuple[int, ...]) -> bytes:
+    if not any(masks):
+        return data
+    result = bytearray(data)
+    for index, mask in enumerate(masks[: (len(data) + 3) // 4]):
+        if mask:
+            at = index * 4
+            word = int.from_bytes(result[at : at + 4], "big") & (~mask & 0xFFFFFFFF)
+            result[at : at + 4] = word.to_bytes(4, "big")
+    return bytes(result)
+
+
 def load(path: Path) -> tuple[Signature, ...]:
     """Read JSON {source, signatures: [{name, words, masks}]} from a supplied SDK corpus.
 
@@ -29,9 +51,27 @@ def load(path: Path) -> tuple[Signature, ...]:
         source = document["source"]
         if not isinstance(source, str) or not source.strip():
             raise ValueError("source: required SDK/object provenance")
-        result = []
+        result: list[Signature] = []
         for row in document["signatures"]:
             name = row["name"]
+            if "crc_body" in row:
+                size = row["size"]
+                masks = tuple(int(mask, 16) for mask in row["masks"])
+                head, body = row["crc_head"], row["crc_body"]
+                if (
+                    not isinstance(name, str)
+                    or not name
+                    or not isinstance(size, int)
+                    or size < 8
+                    or size % 4
+                    or len(masks) != size // 4
+                    or any(mask not in (0, 0xFFFF, 0x03FFFFFF) for mask in masks)
+                    or not all(isinstance(crc, int) and 0 <= crc <= 0xFFFFFFFF for crc in (head, body))
+                    or not any(mask == 0 for mask in masks)
+                ):
+                    raise ValueError(f"{name}: invalid masked CRC signature")
+                result.append(CRCSignature(name, source, (), masks, size, head, body))
+                continue
             words = tuple(int(word, 16) for word in row["words"])
             masks = tuple(int(mask, 16) for mask in row["masks"])
             if not isinstance(name, str) or not name or not words or len(words) != len(masks):
@@ -44,7 +84,7 @@ def load(path: Path) -> tuple[Signature, ...]:
         if not result:
             raise ValueError("signatures: required nonempty SDK catalog")
         return tuple(result)
-    except (OSError, ValueError, TypeError, KeyError) as error:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         raise Held("boundary", f"SDK signatures {path}: {error}") from error
 
 
@@ -57,7 +97,28 @@ def configured() -> tuple[Signature, ...]:
 
 def matches(data: bytes, begin: int, end: int, signatures: tuple[Signature, ...]) -> dict[int, Signature]:
     result: dict[int, Signature] = {}
+    ambiguous: set[int] = set()
+    groups: dict[tuple[int, ...], dict[int, list[CRCSignature]]] = {}
     for signature in signatures:
+        if isinstance(signature, CRCSignature):
+            groups.setdefault(signature.masks[:2], {}).setdefault(signature.crc_head, []).append(signature)
+    for masks, heads in groups.items():
+        for start in range(begin + (-begin % 4), end - 7, 4):
+            head = zlib.crc32(masked(data[start : start + 8], masks))
+            for candidate in heads.get(head, ()):
+                stop = start + candidate.size
+                if stop <= end and zlib.crc32(masked(data[start:stop], candidate.masks)) == candidate.crc_body:
+                    previous = result.get(start)
+                    if previous is not None and previous.name != candidate.name:
+                        ambiguous.add(start)
+                    result[start] = candidate
+    # Common tiny functions can share CRCs or prefix larger bodies. No identity
+    # evidence is issued for those offsets; an unrelated match remains usable.
+    for start in ambiguous:
+        result.pop(start, None)
+    for signature in signatures:
+        if isinstance(signature, CRCSignature):
+            continue
         anchor = next(index for index, mask in enumerate(signature.masks) if mask == 0)
         needle = signature.words[anchor].to_bytes(4, "big")
         cursor = begin

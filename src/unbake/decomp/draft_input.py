@@ -45,7 +45,7 @@ def whole_body(assembly: str, function: str) -> str:
 
 def jump_tables(project: Project, version: str, function: str, assembly: str) -> str:
     """Supply ROM-backed local jump tables omitted by text-only extraction."""
-    from unbake.decomp.trial_layout import function_span, rom_reader, symbol_values
+    from unbake.decomp.trial_layout import function_span, project_reader, symbol_values
 
     names = set(re.findall(r"%hi\((jtbl_[A-Za-z0-9_]+)\)", assembly))
     if not names:
@@ -55,7 +55,7 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
     span = function_span(configured, function, values)
     if span is None:
         raise Held("m2c", f"{function}: missing split placement in VERSION {version}")
-    read_memory = rom_reader(configured)
+    read_memory = project_reader(project, version)
     tables = []
     targets = set()
     for name in sorted(names):

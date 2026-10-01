@@ -119,6 +119,34 @@ def function_symbol(elf: Elf, function: str) -> Symbol:
     return symbol
 
 
+def generation_entry(layout: Elf, function: str, address: int) -> Symbol:
+    """Prove the current generation has a function entry at the split address.
+
+    Functions reached only through pointers carry the extractor's address-derived name until a
+    draft names them, so the entry is identified by address and executable FUNC type.
+    """
+    named = [symbol for symbol in layout.symbols if symbol.name == function and symbol.section in layout.sections]
+    if named:
+        symbol = function_symbol(layout, function)
+        if symbol.address != address:
+            raise Held(
+                "try",
+                f"{layout.path}: {function} address 0x{symbol.address:X} "
+                f"disagrees with symbol/split address 0x{address:X}",
+            )
+        return symbol
+    entries = {
+        symbol.name: symbol
+        for symbol in layout.symbols
+        if symbol.kind == "FUNC" and symbol.address == address and symbol.section in layout.sections
+    }
+    if len(entries) != 1:
+        raise Held(
+            "try", f"{layout.path}: one defined function symbol {function} or entry at 0x{address:X} is required"
+        )
+    return function_symbol(layout, next(iter(entries)))
+
+
 def generation_elf(generation: Path) -> Path:
     paths = sorted(Path(generation).rglob("*.elf"))
     if len(paths) != 1:
@@ -186,13 +214,7 @@ def link(
                 f"{unit.path}: placement for emitted section {other.name} "
                 f"({other.size} bytes) is missing from current generation layout",
             )
-    original = function_symbol(layout, function)
-    if original.address != span.address:
-        raise Held(
-            "try",
-            f"{layout.path}: {function} address 0x{original.address:X} "
-            f"disagrees with symbol/split address 0x{span.address:X}",
-        )
+    generation_entry(layout, function, span.address)
     addresses: dict[str, int] = {}
     for entry in layout.symbols:
         if entry.section != "UND" and entry.binding in ("GLOBAL", "WEAK"):

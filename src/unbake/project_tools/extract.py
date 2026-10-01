@@ -158,6 +158,17 @@ def unit_ranges(text: str) -> dict[str, dict[str, int]]:
                 "end": end,
                 "address": int(vram[1], 0) + rom_offset - int(start[1], 0),
             }
+    for block in blocks:
+        start = re.search(r"^    start: (\S+)", block, re.M)
+        vram = re.search(r"^    vram: (\S+)", block, re.M)
+        if not start or not vram:
+            continue
+        for offset, name in re.findall(
+            r"^      - \[\s*(0x[\da-fA-F]+|\d+)\s*,\s*\.rodata\s*,\s*([^,\]]+)", block, re.M
+        ):
+            unit = Path(scalar(name)).name
+            if unit in found:
+                found[unit]["rodata_address"] = int(vram[1], 0) + int(offset, 0) - int(start[1], 0)
     return found
 
 
@@ -240,8 +251,6 @@ def inventory(script: str, staging: Path, asm: Path, src: Path, compiler: str) -
         return str(obj)
 
     rewritten = pattern.sub(replace, script)
-    if compiler == "sn64":
-        rewritten = rewritten.replace("(.rodata)", "(.rdata)")
     if not seen:
         raise ValueError("splat linker script names no .s.o, .c.o, or .bin.o objects")
     lines = [f"{kind}_OBJECTS := {' '.join(objects)}" for kind, objects in groups.items()]

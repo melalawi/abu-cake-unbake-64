@@ -157,6 +157,26 @@ def runner(project: Project) -> Iterator[Path]:
         yield staging
 
 
+class _Generations(dict[str, Path]):
+    """Hold current generations as staging discovers VERSIONs from resolved edits."""
+
+    def __init__(self, project: Project, holds: ExitStack) -> None:
+        super().__init__()
+        self.project = project
+        self.holds = holds
+
+    def __missing__(self, version: str) -> Path:
+        try:
+            generation = build.current_generation(self.project, version).resolve()
+            lock = self.holds.enter_context((generation / ".inuse").open("a+b"))
+            fcntl.flock(lock, fcntl.LOCK_SH)
+        except (Held, OSError) as error:
+            reason = error.reason if isinstance(error, Held) else str(error)
+            held(f"VERSION {version}: cannot acquire generation: {reason}")
+        self[version] = generation
+        return generation
+
+
 def run(project: Project, policy: Policy) -> list[str]:
     """Build outside build/.lock, isolate failures, then publish verified files."""
     features.load()
@@ -178,14 +198,9 @@ def run(project: Project, policy: Policy) -> list[str]:
     attempt = None
     published = False
     try:
-        current = {}
         with runner(project) as staging:
             with ExitStack() as holds:
-                for version in dict.fromkeys(v for draft in candidates for v in draft.versions):
-                    generation = build.current_generation(project, version).resolve()
-                    current[version] = generation
-                    lock = holds.enter_context((generation / ".inuse").open("a+b"))
-                    fcntl.flock(lock, fcntl.LOCK_SH)
+                current = _Generations(project, holds)
                 workspace = Path(tempfile.mkdtemp(prefix="run-", dir=staging))
                 base = workspace / "base"
                 copy_tree(project.root, base)

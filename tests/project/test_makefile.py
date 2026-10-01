@@ -430,3 +430,14 @@ class MakefileTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         built = (self.root / "build/us/game.us.z64").read_bytes()
         self.assertEqual(built, rom)
+
+
+class HostExecutableTests(unittest.TestCase):
+    def test_policy_references_resolve_through_the_operator_policy(self) -> None:
+        policy = SimpleNamespace(cpp=Path("/usr/bin/cpp"))
+        self.assertEqual(makefile.host_executable(policy, "policy:cpp", "cpp"), "/usr/bin/cpp")  # type: ignore[arg-type]
+        self.assertEqual(makefile.host_executable(policy, "tools/cpp", "cpp"), "tools/cpp")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(config.Held, "policy.mips_cpp: missing executable for build.cpp"):
+            makefile.host_executable(policy, "policy:mips_cpp", "cpp")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(config.Held, "build.cpp: missing value"):
+            makefile.host_executable(policy, "", "cpp")  # type: ignore[arg-type]
