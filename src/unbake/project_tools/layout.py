@@ -10,11 +10,7 @@ from pathlib import Path
 from unbake.project_tools.elf import Object
 from unbake.project_tools.extract import publish
 from unbake.project_tools.literal_layout import arrange
-from unbake.project_tools.rodata import fragment, insert_fragment, placement
-
-
-def signed(value: int) -> int:
-    return value - 65536 if value & 32768 else value
+from unbake.project_tools.rodata import fragment, insert_fragment, placement, relocated
 
 
 def resident(
@@ -62,8 +58,25 @@ def resident(
         base, dissent = placement(obj, section_name, target_words)
         if dissent:
             raise ValueError(f"{section_name}: conflicting placements")
+        if "rodata_address" in interval and base != interval["rodata_address"]:
+            raise ValueError(f"{section_name}: leading compiler padding precedes the local split row")
     except ValueError:
-        base = arrange(obj, section_name, target_words, interval["address"], read_memory, read_table)
+        return arrange(
+            obj,
+            section_name,
+            target_words,
+            interval["address"],
+            read_memory,
+            read_table,
+            emit_resident="rodata_address" in interval,
+        )
+    if "rodata_address" in interval:
+        material = relocated(obj, section_name, interval["address"])
+        if material == read_memory(base, len(material)):
+            return base
+        return arrange(
+            obj, section_name, target_words, interval["address"], read_memory, read_table, emit_resident=True
+        )
     content = bytearray(obj.content(section))
     matches = [
         row
@@ -84,7 +97,15 @@ def resident(
         struct.pack_into(">I", content, at, value)
     if offset < 0 or offset + len(content) > len(image) or content != image[offset : offset + len(content)]:
         try:
-            base = arrange(obj, section_name, target_words, interval["address"], read_memory, read_table)
+            base = arrange(
+                obj,
+                section_name,
+                target_words,
+                interval["address"],
+                read_memory,
+                read_table,
+                emit_resident="rodata_address" in interval,
+            )
         except ValueError as error:
             raise ValueError(f"{obj.path}: {section_name} bytes disagree with resident ROM: {error}") from error
     return base
@@ -123,12 +144,16 @@ def place(args: argparse.Namespace) -> None:
             raise ValueError(f"{name}: unit-ranges.{unit} missing")
         obj = Object(args.build / name)
         local = intervals[unit].get("rodata_address")
-        rdata = obj.section(".rdata")
-        if not partial and local is not None and rdata is not None and obj.sections[rdata][5]:
-            base = resident(obj, intervals[unit], image, ".rdata", mappings)
-            if base != local:
-                raise ValueError(f"{name}: local .rdata placement disagrees with split row")
-            script = re.sub(re.escape(name) + r"\s*\(\.rodata\)", name + "(.rdata)", script)
+        if not partial and local is not None:
+            for section in (".rdata", ".rodata"):
+                index = obj.section(section)
+                if index is None or not obj.sections[index][5]:
+                    continue
+                base = resident(obj, intervals[unit], image, section, mappings)
+                if base != local:
+                    raise ValueError(f"{name}: local {section} placement disagrees with split row")
+                if section == ".rdata":
+                    script = re.sub(re.escape(name) + r"\s*\(\.rodata\)", name + "(.rdata)", script)
         if partial:
             for section in (".rdata", ".rodata"):
                 index = obj.section(section)

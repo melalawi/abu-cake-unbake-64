@@ -13,6 +13,87 @@ from unbake.project_tools.rodata import placement, relocated
 
 
 class LiteralLayoutTests(unittest.TestCase):
+    def anchored(self, values: list[tuple[int, bytes]], *, external: bool = True) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            asm = ".set noreorder\n.text\n.globl alpha\nalpha:\n"
+            if external:
+                asm += "lui $at,%hi(external+4)\nlwc1 $f0,%lo(external+4)($at)\n"
+            asm += "jr $ra\nnop\n.section .rdata\n"
+            for address, data in values:
+                name = f"unbake_rodata_{address:08X}_{len(data):X}"
+                asm += f".align 3\n.globl {name}\n{name}:\n.byte " + ",".join(str(v) for v in data) + "\n"
+            obj = Object(assemble(root, "storage", asm))
+            text = obj.section(".text")
+            assert text is not None
+            before = obj.content(text)
+            relocations = obj.relocations(text)
+            base = min(a for a, _ in values)
+            end = max(a + len(data) for a, data in values)
+            raw = bytearray(end - base)
+            for address, data in values:
+                raw[address - base : address - base + len(data)] = data
+
+            def read(address: int, size: int) -> bytes:
+                return bytes(raw[address - base : address - base + size])
+
+            for _ in range(2):
+                self.assertEqual(arrange(obj, ".rdata", {}, 0x80002000, read, emit_resident=True), base)
+                rebuilt = Object(obj.path)
+                self.assertEqual(relocated(rebuilt, ".rdata", 0x80002000), bytes(raw))
+                self.assertEqual(rebuilt.content(text), before)
+                self.assertEqual(rebuilt.relocations(text), relocations)
+                for symbols in rebuilt.symbols.values():
+                    for symbol in symbols:
+                        if symbol["name"].startswith("unbake_rodata_"):
+                            address = int(symbol["name"].split("_")[2], 16)
+                            self.assertEqual(symbol["value"], address - base)
+
+    def test_pool_offset_storage_keeps_external_addends(self) -> None:
+        self.anchored([(0x80003004, struct.pack(">f", 2.0))])
+
+    def test_incomplete_volatile_pool_emits_all_sixteen_bytes(self) -> None:
+        self.anchored([(0x80003000 + i * 4, struct.pack(">f", float(i))) for i in range(4)])
+
+    def test_missing_leading_pool_is_explicitly_emitted(self) -> None:
+        self.anchored([(0x80003000, struct.pack(">f", 1.0)), (0x80003004, struct.pack(">f", 2.0))])
+
+    def test_extra_nonpadding_has_an_explicit_storage_identity(self) -> None:
+        self.anchored([(0x80003000, bytes.fromhex("123456789abcdef0")), (0x80003008, b"more")])
+
+    def test_address_aggregate_array_storage_is_not_a_string(self) -> None:
+        self.anchored([(0x80003000, bytes.fromhex("01020304000000000000000040c00000"))])
+
+    def test_nonpool_instruction_changes_are_avoided(self) -> None:
+        self.anchored([(0x80003000, struct.pack(">f", 0.0))])
+
+    def test_byte_array_pool_has_its_exact_unrounded_extent(self) -> None:
+        self.anchored([(0x80003001, b"abc\0")])
+
+    def test_existing_short_string_pool_has_explicit_nonzero_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            obj = Object(
+                assemble(
+                    root,
+                    "short_string",
+                    ".set noreorder\n.text\n"
+                    "lui $at,%hi(string)\naddiu $a0,$at,%lo(string)\njr $ra\nnop\n"
+                    '.section .rdata\nstring: .asciz "fourteen chars"\n'
+                    ".globl unbake_rodata_8000300F_1\nunbake_rodata_8000300F_1: .byte 255\n",
+                )
+            )
+            raw = b"fourteen chars\0\xff"
+            self.assertEqual(len(raw), 16)
+
+            def read(address: int, size: int) -> bytes:
+                return raw[address - 0x80003000 : address - 0x80003000 + size]
+
+            self.assertEqual(
+                arrange(obj, ".rdata", {0: 0x3C018000, 4: 0x24243000}, 0x80002000, read, emit_resident=True), 0x80003000
+            )
+            self.assertEqual(relocated(Object(obj.path), ".rdata", 0x80002000), raw)
+
     def test_shared_duplicates_and_misaligned_table_prove_each_word(self) -> None:
         for biased in (False, True):
             with self.subTest(biased=biased), tempfile.TemporaryDirectory() as temporary:

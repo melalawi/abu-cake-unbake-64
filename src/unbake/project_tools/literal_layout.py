@@ -1,10 +1,30 @@
 """Reposition compiler pool words using paired instructions and resident identity."""
 
+import re
 import struct
 from collections.abc import Callable, Mapping
 
 from unbake.project_tools.elf import Object
 from unbake.project_tools.rodata import pools, relocated
+
+ANCHOR = re.compile(r"unbake_rodata_([0-9A-F]{8})_([0-9A-F]+)$")
+
+
+def storage(obj: Object, section: int) -> list[tuple[int, int, int]]:
+    """Read explicit C storage anchors (address and byte extent, not ELF padding).
+
+    ASN64-compatible assemblers do not retain object sizes, so the complete
+    extent is part of the emitted identifier. An anchor is still checked against
+    ROM bytes before it is allowed to supply any placement evidence.
+    """
+    result = []
+    for symbols in obj.symbols.values():
+        for symbol in symbols:
+            match = ANCHOR.fullmatch(symbol["name"])
+            if match is not None and symbol["section"] == section:
+                address, size = (int(value, 16) for value in match.groups())
+                result.append((symbol["value"], address, size))
+    return result
 
 
 def arrange(
@@ -14,6 +34,8 @@ def arrange(
     text_address: int,
     read_memory: Callable[[int, int], bytes],
     read_table: Callable[[int, int], bytes] | None = None,
+    *,
+    emit_resident: bool = False,
 ) -> int:
     """Expand shared literal uses and preserve resident gaps, proving each emitted word.
 
@@ -26,11 +48,18 @@ def arrange(
     if index is None or text is None:
         raise ValueError(f"{section}: missing constant or text section")
     code = bytearray(obj.content(text))
-    source = obj.content(index)
+    source = bytearray(obj.content(index))
     material = relocated(obj, section, text_address)
     tables = pools(obj, section, True)
     pending: dict[tuple[str, int], list[tuple[int, int]]] = {}
     uses: list[tuple[int, int, int, int, int, int]] = []
+    normalized: set[int] = set()
+    anchors = storage(obj, index)
+    for own, address, size in anchors:
+        if size <= 0 or own + size > len(source):
+            raise ValueError(f"{section}: explicit storage outside section bytes")
+        if material[own : own + size] != read_memory(address, size):
+            raise ValueError(f"{section}.bytes: explicit storage disagrees at 0x{address:08X}")
     for offset, kind, symbol in obj.relocations(text):
         if symbol["section"] != index:
             continue
@@ -53,28 +82,52 @@ def arrange(
             own = ((high & 0xFFFF) << 16) + signed(word) + symbol["value"]
             address = (((original & 0xFFFF) << 16) + signed(target)) & 0xFFFFFFFF
             table = next((pool for pool in tables if pool.offset == own), None)
-            size = table.size if table else 8 if word >> 26 in (0x35, 0x37) else 4
-            if table is None and word >> 26 not in (0x23, 0x31, 0x35, 0x37):
+            string = table is None and word >> 26 in (9, 13)
+            if string:
+                terminator = source.find(0, own)
+                if own < 0 or terminator < own:
+                    raise ValueError(f"{section}: unterminated string reference")
+                size = terminator + 1 - own
+            else:
+                size = table.size if table else 8 if word >> 26 in (0x35, 0x37) else 4
+            if table is None and not string and word >> 26 not in (0x23, 0x31, 0x35, 0x37):
                 raise ValueError(f"{section}: reference has no literal load or jump table")
-            if own < 0 or own % 4 or own + size > len(source):
+            if own < 0 or (not string and own % 4) or own + size > len(source):
                 raise ValueError(f"{section}: reference outside pool words")
             expected = (read_table or read_memory)(address, size) if table else read_memory(address, size)
-            if expected != material[own : own + size]:
+            actual = material[own : own + size]
+            raw = read_memory(address, size)
+            if actual != expected and (table is None or actual != raw):
                 raise ValueError(f"{section}.bytes: disagree at 0x{address:08X}")
+            if emit_resident and table is not None and actual != raw and own not in normalized:
+                normalized.add(own)
+                for entry in range(0, size, 4):
+                    delta = int.from_bytes(raw[entry : entry + 4], "big") - int.from_bytes(
+                        actual[entry : entry + 4], "big"
+                    )
+                    addend = int.from_bytes(source[own + entry : own + entry + 4], "big")
+                    struct.pack_into(">I", source, own + entry, (addend + delta) & 0xFFFFFFFF)
             uses.append((at, offset, own, address, size, symbol["value"]))
-    if pending or not uses:
+    if pending or not (uses or anchors):
         raise ValueError(f"{section}: missing complete pool reference pairs")
-    covered = {i for _, _, own, _, size, _ in uses for i in range(own, own + size)}
+    chunks = [(own, address, size) for _, _, own, address, size, _ in uses] + anchors
+    covered = {i for own, _, size in chunks for i in range(own, own + size)}
     if any(value and i not in covered for i, value in enumerate(source)):
         raise ValueError(f"{section}: unreferenced non-padding pool bytes")
-    base = min(address for _, _, _, address, _, _ in uses)
-    end = max(address + size for _, _, _, address, size, _ in uses)
+    base = min(address for _, address, _ in chunks)
+    end = max(address + size for _, address, size in chunks)
+    if not anchors:
+        end = (end + 3) & ~3
     if end - base > max(0x10000, len(source) * 16):
         raise ValueError(f"{section}: pool references cross unrelated resident spans")
     result = bytearray(read_memory(base, end - base))
     if len(result) != end - base:
         raise ValueError(f"{section}: incomplete resident pool words")
     moved: dict[int, int] = {}
+    for own, address, size in anchors:
+        destination = address - base
+        result[destination : destination + size] = source[own : own + size]
+        moved.update((old, destination + old - own) for old in range(own, own + size))
     for at, low, own, address, size, value in uses:
         destination = address - base
         result[destination : destination + size] = source[own : own + size]
@@ -99,6 +152,16 @@ def arrange(
                 old = int(struct.unpack_from(">I", data, pos)[0])
                 struct.pack_into(">I", data, pos, moved[old])
             replace(obj, rel_index, data)
+    # Exported C storage symbols must follow their bytes when compiler alignment
+    # is removed. Section symbols retain zero: their addends were adjusted above.
+    for sym_index, symbols in obj.symbols.items():
+        data = bytearray(obj.content(sym_index))
+        for number, symbol in enumerate(symbols):
+            if symbol["section"] == index and symbol["value"] in moved and ANCHOR.fullmatch(symbol["name"]):
+                value = moved[symbol["value"]]
+                struct.pack_into(">I", data, number * 16 + 4, value)
+                symbol["value"] = value
+        replace(obj, sym_index, data)
     replace(obj, text, code)
     replace(obj, index, result)
     if obj.path.is_symlink():

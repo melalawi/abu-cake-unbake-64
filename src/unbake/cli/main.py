@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from unbake.cli import check, clone, decomp, init, match, report, setup, split
+from unbake.cli import check, clone, decomp, init, match, report, rodata, setup, split
 from unbake.cli.common import Parser
 from unbake.project import config
 from unbake.project.config import Held, Policy, Project
@@ -16,7 +16,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", type=Path, metavar="DIR")
     parser.add_argument("--policy", type=Path, metavar="FILE")
     phases = parser.add_subparsers(dest="phase", required=True)
-    for command in (setup, init, split, decomp, match, report, check, clone):
+    for command in (setup, init, split, decomp, match, report, check, clone, rodata):
         command.register(phases)
     return parser
 
@@ -26,6 +26,7 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
         decomp.run(args, project, policy)
         return False
     commands = {
+        "rodata": rodata.run,
         "clone": clone.run,
         "setup": setup.run,
         "split": split.run,
