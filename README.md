@@ -30,6 +30,8 @@ It shows compiler evidence and asks for confirmation.
 It proves every version before the project is ready.
 Setup prints the policy path and names any missing input.
 Machine paths go in `~/.config/unbake/policy.toml`.
+If setup asks for `names_from` choose a version.
+Run `unbake setup --names-from VERSION`.
 
 ## Next command
 

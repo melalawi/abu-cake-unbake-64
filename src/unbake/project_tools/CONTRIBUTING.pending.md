@@ -22,6 +22,8 @@ It shows compiler evidence and asks for confirmation.
 It prints the policy path and names any missing input.
 It proves every version before the project is ready.
 Setup then writes instructions with your ROM paths.
+If setup asks for `names_from` choose a version.
+Run `unbake setup --names-from VERSION`.
 
 ## Next command
 
