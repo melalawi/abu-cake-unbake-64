@@ -546,7 +546,7 @@ class Proof:
         result = self.run([self.python, "-c", code])
         require(result.returncode == 0, "retire.imports: retired API remains")
 
-    def resubmit(self, project: Path, source_dir: Path) -> None:
+    def resubmit(self, project: Path, source_dir: Path, *, cleanup: bool = False) -> None:
         require(source_dir.is_dir(), "accept.source_dir: missing authored C directory")
         sources = sorted(source_dir.rglob("*.c"))
         require(sources, "accept.sources: no authored C inputs")
@@ -573,6 +573,10 @@ class Proof:
             record = {"input": str(source), "input_sha256": digest, "copy": str(copied)}
             before = self.canonical(project)
             try:
+                if cleanup:
+                    self.cli("decomp", "cleanup", copied, cwd=project)
+                    require(self.canonical(project) == before, "cleanup.overlay: canonical files changed")
+                    record["prepared_sha256"] = hashlib.sha256(copied.read_bytes()).hexdigest()
                 self.cli("try", copied, cwd=project)
                 require(self.canonical(project) == before, "trial.overlay: canonical files changed")
                 self.cli("submit", copied, cwd=project)
@@ -621,6 +625,7 @@ def main() -> int:
         "resubmit", help="Re-submit each read-only authored C input through public work commands."
     )
     resubmit.add_argument("--source-dir", type=Path, required=True)
+    resubmit.add_argument("--cleanup", action="store_true", help="Prepare copied authored C through public cleanup.")
     verify = phases.add_parser("verify", help="Check digests, generated docs, hygiene and repeat setup.")
     for command in (prepare, propose, confirm, cycle, resubmit, verify, mapping, measure):
         command.add_argument("--project", type=Path, required=True)
@@ -660,7 +665,7 @@ def main() -> int:
             elif args.phase == "verify":
                 proof.verify(project)
             else:
-                proof.resubmit(project, args.source_dir)
+                proof.resubmit(project, args.source_dir, cleanup=args.cleanup)
         print("PASS: " + args.phase)
         return 0
     except (ProofError, OSError, ValueError, KeyError, IndexError) as error:
