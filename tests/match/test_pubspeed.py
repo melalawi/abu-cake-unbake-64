@@ -16,7 +16,7 @@ class PublicationSpeedTests(MatchFixture):
         self.assertEqual([row["function"] for row in self.queued()], ["alpha"])
         self.assert_untouched()
 
-    def test_stale_c_receipts_use_chunks_without_dropping_objects_or_assembly(self) -> None:
+    def test_stale_receipts_use_chunks_without_dropping_objects(self) -> None:
         import os
 
         tools = self.root / "tools"
@@ -36,7 +36,7 @@ class PublicationSpeedTests(MatchFixture):
         staging.chunk_stale_sources(generation, tools)
         self.assertFalse((generation / "obj/src/100.built").exists())
         self.assertTrue((generation / "obj/src/300.built").exists())
-        self.assertTrue((generation / "obj/asm/100.built").exists())
+        self.assertFalse((generation / "obj/asm/100.built").exists())
         for unit in (Path("src/100"), Path("src/300"), Path("asm/100")):
             self.assertEqual((generation / "obj" / unit.with_suffix(".o")).read_bytes(), b"warm object")
             self.assertEqual((generation / "obj" / unit.with_suffix(".d")).read_text(), "header dependency")

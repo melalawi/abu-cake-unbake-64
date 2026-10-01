@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shlex
 from dataclasses import asdict
 from pathlib import Path
 
-from unbake.cli.common import Subparsers, count, receipt
+from unbake.cli.common import Subparsers, count, receipt, suggest
+from unbake.decomp.commands import prefix
 from unbake.project.config import Held, Policy, Project
 
 
@@ -37,6 +39,10 @@ def register(phases: Subparsers) -> None:
     gbi = decomp_verbs.add_parser("gbi", phase="decomp", help="Rewrite proven Gfx word pairs as standard GBI macros.")
     gbi.add_argument("files", type=Path, nargs="*", metavar="FILE")
     gbi.add_argument("--all", action="store_true", dest="all_files")
+    cleanup = decomp_verbs.add_parser(
+        "cleanup", phase="decomp", help="Prepare editable C using shared types and staged headers."
+    )
+    cleanup.add_argument("source", type=Path, metavar="FILE")
     search = decomp_verbs.add_parser("search", phase="decomp")
     search.add_argument("source", type=Path, metavar="FILE")
     search.add_argument("--method", required=True)
@@ -86,6 +92,12 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
         from unbake.decomp import gbi
 
         print(json.dumps(gbi.rewrite(project, args.files, all_files=args.all_files), indent=2))
+    elif args.verb == "cleanup":
+        from unbake.decomp.cleanup import prepare
+
+        source = prepare(project, policy, args.source)
+        suggest(shlex.join([*prefix(project), "try", str(source)]))
+        receipt("decomp", [f"editable source prepared: {source}; headers remain staged"])
     elif args.verb == "search":
         from unbake.search import methods
         from unbake.search.core import run as search_run
