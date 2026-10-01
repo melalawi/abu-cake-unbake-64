@@ -449,7 +449,30 @@ class Proof:
         ):
             require(not re.search(pattern, text), f"accept.{key}: {path}")
 
-    def cycle(self, project: Path, source: Path | None = None, function: str | None = None) -> None:
+    def cycle(
+        self, project: Path, source: Path | None = None, function: str | None = None, *, subset: bool = False
+    ) -> None:
+        config = read_config(project)
+        type_root = project / config["paths"]["build"] / "types"
+        revision = json.loads((type_root / "database.json").read_bytes())["revision"]
+        if subset:
+            facts = json.loads((project / config["paths"]["build"] / "map/facts.json").read_bytes())
+            candidates = {
+                name: row
+                for name, row in facts["functions"].items()
+                if config["project"]["names_from"] not in row["versions"]
+            }
+            require(candidates, "accept.subset: no item absent from the naming version")
+            if function is None:
+                function = min(
+                    candidates,
+                    key=lambda name: (
+                        min(row["end"] - row["start"] for row in candidates[name]["versions"].values()),
+                        name,
+                    ),
+                )
+            require(function in candidates, "accept.subset: supplied item is present in the naming version")
+            print(f"Subset item: {function}. Holding versions: {', '.join(candidates[function]['versions'])}")
         output = self.cli("next", cwd=project)
         suggestion = next(line.removeprefix("Next: ") for line in output.splitlines() if line.startswith("Next: "))
         tokens = shlex.split(suggestion)
@@ -484,6 +507,16 @@ class Proof:
         published = project / read_config(project)["paths"]["src"] / draft.name
         require(published.is_file(), "submit.source: missing published C")
         self.clean_source(published)
+        feedback = json.loads((type_root / "proven.json").read_bytes())["records"][draft.stem]
+        require(
+            feedback["source_sha256"] == hashlib.sha256(published.read_bytes()).hexdigest(),
+            "solve.feedback: published source differs from proven seed",
+        )
+        require(feedback["proof"]["matched"] is True, "solve.feedback: missing exact proof")
+        database = json.loads((type_root / "database.json").read_bytes())
+        require(database["revision"] > revision, "solve.feedback: submit did not re-solve")
+        marks = json.loads((type_root / "redraft.json").read_bytes())["functions"]
+        print(f"Submit feedback: revision {revision} -> {database['revision']}. Redraft marks: {len(marks)}")
         self.verify(project)
         self.cli("next", cwd=project)
 
@@ -579,6 +612,7 @@ def main() -> int:
     cycle = phases.add_parser("cycle", help="Execute next/draft/try/submit and refuse a changed untried source.")
     cycle.add_argument("--source", type=Path, help="Reviewed matching C to copy into the generated draft.")
     cycle.add_argument("--function", help="Explicit evidenced item, including a subset-version item.")
+    cycle.add_argument("--subset", action="store_true", help="Prove an item absent from the naming version.")
     mapping = phases.add_parser("map-solve", help="Map all ROMs and solve one shared type database.")
     measure = phases.add_parser("measure", help="Record observed compile, fuzzy and matched round measures.")
     measure.add_argument("--label", required=True)
@@ -618,7 +652,7 @@ def main() -> int:
             elif args.phase == "propose":
                 proof.propose(project, args.compiler, args.supply)
             elif args.phase == "cycle":
-                proof.cycle(project, args.source, args.function)
+                proof.cycle(project, args.source, args.function, subset=args.subset)
             elif args.phase == "map-solve":
                 proof.map_solve(project)
             elif args.phase == "measure":
