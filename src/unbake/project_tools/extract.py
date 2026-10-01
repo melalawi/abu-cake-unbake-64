@@ -134,7 +134,7 @@ def unit_addresses(text: str) -> dict[str, int]:
     return found
 
 
-def pool_rows(text: str) -> list[dict[str, Any]]:
+def pool_rows(text: str, *, storage: bool = False) -> list[dict[str, Any]]:
     """Derive all native pool slices, with structural owner paths preserved."""
     blocks = re.split(r"(?=^  - )", text, flags=re.M)
     found: list[dict[str, Any]] = []
@@ -147,7 +147,7 @@ def pool_rows(text: str) -> list[dict[str, Any]]:
             raise ValueError("layout.pool_span: code segment requires start and vram")
         rows = re.findall(r"^      - \[\s*(0x[\da-fA-F]+|\d+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)", block, re.M)
         for index, (offset, kind, name) in enumerate(rows):
-            if kind.strip().lstrip(".") not in ("rodata", "rdata"):
+            if kind.strip().lstrip(".") not in (("data", "rodata", "rdata") if storage else ("rodata", "rdata")):
                 continue
             if index + 1 < len(rows):
                 end = int(rows[index + 1][0], 0)
@@ -172,6 +172,7 @@ def pool_rows(text: str) -> list[dict[str, Any]]:
                     end=end,
                     address=int(vram[1], 0) + rom - int(start[1], 0),
                     path=path,
+                    section="." + kind.strip().lstrip("."),
                     owner=owner,
                     kind="private" if owner else "shared" if structural and parts[1] == "shared" else "unresolved",
                 )
@@ -216,6 +217,18 @@ def unit_ranges(text: str) -> dict[str, dict[str, Any]]:
             if not row["path"].startswith("rodata/"):
                 interval["rodata_address"] = row["address"]
     return found
+
+
+def raw_storage(row: dict[str, Any], image: bytes) -> str:
+    """Emit the complete byte extent without object-relative numeric alignment."""
+    if not 0 <= row["start"] < row["end"] <= len(image):
+        raise ValueError("layout.pool_span: storage outside ROM bytes")
+    material = image[row["start"] : row["end"]]
+    flags = "a" if row["section"] in (".rdata", ".rodata") else "wa"
+    return f'.section {row["section"]}, "{flags}"\n' + "".join(
+        ".byte " + ",".join(f"0x{value:02X}" for value in material[offset : offset + 16]) + "\n"
+        for offset in range(0, len(material), 16)
+    )
 
 
 def symbols_from(paths: list[Path]) -> dict[str, int]:
@@ -396,6 +409,15 @@ def extract(args: argparse.Namespace) -> None:
         if result.returncode:
             sys.stderr.write(result.stdout.decode(errors="replace"))
             raise subprocess.CalledProcessError(result.returncode, result.args)
+        # Floating directives align relative to an object, while native rows
+        # may start between alignment boundaries. Retain exact ROM bytes in
+        # independent assembly storage; discovered addresses remain explicit
+        # linker definitions. Text retains its actual symbolic relocations.
+        image = args.baserom.read_bytes()
+        for row in pool_rows(text, storage=True):
+            source = staging / "asm" / "data" / (row["path"] + row["section"] + ".s")
+            if source.is_file():
+                source.write_text(raw_storage(row, image))
         script = defer_bss((staging / "layout.ld").read_text())
         rewritten, graph = inventory(script, staging, args.asm, args.src, compiler)
         rewritten = render_alignment(rewritten, alignments)

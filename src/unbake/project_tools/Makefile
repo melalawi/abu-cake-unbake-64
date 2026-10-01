@@ -100,6 +100,16 @@ $(if $(strip $(1)),$(eval $(call compile-chunk,$(wordlist 1,128,$(1))))$(call co
 endef
 $(call compile-chunks,$(C_COLD))
 
+ASM_COLD := $(filter-out $(wildcard $(ASM_OBJECTS:.o=.built)),$(ASM_OBJECTS:.o=.built))
+define assemble-chunk
+$(1) &: $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1)) $(RECIPE) $(DRIVERS) $(BUILD)/symbol-addresses.txt | verify
+	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit batch --source $(ASM) --output $(BUILD)/obj/asm --symbols $(BUILD)/symbol-addresses.txt --batch $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1))
+endef
+define assemble-chunks
+$(if $(strip $(1)),$(eval $(call assemble-chunk,$(wordlist 1,128,$(1))))$(call assemble-chunks,$(wordlist 129,$(words $(1)),$(1))))
+endef
+$(call assemble-chunks,$(ASM_COLD))
+
 $(BUILD)/obj/src/%.built: $(SRC)/%.c $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.json | verify
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/compile.py --kind cc --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $(SRC)/$*.c --source $< --output $(@:.built=.o) --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/src/$*.built'

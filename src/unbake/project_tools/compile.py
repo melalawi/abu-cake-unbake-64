@@ -334,7 +334,9 @@ def compile_batch(args: argparse.Namespace) -> None:
         item.unit = str(source)
         item.output = output
         item.depfile = output.with_suffix(".d")
-        item.dep_target = "$(BUILD)/obj/src/" + str(relative.with_suffix(".built"))
+        item.dep_target = (
+            "$(BUILD)/obj/" + ("asm/" if args.kind == "as" else "src/") + str(relative.with_suffix(".built"))
+        )
         compile_object(item, data)
         output.with_suffix(".built").touch()
 

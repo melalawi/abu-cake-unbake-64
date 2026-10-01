@@ -10,7 +10,6 @@ The upstream MIT notice is embedded; neither building nor matching accesses a ne
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import re
@@ -85,15 +84,19 @@ def build(input_path: Path, output: Path, *, source_url: str, commit: str, sha25
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    from unbake.cli.common import Parser, begin, finish
+
+    begin()
+    parser = Parser(description=__doc__, phase="boundary")
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--source-url", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--license-file", required=True, type=Path)
-    args = parser.parse_args()
+    action = "python -m unbake.layout.signature_catalog --help"
     try:
+        args = parser.parse_args()
         build(
             args.input,
             args.output,
@@ -102,8 +105,11 @@ def main() -> None:
             sha256=args.sha256,
             license_file=args.license_file,
         )
+        action = f"set UNBAKE_BOUNDARY_SIGNATURES to {args.output} and run unbake setup"
     except Held as error:
         parser.exit(1, f"{error}\n")
+    finally:
+        finish(action)
 
 
 if __name__ == "__main__":

@@ -108,6 +108,38 @@ def resolve_literal_placement(
     reader = project_reader(project, version)
     resolved: dict[str, int] = {}
     copied = output.with_suffix(".placed.o")
+    from unbake.project.makefile import recipe
+    from unbake.project_tools.extract import pool_rows
+    from unbake.project_tools.layout import transfer_private
+
+    slices = [
+        row
+        for row in pool_rows(project.version(version).split.read_text())
+        if row["owner"] == function and row["path"].startswith("rodata/")
+    ]
+    if slices and entries[0]["value"] == 0:
+        mappings = recipe(project).resident_mappings.get(version, [])
+        for row in slices:
+            mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
+            row["table_entry_bias"] = mapped[0]["table_entry_bias"] if len(mapped) == 1 else 0
+        shutil.copyfile(candidate, copied)
+        try:
+            section_names = transfer_private(
+                Object(copied),
+                {"start": owner.start, "end": owner.end, "address": text_base},
+                project.version(version).baserom.read_bytes(),
+                slices,
+            )
+        except (Held, ValueError, KeyError, struct.error):
+            copied.unlink(missing_ok=True)
+            return candidate, {}
+        return copied, {
+            "[.text]": text_base,
+            **{
+                f"[{name}]": row["address"]
+                for name, row in zip(section_names, sorted(slices, key=lambda item: item["address"]), strict=True)
+            },
+        }
     for section in pools:
         if not resolved:
             shutil.copyfile(candidate, copied)
@@ -163,6 +195,16 @@ def jump_table_differences(
     obj = Object(candidate)
     index = obj.section(section_name)
     base = sections.get(f"[{section_name}]")
+    if section_name == ".rdata" and (index is None or not obj.sections[index][5]):
+        sliced = [name for name in obj.names if name.startswith(".unbake_pool_")]
+        if sliced:
+            return [
+                difference
+                for name in sliced
+                for difference in jump_table_differences(
+                    generation, version, candidate, sections, addresses, complete_table=False, section_name=name
+                )
+            ]
     if index is None:
         return []
     entries = {offset: symbol for offset, kind, symbol in obj.relocations(index) if kind == 2}

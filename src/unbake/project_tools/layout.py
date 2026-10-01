@@ -10,7 +10,7 @@ from typing import Any
 
 from unbake.project_tools.elf import Object
 from unbake.project_tools.extract import publish
-from unbake.project_tools.literal_layout import arrange
+from unbake.project_tools.literal_layout import arrange, signed, storage
 from unbake.project_tools.pool_slices import split_pool
 from unbake.project_tools.rodata import fragment, insert_fragment, placement, relocated
 
@@ -167,7 +167,25 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
             continue
         # The reference proof assigns bytes, rather than compiler section order.
         # Both sections together may be present, but a slice has one provider.
-        matching = slices if not allocated else [row for row in slices if row["address"] not in allocated]
+        addresses = {address for _, address, _ in storage(obj, index)}
+        pending: dict[tuple[str, int], list[int]] = {}
+        for at, kind, symbol in obj.relocations(text):
+            if symbol["section"] != index:
+                continue
+            key = symbol["name"], symbol["value"]
+            if kind == 5:
+                pending.setdefault(key, []).append(at)
+            elif kind == 6:
+                for high in pending.pop(key, []):
+                    if high in target and at in target:
+                        addresses.add((((target[high] & 65535) << 16) + signed(target[at])) & 0xFFFFFFFF)
+        matching = [
+            row
+            for row in slices
+            if any(row["address"] <= address < row["address"] + row["end"] - row["start"] for address in addresses)
+        ]
+        if not matching or any(row["address"] in allocated for row in matching):
+            raise ValueError("layout.pool_owner: compiler sections do not have disjoint private slices")
         base = arrange(obj, section, target, interval["address"], read, table, emit_resident=True, slices=matching)
         sections.extend(split_pool(obj, section, base, matching))
         allocated.update(row["address"] for row in matching)
@@ -175,10 +193,13 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
         existing = [f".unbake_pool_{row['address']:08X}" for row in slices]
         if not all(obj.section(name) is not None for name in existing):
             raise ValueError("layout.pool_span: compiler emitted no provider for private slices")
+        for row, name in zip(slices, existing, strict=True):
+            if relocated(obj, name, interval["address"]) != read(row["address"], row["end"] - row["start"]):
+                raise ValueError("layout.pool_span: existing compiler slice bytes disagree with ROM")
         return existing
     if allocated != {row["address"] for row in slices}:
         raise ValueError("layout.pool_span: incomplete compiler pool transfer")
-    return sections
+    return sorted(sections)
 
 
 def transfer_selectors(script: str, objname: str, slices: list[dict[str, Any]], sections: list[str]) -> str:

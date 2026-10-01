@@ -7,11 +7,23 @@ from pathlib import Path
 
 from tests.decomp.support import assemble
 from unbake.project_tools.elf import Object
-from unbake.project_tools.extract import pool_rows, unit_ranges
+from unbake.project_tools.extract import pool_rows, raw_storage, unit_ranges
 from unbake.project_tools.layout import transfer_private, transfer_selectors
 
 
 class PoolSliceTests(unittest.TestCase):
+    def test_retained_double_at_absolute_eight_byte_boundary_keeps_exact_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            # ROM start is four bytes off an eight-byte boundary. A .double
+            # directive would align its contents relative to this object.
+            image = bytes(4) + struct.pack(">Id", 0x12345678, 4294967296.0)
+            obj = Object(
+                assemble(Path(directory), "retained", raw_storage(dict(start=4, end=16, section=".data"), image))
+            )
+            data = obj.section(".data")
+            assert data is not None
+            self.assertEqual(obj.content(data), image[4:16])
+
     def test_structural_rows_keep_disjoint_owner_and_shared_storage(self) -> None:
         yaml = (
             "segments:\n  - name: main\n    type: code\n    start: 0x20\n    vram: 0x80002000\n"
@@ -68,6 +80,47 @@ class PoolSliceTests(unittest.TestCase):
             self.assertEqual(
                 transfer_private(rebuilt, dict(start=0x20, end=0x38, address=0x80002000), bytes(image), slices), names
             )
+
+    def test_string_biased_table_and_literal_use_both_compiler_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            obj = Object(
+                assemble(
+                    Path(directory),
+                    "mixed",
+                    ".set noreorder\n.text\n.globl alpha\nalpha:\n"
+                    "lui $at,%hi(literal)\nlwc1 $f0,%lo(literal)($at)\n"
+                    "lui $at,%hi(string)\naddiu $a0,$at,%lo(string)\n"
+                    "lui $at,%hi(table)\naddiu $v0,$at,%lo(table)\n"
+                    "case: jr $ra\nnop\n.section .rdata\nliteral: .word 0x3f800000\n"
+                    '.section .rodata\nstring: .asciz "hello"\n.align 2\ntable: .word case,case\n',
+                )
+            )
+            image = bytearray(0xC4)
+            image[0x20:0x40] = struct.pack(
+                ">8I", 0x3C018000, 0xC4205000, 0x3C018000, 0x24243000, 0x3C018000, 0x24224000, 0x03E00008, 0
+            )
+            image[0x40:0x46] = b"hello\0"
+            image[0x80:0x88] = struct.pack(">II", 0x2018, 0x2018)
+            image[0xC0:0xC4] = bytes.fromhex("3f800000")
+            slices = [
+                dict(start=0x40, end=0x46, address=0x80003000),
+                dict(start=0x80, end=0x88, address=0x80004000, table_entry_bias=0x80000000),
+                dict(start=0xC0, end=0xC4, address=0x80005000),
+            ]
+            names = transfer_private(obj, dict(start=0x20, end=0x40, address=0x80002000), bytes(image), slices)
+            self.assertEqual(names, [".unbake_pool_80003000", ".unbake_pool_80004000", ".unbake_pool_80005000"])
+            rebuilt = Object(obj.path)
+            table = rebuilt.section(names[1])
+            assert table is not None
+            self.assertEqual([offset for offset, _, _ in rebuilt.relocations(table)], [0, 4])
+            from unbake.project_tools.rodata import relocated
+
+            self.assertEqual(relocated(rebuilt, names[1], 0x80002000), image[0x80:0x88])
+            for row, name in zip(slices, names, strict=True):
+                index = rebuilt.section(name)
+                assert index is not None
+                if name != names[1]:
+                    self.assertEqual(rebuilt.content(index), image[row["start"] : row["end"]])
 
     def test_nonzero_private_tail_needs_compiler_material(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
