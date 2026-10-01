@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.project.test_makefile import fixture, helper, write_rendered
+from tests.project.makefile_fixture import fixture, helper, write_rendered
 from tests.support import tool
 
 

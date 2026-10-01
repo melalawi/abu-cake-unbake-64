@@ -2,6 +2,9 @@
 
 Run: python -m unbake.layout.signature_catalog INPUT OUTPUT
 --source-url URL --commit FULL_COMMIT --sha256 INPUT_SHA256 --license-file LICENSE
+Entries retain their source bodies; matching requires at least 16 bytes and a
+unique masked-body occurrence in the scanned range. Short/repeated bodies are
+withheld because they cannot establish function identity.
 The upstream MIT notice is embedded; neither building nor matching accesses a network.
 """
 
@@ -14,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from unbake.layout.boundary_signatures import load
+from unbake.layout.boundary_signatures import MINIMUM_BODY_SIZE, load
 from unbake.project.config import Held
 
 RELOCATION_MASKS = {"hi16": 0xFFFF, "lo16": 0xFFFF, "targ26": 0x03FFFFFF}
@@ -57,6 +60,11 @@ def build(input_path: Path, output: Path, *, source_url: str, commit: str, sha25
         document = {
             "source": f"{source_url}@{commit} sha256:{sha256}",
             "provenance": {"url": source_url, "commit": commit, "sha256": sha256, "license": "MIT", "notice": notice},
+            "identity_requirements": {
+                "minimum_body_size": MINIMUM_BODY_SIZE,
+                "unique_masked_body_in_scanned_range": True,
+                "reason": "Short or repeated masked bodies cannot establish function identity.",
+            },
             "signatures": rows,
         }
         # Validate with the consumer before publishing, without writing through symlinks.

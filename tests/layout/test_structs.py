@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -218,6 +219,33 @@ class FoldTests(unittest.TestCase):
                 [(item.name, item.offset) for item in layouts(edits[0].after)[0].fields],
                 [("a", 0), ("b", 4), ("tail", 8)],
             )
+
+    def test_guarded_scalar_home_and_comma_edits_compile_as_c89(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "types.h").write_text("typedef int s32;\n")
+            (root / "base.h").write_text("#ifndef BASE_H\n#define BASE_H\ntypedef int s32;\n#endif\n")
+            header = root / "existing.h"
+            header.write_text('#include "base.h"\nstruct Existing { char pad[4], tail[4]; };\n')
+            project = SimpleNamespace(include=(root,), versions=("us",))
+            records = layouts("struct Existing { s32 value; char tail[4]; }; struct Added { s32 x, y; };")
+            edits = fold(records, project)
+            self.assertEqual(len(edits), 2)
+            for edit in edits:
+                edit.path.write_text(edit.after)
+            self.assertIn('#include "base.h"', (root / "structs.h").read_text())
+            source = root / "test.c"
+            source.write_text('#include "base.h"\n#include "existing.h"\n#include "structs.h"\n')
+            compiler = shutil.which("cc")
+            self.assertIsNotNone(compiler)
+            assert compiler is not None
+            result = subprocess.run(
+                [compiler, "-std=c89", "-pedantic-errors", "-fsyntax-only", str(source)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(layouts(header.read_text().split("\n", 1)[1])[0].size, 8)
 
     def test_existing_union_and_forward_typedef_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

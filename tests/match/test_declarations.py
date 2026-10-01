@@ -1,6 +1,9 @@
 """Shared declaration preflight and final source regressions."""
 
+import hashlib
+from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
@@ -96,6 +99,32 @@ class DeclarationTests(MatchFixture):
         self.assertIn("struct Record", header)
         self.assertIn("struct Other", header)
         self.assertFalse((self.root / "include" / "alpha.h").exists())
+
+    def test_header_promotion_keeps_queued_source_hash_through_retry(self) -> None:
+        header = self.root / "include" / "structs.h"
+        header.write_text("struct Record { char pad[4], tail[4]; };\n")
+        text = "struct Record { int value; char tail[4]; };\nint alpha(void) { return 0; }\n"
+        source = self.src / "alpha.c"
+        source.write_text(text)
+        self.prove(source, pending=self.pending(text))
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        match.submit(self.project, self.policy, source)
+
+        def inspect(tree: Path, generation_for: Callable[[str], Path]) -> None:
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)
+            self.assertEqual(self.queued()[0]["source_sha256"], digest)
+            self.assertIn("int value;", (tree / "include" / "structs.h").read_text())
+            self.assertNotIn("struct Record", (tree / "src" / "alpha.c").read_text())
+
+        self.on_build = inspect
+        self.fail.add(("alpha", "us"))
+        self.assertTrue(any("HELD(match)" in line for line in match.run(self.project, self.policy)))
+        self.assertEqual(source.read_text(), text)
+        self.fail.clear()
+        receipts = match.run(self.project, self.policy)
+        self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
+        self.assertEqual(self.matched()[0]["sha256"], digest)
+        self.assertEqual(self.queued(), [])
 
     def test_landing_removes_draft_marker_and_preserves_other_comments(self) -> None:
         text = (

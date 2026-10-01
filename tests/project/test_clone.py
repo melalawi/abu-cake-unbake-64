@@ -123,6 +123,33 @@ class CloneTests(unittest.TestCase):
         with self.assertRaisesRegex(config.Held, "overlaps"):
             clone.create(self.project, self.policy, self.live / "proof", ["us"])
 
+    def test_local_policy_and_build_outputs_leave_tracked_checkout_clean(self) -> None:
+        helper = self.project.tools / "helper.py"
+        (self.project.tools / "compiler.sha256").write_text(
+            hashlib.sha256(helper.read_bytes()).hexdigest() + "  tools/helper.py\n"
+        )
+        (self.live / "Makefile").write_text(
+            "include build/us/.split.mk\n"
+            'check:\n\t@test "$$UNBAKE_POLICY" = "$(CURDIR)/tools/clone-policy.toml"\n'
+            "\t@mkdir -p .unbake/cache .unbake/state\n"
+            "\t@touch .unbake/cache/output .unbake/state/output\n"
+        )
+        for name in self.project.versions:
+            (self.live / "build" / f"{name}.3/.split.mk").write_text("# warm graph\n")
+        self.git("add", ".")
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "clean inputs")
+        with patch.object(toolchain, "verify"):
+            clone.create(self.project, self.policy, self.destination, self.project.versions)
+        for build in (False, True):
+            with self.subTest(build=build):
+                if build:
+                    subprocess.run(["make", "-j4", "check"], cwd=self.destination, check=True, capture_output=True)
+                status = subprocess.run(
+                    ["git", "status", "--short"], cwd=self.destination, check=True, capture_output=True
+                )
+                self.assertEqual(status.stdout, b"")
+        self.assertEqual((self.destination / "Makefile").read_bytes(), (self.live / "Makefile").read_bytes())
+
     def test_cli_dispatch_selects_versions_and_formats_refusal(self) -> None:
         for versions in ([], ["--version", "us"]):
             with self.subTest(versions=versions), patch.object(config, "load_policy", return_value=self.policy):

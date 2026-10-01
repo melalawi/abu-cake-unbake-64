@@ -11,6 +11,7 @@ from unbake.layout import shared
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
+from unbake.layout.structs_types import SCALARS
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -29,6 +30,39 @@ def _padding(item: Field) -> bool:
         "s8",
         "unsigned char",
     )
+
+
+def _scalar_include(project: Any, texts: dict[Path, str], records: list[Layout]) -> str:
+    """Prefer a guarded scalar home: older compilers reject repeated typedefs."""
+    candidates = []
+    required = set(
+        re.findall(
+            r"\b[A-Za-z_]\w*\b",
+            " ".join(member.declaration for record in records for _, member, _ in _leaves(record.fields)),
+        )
+    )
+    for path, text in texts.items():
+        parser = Parser(text)
+        if any(token[0] in ("struct", "union") for token in parser.tokens):
+            continue
+        parser.parse()
+        scalars = {
+            name
+            for name, target in parser.types.items()
+            if isinstance(target, tuple) and isinstance(target[0], str) and target[0] in SCALARS and not target[1]
+        }
+        if scalars:
+            guarded = bool(re.search(r"^\s*#\s*ifndef\b", text, re.M))
+            candidates.append((guarded, scalars, path))
+    if not candidates:
+        return ""
+    required &= set().union(*(names for _, names, _ in candidates))
+    compatible = [(not guarded, -len(names), path) for guarded, names, path in candidates if required <= names]
+    if not compatible:
+        held("scalar headers", "no common declaration home for " + ", ".join(sorted(required)))
+    path = min(compatible)[2]
+    relative = next(path.relative_to(root) for root in project.include if path.is_relative_to(root))
+    return f'#include "{relative.as_posix()}"\n'
 
 
 def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | None = None) -> list[Edit]:
@@ -192,7 +226,11 @@ def fold(records: list[Layout], headers: Any, *, versions: tuple[str, ...] | Non
             held("project", "shared declaration home required")
         path = shared.home(project)
         before = texts.get(path, "")
-        before_header = before or '#ifndef UNBAKE_STRUCTS_H\n#define UNBAKE_STRUCTS_H\n#include "types.h"\n\n#endif\n'
+        before_header = before or (
+            "#ifndef UNBAKE_STRUCTS_H\n#define UNBAKE_STRUCTS_H\n"
+            + _scalar_include(project, texts, list(additions.values()))
+            + "\n#endif\n"
+        )
         new_declarations = "\n".join(shared.declaration(record) for record in additions.values())
         existing_edit = next((edit for edit in edits if edit.path == path), None)
         if existing_edit is not None:

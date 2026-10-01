@@ -21,22 +21,28 @@ class BoundaryTests(unittest.TestCase):
                 json.dumps(
                     {
                         "source": "SDK object fixture",
-                        "signatures": [{"name": "sdk_leaf", "words": ["03e00008", "24020001"], "masks": ["0", "0"]}],
+                        "signatures": [
+                            {
+                                "name": "sdk_leaf",
+                                "words": ["3c028000", "24420001", "03e00008", "00000000"],
+                                "masks": ["0"] * 4,
+                            }
+                        ],
                     }
                 )
             )
-            data = struct.pack(">4I", 0x03E00008, 0, 0x03E00008, 0x24020001)
+            data = struct.pack(">6I", 0x03E00008, 0, 0x3C028000, 0x24420001, 0x03E00008, 0)
             with patch.dict("os.environ", {"UNBAKE_BOUNDARY_SIGNATURES": str(path)}):
                 self.assertIn("[0x8, asm]", loaded_rows(data, 0, len(data), 0x80000000))
             with patch.dict("os.environ", {}, clear=True), self.assertRaisesRegex(Held, "UNBAKE_BOUNDARY_SIGNATURES"):
                 boundary_signatures.configured()
 
     def test_relocation_mask_preserves_nonrelocation_instruction_bits(self) -> None:
-        signature = Signature("sdk", "SDK fixture", (0x0C000001, 0x03E00008), (0x03FFFFFF, 0))
-        data = struct.pack(">2I", 0x0C123456, 0x03E00008)
-        self.assertEqual(list(boundary_signatures.matches(data, 0, 8, (signature,))), [0])
-        data = struct.pack(">2I", 0x08123456, 0x03E00008)
-        self.assertFalse(boundary_signatures.matches(data, 0, 8, (signature,)))
+        signature = Signature("sdk", "SDK fixture", (0x0C000001, 0, 0x03E00008, 0), (0x03FFFFFF, 0, 0, 0))
+        data = struct.pack(">4I", 0x0C123456, 0, 0x03E00008, 0)
+        self.assertEqual(list(boundary_signatures.matches(data, 0, 16, (signature,))), [0])
+        data = struct.pack(">4I", 0x08123456, 0, 0x03E00008, 0)
+        self.assertFalse(boundary_signatures.matches(data, 0, 16, (signature,)))
 
     def test_tail_call_and_merge_have_different_evidence(self) -> None:
         words = {0: 0x08000004, 4: 0}
@@ -98,25 +104,27 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(measured.call_args.args[2], [root / "asm/b/leaf.s"])
 
     def test_signature_seeding_preserves_existing_row_intervals(self) -> None:
-        data = struct.pack(">4I", 0x03E00008, 0, 0x03E00008, 0x24020001)
+        data = struct.pack(">6I", 0x03E00008, 0, 0x3C028000, 0x24420001, 0x03E00008, 0)
         text = (
             "segments:\n  - name: main\n    type: code\n    start: 0x0\n"
             "    vram: 0x80000000\n    subsegments:\n"
-            "      - [0x0, asm]\n      - [0x8, asm]\n  - [0x10, bin]\n"
+            "      - [0x0, asm]\n      - [0x8, asm]\n  - [0x18, bin]\n"
         )
         with (
             patch.dict("os.environ", {"UNBAKE_BOUNDARY_SIGNATURES": "configured"}),
             patch("unbake.layout.split_analysis.copied_text", return_value=[]),
-            patch("unbake.layout.split_analysis.loaded_bounds", return_value=(0x80000010, 0x80000020)),
-            patch("unbake.layout.split_analysis.executable_end", return_value=16),
+            patch("unbake.layout.split_analysis.loaded_bounds", return_value=(0x80000018, 0x80000028)),
+            patch("unbake.layout.split_analysis.executable_end", return_value=24),
             patch.object(
                 boundary_signatures,
                 "configured",
-                return_value=(Signature("sdk_leaf", "SDK fixture", (0x03E00008, 0x24020001), (0, 0)),),
+                return_value=(
+                    Signature("sdk_leaf", "SDK fixture", (0x3C028000, 0x24420001, 0x03E00008, 0), (0, 0, 0, 0)),
+                ),
             ),
         ):
             # A measured boundary must extend the generated code interval.
-            text = text.replace("0x10, bin", "0xC, bin")
+            text = text.replace("0x18, bin", "0x14, bin")
             result = complete_executable(text, data)
         self.assertEqual(result.count("[0x8, asm]"), 1)
 

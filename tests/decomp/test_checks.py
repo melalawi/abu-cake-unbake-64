@@ -4,7 +4,9 @@ import json
 import os
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from unbake.decomp import checks
 from unbake.project.config import Held
@@ -29,7 +31,7 @@ class ChecksTest(unittest.TestCase):
                 self.assertTrue(findings)
                 self.assertEqual((findings[0].rule, findings[0].line), (rule, line))
                 with self.assertRaisesRegex(Held, rule):
-                    checks.resolve(findings, None, None)
+                    checks.resolve(list(findings), None, None)
 
     def test_real_c_forms_avoid_false_positives(self) -> None:
         cases = [
@@ -47,10 +49,76 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertEqual(checks.run(content), [])
 
+    def test_raw_offsets_are_bounded_unary_addresses(self) -> None:
+        cases = [
+            ("value arithmetic", "x = *(int *)(array + index) + 1;", 0),
+            ("value comparison", "if (*(int *)(array + index) != -1) {}", 0),
+            ("multiline value", "x = *(int *)(array + index)\n + 1;", 0),
+            ("multiplication", "x = factor * ((int *)(array + 4));", 0),
+            ("multiplication with load", "x = factor * (*((int *)(array + 4)));", 1),
+            ("nested char buffer", "x = *(int *)(p->buffer + 0x1C);", 1),
+            ("negative field", "x = *(int *)((char *)p - 4);", 1),
+            ("parenthesized field", "x = *(int *)((char *)p + (0x18));", 1),
+            ("zero base reinterpretation", "x = *(int *)((char *)p + (0));", 0),
+            ("nested field loads", "x = *(int *)(*(char **)(p + 4) + 8);", 2),
+            ("dynamic outer address", "x = *(int *)(p + *(int *)(q + 4));", 1),
+            ("outer scalar cast", "x = (u32)*(s32 *)(p + 0x18);", 1),
+            ("indexed object field", "x = *(int *)((char *)p + index * 0x18 + 0xA4);", 1),
+            ("function pointer field", "x = *((Callback (**)(void *))((char *)p + 4));", 1),
+            ("scalar reinterpretation", "x = *((u16 *)&arg + 1);", 1),
+            ("multiple loads", "x = *(int *)(p + 4) + *(int *)(p + 8);", 2),
+        ]
+        for pattern, content, count in cases:
+            with self.subTest(pattern=pattern):
+                findings = [finding for finding in checks.run(content) if finding.rule == "raw-offset"]
+                self.assertEqual(len(findings), count)
+                if count:
+                    with self.assertRaisesRegex(Held, "raw-offset"):
+                        checks.resolve(list(findings), None, None)
+
+    def test_volatile_distinguishes_storage_from_type_and_device_access(self) -> None:
+        cases = [
+            ("parenthesized cast", "x = *((volatile float *) (&p->field));", 0),
+            ("extra parentheses", "x = *(((volatile float *) (&p->field)));", 0),
+            ("sizeof type", "char pad[4 - sizeof(volatile int)];", 0),
+            ("sizeof pointer", "char pad[8 - sizeof(volatile Entry *)];", 0),
+            ("alignment type", "x = _Alignof(volatile int);", 0),
+            ("return qualifier", "volatile unsigned long long f(void) {}", 0),
+            ("device cast", "p = (volatile u32 *)0xA4600010;", 0),
+            (
+                "device alias",
+                "void f(void) { volatile u32 *p; volatile u32 *q; "
+                "p = (volatile u32 *)0xA4600010; q = p; while (*q) {} }",
+                0,
+            ),
+            ("device initializer", "void f(void) { volatile u32 *p = (volatile u32 *)0xA4600010; *p = 2; }", 0),
+            ("local dead stores", "void f(void) { volatile int ret; ret = 1; }", 1),
+            ("volatile field", "struct S { volatile int field; };", 1),
+            ("aggregate scheduling cast", "state = ((volatile struct Screen *)p)->rows[row].state;", 1),
+            ("unknown pointer storage", "void f(void) { volatile int *p; }", 1),
+            ("volatile pointer itself", "void f(void) { u32 *volatile p = (u32 *)0xA4600010; }", 1),
+            ("ordinary memory cast", "p = (volatile u32 *)0x80000000;", 1),
+            (
+                "device name in another function",
+                "void f(void) { volatile u32 *p = (volatile u32 *)0xA4600010; } void g(void) { volatile u32 *p; }",
+                1,
+            ),
+            ("marked real storage", "/* FAKEMATCH: measured scheduling */ volatile int x;", 1),
+        ]
+        for pattern, content, count in cases:
+            with self.subTest(pattern=pattern):
+                findings = [finding for finding in checks.run(content) if finding.rule == "volatile-storage"]
+                self.assertEqual(len(findings), count)
+                if count and "FAKEMATCH" not in content:
+                    with self.assertRaisesRegex(Held, "volatile-storage"):
+                        checks.resolve(list(findings), None, None)
+                elif "FAKEMATCH" in content:
+                    self.assertEqual(checks.resolve(list(findings), None, None), [])
+
     def test_marked_exception_is_accepted_and_serializable(self) -> None:
         content = "/* FAKEMATCH: preserve the measured scheduling effect. */\nvoid f(void) { do {} while (0); }"
         findings = checks.run(content)
-        self.assertEqual(checks.resolve(findings, None, None), [])
+        self.assertEqual(checks.resolve(list(findings), None, None), [])
         reason = "preserve the measured scheduling effect."
         self.assertEqual(findings[0].fakematch, reason)
         receipt = json.loads(json.dumps({"function": "f", "fakematch": checks.fakematches(content)}))
@@ -58,12 +126,13 @@ class ChecksTest(unittest.TestCase):
         self.assertEqual(checks.fakematches('const char *s = "/* FAKEMATCH: text */";'), ())
 
     def test_missing_values_are_named(self) -> None:
-        cases = [
-            (lambda: checks.run(None), "source"),
-            (lambda: checks.fakematches(None), "source_text"),
+        invalid: Any = None
+        cases: list[tuple[Callable[[], object], str]] = [
+            (lambda: checks.run(invalid), "source"),
+            (lambda: checks.fakematches(invalid), "source_text"),
             (lambda: checks.run("/* FAKEMATCH: */"), "FAKEMATCH.reason"),
-            (lambda: checks.resolve([None], None, None), "GuardFinding"),
-            (lambda: checks.resolve(None, None, None), "findings"),
+            (lambda: checks.resolve([invalid], None, None), "GuardFinding"),
+            (lambda: checks.resolve(invalid, None, None), "findings"),
             (lambda: checks.derive(None), "trial_context.source"),
         ]
         for operation, name in cases:

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tests.project.test_makefile import WORK, fixture
+from tests.project.makefile_fixture import WORK, fixture
 from unbake.project import build, config, setup
 
 

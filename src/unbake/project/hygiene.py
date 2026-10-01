@@ -15,13 +15,28 @@ def compiler_directories(project: Project) -> tuple[Path, ...]:
 def ignore_text(project: Project) -> str:
     path = project.root / ".gitignore"
     existing = path.read_text() if path.exists() else ""
-    entries = ["__pycache__/", "*.py[cod]", "baserom.*", "/build/", "/asm/", "/.splat/"]
+    entries = ["__pycache__/", "*.py[cod]", "baserom.*", "/build/", "/asm/", "/.splat/", "/.unbake/"]
     entries.extend(f"/{directory.as_posix()}/" for directory in compiler_directories(project))
-    # Append required rules after user rules so negations cannot expose host inputs.
-    suffix = "\n".join(entries) + "\n"
-    if existing.endswith(suffix):
-        return existing
-    return existing + ("\n" if existing and not existing.endswith("\n") else "") + suffix
+    entries.append(f"/{project.tools.relative_to(project.root).as_posix()}/clone-policy.toml")
+    required = {entry.removeprefix("/") for entry in entries}
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in existing.splitlines():
+        # Ignore spelling differences in the root rules supplied by the tool.
+        # Retain the first spelling and all comments, blanks and negations.
+        root_rule = line.removeprefix("/")
+        key = root_rule if root_rule in required else line
+        if line and not line.startswith(("#", "!")):
+            if key in seen:
+                continue
+            seen.add(key)
+        lines.append(line)
+    for entry in entries:
+        key = entry.removeprefix("/")
+        if key not in seen:
+            lines.append(entry)
+            seen.add(key)
+    return "\n".join(lines) + "\n"
 
 
 def indexed_contents(root: Path, blobs: list[bytes]) -> dict[bytes, bytes]:

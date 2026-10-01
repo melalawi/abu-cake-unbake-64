@@ -8,8 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_config import write_policy
-from tests.project.test_makefile import WORK, fixture
 from unbake.cli.main import make_parser
 from unbake.cli.setup import run as setup_command
 from unbake.project import config, setup

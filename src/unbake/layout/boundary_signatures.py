@@ -95,9 +95,24 @@ def configured() -> tuple[Signature, ...]:
     return load(Path(value))
 
 
-def matches(data: bytes, begin: int, end: int, signatures: tuple[Signature, ...]) -> dict[int, Signature]:
-    result: dict[int, Signature] = {}
-    ambiguous: set[int] = set()
+MINIMUM_BODY_SIZE = 16
+
+
+@dataclass(frozen=True)
+class Identification:
+    matches: dict[int, Signature]
+    withheld: dict[int, tuple[str, ...]]
+
+
+def identify(data: bytes, begin: int, end: int, signatures: tuple[Signature, ...]) -> Identification:
+    """Identify bodies of at least 16 bytes occurring once in the scanned range.
+
+    Short bodies cannot distinguish common instruction idioms. Repeated masked
+    bodies cannot identify which occurrence owns the catalog function. Neither
+    supplies identity evidence, even when the catalog assigns only one name.
+    Withheld offsets include the function name and every specificity reason.
+    """
+    occurrences: dict[Signature, set[int]] = {}
     groups: dict[tuple[int, ...], dict[int, list[CRCSignature]]] = {}
     for signature in signatures:
         if isinstance(signature, CRCSignature):
@@ -108,14 +123,7 @@ def matches(data: bytes, begin: int, end: int, signatures: tuple[Signature, ...]
             for candidate in heads.get(head, ()):
                 stop = start + candidate.size
                 if stop <= end and zlib.crc32(masked(data[start:stop], candidate.masks)) == candidate.crc_body:
-                    previous = result.get(start)
-                    if previous is not None and previous.name != candidate.name:
-                        ambiguous.add(start)
-                    result[start] = candidate
-    # Common tiny functions can share CRCs or prefix larger bodies. No identity
-    # evidence is issued for those offsets; an unrelated match remains usable.
-    for start in ambiguous:
-        result.pop(start, None)
+                    occurrences.setdefault(candidate, set()).add(start)
     for signature in signatures:
         if isinstance(signature, CRCSignature):
             continue
@@ -132,8 +140,32 @@ def matches(data: bytes, begin: int, end: int, signatures: tuple[Signature, ...]
                 == 0
                 for index, (word, mask) in enumerate(zip(signature.words, signature.masks, strict=True))
             ):
-                previous = result.get(start)
-                if previous is not None and previous != signature:
-                    raise Held("boundary", f"SDK signatures: ambiguous {previous.name}/{signature.name} at 0x{start:X}")
-                result[start] = signature
-    return result
+                occurrences.setdefault(signature, set()).add(start)
+    candidates: dict[int, list[Signature]] = {}
+    withheld: dict[int, set[str]] = {}
+    for signature, offsets in occurrences.items():
+        size = signature.size if isinstance(signature, CRCSignature) else len(signature.words) * 4
+        reasons = []
+        if size < MINIMUM_BODY_SIZE:
+            reasons.append(f"{signature.name}: body size {size} below minimum {MINIMUM_BODY_SIZE}")
+        if len(offsets) > 1:
+            reasons.append(f"{signature.name}: masked body occurs at {len(offsets)} candidate offsets")
+        for start in offsets:
+            if reasons:
+                withheld.setdefault(start, set()).update(reasons)
+            else:
+                candidates.setdefault(start, []).append(signature)
+    result: dict[int, Signature] = {}
+    for start, entries in candidates.items():
+        names = {signature.name for signature in entries}
+        if len(names) > 1:
+            withheld.setdefault(start, set()).add("ambiguous catalog names: " + ", ".join(sorted(names)))
+        else:
+            result[start] = entries[0]
+            withheld.pop(start, None)
+    return Identification(result, {start: tuple(sorted(reasons)) for start, reasons in withheld.items()})
+
+
+def matches(data: bytes, begin: int, end: int, signatures: tuple[Signature, ...]) -> dict[int, Signature]:
+    """Supply only specific identities for boundary evidence."""
+    return identify(data, begin, end, signatures).matches

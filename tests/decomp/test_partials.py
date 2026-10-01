@@ -117,7 +117,7 @@ class PartialsTest(unittest.TestCase):
                 self.assertIn('asm, "text/f"', text)
 
     def test_standalone_partial_object_receives_macro(self) -> None:
-        from tests.project.test_makefile import fixture, write_rendered
+        from tests.project.makefile_fixture import fixture, write_rendered
 
         (self.root / "build-fixture").mkdir()
         project, _ = fixture(self.root / "build-fixture")

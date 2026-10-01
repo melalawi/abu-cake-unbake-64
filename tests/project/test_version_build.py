@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from tests.project.test_makefile import fixture, write_rendered
+from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.project import config
 
 

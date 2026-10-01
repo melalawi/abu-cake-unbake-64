@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from tests.project.test_makefile import fixture
+from tests.project.makefile_fixture import fixture
 from tests.support import test_policy, tool
 from unbake.decomp import score
 from unbake.project import init

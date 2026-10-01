@@ -63,39 +63,169 @@ def _asm(source: str, code: str) -> list[GuardFinding]:
     return _matches("inline-asm", r"\b(?:asm|__asm|__asm__|GLOBAL_ASM|INCLUDE_ASM)\b", source, pasted)
 
 
+class _Syntax:
+    """Balanced C tokens shared by expression-based guards."""
+
+    def __init__(self, code: str) -> None:
+        self.tokens = list(
+            re.finditer(r"[A-Za-z_]\w*|0[xX][\da-fA-F]+[uUlL]*|\d+(?:\.\d*)?[\w]*|->|\+\+|--|[^\s]", code)
+        )
+        self.words = [token[0] for token in self.tokens]
+        self.pairs: dict[int, int] = {}
+        stack: list[int] = []
+        for index, word in enumerate(self.words):
+            if word in ("(", "[", "{"):
+                stack.append(index)
+            elif word in (")", "]", "}") and stack:
+                opening = stack.pop()
+                if self.words[opening] == {")": "(", "]": "[", "}": "{"}[word]:
+                    self.pairs[opening] = index
+
+    def pointer_type(self, start: int, end: int) -> bool:
+        words = self.words[start + 1 : end]
+        return "*" in words and all(re.fullmatch(r"[A-Za-z_]\w*|\d+|[*(),\[\]]", word) for word in words)
+
+    def unary(self, index: int) -> bool:
+        if not index:
+            return True
+        previous = self.words[index - 1]
+        if previous == ")":
+            opening = next((a for a, b in self.pairs.items() if b == index - 1), -1)
+            if opening >= 0 and re.fullmatch(
+                r"(?:[su](?:8|16|32|64)|f(?:32|64)|int|char|short|long|float|double)",
+                " ".join(self.words[opening + 1 : index - 1]),
+            ):
+                return True
+        return previous in ("return", "case", "sizeof") or not re.fullmatch(r"[\w]+|[)\]]|\+\+|--", previous)
+
+    def operand_end(self, start: int) -> int:
+        """Bound one unary operand, including casts and postfix expressions."""
+        if start >= len(self.words):
+            return start
+        word = self.words[start]
+        if word in ("*", "&", "+", "-", "!", "~", "++", "--"):
+            return self.operand_end(start + 1)
+        if word == "(" and start in self.pairs:
+            closing = self.pairs[start]
+            if self.pointer_type(start, closing):
+                return self.operand_end(closing + 1)
+            end = closing + 1
+        else:
+            end = start + 1
+        while end < len(self.words):
+            if self.words[end] in ("(", "[") and end in self.pairs:
+                end = self.pairs[end] + 1
+            elif self.words[end] in (".", "->"):
+                end += 2
+            else:
+                break
+        return end
+
+    def scope(self, index: int) -> tuple[int, int]:
+        scopes = [(a, b) for a, b in self.pairs.items() if self.words[a] == "{" and a < index < b]
+        return max(scopes, default=(0, len(self.words)))
+
+
 def _volatile(source: str, code: str) -> list[GuardFinding]:
-    allowed = set()
-    # A dereferenced pointer cast can force ordering without declaring storage volatile.
-    for cast in re.finditer(r"\*\s*\([^();{}]*\bvolatile\b[^();{}]*\*\s*\)", code):
-        allowed.add(code.index("volatile", cast.start(), cast.end()))
+    syntax = _Syntax(code)
+    words = syntax.words
+    allowed: set[int] = set()
+    # Type queries do not declare storage. Parentheses around a dereferenced cast
+    # likewise do not change the existing cast exception.
+    for opening, closing in syntax.pairs.items():
+        if words[opening] != "(":
+            continue
+        if opening and words[opening - 1] in ("sizeof", "_Alignof", "alignof"):
+            allowed.update(range(opening, closing))
+        elif syntax.pointer_type(opening, closing):
+            preceding = opening - 1
+            while preceding >= 0 and words[preceding] == "(":
+                preceding -= 1
+            if preceding >= 0 and words[preceding] == "*" and syntax.unary(preceding):
+                allowed.update(range(opening, closing))
+
+    # A pointer to a literal device address, and aliases of that pointer, qualify
+    # the pointed-to device rather than introducing volatile local storage.
+    devices: list[tuple[str, int, int]] = []
+    assignments = [
+        i for i, word in enumerate(words) if word == "=" and i and re.fullmatch(r"[A-Za-z_]\w*", words[i - 1])
+    ]
+    for index in assignments:
+        start = index + 1
+        opening = start
+        while opening < len(words) and words[opening] == "(" and opening in syntax.pairs:
+            closing = syntax.pairs[opening]
+            if syntax.pointer_type(opening, closing):
+                value = closing + 1
+                while value < len(words) and words[value] == "(":
+                    value += 1
+                if value < len(words) and re.fullmatch(r"0[xX][\da-fA-F]+[uUlL]*", words[value]):
+                    address = int(words[value].rstrip("uUlL"), 16)
+                    if 0xA4000000 <= address < 0xA8000000:
+                        allowed.update(range(opening, closing))
+                        lo, hi = syntax.scope(index)
+                        devices.append((words[index - 1], lo, hi))
+                break
+            opening += 1
+    for _ in assignments:
+        changed = False
+        for index in assignments:
+            value = index + 1
+            if (
+                value + 1 < len(words)
+                and words[value + 1] == ";"
+                and any(name == words[value] and lo < index < hi for name, lo, hi in devices)
+            ):
+                lo, hi = syntax.scope(index)
+                alias = (words[index - 1], lo, hi)
+                if alias not in devices:
+                    devices.append(alias)
+                    changed = True
+        if not changed:
+            break
+    for index, word in enumerate(words):
+        if word != "volatile":
+            continue
+        tail = re.match(r"\s*(?:[A-Za-z_]\w*\s+)*\*\s*([A-Za-z_]\w*)", code[syntax.tokens[index].end() :])
+        if tail and any(name == tail[1] and lo < index < hi for name, lo, hi in devices):
+            allowed.add(index)
+        # A function return qualifier is not a storage declaration.
+        if re.match(r"\s*(?:[A-Za-z_]\w*\s+)+[A-Za-z_]\w*\s*\(", code[syntax.tokens[index].end() :]):
+            allowed.add(index)
     return [
-        _finding("volatile-storage", source, m) for m in re.finditer(r"\bvolatile\b", code) if m.start() not in allowed
+        _finding("volatile-storage", source, token)
+        for index, token in enumerate(syntax.tokens)
+        if token[0] == "volatile" and index not in allowed
     ]
 
 
 def _offsets(source: str, code: str) -> list[GuardFinding]:
+    syntax = _Syntax(code)
     findings = []
-    # Follow balanced expressions after a unary dereference; nested casts are common.
-    for match in re.finditer(r"\*\s*\(", code):
-        start = code.index("(", match.start())
-        depth = 0
-        end = start
-        for end in range(start, len(code)):
-            if code[end] == "(":
-                depth += 1
-            elif code[end] == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            elif code[end] in ";{}":
-                break
-        expression = code[start : end + 1]
-        # The cast may be outside the arithmetic parentheses: *(T*)((char*)p + N).
-        if end + 1 < len(code) and re.match(r"\s*\(", code[end + 1 :]):
-            tail = re.match(r"\s*\(([^;\n{}]*)", code[end + 1 :])
-            expression += tail[0] if tail else ""
-        if re.search(r"\([^()]*\*\s*\)", expression) and re.search(r"[+-]\s*(?:0[xX][\da-fA-F]+|\d+)\b", expression):
-            findings.append(_finding("raw-offset", source, match))
+    for index, token in enumerate(syntax.tokens):
+        if (
+            token[0] != "*"
+            or index + 1 >= len(syntax.words)
+            or syntax.words[index + 1] != "("
+            or not syntax.unary(index)
+        ):
+            continue
+        end = syntax.operand_end(index + 1)
+        expression = code[token.end() : syntax.tokens[end - 1].end()] if end > index + 1 else ""
+        # Offsets inside a nested loaded value belong to that load alone.
+        for nested in range(index + 1, end):
+            if syntax.words[nested] == "*" and syntax.unary(nested) and syntax.words[nested + 1] == "(":
+                nested_end = min(syntax.operand_end(nested + 1), end)
+                lo = syntax.tokens[nested].start() - token.end()
+                hi = syntax.tokens[nested_end - 1].end() - token.end()
+                expression = expression[:lo] + " " * (hi - lo) + expression[hi:]
+        has_cast = any(
+            index < opening < closing < end and syntax.pointer_type(opening, closing)
+            for opening, closing in syntax.pairs.items()
+        )
+        offsets = re.finditer(r"[+-]\s*\(*\s*(0[xX][\da-fA-F]+|\d+)\b", expression)
+        if has_cast and any(int(offset[1], 16 if offset[1].lower().startswith("0x") else 10) for offset in offsets):
+            findings.append(_finding("raw-offset", source, token))
     return findings
 
 

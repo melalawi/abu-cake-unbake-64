@@ -6,13 +6,14 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from collections.abc import Sequence
 from dataclasses import fields
 from pathlib import Path
 
-from unbake.project import build, compiler_files, config, toolchain
+from unbake.project import build, compiler_files, config, hygiene, toolchain
 from unbake.project.config import Held, Policy, Project
 
 
@@ -163,11 +164,21 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
     if policy_path.is_symlink():
         policy_path.unlink()
     policy_path.write_text(isolated_policy(policy, destination))
-    makefile = destination / "Makefile"
-    original_stat = makefile.stat()
     local_policy = project_relative(cloned, policy_path).as_posix()
-    makefile.write_text(f"export UNBAKE_POLICY := $(abspath {local_policy})\n" + makefile.read_text())
-    os.utime(makefile, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    # The existing Makefile includes these ignored, clone-local build graphs.
+    # Keep policy selection out of every tracked game file.
+    for generation in generations.values():
+        graph = destination / "build" / generation.name / ".split.mk"
+        original_stat = graph.stat()
+        graph.write_bytes(f"export UNBAKE_POLICY := $(abspath {local_policy})\n".encode() + graph.read_bytes())
+        os.utime(graph, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    local = destination / ".unbake"
+    local.mkdir(exist_ok=True)
+    # Operators can source this environment for setup, clean builds and CLI use.
+    (local / "env").write_text(f"export UNBAKE_POLICY={shlex.quote(str(policy_path))}\n")
+    exclude = destination / ".git/info/exclude"
+    with exclude.open("a") as output:
+        output.write("\n" + hygiene.ignore_text(cloned))
     refresh_checksums(cloned)
     return cloned
 
