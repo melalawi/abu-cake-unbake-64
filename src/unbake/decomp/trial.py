@@ -190,7 +190,7 @@ def try_draft(
     command = [*prefix(original_project), "try", str(source)]
     if flags:
         command.append("--flags")
-    trial.next_command = shlex.join(command)
+    trial.next_command = f"Edit {source}. Then run " + shlex.join(command)
     if trial.identical_everywhere and not preconditions:
         trial.next_command = shlex.join(
             [*prefix(original_project), "submit", str(source)]

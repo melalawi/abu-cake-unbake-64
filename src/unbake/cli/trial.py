@@ -1,10 +1,12 @@
 """Compare an editable source using configured work and holding versions."""
 
 import argparse
+import shlex
 from pathlib import Path
 
-from unbake.cli.common import Subparsers, receipt
-from unbake.decomp import trial
+from unbake.cli.common import Subparsers, receipt, suggest
+from unbake.decomp import checks, trial
+from unbake.decomp.commands import prefix
 from unbake.project.config import Policy, Project, Unfinished, load_policy
 
 
@@ -20,5 +22,11 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     local = project.tools / "clone-policy.toml"
     if local.is_file():
         policy = load_policy(local)
+    blockers = [finding for finding in checks.run(args.source) if finding.fakematch is None]
+    if blockers:
+        detail = "; ".join(f"{args.source}:{checks.message(finding)}" for finding in blockers)
+        print(f"HELD(try): trial.source_rules: {detail}")
+        suggest(f"Edit {args.source}. Then run " + shlex.join([*prefix(project), "try", str(args.source)]))
+        return True
     result = trial.retain_draft(project, policy, args.source, project.work, versions=None, flags=args.flags)
     return receipt("try", [f"retained {result.function} source_sha256 {result.source_sha256}"])

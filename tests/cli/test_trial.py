@@ -87,6 +87,17 @@ class TrialTests(MainCase):
         self.assertEqual(operation.call_args.args[3], containing)
         self.assertIn("draft version: " + containing, out)
 
+    def test_raw_graphics_copy_is_refused_before_compilation(self) -> None:
+        self.source.write_text("void alpha(void) { p->words.w0 = 0xE7000000; }\n")
+        operation = Mock()
+        code, out, error = self.run_main(
+            self.args("try", str(self.source)), {"trial": self.module("trial", retain_draft=operation)}
+        )
+        self.assertEqual(code, 1, error)
+        self.assertIn(f"{self.source}:raw-gfx:1", out)
+        operation.assert_not_called()
+        self.assertIn("Next: Edit ", out)
+
     def test_retired_nested_routes_and_scratch_flags_refuse(self) -> None:
         for operands in (
             ("decomp", "try", "alpha.c"),

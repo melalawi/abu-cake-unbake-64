@@ -328,7 +328,15 @@ def run(source: str | Path) -> list[GuardFinding]:
     code = _code(source)
     findings = [finding for rule in RULES for finding in rule.check(source, code)]
     reason = "; ".join(reasons) if reasons else None
-    return [GuardFinding(f.rule, f.line, f.text, reason) for f in sorted(findings, key=lambda f: (f.line, f.rule))]
+    return [
+        GuardFinding(
+            f.rule,
+            f.line,
+            f.text,
+            None if f.rule in {"raw-gfx", "local-gbi-macro", "local-type-copy", "invented-struct"} else reason,
+        )
+        for f in sorted(findings, key=lambda f: (f.line, f.rule))
+    ]
 
 
 def message(finding: GuardFinding) -> str:

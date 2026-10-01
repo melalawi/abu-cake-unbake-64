@@ -72,7 +72,8 @@ class DraftBoundaryTests(unittest.TestCase):
             source = m2c.draft(project, policy, "alpha", "us", project.work)
             self.assertNotIn("M2C_BITWISE", source.read_text())
             self.assertNotIn("M2C_FIELD", source.read_text())
-            self.assertIn("struct Layout_alpha_p", source.read_text())
+            self.assertNotIn("struct Layout_", source.read_text())
+            self.assertIn("(char *)(p)", source.read_text())
 
     def test_stack_views_bound_arrays_and_retain_raw_byte_access(self) -> None:
         context = "typedef int s32; typedef unsigned char u8;"

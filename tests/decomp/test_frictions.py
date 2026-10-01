@@ -32,23 +32,25 @@ class FrictionTests(unittest.TestCase):
         )
         self.policy.m2c.chmod(0o755)
 
-    def test_1_draft_fields_compile_and_have_shared_match_declarations(self) -> None:
+    def test_1_unresolved_fields_compile_without_inventing_shared_types(self) -> None:
         with redirect_stdout(io.StringIO()) as output:
             source = m2c.draft(self.project, self.policy, "alpha", "us", self.project.work)
         self.assertIn(str(source), output.getvalue())
         self.assertNotIn("M2C_FIELD", source.read_text())
         self.assertNotIn("Draft_", source.read_text())
-        self.assertIn("struct Layout_alpha_a", source.read_text())
+        self.assertNotIn("struct Layout_", source.read_text())
+        self.assertIn("(char *)(a)", source.read_text())
         self.assertFalse((self.project.include[0] / "alpha_fields.h").exists())
         staged = work.compilation_project(self.project, source)
-        self.assertTrue((staged.include[0] / "structs.h").is_file())
+        self.assertFalse((staged.include[0] / "structs.h").exists())
         self.assertFalse((self.project.include[0] / "structs.h").exists())
         with redirect_stdout(io.StringIO()):
             repeated = m2c.draft(self.project, self.policy, "alpha", "us", self.project.work)
         self.assertEqual(source.read_text(), repeated.read_text())
         records = layouts(source, project=staged, policy=self.policy, version="us")
         self.assertEqual(fold(records, staged), [])
-        self.assertEqual([(f.name, f.offset) for f in records[0].fields][-2:], [("field_40", 0x40), ("field_44", 0x44)])
+        self.assertEqual(records, [])
+        self.assertEqual(work.overlay_data(self.project, source)["edits"], {})
 
     def test_function_header_moves_to_shared_home_without_changing_layout(self) -> None:
         self.project.src.mkdir(parents=True, exist_ok=True)
