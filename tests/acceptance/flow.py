@@ -119,11 +119,15 @@ class Proof:
         if not destination.is_file() or destination.read_text() != text:
             destination.write_text(text)
 
-    def install(self, spec: str) -> None:
-        require(not self.python.exists(), "accept.root: existing virtual environment")
-        result = self.run([sys.executable, "-m", "venv", self.root / "venv"])
-        require(result.returncode == 0, "accept.venv: creation failed")
-        result = self.run([self.python, "-m", "pip", "install", spec])
+    def install(self, spec: str, *, update: bool = False) -> None:
+        if update:
+            require(self.python.is_file(), "accept.install: run the clean install first")
+        else:
+            require(not self.python.exists(), "accept.root: existing virtual environment")
+            result = self.run([sys.executable, "-m", "venv", self.root / "venv"])
+            require(result.returncode == 0, "accept.venv: creation failed")
+        options = ["--force-reinstall", "--no-deps"] if update else []
+        result = self.run([self.python, "-m", "pip", "install", *options, spec])
         require(result.returncode == 0, "accept.install: pip install failed")
         self.cli("--help")
         result = self.run([self.python, "-m", "unbake", "--help"])
@@ -140,6 +144,7 @@ class Proof:
             "assert r.files('unbake.project_tools').joinpath('Makefile').is_file(); "
             "assert r.files('unbake.project_tools').joinpath('CONTRIBUTING.md').is_file(); "
             "assert r.files('unbake.project_tools').joinpath('CONTRIBUTING.pending.md').is_file()"
+            "; assert r.files('unbake.project_tools').joinpath('README.ready.md').is_file()"
         )
         result = self.run([self.python, "-c", code])
         require(result.returncode == 0, "accept.package: pinned dependency or packaged asset missing")
@@ -482,6 +487,8 @@ def main() -> int:
     phases = parser.add_subparsers(dest="phase", required=True)
     install = phases.add_parser("install", help="Create a clean venv and pip install an explicit immutable source.")
     install.add_argument("--install-spec", required=True, help="Pinned Git URL or immutable source directory.")
+    update = phases.add_parser("update-install", help="Record a pinned follow-up install after integration fixes.")
+    update.add_argument("--install-spec", required=True)
     prepare = phases.add_parser("prepare", help="Init a shell, copy supplied ROMs and display the setup proposal.")
     prepare.add_argument("--policy", type=Path, required=True)
     prepare.add_argument("--rom", action="append", required=True, metavar="VERSION=FILE")
@@ -514,8 +521,8 @@ def main() -> int:
         parser.error("accept.root: install requires an empty directory")
     proof = Proof(root)
     try:
-        if args.phase == "install":
-            proof.install(args.install_spec)
+        if args.phase in ("install", "update-install"):
+            proof.install(args.install_spec, update=args.phase == "update-install")
         elif args.phase == "retirement":
             proof.retirement()
         elif args.phase == "refusals":
