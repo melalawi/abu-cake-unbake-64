@@ -77,7 +77,11 @@ def receipt(phase: str, lines: Iterable[object]) -> bool:
             refused = True
             invocation = _invocation.get()
             if invocation is not None and invocation.missing_input is None:
-                invocation.missing_input = line.split(":", 1)[1].strip().split(":", 1)[0]
+                invocation.missing_input = (
+                    "headers.declaration"
+                    if "headers.declaration:" in line
+                    else line.split(":", 1)[1].strip().split(":", 1)[0]
+                )
         if line.startswith("HELD:"):
             line = f"HELD({phase}): {line.removeprefix('HELD:').strip()}"
         if line.startswith(("OK(", "HELD(")):

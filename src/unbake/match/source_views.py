@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from unbake.layout.header_context import context
 from unbake.layout.structs_parser import Parser
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
@@ -14,10 +15,10 @@ from unbake.project.config import Policy, Project
 
 def parsers(project: Project, policy: Policy, text: str, versions: tuple[str, ...]) -> list[Parser]:
     """Ask cpp to select branches without expanding tokens or changing edit spans."""
-    context = Parser(
-        "\n".join(path.read_text() for root in project.include for path in sorted(root.rglob("*.h")) if path.is_file())
+    _, headers, _ = context(
+        {path: path.read_text() for root in project.include for path in sorted(root.rglob("*.h")) if path.is_file()},
+        root=project.root,
     )
-    context.parse()
 
     def contextual(view: str) -> Parser:
         parser = Parser(view)
@@ -25,8 +26,8 @@ def parsers(project: Project, policy: Policy, text: str, versions: tuple[str, ..
         # by-value types and callback aliases. Locally defined tags get their
         # own aggregates; imported aggregates retain their measured layouts.
         local_tags = set(re.findall(r"\b((?:struct|union)\s+\w+)\s*\{", view))
-        parser.types.update({name: value for name, value in context.types.items() if name not in local_tags})
-        parser.cache.update(context.cache)
+        parser.types.update({name: value for name, value in headers.types.items() if name not in local_tags})
+        parser.cache.update(headers.cache)
         parser.parse()
         return parser
 

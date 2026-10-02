@@ -149,6 +149,96 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             if path.is_file() and "__pycache__" not in path.parts
         }
 
+    def install_sdk(self):
+        (self.project.include[0] / "types.h").write_text(
+            "#ifndef TYPES_H\n#define TYPES_H\ntypedef unsigned int u32; typedef unsigned long long u64;\n#endif\n"
+        )
+        setup._sdk_headers(self.project)
+
+    def test_installed_submit_resolves_sdk_commands_and_callbacks_and_folds_shared_types(self):
+        self.install_sdk()
+        source = self.sources[0]
+        source.write_text(
+            '#include "shared/audio_callbacks.h"\n'
+            "struct Holder { Acmd command; ALCmdHandler callback; };\n"
+            "int alpha(void) { return 1; }\n"
+        )
+        before = self.inputs()
+        self.assertIn("identical 2 of 2", self.cli("try", source))
+        self.assertEqual(self.inputs(), before)
+        output = self.cli("submit", source)
+        self.assertIn("alpha matched on VERSION us, us-rev1", output)
+        header = self.project.include[0] / "shared/alpha.h"
+        self.assertIn("Acmd command;", header.read_text())
+        self.assertIn('#include "shared/acmd.h"', header.read_text())
+        self.assertIn('#include "shared/audio_callbacks.h"', header.read_text())
+        for name in ("gbi.h", "shared/acmd.h", "shared/audio_callbacks.h"):
+            path = self.project.include[0] / name
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before["include/" + name])
+        self.assertIn(": OK", self.make())
+
+    def test_installed_batch_shares_one_new_sdk_header_overlay(self):
+        from unbake.decomp import work
+
+        self.install_sdk()
+        for source in self.sources:
+            work.overlay(self.project, source.parent)
+            header = source.parent / "overlay/include/shared/holder.h"
+            header.write_text(
+                '#ifndef HOLDER_H\n#define HOLDER_H\n#include "acmd.h"\n'
+                "typedef struct { Acmd command; } Holder;\n#endif\n"
+            )
+            source.write_text(f'#include "shared/holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
+            self.cli("try", source)
+        output = self.cli("submit", "--batch", *self.sources)
+        for source in self.sources:
+            self.assertIn(source.stem + " matched on VERSION us, us-rev1", output)
+        self.assertTrue((self.project.include[0] / "shared/holder.h").is_file())
+        self.assertIn(": OK", self.make())
+
+    def test_installed_try_reuses_a_header_already_published_from_another_overlay(self):
+        from unbake.decomp import work
+
+        self.install_sdk()
+        for source in self.sources:
+            work.overlay(self.project, source.parent)
+            (source.parent / "overlay/include/shared/holder.h").write_text(
+                '#ifndef HOLDER_H\n#define HOLDER_H\n#include "acmd.h"\n'
+                "typedef struct { Acmd command; } Holder;\n#endif\n"
+            )
+            source.write_text(f'#include "shared/holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
+        self.cli("try", self.sources[0])
+        self.cli("submit", self.sources[0])
+        self.cli("try", self.sources[1])
+        self.cli("submit", self.sources[1])
+        self.assertIn(": OK", self.make())
+
+    def test_installed_submit_names_missing_sdk_header_prerequisite_for_exact_source(self):
+        self.install_sdk()
+        path = self.project.include[0] / "shared/missing_sdk.h"
+        path.write_text("typedef struct { MissingSDK words; } MissingRecord;\n")
+        source = self.sources[0]
+        self.assertIn("identical 2 of 2", self.cli("try", source))
+        before = self.inputs()
+        for operands in (("submit", source), ("submit", "--batch", source)):
+            result = subprocess.run(
+                [str(self.script), "--project", str(self.root), *map(str, operands)],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 1, output)
+            self.assertIn("headers.declaration: SDK/shared header prerequisite", output)
+            self.assertIn("MissingSDK: missing type layout", output)
+            self.assertIn("include/shared/missing_sdk.h:1", output)
+            self.assertIn("Next: Repair the SDK/shared header prerequisite", output)
+            self.assertNotIn("Supply alpha", output)
+            self.assertEqual(self.inputs(), before)
+            self.assertFalse((self.project.src / source.name).exists())
+
     def test_equivalent_batch_is_read_only_until_one_proved_publication(self):
         before = self.inputs()
         for source in self.sources:

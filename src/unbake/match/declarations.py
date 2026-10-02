@@ -9,6 +9,7 @@ from pathlib import Path
 
 from unbake.decomp import drafts, needs
 from unbake.layout import entries, split, structs
+from unbake.layout.header_context import context
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import fold, scalar_edits
 from unbake.layout.structs_parser import Parser
@@ -38,8 +39,7 @@ def final_source(project: Project, text: str, parsers: list[Parser], edits: list
         headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
         headers.update({edit.path: edit.after for edit in edits})
         destinations: dict[str, Path] = {}
-        combined = "\n".join(headers.values())
-        parsed = Parser(combined).parse()
+        headers, _, parsed = context(headers, root=project.root)
         cursor = 0
         for path, content in headers.items():
             for record in parsed:

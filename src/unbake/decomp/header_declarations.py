@@ -13,6 +13,21 @@ _QUALIFIERS = set(["const", "volatile", "restrict", "__restrict", "__restrict__"
 _STORAGE = set(["typedef", "extern", "static", "auto", "register", "inline", "__inline", "__inline__", "__extension__"])
 
 
+def declaration_source(source: str) -> str:
+    """Hide comments and complete logical directives without moving edit offsets."""
+
+    def blank(match: re.Match[str]) -> str:
+        return "".join("\n" if char == "\n" else " " for char in match[0])
+
+    source = re.sub(
+        r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//(?:\\\n|[^\n])*',
+        lambda match: blank(match) if match[0].startswith(("/*", "//")) else match[0],
+        source,
+        flags=re.S,
+    )
+    return re.sub(r"^[ \t]*#(?:\\\n|[^\n])*", blank, source, flags=re.M)
+
+
 @dataclass
 class Declarations:
     typedefs: set[str] = field(default_factory=set)
@@ -29,9 +44,7 @@ class Parser:
     """
 
     def __init__(self, source: str) -> None:
-        source = re.sub(r"\\\n", "", source)
-        source = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
-        source = re.sub(r"^\s*#[^\n]*", "", source, flags=re.M)
+        source = re.sub(r"\\\n", "", declaration_source(source))
         self.tokens = re.findall(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S', source)
         self.index = 0
         self.result = Declarations()

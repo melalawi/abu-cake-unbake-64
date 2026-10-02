@@ -7,6 +7,7 @@ import re
 from collections.abc import Callable
 from typing import cast
 
+from unbake.decomp.header_declarations import declaration_source
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Declaration, Member, Operation
 from unbake.project.config import Held
@@ -21,7 +22,7 @@ class Parser:
     def __init__(self, source: str) -> None:
         self.source = source
         self.defines = dict(re.findall(r"^\s*#\s*define\s+([A-Za-z_]\w*)[ \t]+([^\n]+)", source, re.M))
-        clean = re.sub(r"^\s*#[^\n]*", lambda match: " " * len(match[0]), source, flags=re.M)
+        clean = declaration_source(source)
         self.tokens = [match for match in _TOKEN.finditer(clean) if not match[0].startswith(("/*", "//"))]
         self.index = 0
         self.types: dict[str, Aggregate | tuple[str | Aggregate, tuple[Operation, ...]]] = {}
