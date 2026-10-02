@@ -14,10 +14,24 @@ from unbake.project.config import Policy, Project
 
 def parsers(project: Project, policy: Policy, text: str, versions: tuple[str, ...]) -> list[Parser]:
     """Ask cpp to select branches without expanding tokens or changing edit spans."""
-    if not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
-        parser = Parser(text)
+    context = Parser(
+        "\n".join(path.read_text() for root in project.include for path in sorted(root.rglob("*.h")) if path.is_file())
+    )
+    context.parse()
+
+    def contextual(view: str) -> Parser:
+        parser = Parser(view)
+        # Preserve declaration offsets in the source while resolving imported
+        # by-value types and callback aliases. Locally defined tags get their
+        # own aggregates; imported aggregates retain their measured layouts.
+        local_tags = set(re.findall(r"\b((?:struct|union)\s+\w+)\s*\{", view))
+        parser.types.update({name: value for name, value in context.types.items() if name not in local_tags})
+        parser.cache.update(context.cache)
         parser.parse()
-        return [parser]
+        return parser
+
+    if not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
+        return [contextual(text)]
     lines = text.splitlines(keepends=True)
     result = []
     with tempfile.TemporaryDirectory(prefix="match-view-") as temporary:
@@ -49,7 +63,5 @@ def parsers(project: Project, policy: Policy, text: str, versions: tuple[str, ..
                 line if index in active else "".join("\n" if char == "\n" else " " for char in line)
                 for index, line in enumerate(lines)
             )
-            parser = Parser(view)
-            parser.parse()
-            result.append(parser)
+            result.append(contextual(view))
     return result

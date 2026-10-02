@@ -86,7 +86,12 @@ def match_edits(project: Project, function: str, text: str, versions: Iterable[s
     assembly = []
     for version in versions:
         _, _, segments = split.layout(project.version(version).split)
-        rows = [row for segment in segments for row in segment.rows if Path(row.path).name == function]
+        rows = [
+            row
+            for segment in segments
+            for row in segment.rows
+            if row.kind in ("asm", "c") and Path(row.path).name == function
+        ]
         if len(rows) == 1 and rows[0].kind == "c":
             continue
         assembly.append(version)
