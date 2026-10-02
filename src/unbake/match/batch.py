@@ -355,8 +355,24 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
     for candidate in candidates:
         if candidate.function in refused:
             receipts.append(f"HELD(submit): {candidate.function}: {refused[candidate.function]}")
-    pending: list[Need] = [need for name, items in found.items() if name not in refused for need in items]
-    for edit in symbols_edits.resolve(pending, staged, policy) if pending else []:
+    while True:
+        pending: list[Need] = [need for name, items in found.items() if name not in refused for need in items]
+        try:
+            edits = symbols_edits.resolve(pending, staged, policy) if pending else []
+        except Held as error:
+            # A refused symbol names its owners; the rest of the batch continues.
+            symbol = error.reason.split(":", 1)[0]
+            owners = {
+                name for name, items in found.items() if name not in refused and any(n.name == symbol for n in items)
+            }
+            if not owners:
+                raise
+            for owner in owners:
+                refused[owner] = f"submit.data_symbols: {error.reason}"
+                receipts.append(f"HELD(submit): {owner}: {refused[owner]}")
+            continue
+        break
+    for edit in edits:
         split_apply.write(edit.path, edit.after)
     return [candidate for candidate in candidates if candidate.function not in refused]
 
