@@ -98,6 +98,17 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(result["structs"]["Shared"]["users"], ["caller", "leaf"])
         self.assertTrue(any(row["key"] == "types.conflict:abi:caller" for row in result["conflicts"]))
 
+    def test_word_access_to_an_opaque_array_does_not_seed_a_byte_scalar(self) -> None:
+        result = solve(
+            {
+                "caller": (0x80001000, [0x00808021, 0x0C000800, 0x02002021, 0x8E020004, 0x03E00008, 0]),
+                "leaf": (0x80002000, [0x8C820000, 0x03E00008, 0]),
+            },
+            "struct Shared { unsigned char unknown_0[4]; int count; }; int leaf(struct Shared *p);",
+        )
+        self.assertEqual(result["nodes"]["field:param:caller:r4:0"]["type"], "int")
+        self.assertEqual(result["structs"]["Shared"]["fields"][0]["extent"], [4])
+
     def test_equal_offsets_and_parameter_names_do_not_create_a_shared_type(self) -> None:
         result = solve(
             {"first": (0x80001000, [0x8C820004, 0x03E00008, 0]), "second": (0x80002000, [0x8C820004, 0x03E00008, 0])},
@@ -195,6 +206,19 @@ class MachineEvidenceTests(unittest.TestCase):
         parsed = extract(shape["declaration"], {})["structs"]
         fields = next(iter(parsed.values()))["fields"]
         self.assertEqual([(field["offset"], field["size"]) for field in fields], [(0, 4), (4, 4), (8, 2), (10, 2)])
+        name = next(iter(result["structs"]))
+        proven = extract(
+            f"struct {name} {{ unsigned char padding_0[4]; float value; unsigned short count; }};",
+            {"kind": "proven"},
+        )
+        repeated = infer(SimpleNamespace(), mapped, [proven])
+        retained = repeated["structs"][name]
+        self.assertEqual(retained["state"], "known")
+        self.assertEqual(retained["common_base"], "global:source")
+        self.assertIn("float value;", retained["declaration"])
+        self.assertEqual(retained["fields"][0]["name"], "value")
+        self.assertEqual(retained["fields"][0]["type"], "float")
+        self.assertIsNone(retained["size"])
 
     def test_layout_widths_keep_conflicting_fields_opaque_and_bad_intervals_named(self) -> None:
         from unbake.typemap.layouts import observed

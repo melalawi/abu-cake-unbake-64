@@ -380,7 +380,11 @@ def infer(
             continue
         for offset, accesses in offsets.items():
             members = [f for f in record["fields"] if f["offset"] == offset]
-            if len(members) == 1 and all(a["width"] == members[0]["size"] and not a["partial"] for a in accesses):
+            if (
+                len(members) == 1
+                and not members[0].get("extent")
+                and all(a["width"] == members[0]["size"] and not a["partial"] for a in accesses)
+            ):
                 graph.seed(
                     f"field:{origin}:{offset}",
                     declarations.canonical(members[0]["type"], aliases),
@@ -654,7 +658,28 @@ def infer(
         # Matched sources include generated headers. Their parsed declarations
         # do not supersede current map-derived bounds and source bindings.
         if name in inferred_structs and name not in authored_structs:
-            output_structs[name]["generated"] = True
+            observed = output_structs[name]
+            # Retain proven member names/types as well: storage representations
+            # cannot rewrite a declaration used by already matched C.
+            members = [field for field in record["fields"] if not field["name"].startswith("padding_")]
+            output_structs[name] = {
+                **observed,
+                "state": "conflict" if record.get("declaration_conflict") else "known",
+                "type": record["type"],
+                "declaration": record["declaration"],
+                "fields": [
+                    {
+                        **field,
+                        "widths": [field["size"]],
+                        "state": "unknown" if field.get("extent") else "known",
+                        "type": None if field.get("extent") else field["type"],
+                        "reason": "proven array storage" if field.get("extent") else None,
+                    }
+                    for field in members
+                ],
+                "minimum_size": max((field["offset"] + field["size"] for field in members), default=0),
+                "generated": True,
+            }
             continue
         users = sorted(
             {
