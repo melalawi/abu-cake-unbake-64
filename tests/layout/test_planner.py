@@ -1,6 +1,10 @@
 """ROM-only ownership and retained coverage do not require existing C or ELF."""
 
+import json
+import os
 import struct
+import subprocess
+import sys
 import unittest
 
 from unbake.layout.planner import carve, complete_providers, correspondence
@@ -94,8 +98,8 @@ class PlannerTests(unittest.TestCase):
 
     def test_insertions_changes_and_reordered_anchors_refuse_positional_join(self):
         for other, reason in (
-            ([1, 0, 2], "sequence-mismatch"),
-            ([1, 0, 3, 2], "sequence-mismatch"),
+            ([1, 0, 2], "position-count-mismatch"),
+            ([1, 0, 3, 2], "graph-no-evidence"),
             ([2, 0, 0, 1], "anchor-order"),
         ):
             with self.subTest(other=other):
@@ -115,7 +119,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(names["a"][16], names["b"][48])
         for at in (16, 64):
             self.assertNotIn(names["c"][at], names["a"].values())
-            self.assertEqual(evidence["c"][at], "repeated-body-alignment-conflict")
+            self.assertEqual(evidence["c"][at], "symbol-position-conflict")
 
     def test_inventory_order_is_not_used_as_rom_order(self):
         body = struct.pack(
@@ -133,3 +137,123 @@ class PlannerTests(unittest.TestCase):
         ff = {v: [function("entry", 0, 16)] for v in images}
         names = correspondence(images, ff, "us")
         self.assertNotEqual(names["us"][0], names["eu"][0])
+
+
+class SymbolIdentityTests(unittest.TestCase):
+    def identity(self, changed=(0x24020003,), *, extra=None, caller_target=0x80001020, reverse=False):
+        images, inventories = {}, {}
+        for v, body in (("us", (0x24020003,)), ("eu", changed)):
+            image = bytearray(0xC0)
+            bodies = {
+                0: (0x24020001, 0x03E00008, 0),
+                0x20: (*body, 0x03E00008, 0),
+                0x60: (0x24020002, 0x03E00008, 0),
+                0x80: (0x0C000000 | ((caller_target if v == "eu" else 0x80001020) >> 2 & 0x3FFFFFF), 0, 0x03E00008, 0),
+            }
+            if extra and v == "eu":
+                bodies[0x40] = extra
+            if reverse and v == "eu":
+                bodies[0], bodies[0x60] = bodies[0x60], bodies[0]
+            ff = []
+            for at, code in bodies.items():
+                struct.pack_into(f">{len(code)}I", image, at, *code)
+                ff.append(function(f"func_{0x80001000 + at:08X}", at, at + len(code) * 4))
+            images[v], inventories[v] = bytes(image), ff
+        evidence, details = {}, {}
+        names = correspondence(images, inventories, "us", evidence=evidence, symbol_evidence=details)
+        return names, evidence, details
+
+    def test_inserted_instruction_keeps_one_symbol_and_independent_bodies(self):
+        names, evidence, details = self.identity((0x24020003, 0x24420001))
+        self.assertEqual(names["us"][0x20], names["eu"][0x20])
+        self.assertEqual(names["us"][0x80], names["eu"][0x80])
+        self.assertEqual(evidence["eu"][0x20], "anchor-call-graph")
+        self.assertEqual(details["eu"][0x20]["callers"], [["us", 0x80]])
+        self.assertTrue(details["eu"][0x20]["anchor_positions"])
+
+    def test_symbol_evidence_is_reproducible_across_process_hash_seeds(self):
+        script = (
+            "import json; from tests.layout.test_planner import SymbolIdentityTests; "
+            "print(json.dumps(SymbolIdentityTests().identity((0x24020003, 0x24420001)), sort_keys=True))"
+        )
+        outputs = [
+            subprocess.check_output(
+                [sys.executable, "-c", script], env=dict(os.environ, PYTHONHASHSEED=str(seed)), text=True
+            )
+            for seed in range(8)
+        ]
+        self.assertTrue(json.loads(outputs[0]))
+        self.assertEqual(len(set(outputs)), 1)
+
+    def test_same_name_address_and_bounds_do_not_override_graph_mismatch(self):
+        names, evidence, _ = self.identity((0x24020004,), caller_target=0x80001060)
+        self.assertNotEqual(names["us"][0x20], names["eu"][0x20])
+        self.assertEqual(evidence["eu"][0x20], "symbol-graph-mismatch")
+
+    def test_inserted_function_refuses_equal_position_assumption(self):
+        names, evidence, _ = self.identity((0x24020004,), extra=(0x24020005, 0x03E00008, 0))
+        self.assertNotEqual(names["us"][0x20], names["eu"][0x20])
+        self.assertEqual(evidence["eu"][0x20], "symbol-position-count-mismatch")
+
+    def test_indirect_callee_and_reversed_anchors_remain_separate(self):
+        for options, reason in (
+            ({"changed": (0x0320F809, 0, 0x24020004)}, "symbol-graph-indirect"),
+            ({"changed": (0x24020004,), "reverse": True}, "symbol-anchor-order"),
+        ):
+            with self.subTest(options=options):
+                names, evidence, _ = self.identity(**options)
+                self.assertNotEqual(names["us"][0x20], names["eu"][0x20])
+                self.assertEqual(evidence["eu"][0x20], reason)
+
+    def test_local_switch_requires_guard_mapping_and_every_entry_inside_the_body(self):
+        from unbake.layout.symbol_identity import graph, local_switches
+        from unbake.project.flow import Span
+
+        image = bytearray(0x300)
+        code = [
+            0x2C620002,
+            0x10400007,
+            0x00009821,
+            0x00031080,
+            0x3C018000,
+            0x00220821,
+            0x8C221200,
+            0x00400008,
+            0,
+            0x24020003,
+            0x03E00008,
+            0,
+        ]
+        struct.pack_into(">12I", image, 0, *code)
+        struct.pack_into(">2I", image, 0x200, 0x1024, 0x1028)
+        f = function("switch", 0, 48)
+        spans = [Span(start=0, end=len(image), address=0x80001000)]
+        switches = local_switches(bytes(image), f, spans)
+        self.assertEqual(switches[7]["count"], 2)
+        self.assertEqual(switches[7]["entry_bias"], 0x80000000)
+        self.assertEqual(graph({"us": bytes(image)}, {"us": [f]}, loaded_spans={"us": spans})[2], {})
+        self.assertEqual(local_switches(bytes(image), f, []), {})
+        # One external entry invalidates the complete local-switch proof.
+        struct.pack_into(">I", image, 0x204, 0x1040)
+        self.assertEqual(local_switches(bytes(image), f, spans), {})
+        self.assertEqual(
+            graph({"us": bytes(image)}, {"us": [f]}, loaded_spans={"us": spans})[2],
+            {("us", 0): "symbol-graph-indirect"},
+        )
+        struct.pack_into(">I", image, 0x204, 0x1028)
+        struct.pack_into(">I", image, 4, 0x14400007)  # bne admits the unbounded case
+        self.assertEqual(local_switches(bytes(image), f, spans), {})
+
+    def test_tail_branch_resolves_unique_peer_body_and_ambiguous_entries_refuse(self):
+        from unbake.layout.symbol_identity import graph
+
+        image = struct.pack(">8I", 0x10000004, 0, 0x03E00008, 0, 0x24020003, 0x03E00008, 0, 0)
+        ff = [function("caller", 0, 16), function("callee", 16, 32)]
+        outgoing, incoming, unresolved = graph({"us": image}, {"us": ff})
+        self.assertEqual(outgoing["us", 0], {("us", 16)})
+        self.assertEqual(incoming["us", 16], {("us", 0)})
+        self.assertFalse(unresolved)
+        # Two executable placements at the target prevent address resolution.
+        ff.append(Function("us", "overlay", 32, 48, ff[1].address, "overlay", "asm", ()))
+        jump = struct.pack(">I", 0x08000000 | (ff[1].address >> 2 & 0x03FFFFFF)) + image[4:]
+        self.assertEqual(graph({"us": jump}, {"us": ff})[2]["us", 0], "symbol-graph-target-unresolved")

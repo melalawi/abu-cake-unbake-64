@@ -25,13 +25,18 @@ class Span(TypedDict):
 class FunctionRecord(Span):
     name: str
     evidence: dict[str, Any]
+    body_sha256: NotRequired[str]
+    normalized_body_sha256: NotRequired[str]
 
 
 class CrossVersionItem(TypedDict):
+    """One link symbol with independent executable bodies in each placement."""
+
     name: str
     versions: list[str]
     placements: dict[str, FunctionRecord]
     evidence: dict[str, Any]
+    body_groups: NotRequired[dict[str, list[str]]]
 
 
 class ProviderRecord(Span):
@@ -52,6 +57,7 @@ class LayoutManifest(Identity):
     names_from: str
     versions: dict[str, VersionLayout]
     inputs_sha256: dict[str, str]
+    items: NotRequired[dict[str, CrossVersionItem]]
 
 
 class CompilerCandidate(TypedDict):

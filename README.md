@@ -32,6 +32,14 @@ Run `unbake setup` to read every ROM and review the compiler proposal.
 Accept its digest to prove every version before work starts.
 Init and setup leave commits to you.
 
+Function symbols and executable bodies have separate identities. Unambiguous
+positions between matched anchors can share one symbol when mapped callers and
+callees agree, while each version retains its own body and assembly row.
+One C file can express those bodies with version conditionals.
+For a ready project, `unbake setup --replan-symbols` reviews correspondence on
+its retained boundaries. Confirm the printed digest to prove every ROM before
+publishing the name changes. Affected authored C requires review first.
+
 ## Work
 
 ```sh
