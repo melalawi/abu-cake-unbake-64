@@ -38,6 +38,15 @@ def diagnose(
         if name in names:
             placed.setdefault(name, []).append((address, detail))
 
+    def moved(left: bytes, right: bytes) -> bool:
+        """Whether produced bytes are the expected bytes displaced by whole words."""
+        span = min(len(left), len(right))
+        return any(
+            span > 2 * delta
+            and (left[delta:span] == right[: span - delta] or right[delta:span] == left[: span - delta])
+            for delta in range(4, min(span // 2, 1024) + 1, 4)
+        )
+
     def masked(obj: Object, section: int, left: bytes, right: bytes, base: int) -> bool:
         """Whether two section byte runs differ only inside relocated words."""
         words = {offset - base for offset, _, _ in obj.relocations(section)}
@@ -149,7 +158,9 @@ def diagnose(
                                 f"{version}: symbol {symbol['name']} in {path}: "
                                 f"expected {left[:16].hex()}, produced {right[:16].hex()}"
                             )
-                            if masked(obj, section_index, left, right, at):
+                            if moved(left, right):
+                                shifted(Path(path).stem, address + at, detail)
+                            elif masked(obj, section_index, left, right, at):
                                 if Path(path).stem in names:
                                     relocated.setdefault(Path(path).stem, []).append(detail)
                             else:
@@ -166,7 +177,9 @@ def diagnose(
                     )
                     obj = Object(generation / path)
                     index = obj.section(section)
-                    if index is not None and masked(obj, index, expected, actual, 0):
+                    if moved(expected, actual):
+                        shifted(name, address, detail)
+                    elif index is not None and masked(obj, index, expected, actual, 0):
                         if name in names:
                             relocated.setdefault(name, []).append(detail)
                     else:
