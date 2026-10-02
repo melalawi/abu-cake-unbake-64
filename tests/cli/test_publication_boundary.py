@@ -221,6 +221,12 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.assertTrue(path.exists(), f"process {process.pid} exited {process.poll()} before {path.name}")
 
     def test_try_overlaps_submit_proof_and_both_sources_publish(self):
+        self.overlap(finishes_during_proof=True)
+
+    def test_submit_publishes_between_another_sources_candidate_measurements(self):
+        self.overlap(finishes_during_proof=False)
+
+    def overlap(self, *, finishes_during_proof):
         self.cli("try", self.sources[0])
         trying, tried = self.directory / "trying", self.directory / "tried"
         proving, proved = self.directory / "proving", self.directory / "proved"
@@ -254,14 +260,20 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             with (self.project.build / ".lock").open("a+b") as lock, self.assertRaises(BlockingIOError):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertEqual((self.root / "config.toml").read_bytes(), before)
-            tried.touch()
-            out, err = beta.communicate(timeout=30)
-            self.assertEqual(beta.returncode, 0, out + err)
-            self.assertIsNone(alpha.poll())
+            if finishes_during_proof:
+                tried.touch()
+                out, err = beta.communicate(timeout=30)
+                self.assertEqual(beta.returncode, 0, out + err)
+                self.assertIsNone(alpha.poll())
             proved.touch()
             out, err = alpha.communicate(timeout=30)
             self.assertEqual(alpha.returncode, 0, out + err)
             self.assertIn("alpha matched", out)
+            if not finishes_during_proof:
+                self.assertIsNone(beta.poll())
+                tried.touch()
+                out, err = beta.communicate(timeout=30)
+                self.assertEqual(beta.returncode, 0, out + err)
             # Publishing alpha has not invalidated beta's already retained receipt.
             output = self.cli("submit", self.sources[1])
             self.assertIn("beta matched", output)

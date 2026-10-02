@@ -224,6 +224,7 @@ def _run(
                 publish(project, policy, attempt, candidates, current, fingerprint)
                 receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
                 published = True
+            project = config.load(project.root)
             collect(replace(project, versions=tuple(current)))
         receipts.extend(
             f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}"

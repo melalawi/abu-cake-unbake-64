@@ -190,7 +190,7 @@ def compile_object(
     )
     with tempfile.TemporaryDirectory(prefix=".compile-", dir=out.parent) as temporary:
         work = Path(temporary)
-        for name, content in makefile.helpers(project).items():
+        for name, content in makefile.helpers(project, unit=source).items():
             (work / Path(name).name).write_text(content)
         shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
         _run(
