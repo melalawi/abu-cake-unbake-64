@@ -177,6 +177,7 @@ def plan(project: Project, mapping: dict[str, str]) -> list[Change]:
         value = json.loads(proven.read_bytes())
         records = value.get("records", {})
         affected = set(mapping) | set(mapping.values())
+        affected.update(path.stem for path in changes if path.is_relative_to(project.src) and path.suffix == ".c")
         retained = {
             name: record
             for name, record in records.items()

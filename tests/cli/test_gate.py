@@ -99,6 +99,20 @@ class GateCliTests(MainCase):
             self.assertEqual(edit.after.count(b"carried ="), 1)
             self.assertNotIn(b"alpha =", edit.after)
 
+    def test_data_rename_invalidates_receipt_for_changed_calling_source(self):
+        self.source.write_text("extern int D_value; int alpha(void) { return D_value; }\n")
+        for version in self.project.versions:
+            with self.project.version(version).symbols.open("a") as output:
+                output.write("D_value = 0x80002000;\n")
+        path = self.project.build / "types/proven.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"records": {"alpha": {"source": "src/alpha.c"}}}))
+        changes = rename_map.plan(self.project, {"D_value": "carried_value"})
+        record_edit = next(change for change in changes if change.path == path)
+        self.assertEqual(json.loads(record_edit.after)["records"], {})
+        source_edit = next(change for change in changes if change.path == self.source)
+        self.assertIn(b"return carried_value", source_edit.after)
+
     def test_cross_version_name_collision_refuses_entire_map(self):
         self.project.version(self.project.versions[-1]).symbols.write_text(
             "alpha = 0x80001000;\ncarried = 0x80001010;\n"
