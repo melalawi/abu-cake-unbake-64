@@ -38,6 +38,13 @@ def ordered_headers(contents: dict[Path, str]) -> list[Path]:
         }
         for path, header in parsed.items()
     }
+    tag_providers: dict[str, set[Path]] = {}
+    for path, header in parsed.items():
+        for name in header.tags:
+            tag_providers.setdefault(name, set()).add(path)
+    for path, header in parsed.items():
+        for name in header.complete_uses - header.tags:
+            dependencies[path].update(provider for provider in tag_providers.get(name, set()) if provider != path)
     ordered: list[Path] = []
     active: list[Path] = []
     visited: set[Path] = set()

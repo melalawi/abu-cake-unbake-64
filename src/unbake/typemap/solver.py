@@ -430,8 +430,10 @@ def infer(
     authored_structs = {
         name
         for seed in seeds
-        for name, record in seed["structs"].items()
-        if record["provenance"].get("kind") != "proven"
+        for name in seed.get(
+            "authored_structs",
+            {name for name, record in seed["structs"].items() if record["provenance"].get("kind") != "proven"},
+        )
     }
     # Partial layouts describe only the observed prefix, never the full object extent.
     for origin, offsets in shared_fields.items():

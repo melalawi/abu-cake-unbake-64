@@ -78,6 +78,18 @@ class HeaderDeclarationsTests(unittest.TestCase):
         self.assertEqual(ordered_headers(contents), [base, payload, callback])
         self.assertEqual(required_headers(contents, "Callback handler;"), set(contents))
 
+    def test_complete_tag_fields_order_providers_without_pointer_cycles(self) -> None:
+        consumer, provider = Path("consumer.h"), Path("provider.h")
+        contents = {
+            consumer: "struct Holder { struct Value values[2]; struct Value *pointer; };",
+            provider: "struct Value { int number; struct Holder *owner; };",
+        }
+        self.assertEqual(ordered_headers(contents), [provider, consumer])
+        records = Parser("\n".join(contents[path] for path in ordered_headers(contents))).parse()
+        self.assertEqual([(record.name, record.size) for record in records], [("Value", 8), ("Holder", 20)])
+        self.assertEqual(declarations(contents[consumer]).complete_uses, {"Value"})
+        self.assertEqual(declarations(contents[provider]).complete_uses, set())
+
     def test_real_typedef_dependency_cycle_still_refuses(self) -> None:
         with self.assertRaisesRegex(Held, "cyclic shared type context: a.h -> b.h -> a.h"):
             ordered_headers({Path("a.h"): "typedef B A;", Path("b.h"): "typedef A B;"})

@@ -24,7 +24,9 @@ def clean(source: str, *, line_markers: bool = False) -> str:
     return source
 
 
-def headers(project: Project, policy: Policy | None, version: str, extra: Path | None = None) -> str:
+def headers(
+    project: Project, policy: Policy | None, version: str, extra: Path | None = None, *, line_markers: bool = False
+) -> str:
     contents = {
         path: path.read_text()
         for root in project.include
@@ -41,6 +43,8 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
             if re.search(r"^\s*#\s*(?:if\b|ifdef\b|ifndef\b|elif\b|else\b)", extra.read_text(), re.M):
                 raise Held("solve", f"types.declaration: {extra}: policy.cpp required for conditional C")
             return clean("\n".join(contents[path] for path in ordered) + "\n" + extra.read_text())
+        if line_markers:
+            return "\n".join(f'# 1 "{path}"\n' + clean(contents[path]) for path in ordered)
         return clean("\n".join(contents[path] for path in ordered))
     if not policy.cpp:
         raise Held("solve", "policy.cpp: required for typed header preprocessing")
@@ -62,9 +66,9 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
             flags.append(flag)
     command = [
         str(policy.cpp),
-        *policy.cppflags,
+        *(flag for flag in policy.cppflags if not line_markers or flag != "-P"),
         *flags,
-        *(("-P",) if extra is None else ()),
+        *(("-P",) if extra is None and not line_markers else ()),
         "-x",
         "c",
         *(f"-I{root}" for root in project.include),
@@ -78,7 +82,7 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
         raise Held("solve", f"policy.cpp: {error}") from error
     if result.returncode:
         raise Held("solve", "types.declaration: " + result.stderr.strip())
-    return clean(result.stdout, line_markers=extra is not None)
+    return clean(result.stdout, line_markers=extra is not None or line_markers)
 
 
 def _type(node: Any) -> str:
@@ -148,9 +152,14 @@ def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -
 
 
 def extract(
-    source: str, provenance: dict[str, Any], *, definitions: bool = False, owned_source: Path | None = None
+    source: str,
+    provenance: dict[str, Any],
+    *,
+    definitions: bool = False,
+    owned_source: Path | None = None,
+    authored_headers: set[Path] | None = None,
 ) -> dict[str, Any]:
-    source = clean(source, line_markers=owned_source is not None)
+    source = clean(source, line_markers=owned_source is not None or authored_headers is not None)
     try:
         tree = c_parser.CParser().parse(source)
     except Exception as error:
@@ -164,6 +173,28 @@ def extract(
         "aliases": aliases,
         "unknown": [],
     }
+    if authored_headers is not None:
+        authored_names: set[str] = set()
+
+        def authored(node: Any) -> bool:
+            return bool(node.coord and node.coord.file and Path(node.coord.file).resolve() in authored_headers)
+
+        class Homes(c_ast.NodeVisitor):  # type: ignore[misc]
+            def visit_Struct(self, node: Any) -> None:
+                if node.name and node.decls and authored(node):
+                    authored_names.add(node.name)
+                self.generic_visit(node)
+
+            visit_Union = visit_Struct
+
+            def visit_Typedef(self, node: Any) -> None:
+                base = node.type.type if isinstance(node.type, c_ast.TypeDecl) else None
+                if isinstance(base, (c_ast.Struct, c_ast.Union)) and not base.name and base.decls and authored(node):
+                    authored_names.add(node.name)
+                self.generic_visit(node)
+
+        Homes().visit(tree)
+        result["authored_structs"] = sorted(authored_names)
     generator = c_generator.CGenerator()
     for node in tree.ext:
         definition = isinstance(node, c_ast.FuncDef)
@@ -233,10 +264,17 @@ def extract(
 
 def collect(project: Project, policy: Policy | None) -> list[dict[str, Any]]:
     seeds = []
+    authored = {
+        path.resolve() for root in project.include for path in root.rglob("*.h") if not storage.generated(project, path)
+    }
     for version in project.versions:
-        source = headers(project, policy, version)
+        source = headers(project, policy, version, line_markers=True)
         seeds.append(
-            extract(source, {"kind": "declared", "version": version, "sha256": storage.digest(source.encode())})
+            extract(
+                source,
+                {"kind": "declared", "version": version, "sha256": storage.digest(source.encode())},
+                authored_headers=authored,
+            )
         )
     path = project.build / "types/proven.json"
     if path.is_file():

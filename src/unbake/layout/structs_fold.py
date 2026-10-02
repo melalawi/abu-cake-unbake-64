@@ -139,10 +139,13 @@ def _type_includes(project: Any, texts: dict[Path, str], records: list[Layout], 
     """Import shared aggregate and callback typedef homes used by new fields."""
     combined = "\n".join(texts.values())
     parser = Parser(combined)
-    parser.parse()
+    records_in_headers = parser.parse()
     homes: dict[str, Path] = {}
     cursor = 0
     for path, text in texts.items():
+        for record in records_in_headers:
+            if cursor <= record.start < cursor + len(text):
+                homes.setdefault(record.name, path)
         for declaration in parser.declarations:
             if not cursor <= declaration.start < cursor + len(text):
                 continue
@@ -525,6 +528,18 @@ def fold(
         for start, end, value in sorted(replacements_for_path, reverse=True):
             after = after[:start] + value + after[end:]
         edits.append(Edit(path, before, after, tuple(versions)))
+    import_texts = dict(texts)
+    for path, aliases in promoted_aliases.items():
+        existing_edit = next((edit for edit in edits if edit.path == path), None)
+        before = texts[path]
+        after = existing_edit.after if existing_edit is not None else before
+        alias_declarations = "".join(f"typedef {kind} {tag} {alias};\n" for kind, tag, alias in sorted(aliases))
+        import_texts[path] = shared.append(before, alias_declarations)
+        after = shared.append(after, alias_declarations)
+        if existing_edit is not None:
+            edits.remove(existing_edit)
+        edits.append(Edit(path, before, after, tuple(versions)))
+    staged_texts = {**texts, **{edit.path: edit.after for edit in edits}}
     if additions:
         if project is None:
             held("project", "shared declaration home required")
@@ -535,7 +550,7 @@ def fold(
             + _scalar_include(project, texts, list(additions.values()))
             + "\n#endif\n"
         )
-        imports = _type_includes(project, texts, list(additions.values()), path)
+        imports = _type_includes(project, import_texts, list(additions.values()), path)
         extra = "".join(include + "\n" for include in imports.splitlines() if include not in before_header)
         if extra:
             # Dependencies such as n64sdk.h require the scalar home first.
@@ -558,7 +573,7 @@ def fold(
             before_header = existing_edit.after
         # Forward typedefs must precede existing definitions too: an extended
         # aggregate may now use one of the newly promoted types.
-        prefix = "\n".join(text for other, text in texts.items() if other != path) + "\n"
+        prefix = "\n".join(text for other, text in staged_texts.items() if other != path) + "\n"
         probe_prefix = prefix + forward
         header_parser = Parser(probe_prefix + shared.append(before_header, new_declarations))
         header_records = [
@@ -580,15 +595,6 @@ def fold(
         before_header = before_header[:position] + forward + before_header[position:]
         after = shared.append(before_header, new_declarations)
         edits.append(Edit(path, before, _order_header(after, prefix, before), tuple(versions)))
-    for path, aliases in promoted_aliases.items():
-        existing_edit = next((edit for edit in edits if edit.path == path), None)
-        before = texts[path]
-        after = existing_edit.after if existing_edit is not None else before
-        alias_declarations = "".join(f"typedef {kind} {tag} {alias};\n" for kind, tag, alias in sorted(aliases))
-        after = shared.append(after, alias_declarations)
-        if existing_edit is not None:
-            edits.remove(existing_edit)
-        edits.append(Edit(path, before, after, tuple(versions)))
     if edits:
         updated = dict(texts)
         for edit in edits:

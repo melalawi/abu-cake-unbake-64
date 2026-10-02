@@ -33,6 +33,8 @@ class Declarations:
     typedefs: set[str] = field(default_factory=set)
     uses: set[str] = field(default_factory=set)
     exports: set[str] = field(default_factory=set)
+    tags: set[str] = field(default_factory=set)
+    complete_uses: set[str] = field(default_factory=set)
 
 
 class Parser:
@@ -68,7 +70,8 @@ class Parser:
                 self.skip({pairs[token]})
                 self.take(pairs[token])
 
-    def specifiers(self) -> None:
+    def specifiers(self) -> str:
+        referenced_tag = ""
         while self.peek() in _QUALIFIERS:
             self.take()
         if self.peek() in ("struct", "union", "enum"):
@@ -77,6 +80,8 @@ class Parser:
             if self.peek() == "{":
                 if tag:
                     self.result.exports.add(tag)
+                    if kind != "enum":
+                        self.result.tags.add(tag)
                 self.take("{")
                 if kind == "enum":
                     self.skip({"}"})
@@ -84,6 +89,8 @@ class Parser:
                     while self.peek() and self.peek() != "}":
                         self.declaration()
                 self.take("}")
+            elif kind != "enum":
+                referenced_tag = tag
         elif self.peek() in _SCALARS:
             while self.peek() in _SCALARS | _QUALIFIERS:
                 self.take()
@@ -95,8 +102,12 @@ class Parser:
         while self.peek() in _QUALIFIERS:
             self.take()
 
-    def declarator(self, *, abstract: bool = False) -> str:
+        return referenced_tag
+
+    def declarator(self, *, abstract: bool = False) -> tuple[str, bool]:
+        pointer = False
         while self.peek() == "*":
+            pointer = True
             self.take()
             while self.peek() in _QUALIFIERS:
                 self.take()
@@ -104,7 +115,8 @@ class Parser:
         # Parentheses group a declarator; suffix parentheses contain parameters.
         if self.peek() == "(" and (not abstract or self.peek(1) in ("*", "(")):
             self.take("(")
-            name = self.declarator(abstract=abstract)
+            name, nested_pointer = self.declarator(abstract=abstract)
+            pointer |= nested_pointer
             self.take(")")
         elif _IDENTIFIER.fullmatch(self.peek()):
             name = self.take()
@@ -123,24 +135,28 @@ class Parser:
                     else:
                         while self.peek() in _STORAGE:
                             self.take()
-                        self.specifiers()
-                        self.declarator(abstract=True)
+                        tag = self.specifiers()
+                        _, indirect = self.declarator(abstract=True)
+                        if tag and not indirect:
+                            self.result.complete_uses.add(tag)
                     if self.peek() != ",":
                         break
                     self.take(",")
                 self.take(")")
-        return name
+        return name, pointer
 
     def declaration(self, *, external: bool = False) -> None:
         storage = set()
         while self.peek() in _STORAGE | _QUALIFIERS:
             storage.add(self.take())
-        self.specifiers()
+        tag = self.specifiers()
         if self.peek() == ";":
             self.take()
             return
         while True:
-            name = "" if self.peek() == ":" else self.declarator()
+            name, indirect = ("", False) if self.peek() == ":" else self.declarator()
+            if tag and not indirect and "typedef" not in storage:
+                self.result.complete_uses.add(tag)
             if external and "typedef" in storage:
                 self.result.typedefs.add(name)
             elif external and "extern" in storage:

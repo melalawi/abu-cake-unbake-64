@@ -60,3 +60,12 @@ class CleanupTests(MatchFixture):
                 self.assertEqual(self.source.read_text(), text)
                 self.assertFalse((self.source.parent / "overlay.json").exists())
                 self.assert_untouched()
+
+    def test_layout_rename_does_not_hide_a_conflicting_canonical_scalar_alias(self) -> None:
+        (self.project.include[0] / "types.h").write_text("typedef unsigned char u8;\n")
+        text = "typedef struct Other {int value;} u8;\nint alpha(void) {return 0;}\n"
+        self.source.write_text(text)
+        with self.assertRaisesRegex(Held, "u8: conflicting draft scalar typedef"):
+            cleanup.prepare(self.project, self.policy, self.source)
+        self.assertEqual(self.source.read_text(), text)
+        self.assert_untouched()
