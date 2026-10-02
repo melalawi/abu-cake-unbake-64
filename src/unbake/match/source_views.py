@@ -153,7 +153,8 @@ def _version_lines(project: Project, policy: Policy, text: str, version: str) ->
                 return None
             stack.pop()
         elif word in ("define", "undef") and taking:
-            name = rest.split("(", 1)[0].split()[0] if rest.split() else ""
+            words = rest.split("(", 1)[0].split()
+            name = words[0] if words else ""
             if not name:
                 return None
             known.add(name)
