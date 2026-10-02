@@ -34,7 +34,7 @@ def base_ignore_text(root: Path) -> str:
         "credentials.json",
     ]
     tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", "baserom.sha1", ":(glob)**/baserom.sha1"],
+        ["git", "ls-files", "-z", "--", ":(top)baserom.sha1", ":(top,glob)**/baserom.sha1"],
         cwd=root,
         capture_output=True,
         check=False,

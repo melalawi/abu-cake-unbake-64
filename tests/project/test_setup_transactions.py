@@ -124,6 +124,32 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
         self.assertEqual((self.project.asm / "generated.s").read_bytes(), b".text\n")
 
+    def test_ready_refresh_publishes_required_ignore_rules_and_keeps_owner_rules(self) -> None:
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "add", "-f", "--", "versions/us/baserom.sha1"], cwd=self.root, check=True)
+        ignore = self.root / ".gitignore"
+        ignore.write_text("# Owner rules\ncustom/\n/roms/\n")
+        readme = (self.root / "README.md").read_bytes()
+        contributing = (self.root / "CONTRIBUTING.md").read_bytes()
+        with patch.object(setup_proof, "proof", side_effect=self.proof):
+            setup.refresh(self.project, self.settings)
+        content = ignore.read_text()
+        self.assertTrue(content.startswith("# Owner rules\ncustom/\n/roms/\n"))
+        for rule in (
+            "baserom.*",
+            "!baserom.sha1",
+            "*.z64",
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key",
+            "id_rsa*",
+            "credentials.json",
+        ):
+            self.assertIn(rule + "\n", content)
+        self.assertEqual((self.root / "README.md").read_bytes(), readme)
+        self.assertEqual((self.root / "CONTRIBUTING.md").read_bytes(), contributing)
+
     def test_installed_refresh_restores_owned_callbacks_after_proving_template(self) -> None:
         callback = self.project.include[0] / "shared/audio_callbacks.h"
         template = (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes()

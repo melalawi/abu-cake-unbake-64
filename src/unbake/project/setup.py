@@ -380,7 +380,7 @@ def _publish(
                 and (project.root / relative).exists()
             )
             or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
-            or relative in {"README.md", "CONTRIBUTING.md", ".gitignore"}
+            or relative in {"README.md", "CONTRIBUTING.md"}
             or relative.startswith("docs/")
         ):
             continue
