@@ -159,7 +159,7 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
             for word in struct.iter_unpack(">I", raw)
         )
 
-    sections = []
+    sections: list[str] = []
     allocated: set[int] = set()
     for section in (".rdata", ".rodata"):
         index = obj.section(section)
@@ -221,51 +221,71 @@ def place(args: argparse.Namespace) -> None:
     if args.recipe is not None:
         configured = json.loads(args.recipe.read_text()).get("resident_mappings", {})
         mappings = resident_mappings(configured.get(args.version, []))
-    sections = []
+    sections: list[str] = []
     partial = args.non_matching == "1"
     objects = sorted(set(re.findall(r"(obj/src/[^\s()]+\.o)\(", script)))
+    faults: list[str] = []
     for name in objects:
-        unit = Path(name).stem
-        if unit not in intervals:
-            raise ValueError(f"{name}: unit-ranges.{unit} missing")
-        obj = Object(args.build / name)
-        slices = [row for row in intervals[unit].get("rodata_slices", []) if row["path"].startswith("rodata/")]
-        if slices and not partial:
-            for row in slices:
-                mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
-                if len(mapped) > 1:
-                    raise ValueError("layout.pool_span: ambiguous private mapping")
-                row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
-            placed = transfer_private(obj, intervals[unit], image, slices)
-            script = transfer_selectors(script, name, slices, placed)
-            continue
-        local = intervals[unit].get("rodata_address")
-        if not partial and local is not None:
-            for section in (".rdata", ".rodata"):
-                index = obj.section(section)
-                if index is None or not obj.sections[index][5]:
-                    continue
-                base = resident(obj, intervals[unit], image, section, mappings)
-                if base != local:
-                    raise ValueError(f"{name}: local {section} placement disagrees with split row")
-                if section == ".rdata":
-                    script = re.sub(re.escape(name) + r"\s*\(\.rodata\)", name + "(.rdata)", script)
-        if partial:
-            for section in (".rdata", ".rodata"):
-                index = obj.section(section)
-                if index is not None and obj.sections[index][5]:
-                    # Partial constants have no byte-identical placement evidence.
-                    sections.append(f"  .partial_{unit}_{section[1:]} : {{ {name}({section}) }}")
-        else:
-            for section in (".rdata", ".rodata"):
-                if re.search(re.escape(name) + r"\s*\(" + re.escape(section) + r"\)", script):
-                    continue
-                base = resident(obj, intervals[unit], image, section, mappings)
-                if base is not None:
-                    sections.append(fragment([{"object": name, "section": section, "address": base}]))
+        try:
+            script = place_object(args, name, script, intervals, image, mappings, sections, partial)
+        except (OSError, ValueError, KeyError, struct.error) as error:
+            # Every failing object is named so one link attributes all culprits.
+            faults.append(f"{name}: {error}")
+    if faults:
+        raise ValueError("\n".join(faults))
     script = insert_fragment(script, "\n".join(sections))
     publish(args.output, script.encode())
     publish(args.output.with_suffix(".flags"), b"--no-check-sections" if sections else b"")
+
+
+def place_object(
+    args: argparse.Namespace,
+    name: str,
+    script: str,
+    intervals: dict[str, Any],
+    image: bytes,
+    mappings: list[dict[str, int]],
+    sections: list[str],
+    partial: bool,
+) -> str:
+    unit = Path(name).stem
+    if unit not in intervals:
+        raise ValueError(f"unit-ranges.{unit} missing")
+    obj = Object(args.build / name)
+    slices = [row for row in intervals[unit].get("rodata_slices", []) if row["path"].startswith("rodata/")]
+    if slices and not partial:
+        for row in slices:
+            mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
+            if len(mapped) > 1:
+                raise ValueError("layout.pool_span: ambiguous private mapping")
+            row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
+        placed = transfer_private(obj, intervals[unit], image, slices)
+        return transfer_selectors(script, name, slices, placed)
+    local = intervals[unit].get("rodata_address")
+    if not partial and local is not None:
+        for section in (".rdata", ".rodata"):
+            index = obj.section(section)
+            if index is None or not obj.sections[index][5]:
+                continue
+            base = resident(obj, intervals[unit], image, section, mappings)
+            if base != local:
+                raise ValueError(f"local {section} placement disagrees with split row")
+            if section == ".rdata":
+                script = re.sub(re.escape(name) + r"\s*\(\.rodata\)", name + "(.rdata)", script)
+    if partial:
+        for section in (".rdata", ".rodata"):
+            index = obj.section(section)
+            if index is not None and obj.sections[index][5]:
+                # Partial constants have no byte-identical placement evidence.
+                sections.append(f"  .partial_{unit}_{section[1:]} : {{ {name}({section}) }}")
+    else:
+        for section in (".rdata", ".rodata"):
+            if re.search(re.escape(name) + r"\s*\(" + re.escape(section) + r"\)", script):
+                continue
+            base = resident(obj, intervals[unit], image, section, mappings)
+            if base is not None:
+                sections.append(fragment([{"object": name, "section": section, "address": base}]))
+    return script
 
 
 def main() -> None:
@@ -278,7 +298,7 @@ def main() -> None:
     try:
         place(parser.parse_args())
     except (OSError, ValueError, KeyError, struct.error) as error:
-        parser.exit(1, f"HELD(link): {error}\n")
+        parser.exit(1, "".join(f"HELD(link): {line}\n" for line in str(error).splitlines()))
 
 
 if __name__ == "__main__":

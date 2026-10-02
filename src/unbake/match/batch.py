@@ -340,6 +340,7 @@ def _isolate(
     receipts: list[str],
 ) -> tuple[list[Candidate], dict[str, str]]:
     """Name culprits from the built objects, then relink the rest from the same objects."""
+    extracted = {version: staged.version(version).split.read_text() for version in generations}
     while True:
         failures = [version for version, result in results.items() if not result.ok]
         reporting.record(
@@ -354,20 +355,34 @@ def _isolate(
         culprits = attribution.diagnose(staged, failures, generations, names)
         reporting.record("attribution", culprits=culprits)
         if not culprits:
-            culprits = _bisect(staged, base, policy, candidates, generations, failures)
+            culprits = _bisect(staged, base, policy, candidates, generations, failures, extracted)
         for name, details in sorted(culprits.items()):
             receipts.append(f"HELD(match): {name}: build compare failed on " + "; ".join(details[:4]))
         candidates = [candidate for candidate in candidates if candidate.function not in culprits]
         if not candidates:
             return [], {}
         _materialize(staged, base, candidates)
-        results = _relink(staged, policy, generations)
+        results = _relink(staged, policy, generations, extracted)
 
 
-def _relink(staged: Project, policy: Policy, generations: dict[str, Path]) -> dict[str, build.BuildResult]:
-    """Extract and link the staged layout over objects this transaction already built."""
+def _relink(
+    staged: Project, policy: Policy, generations: dict[str, Path], extracted: dict[str, str]
+) -> dict[str, build.BuildResult]:
+    """Link the staged layout over objects this transaction already built.
+
+    extracted holds the split each generation's link inputs describe; a split that
+    only returned C rows to assembly is rewritten in place instead of re-extracted.
+    """
+    reuse = {}
+    for version, generation in generations.items():
+        text = staged.version(version).split.read_text()
+        reuse[version] = text == extracted[version] or relink.revert_rows(staged, generation, extracted[version], text)
+        extracted[version] = text
+    reporting.record("relink", reused={v: str(r) for v, r in reuse.items()})
     with ThreadPoolExecutor(max_workers=len(generations)) as pool:
-        futures = {v: pool.submit(relink.prove, staged, policy, v, g, None) for v, g in generations.items()}
+        futures = {
+            v: pool.submit(relink.prove, staged, policy, v, g, None, extracted=reuse[v]) for v, g in generations.items()
+        }
         return {v: future.result() for v, future in futures.items()}
 
 
@@ -378,6 +393,7 @@ def _bisect(
     candidates: list[Candidate],
     generations: dict[str, Path],
     failures: list[str],
+    extracted: dict[str, str],
 ) -> dict[str, list[str]]:
     """Find one unattributed fault by relinking halves of the retained objects."""
     detail = ", ".join(failures)
@@ -385,7 +401,7 @@ def _bisect(
     while len(suspect) > 1:
         left, right = suspect[: len(suspect) // 2], suspect[len(suspect) // 2 :]
         _materialize(staged, base, accepted + left)
-        if all(result.ok for result in _relink(staged, policy, generations).values()):
+        if all(result.ok for result in _relink(staged, policy, generations, extracted).values()):
             accepted += left
             suspect = right
         else:

@@ -158,3 +158,56 @@ def prove(
         log.write_text("".join(output))
         (generation / "build.exit").write_text("0\n" if ok else "1\n")
     return build.BuildResult(version, ok, sha1_line, log, generation)
+
+
+def revert_rows(project: Project, generation: Path, before: str, after: str) -> bool:
+    """Rewrite extracted link inputs when the split only returned C rows to assembly.
+
+    Splat's output for such a split differs only in each unit's object path, the
+    object inventory, its unit range and the symbol dump's row kind, so the
+    retained objects relink without a second extraction. Anything else is False.
+    """
+    from unbake.layout import split
+
+    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    if len(old) != len(new):
+        return False
+    units: dict[str, str] = {}
+    for left, right in zip(old, new, strict=True):
+        if left == right:
+            continue
+        was, now = split.ROW.fullmatch(left), split.ROW.fullmatch(right)
+        if was is None or now is None or (was["kind"], now["kind"]) != ("c", "asm") or was["start"] != now["start"]:
+            return False
+        name = Path(split.plain(was["path"])).name
+        if Path(split.plain(now["path"])).name != name:
+            return False
+        units[name] = split.plain(now["path"])
+    if not units or not all((generation / "obj/asm" / f"{path}.o").is_file() for path in units.values()):
+        return False
+    script = generation / f"{project.name}.ld"
+    graph = generation / ".split.mk"
+    ranges = generation / "unit-ranges.json"
+    dump = generation / "splat_symbols.csv"
+    text, inventory, table = script.read_text(), graph.read_text(), json.loads(ranges.read_text())
+    rows = dump.read_text().splitlines(keepends=True)
+    for name, path in units.items():
+        text, count = re.subn(rf"\bobj/src/{re.escape(name)}\.o\(", f"obj/asm/{path}.o(", text)
+        source, target = f"$(BUILD)/obj/src/{name}.o", f"$(BUILD)/obj/asm/{path}.o"
+        lines = inventory.split("\n")
+        c = next(i for i, line in enumerate(lines) if line.startswith("C_OBJECTS := "))
+        a = next(i for i, line in enumerate(lines) if line.startswith("ASM_OBJECTS := "))
+        words = lines[c].split(" ")
+        if not count or source not in words or name not in table:
+            return False
+        lines[c] = " ".join(word for word in words if word != source)
+        lines[a] += f" {target}"
+        inventory = "\n".join(lines)
+        del table[name]
+        suffix = f",{name},c\n"
+        rows = [row[: -len(suffix)] + f",{name},asm\n" if row.endswith(suffix) else row for row in rows]
+    script.write_text(text)
+    graph.write_text(inventory)
+    ranges.write_text(json.dumps(table, sort_keys=True))
+    dump.write_text("".join(rows))
+    return True

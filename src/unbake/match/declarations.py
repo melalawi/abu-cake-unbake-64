@@ -13,7 +13,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import fold, scalar_edits
 from unbake.layout.structs_parser import Parser
-from unbake.match import reporting, source_views, type_rewrite
+from unbake.match import pool_literals, reporting, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
 
@@ -89,6 +89,7 @@ def fold_source(
     prove_headers: bool = True,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
+    text = pool_literals.lower(project, function, text, versions)
     parsers = source_views.parsers(project, policy, text, versions, headers)
     text, tag_only = _layout_names(project, policy, function, text, parsers, versions, headers)
     parsers = source_views.parsers(project, policy, text, versions, headers)
@@ -170,19 +171,24 @@ def _layout_names(
             if span in replacements and replacements[span] != target:
                 structs.held(function, "version-dependent layout rename at the same source token")
             replacements[span] = target
+        # A layout that keeps its name may absorb a same-source duplicate,
+        # whose forward typedef and definition are then both dropped.
+        local = {record.name for record in records if resolution.get(record.name, (record.name,))[0] == record.name}
         defined: set[str] = set()
         for record in records:
             if record.name not in resolution:
                 continue
             target, _ = resolution[record.name]
             if target in defined:
-                declaration = next(
-                    (item for item in parser.declarations if getattr(item.base, "start", None) == record.start), None
-                )
-                if declaration is not None:
-                    redundant[(declaration.start, declaration.end)] = (
-                        f"typedef {record.kind} {target} {target};" if record.aliases else ""
-                    )
+                # A forward typedef and its definition both name this record.
+                spans = [
+                    (item.start, item.end)
+                    for item in parser.declarations
+                    if getattr(item.base, "start", None) == record.start
+                ]
+                for number, span in enumerate(spans):
+                    keep = record.aliases and number == 0 and target not in local
+                    redundant[span] = f"typedef {record.kind} {target} {target};" if keep else ""
             defined.add(target)
         for name, (target, _) in resolution.items():
             if name != target:
