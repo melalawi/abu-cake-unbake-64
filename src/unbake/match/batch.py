@@ -39,6 +39,9 @@ from unbake.report import progress
 FOLDED_RULES = frozenset({"invented-struct", "local-type-copy", "raw-offset"})
 
 
+_BISECT_LIMIT = 64
+
+
 @dataclass
 class Candidate:
     function: str
@@ -328,9 +331,18 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
         candidate, version = job
         output = work / version / f"{candidate.function}.o"
         try:
-            return candidate, data_symbols.prepare(staged, policy, candidate.function, version, output)
+            needs = data_symbols.prepare(staged, policy, candidate.function, version, output)
         except Held as error:
             return candidate, f"submit.data_symbols: VERSION {version}: {error.reason}"
+        for need in needs:
+            # An address-shaped name is that address; elsewhere it would hide the generated label.
+            shaped = re.fullmatch(r"D_([0-9A-Fa-f]{8})", need.name)
+            if shaped and int(shaped[1], 16) != need.address:
+                return candidate, (
+                    f"submit.data_symbols: VERSION {version}: {need.name}: address-shaped name placed at "
+                    f"0x{need.address:08X}; use this version's name or a cross-version identity"
+                )
+        return candidate, needs
 
     refused: dict[str, str] = {}
     proposed: dict[tuple[str, str], dict[int, set[str]]] = {}
@@ -401,6 +413,10 @@ def _isolate(
         names = {candidate.function for candidate in candidates}
         culprits = attribution.diagnose(staged, failures, generations, names)
         reporting.record("attribution", culprits=culprits)
+        if not culprits and len(candidates) > _BISECT_LIMIT:
+            # Halving thousands of sources costs a link per step and names one culprit.
+            detail = "; ".join(staging.compare_failure(staged, v, results[v])[-300:] for v in failures)
+            held(f"submit.attribution: unattributed proof failure across {len(candidates)} sources: {detail}")
         if not culprits:
             culprits = _bisect(staged, base, policy, candidates, generations, failures, extracted)
         for name, details in sorted(culprits.items()):
