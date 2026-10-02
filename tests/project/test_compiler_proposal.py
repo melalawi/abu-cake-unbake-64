@@ -150,6 +150,21 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(reproduce.call_args.args[2], ["ido-5.3", "ido-7.1"])
         self.accept(census, layout, proposal, self.token())
 
+    def test_incomplete_probes_never_turn_compile_failure_into_a_choice(self) -> None:
+        from unbake.project import compiler_probes
+
+        census, layout = self.layout(IDO)
+        report = {
+            "attempted": 4,
+            "successful_comparable": 2,
+            "errors": [{"candidate": "ido-5.3", "reason": "missing binary"}],
+            "candidates": {"ido-5.3": {"score": [0, 0]}, "ido-7.1": {"score": [1, 1]}},
+        }
+        with patch.object(compiler_probes, "reproduce", return_value=report):
+            proposal = self.propose(census, layout)
+        self.assertEqual(proposal["assignments"], {"f0": "tie:us:ido"})
+        self.assertEqual(proposal["compiler_ties"]["tie:us:ido"], ["ido-5.3", "ido-7.1"])
+
     def test_clear_regional_release_is_a_confirmable_whole_proposal(self) -> None:
         census, layout = self.layout(SN64, SN64, GCC)
         proposal = self.propose(census, layout)

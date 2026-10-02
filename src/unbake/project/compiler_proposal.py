@@ -271,7 +271,9 @@ def propose_compilers(
             probes[region] = probe
             scores = {ident: row["score"] for ident, row in probe["candidates"].items()}
             probe_best = max(scores.values())
-            tied = [ident for ident in tied if scores[ident] == probe_best]
+            if not probe["errors"]:
+                tied = [ident for ident in tied if scores[ident] == probe_best]
+            probe["decision"] = "incomplete probes; retain tied set" if probe["errors"] else "complete comparisons"
             for row in rows:
                 if row["id"] in scores:
                     row["evidence"]["reproduction"] = probe["candidates"][row["id"]]

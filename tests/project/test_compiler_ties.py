@@ -110,6 +110,13 @@ class CompilerTieTests(unittest.TestCase):
         with self.assertRaisesRegex(config.Held, "compiler.tied_set"):
             compiler_ties.read({"bad": ["ido-5.3", "ido-7.1"]}, self.project.compilers)
 
+    def test_segment_tie_uses_same_reference_as_compiler_for(self):
+        project = replace(self.project, units={"main": self.ref})
+        self.assertEqual(compiler_ties.reference(project, self.source), self.ref)
+        self.assertEqual(project.compiler_for(self.source).id, "ido-5.3")
+        variant = compiler_ties.candidate(project, self.ref, "ido-7.1")
+        self.assertEqual(variant.compiler_for(self.source).id, "ido-7.1")
+
     def test_default_tie_pin_and_carrier_do_not_mutate_original(self):
         project = replace(self.project, default_compiler=self.ref)
         variant = compiler_ties.candidate(project, self.ref, "ido-7.1")

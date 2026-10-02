@@ -34,12 +34,7 @@ def read(value: object, compilers: dict[str, Any]) -> dict[str, tuple[str, ...]]
 
 
 def reference(project: Project, source: Path) -> str | None:
-    spelling = (
-        source.relative_to(project.root).as_posix()
-        if source.is_relative_to(project.root)
-        else (project.src.relative_to(project.root) / source.name).as_posix()
-    )
-    ident = project.units.get(spelling, project.units.get(source.stem, project.default_compiler))
+    ident = project.compiler_reference(source)
     return ident if ident in project.compiler_ties else None
 
 

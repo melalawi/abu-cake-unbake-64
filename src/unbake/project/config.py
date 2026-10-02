@@ -72,7 +72,8 @@ class Project:
         """A carrier for draft/assembly recipes, never a regional pin."""
         return self.compiler_ties[ident][0] if ident in self.compiler_ties else ident
 
-    def compiler_for(self, unit: str | Path) -> Compiler:
+    def compiler_reference(self, unit: str | Path) -> str:
+        """Return the configured ID or explicit candidate-set reference."""
         path = Path(unit)
         if path.is_absolute():
             try:
@@ -102,9 +103,12 @@ class Project:
             if len(regions) > 1:
                 raise Held("config", f"[units].{path.stem}: conflicting segment compilers across VERSIONs")
         ident = direct or stem or next(iter(regions), self.default_compiler)
-        ident = self.compiler_id(ident)
+        return ident
+
+    def compiler_for(self, unit: str | Path) -> Compiler:
+        ident = self.compiler_id(self.compiler_reference(unit))
         if ident not in self.compilers:
-            raise Held("config", f"[units].{spelling}: unknown compiler {ident}")
+            raise Held("config", f"[units].{unit}: unknown compiler {ident}")
         return self.compilers[ident]
 
     def version(self, v: str) -> Version:

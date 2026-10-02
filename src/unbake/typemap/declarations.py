@@ -48,7 +48,7 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
     if extra is not None:
         source += f'#include "{extra}"\n'
     flags: list[str] = []
-    pending = iter(project.compilers[project.default_compiler].cflags)
+    pending = iter(project.compilers[project.compiler_id(project.default_compiler)].cflags)
     for flag in pending:
         if flag in ("-D", "-U", "-include", "-isystem"):
             value = next(pending, None)
