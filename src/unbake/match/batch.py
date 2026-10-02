@@ -94,6 +94,9 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 candidates = _fold(staged, policy, candidates, receipts)
             if not candidates:
                 return receipts
+            candidates = _row_owners(base, candidates, receipts)
+            if not candidates:
+                return receipts
             with reporting.phase("data_symbols"):
                 _materialize(staged, base, candidates)
                 candidates = _data_symbols(staged, policy, candidates, receipts)
@@ -235,6 +238,34 @@ def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> N
 
         for edit in reserved.publication_edit(staged, {c.function for c in candidates if c.matched}):
             split_apply.write(edit.path, edit.after)
+
+
+def _row_owners(base: _Base, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
+    """Refuse a source whose row is missing, duplicated or claimed by another source's fold."""
+    refused: dict[str, str] = {}
+    for version, text in base.splits.items():
+        removed = {
+            line: candidate.function for candidate in candidates for line in candidate.removed_rows.get(version, ())
+        }
+        rows: dict[str, list[str]] = {}
+        for line in text.splitlines(keepends=True):
+            row = split.ROW.fullmatch(line)
+            if row is not None and row["kind"] in ("asm", "c"):
+                rows.setdefault(Path(split.plain(row["path"])).name, []).append(line)
+        for candidate in candidates:
+            if not candidate.matched or version not in candidate.versions:
+                continue
+            own = rows.get(candidate.function, [])
+            if len(own) != 1 or split.ROW.fullmatch(own[0])["kind"] != "asm":  # type: ignore[index]
+                refused.setdefault(candidate.function, f"submit.row: VERSION {version} requires one asm row")
+            elif own[0] in removed and removed[own[0]] != candidate.function:
+                refused.setdefault(
+                    candidate.function, f"submit.row: VERSION {version} row is folded by {removed[own[0]]}"
+                )
+    for candidate in candidates:
+        if candidate.function in refused:
+            receipts.append(f"HELD(submit): {candidate.function}: {refused[candidate.function]}")
+    return [candidate for candidate in candidates if candidate.function not in refused]
 
 
 def _rows(text: str, version: str, candidates: list[Candidate]) -> str:

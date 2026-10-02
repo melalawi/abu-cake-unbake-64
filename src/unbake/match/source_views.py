@@ -30,15 +30,20 @@ def parsers(
         return [contextual(text)]
     lines = text.splitlines(keepends=True)
     result = []
+    # Versions selecting the same lines share one parse.
+    parsed: dict[frozenset[int], Parser] = {}
     for version in versions:
         active = _version_lines(project, policy, text, version)
         if active is None:
             active = _preprocessed_lines(project, policy, text, version)
-        view = "".join(
-            line if index in active else "".join("\n" if char == "\n" else " " for char in line)
-            for index, line in enumerate(lines)
-        )
-        result.append(contextual(view))
+        key = frozenset(active)
+        if key not in parsed:
+            view = "".join(
+                line if index in active else "".join("\n" if char == "\n" else " " for char in line)
+                for index, line in enumerate(lines)
+            )
+            parsed[key] = contextual(view)
+        result.append(parsed[key])
     return result
 
 
