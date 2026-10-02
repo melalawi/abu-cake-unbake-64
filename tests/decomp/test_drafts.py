@@ -85,13 +85,15 @@ class DraftsTest(unittest.TestCase):
         self.add("extra instruction", {"us": 99, "eu": 99}, (9, 9), typed={"inserted": 1, "changed": 1})
         sha, _, _ = self.add("fewer differences", {"us": 97, "eu": 98}, (9, 9), typed={"changed": 1})
         self.assertEqual(self.store.best("sample"), self.store.root / sha / "sample.c")
-        self.assertEqual(self.store.publish_all()[0].read_text(), "#ifdef NON_MATCHING\nfewer differences\n#endif\n")
+        with self.assertRaisesRegex(Held, "drafts.work.source"):
+            self.store.publish_all()
 
     def test_publish_rejects_higher_objdiff_extra_instruction_variant(self) -> None:
         self.add("extra instruction", {"us": 99, "eu": 99}, (8, 9), typed={"inserted": 1})
         sha, _, _ = self.add("more exact words", {"us": 97, "eu": 96}, (10, 8), typed={"changed": 2})
         self.assertEqual(self.store.best("sample"), self.store.root / sha / "sample.c")
-        self.assertEqual(self.store.publish_all()[0].read_text(), "#ifdef NON_MATCHING\nmore exact words\n#endif\n")
+        with self.assertRaisesRegex(Held, "drafts.work.source"):
+            self.store.publish_all()
 
     def test_latest_trial_per_sha_and_all_history_survive_reopening(self) -> None:
         sha, trial, source = self.add("same draft", {"us": 95, "eu": 95})
@@ -104,13 +106,13 @@ class DraftsTest(unittest.TestCase):
         self.assertEqual(len(list(reopened.root.glob("*/*.c"))), 2)
         self.assertEqual(reopened.rows("sample")[0]["source_sha256"], sha)
 
-    def test_publish_guards_best_draft_and_skips_matched_source(self) -> None:
+    def test_publish_requires_current_trial_source_and_preserves_matched_source(self) -> None:
         self.add("perfect draft", {"us": 100, "eu": 100}, (10, 10))
         self.add("already matched", {"us": 100, "eu": 100}, (10, 10), function="matched")
         (self.project.src / "matched.c").write_text("already matched")
-        paths = self.store.publish_all()
-        self.assertEqual(paths, [self.project.src / "sample.c"])
-        self.assertEqual(paths[0].read_text(), "#ifdef NON_MATCHING\nperfect draft\n#endif\n")
+        with self.assertRaisesRegex(Held, "drafts.work.source"):
+            self.store.publish_all()
+        self.assertFalse((self.project.src / "sample.c").exists())
         self.assertEqual((self.project.src / "matched.c").read_text(), "already matched")
         self.assertFalse((self.project.root / "nonmatching").exists())
         self.assertTrue(self.store.rows("sample")[0]["identical_everywhere"])

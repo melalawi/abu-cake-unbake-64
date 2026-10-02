@@ -97,15 +97,15 @@ class ProposalTests(unittest.TestCase):
         self.assertFalse((self.project.root / "versions").exists())
         self.assertFalse((self.project.root / "docs").exists())
 
-    def test_mixed_compilers_keep_ido_tie_and_require_explicit_default(self) -> None:
+    def test_mixed_compilers_keep_ido_tie_with_displayed_default(self) -> None:
         census, layout = self.layout(GCC, IDO, LEAF)
         proposal = self.propose(census, layout)
         self.assertEqual(proposal["candidates"]["us:gcc"][0]["id"], "gcc-2.7.2-kmc")
         self.assertEqual(proposal["candidates"]["us:ido"][0]["rank"], proposal["candidates"]["us:ido"][1]["rank"])
         self.assertIn("us:ido", proposal["unresolved"])
-        self.assertIn("default:mixed", proposal["unresolved"])
-        self.assertIsNone(proposal["default_compiler"])
-        with self.assertRaisesRegex(config.Held, "setup.compiler_mixed:"):
+        self.assertNotIn("default:mixed", proposal["unresolved"])
+        self.assertEqual(proposal["default_compiler"], "gcc-2.7.2-kmc")
+        with self.assertRaisesRegex(config.Held, "setup.compiler_candidate:"):
             self.accept(census, layout, proposal, self.token())
         choices = {"us:ido": "ido-7.1", "default": "gcc-2.7.2-kmc"}
         proposal = self.propose(census, layout, choices)
@@ -133,14 +133,13 @@ class ProposalTests(unittest.TestCase):
             self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
-    def test_gcc_release_conflict_is_not_erased_by_regional_majority(self) -> None:
+    def test_clear_regional_release_is_a_confirmable_whole_proposal(self) -> None:
         census, layout = self.layout(SN64, SN64, GCC)
         proposal = self.propose(census, layout)
-        self.assertEqual(proposal["assignments"]["f0"], "gcc-2.8.1-sn64")
-        self.assertNotIn("f2", proposal["assignments"])
-        self.assertIn("unit:f2:mixed", proposal["unresolved"])
-        with self.assertRaisesRegex(config.Held, "setup.compiler_mixed:"):
-            self.accept(census, layout, proposal, self.token())
+        self.assertEqual(set(proposal["assignments"].values()), {"gcc-2.8.1-sn64"})
+        self.assertEqual(proposal["unresolved"], [])
+        self.assertEqual(proposal["choices"], {})
+        self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
     def test_exact_prologue_words_and_interpreter_digest_are_evidence(self) -> None:

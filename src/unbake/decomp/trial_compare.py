@@ -224,6 +224,14 @@ def compare_object(version: str, document: dict[str, object], function: str) -> 
             if equalised and operands(before) == operands(after):
                 identical += 1
                 continue
+        if kind == "relocation" and before is not None and after is not None:
+            # A changed branch/call/load opcode must not disappear behind its
+            # different relocation target. Both differences are evidence.
+            opcodes_before = [part["opcode"] for part in before.get("parts", []) if "opcode" in part]
+            opcodes_after = [part["opcode"] for part in after.get("parts", []) if "opcode" in part]
+            if opcodes_before != opcodes_after:
+                typed["changed"] += 1
+                details.append("changed: opcode differs at an instruction with a relocation difference")
         if kind == "same" and (
             x.get("diff_kind", "DIFF_NONE") != "DIFF_NONE" or y.get("diff_kind", "DIFF_NONE") != "DIFF_NONE"
         ):

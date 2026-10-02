@@ -257,28 +257,31 @@ class Store:
         return path
 
     def publish_all(self) -> list[Path]:
-        """Publish best drafts in source files selected only by NON_MATCHING builds."""
-        destination = getattr(self.project, "src", None)
-        if not destination:
-            raise Held("drafts", "project.src is missing")
+        """Submit current tried drafts through the same admission/proof boundary."""
+        from unbake.match import queue
+
         paths = []
-        try:
-            for function in sorted({row["function"] for row in self.history()}):
-                path = Path(destination) / f"{function}.c"
-                if path.exists() and not is_partial(path.read_text()):
-                    continue
-                source = self.best(function)
-                if source is None:
-                    raise Held("drafts", f"best.{function} is missing")
-                content = source.read_text()
-                if is_partial(content):
-                    content = unguard(content)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                _write(path, ("#ifdef NON_MATCHING\n" + content.rstrip("\n") + "\n#endif\n").encode())
-                paths.append(path)
-            return paths
-        except (OSError, UnicodeError) as error:
-            raise Held("drafts", f"publish drafts {destination}: {error}") from error
+        for function in sorted({row["function"] for row in self.history()}):
+            destination = self.project.src / f"{function}.c"
+            if destination.exists() and not is_partial(destination.read_text()):
+                continue
+            latest = self.rows(function)[-1]
+            value = latest["work"].get("source")
+            if not isinstance(value, str) or not value:
+                raise Held(
+                    "drafts", f"drafts.work.source: {function}: current trial source missing; run unbake try FILE"
+                )
+            source = self.project.root / value
+            if not source.is_file():
+                raise Held("drafts", f"drafts.work.source: {function}: {source} missing")
+            lines = queue.publish_source(self.project, self.policy, source)
+            refusals = [line for line in lines if line.startswith("HELD(")]
+            if refusals:
+                raise Held("drafts", "; ".join(refusals))
+            if not destination.is_file():
+                raise Held("drafts", f"drafts.publication: {function}: submit did not publish source")
+            paths.append(destination)
+        return paths
 
 
 def canonical_source(content: bytes) -> bytes:

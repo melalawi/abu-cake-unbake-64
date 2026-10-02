@@ -244,5 +244,10 @@ def run(project: Project, policy: Policy, *, function: str | None = None) -> lis
 
 def publish_source(project: Project, policy: Policy, source: Path) -> list[str]:
     """Publish only the requested file, with one transactional all-owner proof."""
+    rows = drafts.Store(policy, project).rows(source.stem)
+    if rows and not rows[-1]["identical_everywhere"]:
+        from unbake.match import nonmatching
+
+        return nonmatching.publish_source(project, policy, source)
     submit(project, policy, source)
     return run(project, policy, function=source.stem)

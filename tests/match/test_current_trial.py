@@ -50,7 +50,7 @@ class CurrentTrialTests(MatchFixture):
             queue.publish_source(self.project, self.policy, source)
         self.prove(source)
         self.prove(source, identical=False)
-        with self.assertRaisesRegex(Held, "submit.exact"):
+        with self.assertRaisesRegex(Held, "submit.owner_fuzzy_bar"):
             queue.publish_source(self.project, self.policy, source)
 
     def test_workspace_store_is_isolated(self) -> None:

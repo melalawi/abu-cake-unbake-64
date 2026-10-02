@@ -64,23 +64,20 @@ class PartialsTest(unittest.TestCase):
         store.add(trial, path, {"us": score})
         return store
 
-    def test_publish_replaces_partial_and_preserves_matched_source(self) -> None:
+    def test_bulk_publish_cannot_bypass_current_trial_and_full_proof(self) -> None:
         store = self.add("void f(void) {}\n")
         path = self.src / "f.c"
-        self.assertEqual(store.publish_all(), [path])
-        self.assertEqual(path.read_text(), "#ifdef NON_MATCHING\nvoid f(void) {}\n#endif\n")
-        self.add("int f(void) { return 1; }\n", 70)
-        store.publish_all()
-        self.assertIn("return 1", path.read_text())
+        with self.assertRaisesRegex(Held, "drafts.work.source"):
+            store.publish_all()
+        self.assertFalse(path.exists())
         path.write_text("int f(void) { return 2; }\n")
         self.assertEqual(store.publish_all(), [])
         self.assertIn("return 2", path.read_text())
-        self.assertFalse((self.root / "nonmatching").exists())
 
     def test_match_edits_remove_guard_and_flip_every_version(self) -> None:
-        store = self.add("#if DEBUG\nint f(void) { return 1; }\n#endif\n")
-        store.publish_all()
+        self.add("#if DEBUG\nint f(void) { return 1; }\n#endif\n")
         path = self.src / "f.c"
+        path.write_text("#ifdef NON_MATCHING\n#if DEBUG\nint f(void) { return 1; }\n#endif\n#endif\n")
         before = path.read_text()
         edits = drafts.match_edits(self.project, "f", before, ("us", "eu"))
         self.assertEqual(len(edits), 3)

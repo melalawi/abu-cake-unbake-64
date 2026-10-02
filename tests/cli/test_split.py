@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tests.cli.support import MainCase
 
@@ -33,9 +33,19 @@ class SplitTests(MainCase):
         self.assertEqual(code, 1)
         self.assertIn("HELD(split): VERSION us: FAILED log build/us.log", out)
 
-    def test_split_rename_place_and_twins_signatures(self) -> None:
+    def test_split_rename_uses_simultaneous_planner(self) -> None:
+        from unbake.layout import rename_map
+
+        with (
+            patch.object(rename_map, "plan", return_value=[]) as plan,
+            patch.object(rename_map, "diff", return_value=""),
+        ):
+            code, _out, _error = self.run_main(self.args("split", "rename", "alpha", "beta"))
+        plan.assert_called_once_with(self.project, {"alpha": "beta"})
+        self.assertEqual(code, 0)
+
+    def test_split_place_and_twins_signatures(self) -> None:
         for verb, operands, expected in (
-            ("rename", ["alpha", "beta"], (self.project, "alpha", "beta")),
             (
                 "place",
                 ["alpha", "--version", "us", "--address", "0x80001000"],

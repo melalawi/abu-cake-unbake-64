@@ -24,8 +24,9 @@ def register(phases: Subparsers) -> None:
     classify.add_argument("--version", required=True, metavar="V")
     classify.add_argument("--apply", action="store_true")
     rename = split_verbs.add_parser("rename", phase="split")
-    rename.add_argument("function")
-    rename.add_argument("new_name")
+    rename.add_argument("function", nargs="?")
+    rename.add_argument("new_name", nargs="?")
+    rename.add_argument("--map", type=Path, help="JSON old->new names; simultaneous transaction with all-ROM proof.")
     rename.add_argument("--apply", action="store_true")
     place = split_verbs.add_parser("place", phase="split")
     place.add_argument("function")
@@ -54,6 +55,15 @@ def register(phases: Subparsers) -> None:
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.layout import split_apply, split_edits, split_partition
+
+    if args.verb == "rename" and args.map is None and (args.function is None or args.new_name is None):
+        from unbake.project.config import Held
+
+        raise Held("split", "split.rename.names: supply FUNCTION NEW_NAME or --map JSON")
+    if args.verb == "rename":
+        from unbake.cli import gate_split
+
+        return gate_split.run(args, project, policy)
 
     if args.verb == "boundary-map":
         from unbake.layout import boundary_map
@@ -101,8 +111,6 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     elif args.verb in ("cut", "data-cut"):
         operation = split_edits.cut if args.verb == "cut" else split_edits.data_cut
         edits = operation(project, args.version, args.function, args.start, args.end)
-    elif args.verb == "rename":
-        edits = split_edits.rename(project, args.function, args.new_name)
     elif args.verb == "place":
         edits = split_edits.place(project, args.version, args.function, args.address)
     else:

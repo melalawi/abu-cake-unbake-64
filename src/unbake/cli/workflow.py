@@ -4,7 +4,7 @@ import json
 import shlex
 
 from unbake.cli.guidance import command
-from unbake.decomp import drafts, plan, type_context, work
+from unbake.decomp import drafts, fuzzy_bar, plan, type_context, work
 from unbake.decomp.assign import Ledger
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import split
@@ -67,8 +67,10 @@ def select(project: Project, policy: Policy) -> tuple[str, str]:
             try:
                 current = dict(work.identity(project, source, owning_versions(project, subject, None), policy=policy))
                 if latest["work"] == current:
-                    if latest["identical_everywhere"] and not latest["preconditions"]:
-                        verb, reason = "submit", "latest exact trial covers every holding version"
+                    if fuzzy_bar.evaluate(
+                        latest["compares"], owning_versions(project, subject, None), latest["preconditions"]
+                    ).passed:
+                        verb, reason = "submit", "latest owner-bar trial covers every holding version"
                     else:
                         reason = "edit this draft to resolve the measured differences, then try again"
             except Held:

@@ -257,71 +257,21 @@ def propose_compilers(
         supported = [row for row in rows if row["evidence"]["supported"]]
         best = supported[0]["rank"] if supported else [0, 0, 0, 0]
         tied = [row["id"] for row in supported if row["rank"] == best]
-        # Feature-only mixed functions require an explicit review rather than
-        # allowing the majority of a region to erase their contradictory moves.
+        # The regional rank is the displayed proposal. A clear winner is
+        # accepted as part of the whole digest; release ties stay explicit.
         mixed = region.endswith(":mixed")
         choice = selected.get(region)
         if choice:
             winners[region] = choice
-        elif not mixed and len(tied) == 1 and any(best[:3]):
+        elif len(tied) == 1 and any(best[:3]):
             winners[region] = tied[0]
         else:
             winners[region] = None
             reasons[region] = "mixed" if mixed else "tie" if len(tied) > 1 else "no evidence"
-    assignments: dict[str, str] = {}
-    unresolved = []
-    for name, holding in sorted(unit_regions.items()):
-        if name in selected:
-            assignments[name] = selected[name]
-            continue
-        resolved = {winners[region] for region in holding}
-        if None not in resolved and len(resolved) == 1:
-            regional = next(iter(resolved))
-            conflict = False
-            for region, unit in zip(holding, unit_measurements[name], strict=True):
-                ranks = unit["ranks"]
-                best = max(ranks.values())
-                top = [ident for ident, rank in ranks.items() if rank == best]
-                if region not in selected and regional not in top and any(best[:3]):
-                    conflict = True
-            if conflict:
-                unresolved.append(f"unit:{name}:mixed")
-                continue
-            # A regional majority cannot resolve an uninformative leaf. Only
-            # an explicit region/default decision may cover its missing facts.
-            if any(region.endswith(":undecided") and region not in selected for region in holding):
-                informative = all(
-                    len([ident for ident, rank in unit["ranks"].items() if rank == max(unit["ranks"].values())]) == 1
-                    and max(unit["ranks"].values())[:3] != [0, 0, 0]
-                    for unit in unit_measurements[name]
-                )
-                if not informative:
-                    if selected.get("default"):
-                        assignments[name] = selected["default"]
-                        continue
-                    unresolved.extend(region for region in holding if region not in selected)
-                    continue
-            assignments[name] = str(next(iter(resolved)))
-        elif resolved == {None} and selected.get("default"):
-            # Only an explicit default may cover uninformative leaves. A
-            # family/release tie still requires its region choice.
-            if all(region.endswith(":undecided") for region in holding):
-                assignments[name] = selected["default"]
-                continue
-            unresolved.extend(holding)
-        elif len(resolved - {None}) > 1:
-            unresolved.append(f"unit:{name}:mixed")
-        else:
-            unresolved.extend(region for region in holding if winners[region] is None)
+    from unbake.project.proposal_accept import assignments as accept_assignments
+
+    assignments, unresolved, default = accept_assignments(unit_regions, winners, selected)
     used = set(assignments.values())
-    default = selected.get("default")
-    families = {region.rsplit(":", 1)[-1] for region in regions}
-    if default is None and (len(used) > 1 or {"gcc", "ido"} <= families):
-        unresolved.append("default:mixed")
-    elif default is None and len(used) == 1:
-        default = next(iter(used))
-    if not used and default is None:
-        unresolved.append("default:missing")
     document: dict[str, Any] = {
         "schema": 1,
         "project_id": project.id,
@@ -376,7 +326,7 @@ def receipt(proposal: CompilerProposal) -> list[str]:
     lines.append("exact per-unit assignments and prologue/codegen evidence: build/setup/proposal.json")
     if proposal["unresolved"]:
         lines.append("unresolved compiler choices: " + ", ".join(proposal["unresolved"]))
-        lines.append("supply setup --compiler REGION=ID (or UNIT=ID); mixed compilers also need --compiler default=ID")
+        lines.append("supply setup --compiler REGION=ID (or UNIT=ID) for the named unresolved choices")
     else:
         lines.append(f"reviewed proposal: setup --confirm {hashlib.sha256(encoded(proposal)).hexdigest()}")
     return lines
