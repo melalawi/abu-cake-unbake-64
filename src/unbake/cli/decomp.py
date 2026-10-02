@@ -39,7 +39,9 @@ def register(phases: Subparsers) -> None:
     draft.add_argument("function")
     draft.add_argument("--version", required=True, metavar="V")
     draft.add_argument("--scratch", type=Path, required=True, metavar="DIR")
-    gbi = decomp_verbs.add_parser("gbi", phase="decomp", help="Rewrite proven Gfx word pairs as standard GBI macros.")
+    gbi = decomp_verbs.add_parser(
+        "gbi", phase="decomp", help="Recover Gfx/Acmd builders and reuse shared command headers."
+    )
     gbi.add_argument("files", type=Path, nargs="*", metavar="FILE")
     gbi.add_argument("--all", action="store_true", dest="all_files")
     trial = decomp_verbs.add_parser(

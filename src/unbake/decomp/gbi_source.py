@@ -76,7 +76,33 @@ def expand(text: str, definitions: dict[str, Macro], depth: int = 0) -> str:
     return text
 
 
-def word_builder(macro: Macro, definitions: dict[str, Macro]) -> tuple[str, str, str] | None:
+def constants(source: str) -> dict[str, str]:
+    """Unconditional, integer-valued object macros only; never symbol aliases."""
+    from unbake.decomp.gbi_expr import integer
+
+    result = {}
+    seen: set[str] = set()
+    conflicts: set[str] = set()
+    depth = 0
+    for line in source.splitlines():
+        if re.match(r"\s*#\s*(?:if|ifdef|ifndef)\b", line):
+            depth += 1
+        elif re.match(r"\s*#\s*endif\b", line):
+            depth -= 1
+        elif match := re.match(r"\s*#\s*(define|undef)\s+(\w+)(.*)$", line):
+            name = match[2]
+            if name in seen or depth or match[1] == "undef":
+                conflicts.add(name)
+            seen.add(name)
+            if depth or match[1] == "undef" or not match[3].startswith((" ", "\t")):
+                continue
+            value = integer(re.sub(r"/\*.*?\*/|//.*", "", match[3]).strip())
+            if value is not None:
+                result[name] = str(value)
+    return {name: value for name, value in result.items() if name not in conflicts}
+
+
+def word_builder(macro: Macro, definitions: dict[str, Macro], packet_type: str = "Gfx") -> tuple[str, str, str] | None:
     body = macro.body
     # Expand aliases to a file-local pair builder, keeping packet evaluation.
     for name, other in definitions.items():
@@ -88,7 +114,7 @@ def word_builder(macro: Macro, definitions: dict[str, Macro]) -> tuple[str, str,
             replaced = other.substitute(args)
             if replaced is not None:
                 body = body[:start] + replaced + body[end:]
-    pointer = re.search(r"\bGfx\s*\*\s*(\w+)\s*=\s*([^;]+);", body)
+    pointer = re.search(r"\b" + re.escape(packet_type) + r"\s*\*\s*(\w+)\s*=\s*([^;]+);", body)
     if not pointer:
         return None
     pair = re.search(
@@ -142,10 +168,27 @@ def tokens(source: str) -> list[str]:
     return re.findall(r"\w+|[^\s]", source)
 
 
+def packet_aliases(source: str, packet_type: str) -> set[str]:
+    """Resolve transitive, non-pointer aliases without treating other structs as packets."""
+    names = {packet_type}
+    aliases = re.findall(r"\btypedef\s+(\w+)\s+(\w+)\s*;", source)
+    while True:
+        updated = names | {alias for target, alias in aliases if target in names}
+        if updated == names:
+            return names
+        names = updated
+
+
+def packet_pointers(source: str, packet_type: str) -> set[str]:
+    names = "|".join(re.escape(name) for name in sorted(packet_aliases(source, packet_type)))
+    return set(re.findall(r"\b(?:" + names + r")\s+(?:const\s+|volatile\s+)?\*\s*(\w+)", source))
+
+
 def initializer_pairs(source: str) -> list[tuple[int, int, str, str]]:
     """Locate explicit Gfx.words array elements; never infer other union members."""
     result = []
-    for declaration in re.finditer(r"\bGfx\s+[A-Za-z_]\w*\s*\[[^\]]*\]\s*=\s*\{", source):
+    names = "(?:" + "|".join(sorted(packet_aliases(source, "Gfx"))) + ")"
+    for declaration in re.finditer(r"\b" + names + r"\s+[A-Za-z_]\w*\s*\[[^\]]*\]\s*=\s*\{", source):
         depth, cursor, begin = 1, declaration.end(), declaration.end()
         while cursor < len(source) and depth:
             char = source[cursor]
