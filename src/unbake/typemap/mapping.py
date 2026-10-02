@@ -176,3 +176,94 @@ def load_map(project: Project) -> dict[str, Any]:
         raise Held("solve", "map.inputs_stale: run unbake map")
     result["functions"] = shards.Functions(shard_path, result["functions"])
     return result
+
+
+def refresh_map(project: Project) -> dict[str, Any]:
+    """Reuse instruction facts after publication; rescan only changed boundaries."""
+    path = project.build / "map/facts.json"
+    if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
+    result = storage.read(path, "map.facts")
+    storage.validate_identity(project, result, "map.facts")
+    if result.get("format") != "sqlite-zlib-v1":
+        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
+    shard = result.get("shard", "")
+    if not isinstance(shard, str) or Path(shard).name != shard:
+        raise Held("solve", "map.shards: invalid shard name")
+    shard_path = path.parent / shard
+    storage.verify_file(shard_path, result["shard_sha256"], "map.shards")
+    pinned = storage.inputs(project)
+    old_inputs = result["inputs_sha256"]
+    for version in project.versions:
+        relative = str(project.version(version).baserom.relative_to(project.root))
+        if pinned.get(relative) != old_inputs.get(relative):
+            raise Held("solve", f"map.rom_sha1.{version}: ROM changed; bootstrap map required")
+    functions = shards.Functions(shard_path, result["functions"])
+    current = {
+        (version, row.start, row.end, row.address): row
+        for version in project.versions
+        for row in split.functions(project, version)
+    }
+    observed = set()
+    metadata = {}
+    for name, item in functions.items():
+        versions = {}
+        for version, body in item["versions"].items():
+            key = version, body["start"], body["end"], body["address"]
+            row = current.get(key)
+            if row is None:
+                return map_program(project)
+            observed.add(key)
+            if row.name not in item["aliases"]:
+                raise Held("solve", f"map.names_changed: {name}: renamed identity needs an explicit map")
+            versions[version] = {key: body[key] for key in ("start", "end", "address", "target_sha256")}
+            versions[version].update(name=row.name, kind=row.kind)
+        metadata[name] = {"aliases": item["aliases"], "versions": versions}
+    if observed != set(current):
+        return map_program(project)
+    # Publication can add canonical function labels to the generated catalog.
+    # New data naming requires a deliberate remap rather than retaining stale
+    # symbolic origins under a newly pinned input digest.
+    changed = {key for key in set(pinned) | set(old_inputs) if pinned.get(key) != old_inputs.get(key)}
+    symbol_paths = {str(project.version(v).symbols.relative_to(project.root)) for v in project.versions} | {
+        str((project.build_link(v) / filename).relative_to(project.root))
+        for v in project.versions
+        for filename in ("splat_symbols.csv", "symbol-addresses.txt")
+    }
+    if changed & symbol_paths:
+        for version in project.versions:
+            _, native = split.symbols(project.version(version).symbols)
+            named = {name: address for name, (address, _, _) in native.items()}
+            generated = project.build_link(version)
+            table = generated / "splat_symbols.csv"
+            if table.is_file():
+                named = discovered_symbols(table, named)
+            placements = generated / "symbol-addresses.txt"
+            if placements.is_file():
+                named.update(symbols_from([placements]))
+            function_addresses = {key[3] for key in current if key[0] == version}
+            actual = {name: address for name, address in named.items() if address not in function_addresses}
+            expected = {
+                name: row["versions"][version]["address"]
+                for name, row in result["globals"].items()
+                if row.get("name", name) is not None and version in row["versions"]
+            }
+            if actual != expected:
+                raise Held("solve", f"map.symbols_changed: {version}: data names need an explicit map")
+    pools = {}
+    for layout_path in (project.build / "setup/layout.json", project.root / "docs/setup/layout.json"):
+        if layout_path.is_file():
+            layout = storage.read(layout_path, "map.layout")
+            for version, record in layout.get("versions", {}).items():
+                pools[version] = record.get("providers", [])
+    result.update(
+        inputs_sha256=pinned,
+        functions=metadata,
+        pools=pools,
+        unknown=[] if pools else ["map.pools: layout provider evidence is absent"],
+    )
+    if pinned != storage.inputs(project):
+        raise Held("solve", "map.inputs_stale: inputs changed during metadata refresh")
+    storage.write(path, storage.encoded(result))
+    result["functions"] = shards.Functions(shard_path, metadata)
+    return result

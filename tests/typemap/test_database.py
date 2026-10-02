@@ -187,8 +187,63 @@ class DatabaseTests(unittest.TestCase):
             feedback(self.project, "alpha", source, versions=["us", "eu"], proof=proof)
         self.assertFalse((self.project.build / "types/proven.json").exists())
 
+    def test_feedback_map_refuses_new_data_names_without_repinning_facts(self) -> None:
+        from unbake.typemap.mapping import refresh_map
+
+        map_program(self.project)
+        manifest = self.project.build / "map/facts.json"
+        before = manifest.read_bytes()
+        symbols = self.project.version("us").symbols
+        symbols.write_text(symbols.read_text() + "new_data = 0x80003000;\n")
+        with self.assertRaisesRegex(Held, "map.symbols_changed"):
+            refresh_map(self.project)
+        self.assertEqual(manifest.read_bytes(), before)
+
+    def test_feedback_map_rescans_when_function_boundaries_change(self) -> None:
+        from unbake.typemap.mapping import refresh_map
+
+        map_program(self.project)
+        split = self.project.version("us").split
+        split.write_text(split.read_text().replace("[0x4C, asm, beta]", "[0x50, asm, beta]"))
+        with patch("unbake.typemap.mapping.map_program", wraps=map_program) as rescanned:
+            refresh_map(self.project)
+        self.assertEqual(rescanned.call_count, 1)
+
+    def test_feedback_preserves_a_proven_shared_shape_without_rescanning(self) -> None:
+        import hashlib
+        from dataclasses import replace
+
+        directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
+        self.addCleanup(directory.cleanup)
+        words = [0x00808021, 0x0C000406, 0x02002021, 0x8E020004, 0x03E00008, 0]
+        project, policy, _ = fixture(Path(directory.name), words=words)
+        cartridge = project.version("us")
+        image = bytearray(cartridge.baserom.read_bytes())
+        image[0x58:0x5C] = (0x8C820000).to_bytes(4, "big")
+        cartridge.baserom.write_bytes(image)
+        project.version_map["us"] = replace(cartridge, baserom_sha1=hashlib.sha1(image).hexdigest())
+        mapped = map_program(project)
+        first = solve(project)
+        shapes = [name for name, row in first["structs"].items() if row["state"] == "known"]
+        self.assertEqual(len(shapes), 1)
+        shape = shapes[0]
+        source = project.src / "beta.c"
+        source.write_text('#include "shared/typemap.h"\n' + f"int beta(struct {shape} *p) {{ return p->field_0; }}\n")
+        cartridge.split.write_text(cartridge.split.read_text().replace(", asm, beta]", ", c, beta]"))
+        proof = {
+            "matched": True,
+            "source_sha256": storage.file_digest(source),
+            "versions": ["us"],
+            "target_sha256": {"us": mapped["functions"]["beta"]["versions"]["us"]["target_sha256"]},
+        }
+        with patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("unexpected rescan")):
+            result = feedback(project, "beta", source, versions=["us"], proof=proof, policy=policy)
+        self.assertEqual(result["structs"][shape]["state"], "known")
+        self.assertTrue(result["structs"][shape]["generated"])
+        self.assertIn(f"struct {shape} {{", (project.include[0] / "shared/typemap.h").read_text())
+
     def test_batch_feedback_maps_and_solves_once_for_all_exact_receipts(self) -> None:
-        from unbake.typemap.mapping import map_program as map_
+        from unbake.typemap.mapping import refresh_map as map_
         from unbake.typemap.solver import solve as solve_
 
         entries = []
@@ -214,8 +269,9 @@ class DatabaseTests(unittest.TestCase):
                 },
             }
         with (
-            patch("unbake.typemap.mapping.map_program", wraps=map_) as mapped_once,
+            patch("unbake.typemap.mapping.refresh_map", wraps=map_) as mapped_once,
             patch("unbake.typemap.solver.solve", wraps=solve_) as solved_once,
+            patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("unexpected rescan")),
         ):
             result = feedback_many(self.project, entries, policy=self.policy)
         self.assertEqual(mapped_once.call_count, 1)

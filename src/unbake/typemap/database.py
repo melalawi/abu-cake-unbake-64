@@ -115,7 +115,11 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any]) -
         includes.append(f'#include "{relative}"')
     type_lines = ["#ifndef UNBAKE_TYPEMAP_H", "#define UNBAKE_TYPEMAP_H", *includes]
     for name, record in sorted(value["structs"].items()):
-        if record.get("partial") and record.get("declaration"):
+        if (
+            record["state"] == "known"
+            and (record.get("partial") or record.get("generated"))
+            and record.get("declaration")
+        ):
             type_lines.append(record["declaration"])
         elif record["state"] == "unknown":
             type_lines.append(f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown */")
@@ -222,8 +226,8 @@ def feedback_many(
     *,
     policy: Policy | None = None,
 ) -> dict[str, Any]:
-    """Validate every published receipt, then map and solve the batch once."""
-    from unbake.typemap.mapping import map_program
+    """Validate every published receipt, then refresh mapped metadata and solve once."""
+    from unbake.typemap.mapping import refresh_map
     from unbake.typemap.solver import solve
 
     if not entries:
@@ -256,7 +260,7 @@ def feedback_many(
         ):
             raise Held("submit", "types.feedback.versions: every containing version must be proved")
         checked.append((function, source, digest, versions, proof))
-    facts = map_program(project)
+    facts = refresh_map(project)
     inventory = getattr(facts["functions"], "inventory", facts["functions"])
     aliases = {alias: name for name, row in inventory.items() for alias in (name, *row.get("aliases", []))}
     records = {}

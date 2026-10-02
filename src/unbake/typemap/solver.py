@@ -650,6 +650,12 @@ def infer(
         for name in sorted(set(facts["globals"]) | set(globals_))
     }
     output_structs = dict(inferred_structs)
+    authored_structs = {
+        name
+        for seed in seeds
+        for name, record in seed["structs"].items()
+        if record["provenance"].get("kind") != "proven"
+    }
     unknown.extend(
         f"struct:{name}: {row.get('reason', 'overlapping or misaligned observed fields')}"
         for name, row in inferred_structs.items()
@@ -667,6 +673,7 @@ def infer(
         output_structs[name] = {
             **record,
             "state": "conflict" if record.get("declaration_conflict") else "known",
+            "generated": name not in authored_structs,
             "users": users,
         }
     for name, record in output_globals.items():

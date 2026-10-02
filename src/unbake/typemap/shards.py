@@ -38,6 +38,8 @@ class Functions(Mapping[str, dict[str, Any]]):
             raise Held("solve", f"map.shards: {self.path}: {error}") from error
         if set(versions) != set(item["versions"]):
             raise Held("solve", f"map.shards: missing containing version for {name}")
+        for version, body in versions.items():
+            body.update(item["versions"][version])
         return {"aliases": item["aliases"], "versions": versions}
 
 
