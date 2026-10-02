@@ -106,3 +106,73 @@ class MatchFixTests(MatchFixture):
         match.withdraw("alpha", project=self.project, policy=self.policy)
         self.assertEqual(common.queue(self.project), [])
         self.assertEqual(legacy.read_bytes(), legacy_before)
+
+    def test_cli_current_exact_try_satisfies_submit_with_publication_wrapper(self) -> None:
+        import io
+        from contextlib import nullcontext, redirect_stderr, redirect_stdout
+
+        from unbake.cli.main import main
+        from unbake.decomp.trial_compare import Compare
+
+        for version in self.versions:
+            path = self.project.version(version).split
+            path.write_text(
+                path.read_text().replace("    start: 0x1000\n", "    start: 0x1000\n    vram: 0x80001000\n")
+            )
+        source = self.sources / "alpha.c"
+        plain = b'#include "types.h"\n\nint alpha(void) { return 0; }\n'
+        source.write_bytes(b'#include "types.h"\n#ifdef NON_MATCHING\nint alpha(void) { return 0; }\n#endif\n')
+        # Use exactly the canonical bytes preserved by the wrapper removal.
+        digest = drafts.source_identity(source.read_bytes())
+        result = trial.Trial(
+            "alpha",
+            digest,
+            {
+                version: Compare(
+                    version,
+                    4,
+                    4,
+                    dict.fromkeys(
+                        ("register", "order", "immediate", "relocation", "inserted", "missing", "changed"), 0
+                    ),
+                    [],
+                    match_percent=100,
+                    register_changes=(),
+                )
+                for version in self.versions
+            },
+            [],
+            "match submit alpha.c",
+        )
+        output = io.StringIO()
+        with (
+            patch("unbake.cli.main.config.load", return_value=self.project),
+            patch("unbake.cli.main.config.load_policy", return_value=self.policy),
+            patch.object(trial, "trial_inputs", return_value=nullcontext({})),
+            patch.object(trial, "try_draft", return_value=result) as tried,
+            redirect_stdout(output),
+            redirect_stderr(output),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        "--project",
+                        str(self.root),
+                        "decomp",
+                        "try",
+                        str(source),
+                        "--scratch",
+                        str(self.sources / "scratch"),
+                    ]
+                ),
+                0,
+                output.getvalue(),
+            )
+            self.assertEqual(main(["--project", str(self.root), "match", "submit", str(source)]), 0, output.getvalue())
+            self.assertEqual(tried.call_count, 1)
+        row = self.queued()[0]
+        self.assertEqual(row["source_sha256"], digest)
+        self.assertNotIn(b"NON_MATCHING", Path(row["source"]).read_bytes())
+        source.write_bytes(plain.replace(b"return 0", b"return 1"))
+        with self.assertRaisesRegex(Held, "trial row missing source_sha256"):
+            match.submit(self.project, self.policy, source)

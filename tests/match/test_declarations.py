@@ -13,8 +13,9 @@ from tests.match.support import MatchFixture
 from unbake.decomp import needs
 from unbake.layout.structs import layouts
 from unbake.layout.structs_parser import Parser
-from unbake.match import declarations
+from unbake.match import data_symbols, declarations
 from unbake.match import queue as match
+from unbake.match.data_symbols import prepare
 from unbake.project import build as project_build
 from unbake.project.config import Held, Policy, Project
 
@@ -74,11 +75,11 @@ class DeclarationTests(MatchFixture):
 
     def test_version_branches_fold_and_compile_before_queueing(self) -> None:
         text = (
-            "typedef struct Record Record;\nstruct Record { int value; };\n"
+            "extern int table;\ntypedef struct Record Record;\nstruct Record { int value; };\n"
             "typedef struct { int value; } Other;\n"
             "int alpha(Record *arg, Other *other) {\n"
             "#if defined(VERSION_US)\nif (arg->value) {\n"
-            "#else\nif (other->value) {\n#endif\nreturn arg->value; } return 0; }\n"
+            "#else\nif (other->value) {\n#endif\nreturn arg->value + table; } return 0; }\n"
         )
         source = self.draft("alpha", text)
         compiler = shutil.which("cc")
@@ -103,7 +104,11 @@ class DeclarationTests(MatchFixture):
             compiled.append(version)
             return out
 
-        with patch.object(project_build, "compile_object", side_effect=compile_source):
+        with (
+            patch.object(data_symbols, "prepare", prepare),
+            patch.object(data_symbols, "edits", return_value=[]),
+            patch.object(project_build, "compile_object", side_effect=compile_source),
+        ):
             match.submit(self.project, self.policy, source)
         self.assertEqual(compiled, list(self.versions))
         self.assertFalse((self.root / "include" / "shared" / "alpha.h").exists())
@@ -111,9 +116,12 @@ class DeclarationTests(MatchFixture):
         self.assertIn('"shared/alpha.h"', (self.src / "alpha.c").read_text())
         self.assertIn("struct Record {", (self.root / "include" / "shared" / "alpha.h").read_text())
         invalid = self.draft(
-            "beta", text.replace("alpha(", "beta(").replace("return arg->value;", "return arg->missing;")
+            "beta",
+            text.replace("alpha(", "beta(").replace("return arg->value + table;", "return arg->missing + table;"),
         )
         with (
+            patch.object(data_symbols, "prepare", prepare),
+            patch.object(data_symbols, "edits", return_value=[]),
             patch.object(project_build, "compile_object", side_effect=compile_source),
             self.assertRaisesRegex(Held, "folded source compile failed.*VERSION us"),
         ):

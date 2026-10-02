@@ -27,7 +27,7 @@ from unbake.match.common import (
     write_queue,
 )
 from unbake.match.publication import collect, publish
-from unbake.match.staging import bisect, copy_tree
+from unbake.match.staging import copy_tree
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 
@@ -200,24 +200,11 @@ def run(project: Project, policy: Policy) -> list[str]:
                 fingerprint = stage.fingerprint(base)
                 attempt = stage.attempt(project, policy, base, workspace, current, candidates)
                 if attempt.failures:
-                    if len(candidates) == 1:
-                        detail = "; ".join(attempt.diagnostics.values())
-                        receipts.append(f"HELD(match): {candidates[0].function}: build compare failed on {detail}")
+                    attempt, candidates = stage.isolate(
+                        project, policy, base, workspace, current, candidates, attempt, receipts
+                    )
+                    if attempt is None:
                         return receipts
-                    attempt.discard()
-                    attempt = None
-                    middle = max(1, len(candidates) // 2)
-                    accepted = bisect(project, policy, base, workspace, current, candidates[:middle], [], receipts)
-                    if candidates[middle:]:
-                        accepted = bisect(
-                            project, policy, base, workspace, current, candidates[middle:], accepted, receipts
-                        )
-                    candidates = accepted
-                    if not candidates:
-                        return receipts
-                    attempt = stage.attempt(project, policy, base, workspace, current, candidates)
-                    if attempt.failures:
-                        held("final build compare failed on " + "; ".join(attempt.diagnostics.values()))
                 publish(project, policy, attempt, candidates, current, fingerprint)
                 receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
                 published = True
