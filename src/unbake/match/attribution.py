@@ -29,6 +29,7 @@ def diagnose(
     # shifted or misplaced targets. Both are blamed only when nothing else is.
     placed: dict[str, list[tuple[int, str]]] = {}
     relocated: dict[str, list[str]] = {}
+    short: dict[str, list[tuple[int, str]]] = {}
 
     def blame(name: str, detail: str) -> None:
         if name in names:
@@ -114,6 +115,15 @@ def diagnose(
                         name,
                         f"{version}: object {path}: .text size {int(size_hex, 16)} exceeds target span "
                         f"{row.end - row.start}",
+                    )
+                elif int(size_hex, 16) < row.end - row.start and name in names:
+                    # Alignment may legitimately absorb a short text; it is a cause only before a shift.
+                    short.setdefault(name, []).append(
+                        (
+                            row.address,
+                            f"{version}: object {path}: .text size {int(size_hex, 16)} is short of target span "
+                            f"{row.end - row.start}",
+                        )
                     )
         for function in sorted(names):
             path = generation / "obj/src" / (function + ".o")
@@ -207,6 +217,11 @@ def diagnose(
         return faults
     if placed:
         # The earliest shifted item follows the cause; later ones move with it.
+        first = min(address for items in placed.values() for address, _ in items)
+        causes = {name: items for name, items in short.items() if min(a for a, _ in items) < first}
+        if causes:
+            name = max(causes, key=lambda item: min(a for a, _ in causes[item]))
+            return {name: [detail for _, detail in causes[name]]}
         name = min(placed, key=lambda item: min(address for address, _ in placed[item]))
         return {name: [detail for _, detail in placed[name]]}
     return relocated
