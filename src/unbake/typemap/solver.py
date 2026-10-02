@@ -411,6 +411,12 @@ def infer(
             abi["return_known"] = False
             abi["conflicts"].append("return ABI disagrees with observed scalar representation")
     inferred_structs: dict[str, Any] = {}
+    authored_structs = {
+        name
+        for seed in seeds
+        for name, record in seed["structs"].items()
+        if record["provenance"].get("kind") != "proven"
+    }
     # Partial layouts describe only the observed prefix, never the full object extent.
     for origin, offsets in shared_fields.items():
         users = sorted({access["function"] for accesses in offsets.values() for access in accesses})
@@ -443,7 +449,7 @@ def infer(
         # an authored aggregate when present; never overwrite its declaration.
         if base_type and base_type.endswith(" *"):
             base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
-            if base in layout_index:
+            if base in layout_index and (base != name or name in authored_structs):
                 continue
         authority = origin
         while authority.startswith("field:"):
@@ -639,18 +645,17 @@ def infer(
         for name in sorted(set(facts["globals"]) | set(globals_))
     }
     output_structs = dict(inferred_structs)
-    authored_structs = {
-        name
-        for seed in seeds
-        for name, record in seed["structs"].items()
-        if record["provenance"].get("kind") != "proven"
-    }
     unknown.extend(
         f"struct:{name}: {row.get('reason', 'overlapping or misaligned observed fields')}"
         for name, row in inferred_structs.items()
         if row["state"] != "known"
     )
     for name, record in structs.items():
+        # Matched sources include generated headers. Their parsed declarations
+        # do not supersede current map-derived bounds and source bindings.
+        if name in inferred_structs and name not in authored_structs:
+            output_structs[name]["generated"] = True
+            continue
         users = sorted(
             {
                 user
