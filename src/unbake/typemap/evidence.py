@@ -36,16 +36,51 @@ def scalar(access: dict[str, Any]) -> str | None:
     return None
 
 
-def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def stack_argument(memory: dict[str, Any], function: str) -> str | None:
+    """Big-endian narrow stack formals occupy the low end of an O32 word."""
+    origins = memory["base"].get("origins", [])
+    if len(origins) != 1 or origins[0]["id"] != f"stack:{function}":
+        return None
+    offset = origins[0]["offset"] + memory["offset"]
+    width = memory["width"]
+    if offset < 16 or memory.get("partial"):
+        return None
+    if width <= 4 and offset % 4 + width == 4:
+        return f"stack{offset - offset % 4}"
+    if width == 8 and offset % 8 == 0:
+        return f"stack{offset}"
+    return None
+
+
+def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
     """Forwarded entry arguments count as inputs, including tail calls."""
     # Callee entry reads bound possible stack argument slots. Repeated ABI
     # passes need entry forwarding and return liveness, not complete spill maps.
+    stack_aliases = {
+        (name, version): {
+            f"stack{access['base']['origins'][0]['offset'] + access['offset']}": canonical
+            for access in body["memory"]
+            if access["direction"] == "read" and (canonical := stack_argument(access, name)) is not None
+        }
+        for name, item in facts["functions"].items()
+        for version, body in item["versions"].items()
+    }
     inputs = {
-        (name, version): {reg for reg in body["register_inputs"] if argument(reg)}
+        (name, version): {
+            stack_aliases[name, version].get(reg, reg) for reg in body["register_inputs"] if argument(reg)
+        }
         for name, item in facts["functions"].items()
         for version, body in item["versions"].items()
     }
     slots = set(ARGUMENTS) | {reg for regs in inputs.values() for reg in regs}
+    slots.update(
+        reg
+        for item in facts["functions"].values()
+        for body in item["versions"].values()
+        for call in body["calls"]
+        for reg in call["arguments"]
+        if argument(reg)
+    )
     summaries = {}
     for name, item in facts["functions"].items():
         versions = {}
@@ -61,6 +96,7 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
                         "arguments": {
                             reg: {
                                 "unknown": value.get("unknown", True),
+                                "defined": value.get("defined", not value.get("unknown", True)),
                                 "origins": [
                                     origin
                                     for origin in value.get("origins", [])
@@ -104,20 +140,22 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
                             prefix = f"param:{name}:"
                             if origin["id"].startswith(prefix):
                                 actual = origin["id"][len(prefix) :]
+                                actual = stack_aliases[name, version].get(actual, actual)
                                 if argument(actual) and actual not in used:
                                     used.add(actual)
                                     changed = True
     available: dict[str, set[str]] = {name: set() for name in facts["functions"]}
 
     def is_defined(name: str, version: str, reg: str, value: dict[str, Any]) -> bool:
-        if value.get("unknown"):
+        if not value.get("defined", not value.get("unknown")):
             return False
         origins = value.get("origins", [])
         if origins == [{"id": f"param:{name}:{reg}", "offset": 0}]:
             return False
-        for origin in origins:
-            if origin["id"].startswith("return:"):
-                _, caller, call_version, call_index, return_reg = origin["id"].split(":")
+        dependencies = set(value.get("dependencies", [])) | {origin["id"] for origin in origins}
+        for origin_id in dependencies:
+            if origin_id.startswith("return:"):
+                _, caller, call_version, call_index, return_reg = origin_id.split(":")
                 body = facts["functions"][caller]["versions"][call_version]
                 callee = next(
                     (
@@ -129,25 +167,64 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 )
                 if return_reg not in available.get(str(callee), set()):
                     return False
-        return bool(origins) or value.get("constant") is not None
+        return bool(origins) or value.get("constant") is not None or bool(value.get("defined"))
 
     for _ in range(len(available)):
         changed = False
         for name, item in facts["functions"].items():
-            for version, body in item["versions"].items():
-                for exit_ in body["returns"]:
-                    for reg in ("r2", "f0"):
-                        if reg not in available[name] and is_defined(name, version, reg, exit_["values"][reg]):
-                            available[name].add(reg)
-                            changed = True
-                for call in body["calls"]:
-                    if call.get("tail"):
-                        old = set(available[name])
-                        available[name].update(available.get(call["callee"], set()))
-                        changed |= old != available[name]
+            exits = [(version, exit_) for version, body in item["versions"].items() for exit_ in body["returns"]]
+            exit_tails = [call for body in item["versions"].values() for call in body["calls"] if call.get("tail")]
+            for reg in ("r2", "f0"):
+                if (
+                    reg not in available[name]
+                    and (exits or exit_tails)
+                    and all(is_defined(name, version, reg, exit_["values"][reg]) for version, exit_ in exits)
+                    and all(reg in available.get(call["callee"], set()) for call in exit_tails)
+                ):
+                    available[name].add(reg)
+                    changed = True
         if not changed:
             break
-    output = {}
+    consumed_by = {
+        name: {reg for call in calls.get(name, []) for reg, uses in call.get("return_register_use", {}).items() if uses}
+        for name in facts["functions"]
+    }
+    for name, reg in (declared_returns or {}).items():
+        if name in consumed_by:
+            consumed_by[name].add(reg)
+    # Forwarding an evidenced result at an epilogue is a use even when no
+    # instruction reads v0/f0 between the call and jr ra.
+    changed = True
+    while changed:
+        changed = False
+        for caller, item in facts["functions"].items():
+            for version, body in item["versions"].items():
+                for exit_ in body["returns"]:
+                    for reg in consumed_by[caller]:
+                        value = exit_["values"].get(reg, {})
+                        origins = {origin["id"] for origin in value.get("origins", [])} | set(
+                            value.get("dependencies", [])
+                        )
+                        for origin in origins:
+                            prefix = f"return:{caller}:{version}:"
+                            if not origin.startswith(prefix):
+                                continue
+                            index, returned_reg = origin[len(prefix) :].split(":")
+                            site = next(
+                                (
+                                    call
+                                    for call in body["calls"]
+                                    if (call["instruction"] - body["address"]) // 4 == int(index)
+                                ),
+                                None,
+                            )
+                            callee = site["callee"] if site else None
+                            if site is not None:
+                                site["return_register_use"][returned_reg] = True
+                            if callee in consumed_by and returned_reg not in consumed_by[callee]:
+                                consumed_by[callee].add(returned_reg)
+                                changed = True
+    output: dict[str, dict[str, Any]] = {}
     for name, item in facts["functions"].items():
         observed = [inputs[name, version] for version in item["versions"]]
         regs = set.union(*observed) if observed else set()
@@ -157,7 +234,7 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
         missing = []
         for call in calls.get(name, []):
             for reg in regs:
-                if call["arguments"].get(reg, {}).get("unknown", True):
+                if not call["arguments"].get(reg, {}).get("defined", False):
                     missing.append(
                         {
                             "function": call["function"],
@@ -180,17 +257,13 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     elif reg in body["register_outputs"]:
                         return_incomplete = True
             return_regs.update(defined)
-        used_returns = {
-            reg
-            for call in calls.get(name, [])
-            for reg, uses in call.get("return_register_use", {}).items()
-            if uses and reg in ("r2", "f0")
-        }
+        used_returns = consumed_by[name]
         if used_returns - return_regs:
             conflicts.append("callers consume return registers not defined at callee exits")
         # GPR temporaries can coexist with an FP result. Caller consumption takes
         # precedence over incidental exit register contents.
-        returned = used_returns or ({"f0"} if "f0" in return_regs else return_regs)
+        consumed = used_returns & return_regs
+        returned = consumed or ({"f0"} if "f0" in return_regs else return_regs)
         if len(returned) > 1:
             conflicts.append("callers disagree on integer versus floating return ABI")
         if returned:
@@ -198,19 +271,57 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
             for body in item["versions"].values():
                 for exit_ in body["returns"]:
                     value = exit_["values"][selected]
-                    if value.get("unknown") or value.get("origins") == [
-                        {"id": f"param:{name}:{selected}", "offset": 0}
-                    ]:
+                    if not is_defined(
+                        name, next(v for v, candidate in item["versions"].items() if candidate is body), selected, value
+                    ) or value.get("origins") == [{"id": f"param:{name}:{selected}", "offset": 0}]:
                         return_incomplete = True
         output[name] = {
             "registers": sorted(regs),
             "return_register": next(iter(returned)) if len(returned) == 1 else None,
-            "void": not returned and not return_incomplete,
-            "return_known": not return_incomplete,
-            "arity_known": not conflicts and not missing,
+            "void": not returned
+            and not return_incomplete
+            and not used_returns
+            and any(body["returns"] for body in item["versions"].values()),
+            "return_known": not return_incomplete
+            and (not used_returns or bool(consumed))
+            and any(body["returns"] for body in item["versions"].values()),
+            "arity_known": not any("input registers differ" in reason for reason in conflicts) and not missing,
             "conflicts": conflicts,
             "missing": missing,
             "call_sites": len(calls.get(name, [])),
+            "used_returns": sorted(consumed),
+            "defined_returns": [reg for reg in ("r2", "f0") if reg in available[name]],
+            "caller_return_uses": {
+                caller: sorted(
+                    {
+                        reg
+                        for call in calls.get(name, [])
+                        if call["function"] == caller
+                        for reg, uses in call["return_register_use"].items()
+                        if uses
+                    }
+                )
+                for caller in {call["function"] for call in calls.get(name, [])}
+            },
+            "unproven_return_reads": sorted(used_returns - return_regs),
+            "argument_slots": sorted(
+                set.intersection(
+                    *(
+                        {
+                            reg
+                            for reg, value in call["arguments"].items()
+                            if value.get("defined", False)
+                            and (
+                                value.get("origins") != [{"id": f"param:{call['function']}:{reg}", "offset": 0}]
+                                or reg in inputs.get((call["function"], call["version"]), set())
+                            )
+                        }
+                        for call in calls[name]
+                    )
+                )
+            )
+            if calls.get(name)
+            else [],
             "inputs": {version: sorted(inputs[name, version]) for version in item["versions"]},
         }
     # A tail call inherits the callee return ABI. Cycles with no evidenced exit
@@ -231,6 +342,14 @@ def abi(facts: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 continue
             reg, void, known = next(iter(candidates))
             row = output[name]
+            if any(body["returns"] for body in item["versions"].values()):
+                if (row["return_register"], row["void"]) != (reg, void):
+                    row["return_known"] = False
+                    reason = "direct exits and tail calls disagree on return ABI"
+                    if reason not in row["conflicts"]:
+                        row["conflicts"].append(reason)
+                    continue
+                known = known and row["return_known"]
             if (row["return_register"], row["void"], row["return_known"]) != (reg, void, known):
                 row.update(return_register=reg, void=void, return_known=known)
                 changed = True

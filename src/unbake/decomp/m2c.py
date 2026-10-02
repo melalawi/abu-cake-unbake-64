@@ -6,7 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from unbake.decomp import gbi, similar
+from unbake.decomp import draft_abi, gbi, similar
 from unbake.decomp import work as draft_work
 from unbake.decomp.draft_asm import delay_slots
 from unbake.decomp.draft_compile import prove
@@ -219,6 +219,13 @@ def _draft(
     if not output.strip():
         raise Held("m2c", f"policy.m2c {executable_path} produced no draft for {function}")
     source = work / (function + ".c")
+    if type_context and use_type_db and "Unable to find stack arg" in output:
+        from unbake.typemap.mapping import load_map
+
+        mapped = load_map(original_project)
+        item = next((item for name, item in mapped["functions"].items() if function in (name, *item["aliases"])), None)
+        if item is not None:
+            output = draft_abi.stack_arguments(output, context.read_text(), function, item["versions"][v])
     output = normalize(output, context.read_text())
     if "second half of f64" in output:
         raise Held("m2c", f"{function}: unresolved second half of f64 in decompiler output")
@@ -227,12 +234,14 @@ def _draft(
     # Reject unsupported instructions/register reads before changing headers.
     output = lower(output, context.read_text(), allow_fields=True)
     layouts = None
+    abi_callees = ""
     if type_context and use_type_db:
         from unbake.typemap import load
 
         database = load(original_project)
         assert database is not None
         layouts = database["structs"]
+        abi_callees = draft_abi.callees(output, function, database)
     output, shared = share(project, function, output, context.read_text(), layouts=layouts)
     selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
     context.write_text(_context(headers, selected), encoding="utf-8")
@@ -265,7 +274,7 @@ def _draft(
         print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}")
     content = (
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
-        f"{includes.rstrip()}\n\n{output.rstrip()}\n"
+        f"{includes.rstrip()}\n\n{abi_callees}{output.rstrip()}\n"
     )
     candidate = work / "compile-proof" / (function + ".c")
     candidate.parent.mkdir()

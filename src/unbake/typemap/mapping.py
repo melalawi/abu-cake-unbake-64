@@ -144,6 +144,7 @@ def map_program(project: Project) -> dict[str, Any]:
         **storage.identity(project),
         "inputs_sha256": pinned,
         "format": "sqlite-zlib-v1",
+        "abi_analysis_sha256": storage.file_digest(Path(__file__).with_name("mips.py")),
         "shard": shard_path.name,
         "shard_sha256": storage.file_digest(shard_path),
         "functions": functions,

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tests.decomp.support import fixture
 from unbake.decomp import m2c
+from unbake.decomp.draft_abi import stack_arguments
 from unbake.decomp.draft_asm import delay_slots
 from unbake.decomp.draft_input import stack_locals
 from unbake.decomp.draft_layouts import normalize
@@ -21,6 +22,17 @@ from unbake.project.config import Held
 
 
 class DraftBoundaryTests(unittest.TestCase):
+    def test_lost_stack_operand_requires_agreement_at_every_mapped_call(self) -> None:
+        source = "void alpha(int arg0) { beta(M2C_ERROR(/* Unable to find stack arg 0x10 in block */)); }"
+        value = {"origins": [{"id": "param:alpha:r4", "offset": 0}], "constant": None}
+        call = {"callee": "beta", "function": "alpha", "arguments": {"stack16": value}}
+        body = {"calls": [call, call]}
+        recovered = stack_arguments(source, "void beta(int);", "alpha", body)
+        self.assertIn("beta(arg0)", recovered)
+        self.assertIn("types.abi.stack_argument:", recovered)
+        divergent = {**call, "arguments": {"stack16": {"origins": [], "constant": 2}}}
+        self.assertEqual(stack_arguments(source, "void beta(int);", "alpha", {"calls": [call, divergent]}), source)
+
     def test_refusals_name_function_and_do_not_announce_invalid_c(self) -> None:
         for output, reason in (
             ("void alpha(void) { M2C_ERROR(/* Read from unset register $a0 */); }", "Read from unset register"),
@@ -57,6 +69,27 @@ class DraftBoundaryTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unknown_pointer_transport_needs_no_pointee_layout(self) -> None:
+        source = "void alpha(void) { M2C_UNK *p; p = &opaque; use(p); }"
+        normalized = normalize(source, "typedef int s32; // typedef s32 M2C_UNK;\n")
+        self.assertIn("void *p", normalized)
+        self.assertIn("pointee unknown", normalized)
+        self.assertNotIn("M2C_UNK", normalized)
+        self.assertNotIn("typedef", normalized)
+
+    def test_string_literals_prove_elements_even_for_pointer_arithmetic(self) -> None:
+        source = 'void alpha(void) { M2C_UNK *p; p = "words"; p += 2; use(p); }'
+        normalized = normalize(source, "typedef int s32;")
+        self.assertIn("char *p", normalized)
+        self.assertIn("types.abi.string_pointer", normalized)
+        self.assertNotIn("M2C_UNK", normalized)
+
+    def test_opaque_pointer_sized_uses_still_refuse_by_name(self) -> None:
+        for use in ("p[0] = 2;", "p += 2;", "use(*p);", "p++;", "use(p->field);"):
+            source = "void alpha(void) { M2C_UNK *p; p = &opaque; " + use + " }"
+            with self.subTest(use=use), self.assertRaisesRegex(Held, "unknown type has no declared target layout"):
+                normalize(source, "typedef int s32;")
 
     def test_bitwise_fields_are_lowered_after_sharing(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:

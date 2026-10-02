@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
-from unbake.typemap import declarations, evidence, layouts, storage
+from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
 from unbake.typemap.mapping import load_map
 
 
@@ -212,7 +212,14 @@ def infer(
             if not declarations.unknown(record["type"]):
                 graph.seed("global:" + name, type_, record["provenance"])
                 graph.seed("address:" + name, type_ + " *", record["provenance"])
-    signatures = evidence.abi(facts)
+    declared_returns = {
+        name: "f0" if declarations.canonical(record["return"], aliases) in ("float", "double") else "r2"
+        for name, record in functions.items()
+        if record["return"] != "void"
+        and not declarations.unknown(record["return"])
+        and not record.get("declaration_conflict")
+    }
+    signatures = evidence.abi(facts, declared_returns)
     neighbours: dict[str, set[str]] = defaultdict(set)
     fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     forwarded: dict[str, set[str]] = defaultdict(set)
@@ -270,7 +277,10 @@ def infer(
                     if slot >= 16 and memory["direction"] == "read":
                         scalar = evidence.scalar(memory)
                         if scalar:
-                            graph.seed(f"param:{function}:stack{slot}", scalar, {"kind": "machine", **memory})
+                            formal = evidence.stack_argument(memory, function) or f"stack{slot}"
+                            graph.seed(f"param:{function}:{formal}", scalar, {"kind": "machine", **memory})
+                            if formal != f"stack{slot}":
+                                graph.connect(f"param:{function}:stack{slot}", f"param:{function}:{formal}", memory)
                     continue
                 scalar = evidence.scalar(memory)
                 if memory["direction"] == "read" and scalar:
@@ -396,6 +406,8 @@ def infer(
     for name, abi in signatures.items():
         if name in functions:
             continue
+        abi["machine_return_known"] = abi["return_known"]
+        abi["machine_arity_known"] = abi["arity_known"]
         types = {reg: graph.resolved.get(f"param:{name}:{reg}", {}).get("type") for reg in abi["registers"]}
         ordered = evidence.parameters(abi["registers"], types)
         if ordered is None:
@@ -541,7 +553,7 @@ def infer(
         }
 
     unknown = [row for seed in seeds for row in seed.get("unknown", [])]
-    output_functions = {}
+    output_functions: dict[str, Any] = {}
     for name in sorted(set(facts["functions"]) | set(functions)):
         signature = functions.get(name)
         params = []
@@ -590,6 +602,7 @@ def infer(
             )
             known = (
                 abi["arity_known"]
+                and not abi["conflicts"]
                 and abi["return_known"]
                 and ordered is not None
                 and returned["state"] == "known"
@@ -632,6 +645,50 @@ def infer(
             "prototype": prototype,
         }
         if not known:
+            output_functions[name]["abi_declaration"] = (
+                {
+                    "prototype": signature["prototype"],
+                    "reasons": ["types.abi.declared: reuse existing C; propagated semantic conflicts remain named"],
+                }
+                if signature is not None and not signature.get("declaration_conflict")
+                else abi_declarations.prototype(name, output_functions[name], aliases)
+            )
+            carrier = output_functions[name]["abi_declaration"]
+            if not carrier.get("prototype") and not signature:
+                variants = {}
+                abi = signatures[name]
+                selected_returns = abi.get("defined_returns", []) if len(abi.get("used_returns", [])) > 1 else []
+                for reg in selected_returns:
+                    selected = {
+                        **output_functions[name],
+                        "abi": {
+                            **signatures[name],
+                            "used_returns": [reg],
+                            "return_register": reg,
+                            "return_known": True,
+                            "machine_return_known": True,
+                        },
+                        "return": view(f"result:{name}:{reg}", {"state": "unknown", "type": None}),
+                    }
+                    variant = abi_declarations.prototype(name, selected, aliases)
+                    if variant["prototype"]:
+                        variant["reasons"].append(
+                            f"types.abi.caller_contract: global return conflict; {reg} is proven at every callee exit"
+                        )
+                        variants[reg] = variant
+                if any(not uses for uses in abi.get("caller_return_uses", {}).values()):
+                    selected = {
+                        **output_functions[name],
+                        "abi": {**abi, "used_returns": [], "caller_return_uses": {}},
+                        "return": {"state": "unknown", "type": None},
+                    }
+                    variant = abi_declarations.prototype(name, selected, aliases)
+                    if variant["prototype"]:
+                        variant["reasons"].append(
+                            "types.abi.caller_contract: mapped caller does not consume the unresolved return"
+                        )
+                        variants["unused"] = variant
+                carrier["variants"] = variants
             unknown.append(
                 f"function:{name}: signature incomplete or conflicting; arity={output_functions[name]['arity']}"
             )
@@ -794,7 +851,9 @@ def infer(
 
 
 def solve(project: Project, policy: Policy | None = None) -> dict[str, Any]:
-    facts = load_map(project)
+    from unbake.typemap.abi_facts import refine
+
+    facts = refine(project, load_map(project))
     pinned = storage.inputs(project, headers=True)
     log = storage.FactLog(project.build / "types")
     try:
@@ -821,6 +880,7 @@ def solve(project: Project, policy: Policy | None = None) -> dict[str, Any]:
         "map_sha256": storage.file_digest(project.build / "map/facts.json"),
         "map_shard": facts["shard"],
         "map_shard_sha256": facts["shard_sha256"],
+        "abi_supplement": facts.get("abi_supplement"),
         "inputs_sha256": pinned,
         "revision": revision,
         **result,
