@@ -85,7 +85,7 @@ class CurrentTrialTests(MatchFixture):
             proof.ensure(changed, self.policy, source, self.versions)
 
     def test_changed_private_provider_evidence_requires_another_trial(self) -> None:
-        manifest = self.project.root / "docs/setup/us.json"
+        manifest = self.project.root / "build/setup/us.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text('{"providers": []}\n')
         source = self.draft("alpha")

@@ -80,11 +80,7 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
             if not path.is_file():
                 raise Held("map", f"map.{key}.{version}: missing {path}")
             paths.add(path)
-    paths.update(
-        path
-        for path in (project.build / "setup/layout.json", project.root / "docs/setup/layout.json")
-        if path.is_file()
-    )
+    paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
     if headers:
         paths.update(path for root in project.include for path in root.rglob("*.h") if not generated(project, path))
         proven = project.build / "types/proven.json"

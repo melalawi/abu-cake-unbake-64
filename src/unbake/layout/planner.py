@@ -827,5 +827,5 @@ def render_layout(project: PendingProject, census: Census, layout: LayoutManifes
             text = re.sub(rf"^  {key}:.*$", "  " + key + ": " + json.dumps(value), text, flags=re.M)
         files[f"versions/{version}/{name}.yaml"] = text
         files[f"versions/{version}/symbol_addrs.txt"] = row["evidence"]["symbols_text"]
-        files[f"docs/setup/{version}.json"] = json.dumps(row, indent=2, sort_keys=True) + "\n"
+        files[f"build/setup/{version}.json"] = json.dumps(row, indent=2, sort_keys=True) + "\n"
     return files

@@ -162,7 +162,7 @@ def _layout_names(
         # Validate canonical scalar names before rewriting any aggregate alias.
         scalar_edits(project, parser, headers)
         records = _records(parser)
-        resolution = headers.index.resolve([record for record in records if record.name not in sdk])
+        resolution = headers.index.resolve([record for record in records if record.name not in sdk], function)
         resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
         if not resolution:
             continue

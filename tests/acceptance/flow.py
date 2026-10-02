@@ -228,7 +228,7 @@ class Proof:
             arguments.extend(["--supply", supply])
         self.cli(*arguments, cwd=project)
         require(read_config(project)["project"]["state"] == "ready", "setup.publication: project not ready")
-        accepted = (project / "docs/setup/compiler.json").read_bytes()
+        accepted = (project / "build/setup/compiler.json").read_bytes()
         require(hashlib.sha256(accepted).hexdigest() == token, "setup.confirmation: published evidence differs")
         require(
             accepted == (self.logs / (project.name + ".proposal.json")).read_bytes(),

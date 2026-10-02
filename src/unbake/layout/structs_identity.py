@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections import ChainMap
@@ -70,8 +69,8 @@ class Index:
         for item in records:
             self.available.setdefault(identity(item, self.names), []).append(item)
 
-    def resolve(self, records: list[Layout]) -> dict[str, tuple[str, Layout]]:
-        """Reuse an equal shared layout; reserve conflicting names by a stable layout digest."""
+    def resolve(self, records: list[Layout], owner: str) -> dict[str, tuple[str, Layout]]:
+        """Reuse an equal shared layout; a conflicting name takes its owning function and size."""
         names = ChainMap({name: item for item in records for name in (item.name, *item.aliases)}, self.names)
         occupied = set(self.names)
         result: dict[str, tuple[str, Layout]] = {}
@@ -88,10 +87,12 @@ class Index:
                 target = item.name
                 evidence = item
             else:
-                target = "Shape_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+                target = f"{item.name}_{owner}"
+                if target in occupied:
+                    target = f"{item.name}_{owner}_{item.size:#x}"
                 evidence = item
                 if target in occupied:
-                    held(target, "layout digest name conflicts with a different shared declaration")
+                    held(target, "owner layout name conflicts with a different shared declaration")
             occupied.add(target)
             requested[key] = target, evidence
             for name in (item.name, *item.aliases):

@@ -97,7 +97,7 @@ class DraftInputTests(unittest.TestCase):
                 "sha256": hashlib.sha256(data).hexdigest(),
             },
         }
-        manifest = self.project.root / "docs/setup/us.json"
+        manifest = self.project.root / "build/setup/us.json"
         manifest.parent.mkdir(parents=True)
         body = "glabel alpha\nlui $t0, %hi(literal)\nlwc1 $f0, %lo(literal)($t0)\n"
         manifest.write_text(json.dumps({"providers": [row]}))
@@ -142,7 +142,7 @@ class DraftInputTests(unittest.TestCase):
                 "sha256": hashlib.sha256(data).hexdigest(),
             },
         }
-        manifest = self.project.root / "docs/setup/us.json"
+        manifest = self.project.root / "build/setup/us.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"providers": [row]}))
         body = "glabel alpha\nlui $a0, %hi(message)\n"

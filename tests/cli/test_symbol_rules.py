@@ -90,7 +90,7 @@ class SymbolRuleTests(unittest.TestCase):
             (self.project / configured["symbols"]).write_text("".join(symbols))
             layout["versions"][version] = dict(functions=functions, providers=[], loaded_spans=[], evidence={})
         (self.project / "config.toml").write_text(toml.dumps(self.configuration))
-        path = self.project / "docs/setup/layout.json"
+        path = self.project / "build/setup/layout.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(layout))
 

@@ -219,7 +219,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
     finally:
         writer.close()
     pools = {}
-    for path in (project.build / "setup/layout.json", project.root / "docs/setup/layout.json"):
+    for path in (project.build / "setup/layout.json",):
         if path.is_file():
             layout = storage.read(path, "map.layout")
             for version, record in layout.get("versions", {}).items():

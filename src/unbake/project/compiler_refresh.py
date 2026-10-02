@@ -17,7 +17,7 @@ from unbake.project.flow import LayoutManifest
 
 def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> list[str]:
     project = config.load(pending.root)
-    layout_path = project.root / "docs/setup/layout.json"
+    layout_path = project.build / "setup/layout.json"
     try:
         layout = cast(LayoutManifest, json.loads(layout_path.read_bytes()))
     except (OSError, ValueError) as error:
@@ -60,8 +60,8 @@ def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> li
             if relative.startswith(project.tools.relative_to(project.root).as_posix() + "/")
         }
         accepted = compiler_proposal.encoded(proposal)
-        outputs[project.root / "docs/setup/compiler.json"] = accepted
-        outputs[project.root / "docs/setup/confirmation.json"] = (
+        outputs[project.build / "setup/compiler.json"] = accepted
+        outputs[project.build / "setup/confirmation.json"] = (
             json.dumps({"proposal_sha256": hashlib.sha256(accepted).hexdigest()}) + "\n"
         ).encode()
         outputs[project.root / "config.toml"] = (tree / "config.toml").read_bytes()
