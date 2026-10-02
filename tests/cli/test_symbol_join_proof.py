@@ -126,7 +126,7 @@ class SymbolJoinProofTests(unittest.TestCase):
             refused = dict(joins[0], name="refused_duplicate")
             mapping.write_text(json.dumps([*joins, refused]))
             output = command("--project", str(project), "split", "join", "--map", str(mapping), "--apply", expected=1)
-            self.assertEqual(output.count("name-only proof"), 2, output)
+            self.assertEqual(output.count("every cartridge byte proved"), 2, output)
             self.assertIn("published 2 passing joins; 1 refused requests", output)
             self.assertIn("refused_duplicate: split.join.overlap", output)
             self.assertIn("split join --map", output.split("Next: ", 1)[1])

@@ -60,7 +60,7 @@ class DraftsTest(unittest.TestCase):
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares=compares,
             preconditions=[],
-            next_command="unbake match submit sample.c",
+            next_command="unbake submit sample.c",
             identical_everywhere=all(x == 10 for x in identical)
             and not any(differences.values())
             and all(value == 100 for value in scores.values()),

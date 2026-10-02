@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -17,7 +18,7 @@ import unbake.decomp.needs as needs
 from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
 from unbake.layout import split as layout_split
-from unbake.project import build
+from unbake.project import build, makefile
 from unbake.project.config import Compiler, Held, Policy, Project, Version
 from unbake.report import progress
 
@@ -104,6 +105,9 @@ class MatchFixture(unittest.TestCase):
             work=self.root / "build/work",
             drafts=self.root / "build/drafts",
         )
+        recipe = tools / "build.json"
+        recipe.write_text(json.dumps(makefile.description(self.project), sort_keys=True, indent=2) + "\n")
+        (tools / "compiler.sha256").write_text(hashlib.sha256(recipe.read_bytes()).hexdigest() + "  tools/build.json\n")
         patch("unbake.project.config.load", side_effect=lambda *_: self.project).start()
         self.policy = Policy(
             setup_version_jobs=4,
@@ -231,7 +235,7 @@ class MatchFixture(unittest.TestCase):
             function=source.stem,
             source_sha256=drafts.source_identity(source.read_bytes()),
             preconditions=[],
-            next_command="match submit " + source.name,
+            next_command="unbake submit " + source.name,
             compares={
                 v: Compare(
                     version=v,

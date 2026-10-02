@@ -109,13 +109,12 @@ class GateAdmissionTests(MatchFixture):
         self.assertEqual(self.matched(), [])
         self.assertTrue(captured)
 
-    def test_changed_source_header_target_and_latest_trial_refuse(self):
+    def test_nonmatching_requires_current_trial_source_and_headers(self):
         source = self.fuzzy(order=1)
         original = source.read_bytes()
         source.write_bytes(original + b"/* edit */\n")
-        code, out = self.public_submit(source)
-        self.assertEqual(code, 1)
-        self.assertIn("trial.source_sha256", out)
+        with self.assertRaisesRegex(Held, "trial.source_sha256"):
+            nonmatching.admit(self.project, self.policy, source)
         source.write_bytes(original)
         header = self.project.include[0] / "types.h"
         before = header.read_bytes()
@@ -283,16 +282,17 @@ class GateBatchTests(MatchFixture):
         feedback.assert_called_once()
         self.assertEqual({entry[0] for entry in feedback.call_args.args[1]}, {"alpha", "beta"})
 
-    def test_batch_refuses_changed_source_by_name_and_still_proves_other_source(self):
+    def test_batch_proves_changed_source_with_other_source(self):
         from unbake.match import batch
 
         alpha, beta = self.draft("alpha"), self.draft("beta")
         beta.write_text("int beta(void) { return 2; }\n")
         lines = batch.publish(self.project, self.policy, [alpha, beta])
-        self.assertTrue(any(line.startswith("HELD(submit): beta:") and "source_sha256" in line for line in lines))
+        self.assertTrue(any("beta matched on VERSION" in line for line in lines))
         self.assertTrue(any("alpha matched on VERSION" in line for line in lines))
         self.assertTrue((self.src / "alpha.c").exists())
-        self.assertFalse((self.src / "beta.c").exists())
+        self.assertTrue((self.src / "beta.c").exists())
+        self.assertEqual(self.calls, [("alpha", "beta")])
 
     def test_batch_isolates_shared_header_conflict_before_build(self):
         from unbake.match import batch

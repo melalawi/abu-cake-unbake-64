@@ -57,7 +57,7 @@ class PartialsTest(unittest.TestCase):
             compares={"us": SimpleNamespace(version="us", identical=1, of=3, typed=typed, lines=[])},
             needs=[],
             preconditions=[],
-            next_command="match submit f.c",
+            next_command="unbake submit f.c",
             identical_everywhere=False,
         )
         store = drafts.Store(self.policy, self.project)

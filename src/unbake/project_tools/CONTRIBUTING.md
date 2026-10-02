@@ -18,8 +18,7 @@ unbake setup
 ```
 
 Setup shows compiler evidence and asks for one confirmation of the whole proposal.
-Clear regional winners need no compiler flags.
-Try measures tied candidate sets and records exact equivalence.
+Try measures compiler candidates and records exact equivalence.
 It prints the policy path and names any missing input.
 It checks every ROM before the project is ready.
 
