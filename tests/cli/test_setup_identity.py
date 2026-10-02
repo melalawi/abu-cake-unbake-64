@@ -22,7 +22,11 @@ class SetupIdentityTests(unittest.TestCase):
             directory = Path(temporary)
             project = directory / "Identity"
             script = Path(sysconfig.get_path("scripts")) / "unbake"
-            environment = dict(os.environ, PYTHONNOUSERSITE="1")
+            values = toml.loads(Path(os.environ["UNBAKE_POLICY"]).read_text())
+            values.update(symbol_similarity_threshold=0.9, symbol_similarity_margin=0.1)
+            policy = directory / "policy.toml"
+            policy.write_text(toml.dumps(values))
+            environment = dict(os.environ, PYTHONNOUSERSITE="1", UNBAKE_POLICY=str(policy))
             environment.pop("PYTHONPATH", None)
             # The only substituted boundary is IPL3 identification. Code census,
             # disassembly, layout, correspondence and proposal run normally.
@@ -84,7 +88,11 @@ class SetupIdentityTests(unittest.TestCase):
             directory = Path(temporary)
             project = directory / "Symbols"
             script = Path(sysconfig.get_path("scripts")) / "unbake"
-            environment = dict(os.environ, PYTHONNOUSERSITE="1")
+            values = toml.loads(Path(os.environ["UNBAKE_POLICY"]).read_text())
+            values.update(symbol_similarity_threshold=0.9, symbol_similarity_margin=0.1)
+            policy = directory / "policy.toml"
+            policy.write_text(toml.dumps(values))
+            environment = dict(os.environ, PYTHONNOUSERSITE="1", UNBAKE_POLICY=str(policy))
             environment.pop("PYTHONPATH", None)
             launcher = directory / "cli.py"
             launcher.write_text(

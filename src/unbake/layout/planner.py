@@ -19,7 +19,7 @@ from typing import Any
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
 from unbake.project.census import Census
-from unbake.project.config import Held, PendingProject, SetupPolicy
+from unbake.project.config import Held, PendingProject, SetupPolicy, SymbolPolicy
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
 
@@ -197,6 +197,7 @@ def correspondence(
     inventories: dict[str, list[split.Function]],
     reference: str,
     *,
+    symbol_policy: SymbolPolicy,
     evidence: dict[str, dict[int, str]] | None = None,
     symbol_evidence: dict[str, dict[int, dict[str, Any]]] | None = None,
     preserve_names: bool = False,
@@ -238,7 +239,8 @@ def correspondence(
         return key
 
     def join(a: tuple[str, int], b: tuple[str, int]) -> None:
-        parent[root(b)] = root(a)
+        first, second = sorted((root(a), root(b)))
+        parent[second] = first
 
     canonical: dict[str, tuple[str, int]] = {}
     for version, index in indexes.items():
@@ -249,7 +251,7 @@ def correspondence(
     reasons = dict.fromkeys(functions, "repeated-body-unbounded")
     proposals: dict[tuple[str, int], set[tuple[str, int]]] = defaultdict(set)
     ordered = {v: sorted(ff, key=lambda f: f.start) for v, ff in inventories.items()}
-    for a, b in combinations(inventories, 2):
+    for a, b in combinations(sorted(inventories), 2):
         common = {sig for sig, ff in indexes[a].items() if len(ff) == 1 and len(indexes[b].get(sig, [])) == 1}
         anchors = {
             v: [(i, signatures[v, f.start]) for i, f in enumerate(ordered[v]) if signatures[v, f.start] in common]
@@ -303,7 +305,9 @@ def correspondence(
 
     details: dict[tuple[str, int], dict[str, Any]] = {}
     symbolic = (
-        join_symbols(images, inventories, root, join, reasons, details, loaded_spans) if len(inventories) > 1 else set()
+        join_symbols(images, inventories, root, join, reasons, details, symbol_policy, loaded_spans)
+        if len(inventories) > 1
+        else set()
     )
     groups: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
     for key in functions:
@@ -330,7 +334,7 @@ def correspondence(
         for v, at in rows:
             names[v][at] = name
             reason = (
-                "anchor-call-graph"
+                details[v, at]["reason"]
                 if (v, at) in symbolic
                 else "anchor-sequence"
                 if (v, at) in positional
@@ -653,6 +657,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
         images,
         inventories,
         census.names_from,
+        symbol_policy=SymbolPolicy(policy.symbol_similarity_threshold, policy.symbol_similarity_margin),
         evidence=identity,
         symbol_evidence=symbol_evidence,
         loaded_spans={v: spans for v, (_, spans) in loaded_by_version.items()},

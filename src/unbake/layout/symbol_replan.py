@@ -14,13 +14,14 @@ import toml  # type: ignore[import-untyped]
 
 from unbake.cli.common import suggest
 from unbake.layout import planner, port, split
+from unbake.layout.symbol_identity import similarity_distribution
 from unbake.project import setup, toolchain
-from unbake.project.config import Held, Project, SetupPolicy
+from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import load
 
 
-def plan(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
+def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[str, Any]]:
     """Only instruction/position/graph evidence establishes identity."""
     ff = {v: port.functions(project, v) for v in project.versions}
     images = {v: load(project.version(v).baserom, retain_data=False) for v in project.versions}
@@ -44,6 +45,7 @@ def plan(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
         images,
         ff,
         project.names_from,
+        symbol_policy=SymbolPolicy(policy.symbol_similarity_threshold, policy.symbol_similarity_margin),
         evidence=evidence,
         symbol_evidence=details,
         preserve_names=True,
@@ -107,6 +109,8 @@ def plan(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
     layout["inputs_sha256"]["symbol_replan"] = planner.digest([placements, layout["items"]])
     report = {
         "schema": 1,
+        "symbol_policy": {"threshold": policy.symbol_similarity_threshold, "margin": policy.symbol_similarity_margin},
+        "similarity_distribution": similarity_distribution(details),
         "placements": placements,
         "replacements": replacements,
         "old_items": len(destinations),
@@ -142,7 +146,7 @@ def rewrite_layout(text: str, replacements: dict[str, str]) -> str:
 
 
 def run(project: Project, policy: SetupPolicy, confirm: str | None) -> list[str]:
-    replacements, report = plan(project)
+    replacements, report = plan(project, policy)
     inputs = setup._inputs(project)
     token = planner.digest([inputs, report])
     directory = project.build / "setup"

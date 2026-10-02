@@ -18,6 +18,10 @@ Supply `setup_version_jobs` explicitly in host policy to limit simultaneous vers
 extractions and builds. `cores` supplies a shared build CPU budget for those jobs.
 The measured host policy uses `setup_version_jobs = 4`; supply that value explicitly.
 Choose a lower version limit if the host has less memory.
+Supply `symbol_similarity_threshold` and `symbol_similarity_margin` explicitly
+in host policy as numbers in (0, 1]. They have no bundled defaults.
+For example, 0.90 and 0.10 require at least 90% masked instruction similarity
+and a ten percentage point lead over every competing placement in either version.
 Compiler downloads have pinned SHA-256 hashes.
 
 ## Start
@@ -35,6 +39,14 @@ Init and setup leave commits to you.
 Function symbols and executable bodies have separate identities. Unambiguous
 positions between matched anchors can share one symbol when mapped callers and
 callees agree, while each version retains its own body and assembly row.
+Correspondence runs to a fixpoint: stronger position and graph evidence is
+established first, then successful joins supply anchors for later rounds.
+Graph-free leaves require the policy similarity threshold and margin. Unequal
+counts between anchors use weighted edit alignment; only pairs present in every
+optimal alignment can join. Insertions, deletions and ambiguities retain named
+reasons. The proposal records rounds, anchors, graph evidence, masked instruction
+diff ranges and the similarity distribution. Neither names nor addresses
+establish correspondence.
 One C file can express those bodies with version conditionals.
 For a ready project, `unbake setup --replan-symbols` reviews correspondence on
 its retained boundaries. Confirm the printed digest to prove every ROM before

@@ -11,6 +11,7 @@ from unbake.layout.planner import carve, complete_providers, correspondence
 from unbake.layout.rodata_owners import Span
 from unbake.layout.split import Function
 from unbake.layout.split_analysis import copy_evidence
+from unbake.project.config import SymbolPolicy
 
 
 def function(name: str, start: int, end: int) -> Function:
@@ -39,7 +40,9 @@ class PlannerTests(unittest.TestCase):
         image = struct.pack(">4I", 0x24020001, 0x03E00008, 0, 0)
         source = Function("us", "func_80001000", 0, 16, 0x80001000, "entry", "asm", ())
         target = Function("eu", "func_80002000", 0, 16, 0x80002000, "entry", "asm", ())
-        names = correspondence({"us": image, "eu": image}, {"us": [source], "eu": [target]}, "us")
+        names = correspondence(
+            {"us": image, "eu": image}, {"us": [source], "eu": [target]}, "us", symbol_policy=SymbolPolicy(0.9, 0.1)
+        )
         self.assertEqual(names, {"us": {0: "func_80001000_us"}, "eu": {0: "func_80001000_us"}})
 
     def test_copied_loop_retains_destination_and_complete_extent(self) -> None:
@@ -67,16 +70,21 @@ class PlannerTests(unittest.TestCase):
         second = Function("de", "func_80003000", 0, 16, 0x80003000, "entry", "asm", ())
         inventories = {"us": [], "eu": [first], "de": [second]}
         images = {"us": b"", "eu": body, "de": body}
-        names = correspondence(images, inventories, "us")
+        names = correspondence(images, inventories, "us", symbol_policy=SymbolPolicy(0.9, 0.1))
         self.assertEqual(names, {"us": {}, "eu": {0: "func_80002000_eu"}, "de": {0: "func_80002000_eu"}})
-        self.assertEqual(names, correspondence(images, inventories, "de"))
+        self.assertEqual(names, correspondence(images, inventories, "de", symbol_policy=SymbolPolicy(0.9, 0.1)))
 
     def test_declared_order_names_an_item_and_ambiguous_bodies_stay_separate(self) -> None:
         body = struct.pack(">4I", 0x24020002, 0x03E00008, 0, 0)
         first = Function("eu", "first", 0, 16, 0x80002000, "entry", "asm", ())
         second = Function("us", "second", 0, 16, 0x80003000, "entry", "asm", ())
         duplicate = Function("us", "duplicate", 16, 32, 0x80003010, "entry", "asm", ())
-        names = correspondence({"eu": body, "us": body * 2}, {"eu": [first], "us": [second, duplicate]}, "us")
+        names = correspondence(
+            {"eu": body, "us": body * 2},
+            {"eu": [first], "us": [second, duplicate]},
+            "us",
+            symbol_policy=SymbolPolicy(0.9, 0.1),
+        )
         self.assertEqual(names, {"eu": {0: "first"}, "us": {0: "second_us", 16: "duplicate_us"}})
 
     def identity(self, sequences):
@@ -86,7 +94,9 @@ class PlannerTests(unittest.TestCase):
             images[v] = struct.pack(f">{len(code)}I", *code)
             inventories[v] = [function(f"f{i}", i * 16, (i + 1) * 16) for i in range(len(values))]
         evidence = {}
-        names = correspondence(images, inventories, next(iter(sequences)), evidence=evidence)
+        names = correspondence(
+            images, inventories, next(iter(sequences)), symbol_policy=SymbolPolicy(0.9, 0.1), evidence=evidence
+        )
         return names, evidence
 
     def test_repeated_sequence_joins_by_rom_order_between_shared_anchors(self):
@@ -98,8 +108,8 @@ class PlannerTests(unittest.TestCase):
 
     def test_insertions_changes_and_reordered_anchors_refuse_positional_join(self):
         for other, reason in (
-            ([1, 0, 2], "position-count-mismatch"),
-            ([1, 0, 3, 2], "graph-no-evidence"),
+            ([1, 0, 2], "alignment-ambiguous"),
+            ([1, 0, 3, 2], "leaf-similarity-ambiguous"),
             ([2, 0, 0, 1], "anchor-order"),
         ):
             with self.subTest(other=other):
@@ -126,7 +136,9 @@ class PlannerTests(unittest.TestCase):
             ">16I", 0x24020001, 0x03E00008, 0, 0, 0x03E00008, 0, 0, 0, 0x03E00008, 0, 0, 0, 0x24020002, 0x03E00008, 0, 0
         )
         ff = [function(f"f{i}", i * 16, (i + 1) * 16) for i in range(4)]
-        names = correspondence({"us": body, "eu": body}, {"us": ff, "eu": list(reversed(ff))}, "us")
+        names = correspondence(
+            {"us": body, "eu": body}, {"us": ff, "eu": list(reversed(ff))}, "us", symbol_policy=SymbolPolicy(0.9, 0.1)
+        )
         self.assertEqual(names["us"], names["eu"])
 
     def test_matching_normalized_zeros_require_the_same_relocation_roles(self):
@@ -135,7 +147,7 @@ class PlannerTests(unittest.TestCase):
             "eu": struct.pack(">4I", 0x3C010000, 0x8C220000, 0x03E00008, 0),
         }
         ff = {v: [function("entry", 0, 16)] for v in images}
-        names = correspondence(images, ff, "us")
+        names = correspondence(images, ff, "us", symbol_policy=SymbolPolicy(0.9, 0.1))
         self.assertNotEqual(names["us"][0], names["eu"][0])
 
 
@@ -160,7 +172,9 @@ class SymbolIdentityTests(unittest.TestCase):
                 ff.append(function(f"func_{0x80001000 + at:08X}", at, at + len(code) * 4))
             images[v], inventories[v] = bytes(image), ff
         evidence, details = {}, {}
-        names = correspondence(images, inventories, "us", evidence=evidence, symbol_evidence=details)
+        names = correspondence(
+            images, inventories, "us", symbol_policy=SymbolPolicy(0.9, 0.1), evidence=evidence, symbol_evidence=details
+        )
         return names, evidence, details
 
     def test_inserted_instruction_keeps_one_symbol_and_independent_bodies(self):
@@ -168,7 +182,7 @@ class SymbolIdentityTests(unittest.TestCase):
         self.assertEqual(names["us"][0x20], names["eu"][0x20])
         self.assertEqual(names["us"][0x80], names["eu"][0x80])
         self.assertEqual(evidence["eu"][0x20], "anchor-call-graph")
-        self.assertEqual(details["eu"][0x20]["callers"], [["us", 0x80]])
+        self.assertEqual(details["eu"][0x20]["callers"], [["eu", 0x80]])
         self.assertTrue(details["eu"][0x20]["anchor_positions"])
 
     def test_symbol_evidence_is_reproducible_across_process_hash_seeds(self):
@@ -193,7 +207,7 @@ class SymbolIdentityTests(unittest.TestCase):
     def test_inserted_function_refuses_equal_position_assumption(self):
         names, evidence, _ = self.identity((0x24020004,), extra=(0x24020005, 0x03E00008, 0))
         self.assertNotEqual(names["us"][0x20], names["eu"][0x20])
-        self.assertEqual(evidence["eu"][0x20], "symbol-position-count-mismatch")
+        self.assertEqual(evidence["eu"][0x20], "symbol-alignment-insertion-deletion")
 
     def test_indirect_callee_and_reversed_anchors_remain_separate(self):
         for options, reason in (

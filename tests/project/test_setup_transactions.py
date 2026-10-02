@@ -16,6 +16,7 @@ import toml
 
 from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_bootstrap import cartridge
+from tests.project.test_config import write_policy
 from unbake.project import config, fingerprint, init, setup, setup_proof
 from unbake.project.census import Census
 from unbake.report import readme_layout
@@ -71,6 +72,8 @@ class SetupTransactionTests(unittest.TestCase):
         self.project = config.load(self.root)
         (self.project.include[0] / "types.h").write_text("typedef unsigned int u32;\ntypedef unsigned long long u64;\n")
         setup._sdk_headers(self.project)
+        policy_path = write_policy(self.root)
+        patch.dict(os.environ, UNBAKE_POLICY=str(policy_path)).start()
         self.settings = config.load_policy(stage="setup")
         for name, content in {
             "README.md": b"Owner README\r\n\xff",

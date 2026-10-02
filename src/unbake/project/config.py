@@ -127,6 +127,12 @@ class CensusPolicy:
 
 
 @dataclass(frozen=True)
+class SymbolPolicy:
+    similarity_threshold: float
+    similarity_margin: float
+
+
+@dataclass(frozen=True)
 class SetupPolicy(CensusPolicy):
     cores: int
     cache_root: Path
@@ -140,6 +146,8 @@ class SetupPolicy(CensusPolicy):
     sn64_asflags: tuple[str, ...]
     probe_count: int
     setup_version_jobs: int
+    symbol_similarity_threshold: float
+    symbol_similarity_margin: float
 
 
 @dataclass(frozen=True)
@@ -485,6 +493,8 @@ def policy_template(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = (
         "setup_version_jobs",
+        "symbol_similarity_threshold",
+        "symbol_similarity_margin",
         "splat",
         "mips_as",
         "mips_ld",
@@ -557,6 +567,12 @@ def _load_policy(path: Path | None, *, stage: str, create_template: bool) -> Pol
     def flags(field: str) -> tuple[str, ...]:
         return _strings(value(field), "policy." + field)
 
+    def fraction(field: str) -> float:
+        result = value(field)
+        if type(result) not in (int, float) or not 0 < result <= 1:
+            raise Held("config", f"policy.{field}: expected number in (0, 1]")
+        return float(result)
+
     similarity = value("same_game_similarity")
     if type(similarity) not in (int, float) or not 0 < similarity <= 1:
         raise Held("config", "policy.same_game_similarity: expected number in (0, 1]")
@@ -577,6 +593,8 @@ def _load_policy(path: Path | None, *, stage: str, create_template: bool) -> Pol
             flags("sn64_asflags"),
             number("probe_count"),
             number("setup_version_jobs"),
+            fraction("symbol_similarity_threshold"),
+            fraction("symbol_similarity_margin"),
         )
     if stage != "all":
         raise Held("config", f"policy.stage: unknown stage {stage}")
