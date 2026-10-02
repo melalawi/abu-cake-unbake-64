@@ -8,10 +8,10 @@ from pathlib import Path
 
 from unbake.decomp import gbi, similar
 from unbake.decomp import work as draft_work
-from unbake.decomp.draft_asm import delay_slots
+from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
 from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
-from unbake.decomp.draft_fp import register_pairs
+from unbake.decomp.draft_fp import command, register_pairs
 from unbake.decomp.draft_input import (
     assembly_source,
     canonical_entry,
@@ -24,6 +24,7 @@ from unbake.decomp.draft_input import (
 )
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
+from unbake.decomp.draft_signatures import declarations as callee_declarations
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
@@ -197,12 +198,18 @@ def _draft(
     body = re.sub(
         r"\$(\d+)\b", lambda match: "$" + registers[int(match[1])] if int(match[1]) < len(registers) else match[0], body
     )
-    body = private_constants(project, v, function, jump_tables(project, v, function, body), generation=generation)
-    body = delay_slots(body, function)
+    body = private_constants(
+        project, v, function, jump_tables(project, v, function, saved_returns(body)), generation=generation
+    )
+    body = delay_slots(local_targets(body), function)
+    signatures = callee_declarations(project, policy, v, body, context.read_text())
+    if signatures:
+        with context.open("a") as stream:
+            stream.write("\n" + signatures + "\n")
     assembly.write_text(register_pairs(body, compiler.cflags, function), encoding="utf-8")
     output = run_tool(
         [
-            executable_path,
+            *command(executable_path, assembly.read_text()),
             "-t",
             targets[compiler.kind],
             "--valid-syntax",
@@ -240,9 +247,9 @@ def _draft(
     includes = context.read_text()
     declarations = preprocess_context(context, project, policy, v, function)
     context.write_text(declarations, encoding="utf-8")
-    output = lower(output, declarations)
+    output = lower(output, declarations + "\n" + signatures)
     output = address_arithmetic(output, declarations, function)
-    commands = gbi.lower(output, gbi.microcode(project))
+    commands = gbi.prepare(project, output, gbi.microcode(project))
     output = commands.source
     raw_lines = output.splitlines(keepends=True)
     for item in commands.raw:
@@ -252,13 +259,15 @@ def _draft(
     output = "".join(raw_lines)
     if type_context and re.search(r"\btypedef\b|\b(?:struct|union)\s+\w*\s*\{", output):
         raise Held("types", f"types.declaration: {function}: draft must reuse solved shared types")
-    if commands.macros:
+    if "gbi" in commands.headers:
         includes += gbi.install(project)
+    if "abi" in commands.headers:
+        includes += gbi.install_audio(project)
     for item in commands.raw:
         print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}")
     content = (
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
-        f"{includes.rstrip()}\n\n{output.rstrip()}\n"
+        f"{includes.rstrip()}\n\n{signatures}\n\n{output.rstrip()}\n"
     )
     candidate = work / "compile-proof" / (function + ".c")
     candidate.parent.mkdir()

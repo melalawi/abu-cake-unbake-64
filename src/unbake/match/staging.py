@@ -5,7 +5,8 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterable
+from collections import ChainMap
+from collections.abc import Iterable, Mapping
 from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +14,7 @@ from uuid import uuid4
 
 from unbake.decomp import needs, work
 from unbake.layout import split, split_apply
-from unbake.match import declarations
+from unbake.match import data_symbols, declarations
 from unbake.match.common import (
     QUEUE_PATH,
     Attempt,
@@ -191,7 +192,7 @@ def project_at(project: Project, tree: Path) -> Project:
 
 
 def attempt(
-    project: Project, policy: Policy, base: Path, workspace: Path, current: dict[str, Path], candidates: list[Draft]
+    project: Project, policy: Policy, base: Path, workspace: Path, current: Mapping[str, Path], candidates: list[Draft]
 ) -> Attempt:
     tree = workspace / uuid4().hex
     generations = {}
@@ -225,6 +226,18 @@ def attempt(
                     staged_project, policy, draft.function, draft.content.decode("utf-8"), draft.versions
                 ),
             )
+            for version in draft.versions:
+                apply(
+                    staged_project,
+                    policy,
+                    data_symbols.prepare(
+                        staged_project,
+                        policy,
+                        draft.function,
+                        version,
+                        tree / ".unbake" / f"{draft.function}.{version}.o",
+                    ),
+                )
         affected = {v for edit in applied for v in edit.versions}
         versions = [v for v in project.versions if v in affected]
         for version in versions:
@@ -254,38 +267,84 @@ def attempt(
             holds,
             {v: results[v].sha1_line for v in versions if results[v].ok},
         )
+    except Held as error:
+        return Attempt(tree, generations, ["preparation"], diagnostics={"preparation": error.reason}, holds=holds)
     except BaseException:
         Attempt(tree, generations, [], holds=holds).discard()
         raise
 
 
-def bisect(
+def isolate(
     project: Project,
     policy: Policy,
     base: Path,
     workspace: Path,
     current: dict[str, Path],
-    group: list[Draft],
-    accepted: list[Draft],
+    candidates: list[Draft],
+    result: Attempt,
     receipts: list[str],
-) -> list[Draft]:
+) -> tuple[Attempt | None, list[Draft]]:
+    """Halve a failed set, then verify its remainder using the preceding build.
+
+    One failing item costs logarithmically many builds. A failed remainder starts
+    another isolation pass, preserving support for multiple failures/interactions.
+    Only the preceding build and latest passing subset stay pinned.
+    """
+    passing: Attempt | None = None
+    passing_names: tuple[str, ...] = ()
+
+    def names(group: list[Draft]) -> tuple[str, ...]:
+        return tuple(draft.function for draft in group)
+
+    def test(group: list[Draft]) -> Attempt:
+        nonlocal result, passing, passing_names
+        if passing is not None and names(group) == passing_names:
+            if result is not passing:
+                result.discard()
+            result = passing
+            return result
+        previous = result
+        result = attempt(project, policy, base, workspace, ChainMap(previous.generations, current), group)
+        if previous is not passing:
+            previous.discard()
+        if not result.failures:
+            if passing is not None and passing is not result:
+                passing.discard()
+            passing, passing_names = result, names(group)
+        return result
+
     try:
-        result = attempt(project, policy, base, workspace, current, accepted + group)
-    except Held as error:
-        failures = True
-        detail = error.reason
-    else:
-        failures = bool(result.failures)
-        detail = "; ".join(result.diagnostics.get(v, f"VERSION {v}") for v in result.failures)
+        while result.failures and candidates:
+            suspect = list(candidates)
+            accepted: list[Draft] = []
+            detail = "; ".join(result.diagnostics.values())
+            while len(suspect) > 1:
+                middle = len(suspect) // 2
+                left, right = suspect[:middle], suspect[middle:]
+                tested = test(accepted + left)
+                if tested.failures:
+                    detail = "; ".join(tested.diagnostics.values())
+                    suspect = left
+                else:
+                    accepted += left
+                    suspect = right
+            bad = suspect[0]
+            receipts.append(f"HELD(match): {bad.function}: build compare failed on {detail}")
+            candidates = [draft for draft in candidates if draft is not bad]
+            if not candidates:
+                result.discard()
+                if passing is not None and passing is not result:
+                    passing.discard()
+                return None, []
+            test(candidates)
+        if passing is not None and passing is not result:
+            passing.discard()
+        return result, candidates
+    except BaseException:
         result.discard()
-    if not failures:
-        return accepted + group
-    if len(group) == 1:
-        receipts.append(f"HELD(match): {group[0].function}: build compare failed on {detail}")
-        return accepted
-    middle = len(group) // 2
-    accepted = bisect(project, policy, base, workspace, current, group[:middle], accepted, receipts)
-    return bisect(project, policy, base, workspace, current, group[middle:], accepted, receipts)
+        if passing is not None and passing is not result:
+            passing.discard()
+        raise
 
 
 def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
@@ -305,12 +364,8 @@ def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
         write_staged(staged, edits)
         for version in draft.versions:
             try:
-                build.compile_object(
-                    staged,
-                    policy,
-                    staged.src / f"{draft.function}.c",
-                    version,
-                    workspace / version / f"{draft.function}.o",
+                data_symbols.prepare(
+                    staged, policy, draft.function, version, workspace / version / f"{draft.function}.o"
                 )
             except (Held, OSError) as error:
                 held(f"{draft.function}: folded source compile failed on VERSION {version}: {error}")

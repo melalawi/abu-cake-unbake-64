@@ -40,3 +40,55 @@ class PublicationSpeedTests(MatchFixture):
         for unit in (Path("src/100"), Path("src/300"), Path("asm/100")):
             self.assertEqual((generation / "obj" / unit.with_suffix(".o")).read_bytes(), b"warm object")
             self.assertEqual((generation / "obj" / unit.with_suffix(".d")).read_text(), "header dependency")
+
+    def test_cli_isolates_one_of_32_failures_in_logarithmic_builds_and_reuses_outputs(self) -> None:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest.mock import patch
+
+        from unbake.cli.main import main
+
+        names = [f"item_{index:02d}" for index in range(32)]
+        for version in self.versions:
+            path = self.project.version(version).split
+            path.write_text(
+                "segments:\n  - name: main\n    type: code\n    start: 0x1000\n    subsegments:\n"
+                + "".join(f"      - [0x{0x1000 + index * 16:X}, asm, {name}]\n" for index, name in enumerate(names))
+                + "  - [0x1200]\n"
+            )
+        self.queue(*names)
+        self.build_failures.add((names[17], "eu"))
+        reused = []
+
+        def remember(tree: Path, generation_for: object) -> None:
+            from collections.abc import Callable
+            from typing import cast
+
+            generation = cast(Callable[[str], Path], generation_for)("us")
+            marker = generation / "reused-output"
+            reused.append(marker.exists())
+            marker.write_text("compiled once")
+
+        self.on_build = remember
+        output = io.StringIO()
+        with (
+            patch("unbake.cli.main.config.load", return_value=self.project),
+            patch("unbake.cli.main.config.load_policy", return_value=self.policy),
+            redirect_stdout(output),
+            redirect_stderr(output),
+        ):
+            code = main(
+                [
+                    "--project",
+                    str(self.root),
+                    "submit",
+                    "--batch",
+                    *[str(self.sources / (name + ".c")) for name in names],
+                ]
+            )
+        self.assertEqual(code, 1)
+        self.assertLessEqual(len(self.calls), 7)
+        self.assertEqual(reused, [False] + [True] * (len(self.calls) - 1))
+        self.assertIn(f"HELD(match): {names[17]}:", output.getvalue())
+        self.assertEqual({row["function"] for row in self.matched()}, set(names) - {names[17]})
+        self.assertEqual([row["function"] for row in self.queued()], [names[17]])

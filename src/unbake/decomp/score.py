@@ -9,6 +9,7 @@ import re
 import subprocess
 import threading
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -134,7 +135,9 @@ def _read_score(path: Path, function: str) -> float:
     return _symbol_score(document, function)
 
 
-def relocation_addresses(generation: Path, version: str, names: list[str]) -> dict[str, int]:
+def relocation_addresses(
+    generation: Path, version: str, names: list[str], *, refusals: list[str] | None = None
+) -> dict[str, int]:
     """Read active-VERSION names and actual placements without requiring a link."""
     addresses: dict[str, int] = {}
     symbols = generation.parent.parent / "versions" / version / "symbol_addrs.txt"
@@ -154,17 +157,26 @@ def relocation_addresses(generation: Path, version: str, names: list[str]) -> di
     with suppress(Held, OSError):
         project = load(generation.parent.parent)
         source = split.symbols(project.version(project.names_from).symbols)[1]
+        view = replace(project, versions=tuple(dict.fromkeys((project.names_from, version))))
         for name in dict.fromkeys(names):
             if name not in addresses and name in source:
-                with suppress(Held):
-                    counterpart = data_symbols.counterparts(project, name)[version]
+                reason = ""
+                try:
+                    counterpart = data_symbols.counterparts(view, name)[version]
                     if counterpart in addresses:
                         addresses[name] = addresses[counterpart]
+                except Held as error:
+                    reason = error.reason
                 if name not in addresses:
-                    with suppress(Held):
-                        span = xver.locate(project, name).get(version)
+                    try:
+                        span = xver.locate(project, name, versions=[version]).get(version)
                         if span is not None and span.address in addresses.values():
                             addresses[name] = span.address
+                    except Held as error:
+                        if "missing reference placement" not in error.reason:
+                            reason = error.reason
+                if name not in addresses and reason and refusals is not None:
+                    refusals.append(reason)
     return addresses
 
 
@@ -219,8 +231,9 @@ def diff(
         for side in ("left", "right")
         for symbol in cast(dict[str, list[dict[str, object]]], document[side])["symbols"]
     ]
+    refusals: list[str] = []
     document["symbol_addresses"] = (
-        {} if generation is None else relocation_addresses(generation.resolve(), version, names)
+        {} if generation is None else relocation_addresses(generation.resolve(), version, names, refusals=refusals)
     )
     if generation is not None:
         from unbake.decomp.relocations import (
@@ -261,4 +274,5 @@ def diff(
                 section_name=section,
             )
         ]
+    document["placement_refusals"] = refusals
     return document

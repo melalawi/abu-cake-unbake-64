@@ -140,7 +140,23 @@ def _run(command: list[str], root: Path) -> bytes:
     return completed.stdout
 
 
-def compile_object(project: Project, policy: Policy, source: Path, v: str, out: Path) -> Path:
+def preprocess_object(project: Project, policy: Policy, source: Path, v: str) -> bytes:
+    """Use the object's ordinary recipe to inspect active external references."""
+    flags = list(makefile.flags(project, v, source))
+    compiler = project.compiler_for(source)
+    if compiler.kind == "sn64":
+        from unbake.project_tools.sn64_cc import partition_flags
+
+        recipe = makefile.recipe(project)
+        preprocess, _ = partition_flags(flags)
+        cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
+        return _run([cpp, *recipe.cppflags, *preprocess, str(source)], project.root)
+    return _run([str(compiler.cc), *[flag for flag in flags if flag != "-c"], "-E", str(source)], project.root)
+
+
+def compile_object(
+    project: Project, policy: Policy, source: Path, v: str, out: Path, *, non_matching: bool = False
+) -> Path:
     project.version(v)
     source, out = Path(source).resolve(), Path(out).resolve()
     if not source.is_file():
@@ -180,7 +196,7 @@ def compile_object(project: Project, policy: Policy, source: Path, v: str, out: 
                 "--output",
                 str(out),
                 "--non-matching",
-                "0",
+                "1" if non_matching else "0",
                 "--cache-root",
                 str(policy.cache_root),
             ],

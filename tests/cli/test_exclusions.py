@@ -12,6 +12,7 @@ from unittest.mock import patch
 import toml
 
 from tests.cli.support import MainCase
+from unbake.layout import split
 
 
 class ExclusionTests(MainCase):
@@ -135,3 +136,109 @@ class ExclusionTests(MainCase):
             self.assertIn(reason, output)
             self.assertNotIn("Traceback", output)
             self.assertEqual(sum(line.startswith("Next:") for line in output.splitlines()), 1)
+
+
+class ExclusionIdentityTests(MainCase):
+    manifest = ExclusionTests.manifest
+
+    def saved_identity(self):
+        versions = {}
+        for version in self.project.versions:
+            versions[version] = {
+                "functions": [
+                    {"name": row.name, "start": row.start, "end": row.end, "address": row.address}
+                    for row in split.functions(self.project, version)
+                ]
+            }
+        value = dict(
+            schema=1,
+            project_id=self.project.id,
+            workspace_id=self.project.workspace_id,
+            rom_sha1={v: self.project.version(v).baserom_sha1 for v in self.project.versions},
+            versions=versions,
+        )
+        path = self.project.build / "setup/layout.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+        return path, value
+
+    def renamed_reservation(self):
+        path = self.manifest({"schema": 1, "functions": ["alpha"]})
+        evidence = self.saved_identity()
+        for version in self.project.versions:
+            cartridge = self.project.version(version)
+            cartridge.split.write_text(cartridge.split.read_text().replace("alpha", "renamed"))
+            cartridge.symbols.write_text(cartridge.symbols.read_text().replace("alpha", "renamed"))
+        return path, evidence
+
+    def test_next_refreshes_reserved_name_from_identical_measured_boundary(self):
+        path, _ = self.renamed_reservation()
+        code, out, error = self.run_main(self.args("next"))
+        self.assertEqual(code, 0, out + error)
+        self.assertEqual(json.loads(path.read_bytes()), {"schema": 1, "functions": ["renamed"]})
+        self.assertIn("map", out)
+        before = path.stat().st_mtime_ns
+        code, _, _ = self.run_main(self.args("next"))
+        self.assertEqual(code, 0)
+        self.assertEqual(path.stat().st_mtime_ns, before)
+
+    def test_draft_uses_refreshed_reservation_before_generation(self):
+        path, _ = self.renamed_reservation()
+        with patch("unbake.decomp.m2c.draft") as generate:
+            code, out, _ = self.run_main(self.args("draft", "renamed"))
+        self.assertEqual(code, 1)
+        self.assertIn("draft.excluded: renamed", out)
+        generate.assert_not_called()
+        self.assertEqual(json.loads(path.read_bytes())["functions"], ["renamed"])
+
+    def test_changed_identity_boundary_and_unknown_names_never_refresh(self):
+        path, (evidence_path, value) = self.renamed_reservation()
+        before = path.read_bytes()
+        for key in ("project_id", "workspace_id", "rom_sha1", "boundary", "duplicate"):
+            altered = json.loads(json.dumps(value))
+            if key in ("project_id", "workspace_id"):
+                altered[key] = "changed"
+            elif key == "rom_sha1":
+                altered[key]["us"] = "0" * 40
+            elif key == "boundary":
+                altered["versions"]["us"]["functions"][0]["address"] += 4
+            else:
+                altered["versions"]["us"]["functions"].append(altered["versions"]["us"]["functions"][0])
+            evidence_path.write_text(json.dumps(altered))
+            code, out, _ = self.run_main(self.args("next"))
+            self.assertEqual(code, 1, key)
+            self.assertIn("exclusions.function", out)
+            self.assertEqual(path.read_bytes(), before)
+        evidence_path.write_text(json.dumps(value))
+        path.write_text('{"schema": 1, "functions": ["alpha", "typo"]}')
+        before = path.read_bytes()
+        code, out, _ = self.run_main(self.args("next"))
+        self.assertEqual(code, 1)
+        self.assertIn("exclusions.function", out)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_explicit_manifest_requires_current_names(self):
+        path, _ = self.renamed_reservation()
+        before = path.read_bytes()
+        code, out, _ = self.run_main(self.args("next", "--exclude", str(path)))
+        self.assertEqual(code, 1)
+        self.assertIn("exclusions.function", out)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_refresh_refuses_symlink_and_concurrent_write(self):
+        from unbake.decomp.exclusion_identity import publish
+        from unbake.project.config import Held
+
+        path = self.manifest({"schema": 1, "functions": ["alpha"]})
+        before = path.read_bytes()
+        path.write_text('{"schema": 1, "functions": []}')
+        changed = path.read_bytes()
+        with self.assertRaisesRegex(Held, "exclusions.stale"):
+            publish(self.project, path, before, ["renamed"])
+        self.assertEqual(path.read_bytes(), changed)
+        target = path.with_name("original.json")
+        path.rename(target)
+        path.symlink_to(target)
+        with self.assertRaisesRegex(Held, "exclusions.stale"):
+            publish(self.project, path, changed, ["renamed"])
+        self.assertEqual(target.read_bytes(), changed)

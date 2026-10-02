@@ -336,6 +336,9 @@ def _sdk_headers(project: Project) -> None:
         ),
         "n64sdk.h": '#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n#include "shared/gfx.h"\n#endif\n',
         "gbi.h": (makefile.TEMPLATES / "gbi.h").read_text(),
+        "shared/acmd.h": (makefile.TEMPLATES / "acmd.h").read_text(),
+        "shared/abi.h": (makefile.TEMPLATES / "abi.h").read_text(),
+        "shared/audio_callbacks.h": (makefile.TEMPLATES / "audio_callbacks.h").read_text(),
     }
     for name, content in files.items():
         target = root / name

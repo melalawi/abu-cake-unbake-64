@@ -79,7 +79,7 @@ def _retain(project: Project, policy: Policy, source: Path, result: trial.Trial)
     from unbake.decomp.drafts import Store
 
     rows = Store(policy, project).rows(result.function)
-    matching = [row for row in rows if row["sha256"] == result.source_sha256]
+    matching = [row for row in rows if row["source_sha256"] == result.source_sha256]
     if not matching:
         raise Held("search", f"draft store {result.source_sha256}: missing row")
     scores = matching[-1]["score"]

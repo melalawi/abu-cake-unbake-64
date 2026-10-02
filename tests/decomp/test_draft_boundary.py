@@ -11,7 +11,7 @@ from pathlib import Path
 
 from tests.decomp.support import fixture
 from unbake.decomp import m2c
-from unbake.decomp.draft_asm import delay_slots
+from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_input import stack_locals
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
@@ -21,10 +21,45 @@ from unbake.project.config import Held
 
 
 class DraftBoundaryTests(unittest.TestCase):
+    def test_bitwise_call_preserves_bits_and_evaluates_once(self) -> None:
+        context = "typedef float f32; typedef int s32; s32 bits(void);"
+        source = lower("f32 alpha(void) { return M2C_BITWISE(f32, bits()); }", context)
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
+            binary = Path(temporary) / "proof"
+            result = subprocess.run(
+                ["cc", "-std=c89", "-x", "c", "-", "-o", str(binary)],
+                input=context
+                + "\n"
+                + source
+                + (
+                    "\nint count; s32 bits(void) { ++count; return 0x3F800000; }\n"
+                    "int main(void) { return alpha() != 1.0f || count != 1; }\n"
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(subprocess.run([str(binary)], check=False).returncode, 0)
+        with self.assertRaisesRegex(Held, "requires addressable value"):
+            lower("float alpha(void) { return M2C_BITWISE(float, missing()); }", "")
+
+    def test_saved_return_and_measured_local_targets(self) -> None:
+        text = "glabel alpha\naddu $s2, $ra, $zero\njal callee\nnop\njr $s2\nnop\n"
+        self.assertIn("jr $ra", saved_returns(text))
+        overwritten = text.replace("jr $s2", "move $s2, $v0\njr $s2")
+        self.assertEqual(saved_returns(overwritten), overwritten)
+        text = "glabel alpha\nbnez $a0, .L80001008_auto\nnop\n/* 000048 80001008 03E00008 */ jr $ra\nnop\n"
+        self.assertIn(".L80001008_auto:\n", local_targets(text))
+        self.assertEqual(local_targets(local_targets(text)), local_targets(text))
+        outside = text.replace(".L80001008_auto", ".L80002000_auto")
+        self.assertEqual(local_targets(outside), outside)
+
     def test_refusals_name_function_and_do_not_announce_invalid_c(self) -> None:
         for output, reason in (
             ("void alpha(void) { M2C_ERROR(/* Read from unset register $a0 */); }", "Read from unset register"),
             ("void alpha(void) { M2C_ERROR(/* mtc0 $a0, $18 */); }", "mtc0"),
+            ("void alpha(void) { *(int *)saved_reg_s3 = 1; }", "incoming saved register $s3"),
             ("int alpha(void) { return missing; }", "missing"),
         ):
             with self.subTest(output=output), tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:

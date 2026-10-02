@@ -188,7 +188,11 @@ def plan(project: Project, mapping: dict[str, str]) -> list[Change]:
             add(proven, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
     # Setup's live owner manifests follow canonical names. Exact historical
     # compiler evidence is retained unchanged; map/solve detect changed inputs.
-    metadata = [project.build / "setup/layout.json", project.root / "docs/setup/layout.json"]
+    metadata = [
+        project.build / "setup/layout.json",
+        project.root / "docs/setup/layout.json",
+        project.root / "unbake-exclusions.json",
+    ]
     metadata.extend(project.root / "docs/setup" / (version + ".json") for version in project.versions)
     for path in metadata:
         if path.exists() and not path.is_relative_to(project.build):

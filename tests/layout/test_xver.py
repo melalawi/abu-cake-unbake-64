@@ -172,6 +172,8 @@ class PlacementTests(unittest.TestCase):
         self.project.image("eu-x", [(0x40, BODY), (0x80, BODY)])
         with self.assertRaisesRegex(Held, "ambiguous"):
             xver.locate(self.project, "entry")
+        with self.assertRaisesRegex(Held, "missing symbol entry address.*0x80200000.*ROM 0x40.*0x80200040"):
+            xver.locate(self.project, "entry")
         for data, start, end in [(b"", 0, 0), (b"12345", 0, 5), (b"1234", 0, 8)]:
             with self.subTest(data=data), self.assertRaisesRegex(Held, "start/end"):
                 xver.body(data, start, end, "entry")
@@ -180,3 +182,54 @@ class PlacementTests(unittest.TestCase):
                 alignment_rows(text)
         with self.assertRaisesRegex(ValueError, "entry"):
             render_alignment("", {"entry": 16})
+
+    def test_named_jump_operand_disambiguates_relocation_twins(self) -> None:
+        body = bytes.fromhex("0c080020 00000000 03e00008 00000000")
+        self.project.layout("us", [(0x40, "asm", "entry"), (0x50, "data", "pool")], "callee = 0x80200080;\n")
+        self.project.image("us", [(0x40, body)])
+        self.project.layout("eu-x", [(0x40, "asm", "merged"), (0x90, "data", "pool")], "callee = 0x802000A0;\n")
+        other = bytes.fromhex("0c080028 00000000 03e00008 00000000")
+        self.project.image("eu-x", [(0x40, body), (0x80, other)])
+        span = xver.locate(self.project, "entry")["eu-x"]
+        self.assertIsNotNone(span)
+        self.assertEqual(span.start, 0x80)
+
+    def test_named_caller_disambiguates_an_identical_empty_function(self) -> None:
+        empty = bytes.fromhex("03e00008 00000000")
+        caller = bytes.fromhex("0c080000 00000000 03e00008 00000000")
+        self.project.layout(
+            "us", [(0x40, "asm", "entry"), (0x48, "data", "pool"), (0x80, "asm", "caller"), (0x90, "data", "tail")]
+        )
+        self.project.image("us", [(0x40, empty), (0x80, caller)])
+        self.project.layout(
+            "eu-x", [(0x40, "asm", "merged"), (0x70, "data", "pool"), (0x80, "asm", "caller"), (0x90, "data", "tail")]
+        )
+        target_caller = bytes.fromhex("0c080008 00000000 03e00008 00000000")
+        self.project.image("eu-x", [(0x40, empty), (0x60, empty), (0x80, target_caller)])
+        self.assertEqual(xver.locate(self.project, "entry")["eu-x"].start, 0x60)
+
+    def test_named_memory_operand_disambiguates_hi_lo_twins(self) -> None:
+        self.prepare()
+        self.project.version("us").symbols.write_text("data = 0x800B8884;\n")
+        self.project.layout("eu-x", [(0x40, "asm", "merged"), (0xA4, "data", "pool")], "data = 0x800C8000;\n")
+        changed = bytearray(BODY)
+        struct.pack_into(">I", changed, 16, 0x3C04800D)
+        struct.pack_into(">I", changed, 20, 0xC4848000)
+        self.project.image("eu-x", [(0x40, BODY), (0x80, changed)])
+        self.assertEqual(xver.locate(self.project, "entry")["eu-x"].start, 0x80)
+
+    def test_selected_version_proof_does_not_require_other_versions(self) -> None:
+        self.prepare()
+        root = self.project.root / "de"
+        root.mkdir()
+        self.project.maps["de"] = SimpleNamespace(
+            split=root / "split.yaml", symbols=root / "symbols.txt", baserom=root / "rom.z64"
+        )
+        self.project.versions = (*self.project.versions, "de")
+        self.project.layout("de", [(0x40, "asm", "merged"), (0xA4, "data", "pool")])
+        self.project.image("de", [(0x40, BODY), (0x80, BODY)])
+        with self.assertRaisesRegex(Held, "VERSION de.*ambiguous"):
+            xver.locate(self.project, "entry")
+        spans = xver.locate(self.project, "entry", versions=["eu-x"])
+        self.assertEqual(set(spans), {"us", "eu-x"})
+        self.assertEqual(spans["eu-x"].start, 0x40)

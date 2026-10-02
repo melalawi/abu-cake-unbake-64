@@ -25,7 +25,7 @@ from unbake.match.common import (
     write_queue,
 )
 from unbake.match.publication import collect, publish
-from unbake.match.staging import bisect, copy_tree
+from unbake.match.staging import copy_tree
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 
@@ -90,13 +90,18 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
 
 
 def submit(
-    project: Project, policy: Policy, source: str | Path | None, *, versions: tuple[str, ...] | None = None
+    project: Project,
+    policy: Policy,
+    source: str | Path | None,
+    *,
+    versions: tuple[str, ...] | None = None,
 ) -> list[str]:
     """Enqueue canonical source bytes judged by their latest explicit trial."""
     if source is None:
         held("source: missing value")
     features.load()
-    source = proof.source(project, Path(source).resolve())
+    source = Path(source).resolve()
+    source = proof.source(project, source)
     selected = holding_versions(project, function(source.stem)) if versions is None else versions
     for version in selected:
         project.version(version)
@@ -195,31 +200,13 @@ def run(
                 base = workspace / "base"
                 copy_tree(project, project.root, base)
                 fingerprint = stage.fingerprint(project, base)
-                preparation = None
-                try:
-                    attempt = stage.attempt(project, policy, base, workspace, current, candidates)
-                except Held as error:
-                    preparation = error.reason
-                if attempt is None or attempt.failures:
-                    if len(candidates) == 1:
-                        detail = preparation if attempt is None else "; ".join(attempt.diagnostics.values())
-                        receipts.append(f"HELD(match): {candidates[0].function}: build compare failed on {detail}")
+                attempt = stage.attempt(project, policy, base, workspace, current, candidates)
+                if attempt.failures:
+                    attempt, candidates = stage.isolate(
+                        project, policy, base, workspace, current, candidates, attempt, receipts
+                    )
+                    if attempt is None:
                         return receipts
-                    if attempt is not None:
-                        attempt.discard()
-                    attempt = None
-                    middle = max(1, len(candidates) // 2)
-                    accepted = bisect(project, policy, base, workspace, current, candidates[:middle], [], receipts)
-                    if candidates[middle:]:
-                        accepted = bisect(
-                            project, policy, base, workspace, current, candidates[middle:], accepted, receipts
-                        )
-                    candidates = accepted
-                    if not candidates:
-                        return receipts
-                    attempt = stage.attempt(project, policy, base, workspace, current, candidates)
-                    if attempt.failures:
-                        held("final build compare failed on " + "; ".join(attempt.diagnostics.values()))
                 publish(project, policy, attempt, candidates, current, fingerprint)
                 receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
                 published = True

@@ -51,7 +51,8 @@ def register_pairs(assembly: str, flags: tuple[str, ...], function: str) -> str:
     m2c assumes FR=0 (two adjacent 32-bit FPRs per double). SN64 -mfp64
     uses FR=1, so loading f1 must not overwrite f0's supposed second half.
     An injective map into even registers represents each independent FPR as
-    one disjoint m2c pair. Refuse when no map preserves the ABI save classes.
+    one disjoint m2c pair. Virtual pairs retain the original ABI save class
+    when the physical register namespace is exhausted.
     """
     if "-mfp64" not in flags:
         return assembly
@@ -76,7 +77,7 @@ def register_pairs(assembly: str, flags: tuple[str, ...], function: str) -> str:
             item for item in range(0 if value < 20 else 20, 20 if value < 20 else 32, 2) if item not in reserved
         ]
         if not candidates:
-            raise Held("m2c", f"{function}: -mfp64 FPR f{value} has no disjoint pair in its ABI save class")
+            candidates = [32 + value * 2]
         mapping[value] = candidates[0]
         reserved.add(candidates[0])
 
@@ -85,3 +86,23 @@ def register_pairs(assembly: str, flags: tuple[str, ...], function: str) -> str:
         return f"$f{mapping[value]}" if value is not None else match[0]
 
     return token.sub(rename, assembly)
+
+
+def command(executable: str, assembly: str) -> list[str]:
+    """Extend the configured Python decompiler's analysis register namespace."""
+    import shlex
+    from pathlib import Path
+
+    if not re.search(r"\$f(?:3[2-9]|[4-9][0-9])\b", assembly):
+        return [executable]
+    path = Path(executable)
+    text = path.read_text()
+    if "m2c.main" not in text:
+        raise Held("m2c", "configured decompiler cannot represent virtual independent FPR pairs")
+    launcher = shlex.split(text.splitlines()[0].removeprefix("#!"))
+    if launcher and Path(launcher[0]).name in ("sh", "bash"):
+        wrapped = re.search(r"(?m)^'''exec'\s+(.+?)\s+\"\$0\"", text)
+        launcher = shlex.split(wrapped[1]) if wrapped else []
+    if not launcher or not any("python" in Path(item).name for item in launcher):
+        raise Held("m2c", "configured decompiler has no Python interpreter for virtual FPR analysis")
+    return [*launcher, str(Path(__file__).parents[1] / "project_tools/m2c_registers.py"), executable]

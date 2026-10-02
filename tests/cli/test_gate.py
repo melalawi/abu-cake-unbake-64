@@ -395,15 +395,14 @@ class GateBatchTests(MatchFixture):
         from unbake.match import queue
 
         sources = [self.draft(name) for name in ("alpha", "beta", "gamma")]
-        actual = staging.attempt
+        actual = staging.declarations.folded_edits
 
-        def conflict(project, policy, base, workspace, current, candidates):
-            names = {draft.function for draft in candidates}
-            if {"alpha", "beta"} <= names:
+        def conflict(project, policy, function, content, versions):
+            if function == "beta" and (project.src / "alpha.c").exists():
                 raise Held("structs", "struct L: duplicate definition")
-            return actual(project, policy, base, workspace, current, candidates)
+            return actual(project, policy, function, content, versions)
 
-        with patch.object(staging, "attempt", side_effect=conflict):
+        with patch.object(staging.declarations, "folded_edits", side_effect=conflict):
             lines = queue.publish_sources(self.project, self.policy, sources)
         self.assertTrue(any("HELD(match): beta:" in line and "struct L" in line for line in lines))
         self.assertTrue(any("alpha matched on VERSION" in line for line in lines))

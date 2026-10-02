@@ -390,6 +390,19 @@ class ScheduleTests(unittest.TestCase):
                 self.assertEqual(result.delay_slots, ())
                 self.assertEqual(len(result.dbr), 1)
 
+    def test_gcc_modes_flags_and_copied_delay_slot_uids(self) -> None:
+        sched = "(insn:HI 9 0 4 (set (reg:SI 2) (const_int 1)))"
+        delay = (
+            "(insn/s:SI 20 0 0 (sequence [(jump_insn/i:HI 9 0 4 (return)) "
+            "(insn/s:QI 4 9 0 (set (reg:SI 3) (reg:SI 2)))]))\n"
+            "(insn:QI 4 20 0 (set (reg:SI 3) (reg:SI 2)))"
+        )
+        result = schedule({"sched2": sched, "dbr": delay})
+        self.assertEqual(tuple(row.uid for row in result.sched2), (9,))
+        self.assertEqual(tuple(row.uid for row in result.dbr), (9, 4, 4))
+        self.assertEqual(result.delay_slots, ((9, 4),))
+        self.assertNotEqual(result.dbr[1].line, result.dbr[2].line)
+
     def test_each_named_schedule_refusal(self) -> None:
         cases = [
             (None, "dumps"),

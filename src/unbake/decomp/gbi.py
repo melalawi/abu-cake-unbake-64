@@ -9,22 +9,24 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TypeAlias
 
+from unbake.decomp import gbi_audio
 from unbake.decomp.gbi_expr import Ambiguous, Word, integer, number, plus_one, pure, split, unwrap
 from unbake.decomp.gbi_source import (
+    constants,
     expand,
-    gfx_typedefs,
     initializer_pairs,
     invocations,
     macros,
+    packet_aliases,
+    packet_pointers,
     standard_shiftl,
-    tokens,
-    typedefs,
     word_builder,
 )
-from unbake.project.config import Held, Project
+from unbake.project.config import Held, Policy, Project
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 
@@ -415,6 +417,7 @@ class Raw:
     line: int
     command: str
     reason: str
+    word_lines: tuple[int, ...] = ()
 
 
 @dataclass
@@ -422,6 +425,7 @@ class Lowered:
     source: str
     macros: Counter[str] = field(default_factory=Counter)
     raw: list[Raw] = field(default_factory=list)
+    headers: set[str] = field(default_factory=set)
 
 
 # Mask lexical material without changing offsets, so comments/directives cannot
@@ -429,28 +433,50 @@ class Lowered:
 LEXICAL = re.compile(
     r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|^[ \t]*\#(?:[^\n]*\\\n)*[^\n]*', re.S | re.M
 )
-ACCESS = r"(?P<ptr>[A-Za-z_]\w*(?:\s*\[[^\]\n]+\])*)\s*(?P<access>->|\.)(?:\s*words\s*\.)?\s*w0"
+ACCESS = r"(?P<ptr>[A-Za-z_]\w*(?:\s*\[[^\]\n]+\])*)\s*(?P<access>->|\.)(?:\s*words\s*[._])?\s*w0"
 PAIR = re.compile(
-    ACCESS + r"\s*=\s*(?P<w0>[^;]+);\s*(?P=ptr)\s*(?P=access)(?:\s*words\s*\.)?\s*w1\s*=\s*(?P<w1>[^;]+);", re.S
+    ACCESS
+    + r"\s*=\s*(?P<w0>[^;]+);\s*"
+    + r"(?P<middle>(?:[A-Za-z_]\w*\s*=\s*[^;{}]+;\s*)*?)"
+    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*[._])?\s*w1\s*=\s*(?P<w1>[^;]+);",
+    re.S,
+)
+REVERSE_PAIR = re.compile(
+    ACCESS.removesuffix("w0")
+    + r"w1\s*=\s*(?P<w1>[^;]+);\s*(?P<middle>)"
+    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*[._])?\s*w0\s*=\s*(?P<w0>[^;]+);",
+    re.S,
 )
 
 
-def lower(source: str, variant: str | None = None) -> Lowered:
+def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True) -> Lowered:
     result = Lowered(source)
     definitions = macros(source)
+    object_macros = constants(source)
+
+    def expression(text: str) -> str:
+        text = expand(text, definitions)
+        return re.sub(r"\b\w+\b", lambda match: object_macros.get(match[0], match[0]), text)
+
     shiftl = definitions.get("_SHIFTL")
     unsafe_shiftl = bool(re.search(r"^\s*#\s*define\s+_SHIFTL\s*\(", source, re.M)) and (
         shiftl is None or not standard_shiftl(shiftl)
     )
     masked = LEXICAL.sub(lambda match: re.sub(r"[^\n]", " ", match[0]), source)
+    audio_pointers = packet_pointers(masked, "Acmd")
+    gfx_names = "(?:" + "|".join(sorted(packet_aliases(masked, "Gfx"))) + ")"
     edits = []
-    for match in PAIR.finditer(masked):
-        w0, w1 = (expand(source[match.start(key) : match.end(key)].strip(), definitions) for key in ("w0", "w1"))
+    pairs: list[re.Match[str]] = []
+    for match in sorted([*PAIR.finditer(masked), *REVERSE_PAIR.finditer(masked)], key=lambda match: match.start()):
+        if not pairs or match.start() >= pairs[-1].end():
+            pairs.append(match)
+    for match in pairs:
+        w0, w1 = (expression(source[match.start(key) : match.end(key)].strip()) for key in ("w0", "w1"))
         line = source.count("\n", 0, match.start()) + 1
         try:
             if unsafe_shiftl:
                 raise Ambiguous("local _SHIFTL definition is not proven standard")
-            if re.search(r"\b(?:volatile\s+Gfx|Gfx\s+volatile)\s*\*\s*" + re.escape(match["ptr"]) + r"\b", masked):
+            if re.search(r"\b(?:volatile\s+\w+|\w+\s+volatile)\s*\*\s*" + re.escape(match["ptr"]) + r"\b", masked):
                 raise Ambiguous("volatile packet requires volatile stores; standard builder discards the qualifier")
             if not pure(match["ptr"]) or "_gbi" in match["ptr"]:
                 raise Ambiguous("packet expression has effects or captures the builder temporary")
@@ -459,9 +485,24 @@ def lower(source: str, variant: str | None = None) -> Lowered:
             before = masked[masked.rfind("\n", 0, match.start()) + 1 : match.start()]
             if re.search(r"\b(?:if|while|for)\s*\([^{};]*\)\s*$", before):
                 raise Ambiguous("only the first store is controlled by a branch")
-            if "words" in w0 + w1:
+            if re.search(r"(?:->|\.)\s*(?:words\s*\.\s*)?w[01]\b", w0 + " " + w1):
                 raise Ambiguous("operand reads command storage")
-            name, args = decode(w0, w1, variant)
+            middle = source[match.start("middle") : match.end("middle")].strip()
+            if middle:
+                for statement in match["middle"].split(";"):
+                    if not statement.strip():
+                        continue
+                    target, value = statement.split("=", 1)
+                    target = target.strip()
+                    if (
+                        not pure(value)
+                        or re.search(r"->|\.|\[|\*\s*[A-Za-z_(]", value)
+                        or re.search(r"\b" + re.escape(target) + r"\b", w0 + " " + match["ptr"])
+                        or re.search(r"\bvolatile\b[^;{}]*\b" + re.escape(target) + r"\b", masked)
+                    ):
+                        raise Ambiguous("intervening assignment can affect the first store")
+            audio = match["ptr"] in audio_pointers
+            name, args = gbi_audio.decode(w0, w1) if audio else decode(w0, w1, variant)
         except Ambiguous as error:
             try:
                 word = Word.parse(w0)
@@ -469,29 +510,44 @@ def lower(source: str, variant: str | None = None) -> Lowered:
                 command = OP_NAMES.get(opcode, f"opcode 0x{opcode:02X}")
             except Ambiguous:
                 command = "computed opcode"
-            result.raw.append(Raw(line, command, str(error)))
+            result.raw.append(
+                Raw(
+                    line,
+                    command,
+                    str(error),
+                    tuple(source.count("\n", 0, match.start(key)) + 1 for key in ("w0", "w1")),
+                )
+            )
             continue
         pointer = match["ptr"] if match["access"] == "->" else "&" + match["ptr"]
         start, end = match.span()
         # Collapse a dedicated three-statement builder block. Other pointer
         # assignments are retained because the temporary may escape or be reused.
-        prefix = re.search(r"\{\s*Gfx\s*\*\s*" + re.escape(match["ptr"]) + r"\s*=\s*([^;{}]+);\s*$", masked[:start])
+        packet = "Acmd" if audio else gfx_names
+        prefix = re.search(
+            r"\{\s*" + packet + r"\s*\*\s*" + re.escape(match["ptr"]) + r"\s*=\s*([^;{}]+);\s*$", masked[:start]
+        )
         suffix = re.match(r"\s*\}", masked[end:])
         scoped = bool(prefix and suffix)
         if prefix and suffix:
             pointer = source[prefix.start(1) : prefix.end(1)].strip()
             start, end = prefix.start(), end + suffix.end()
-        if not scoped and len(re.findall(r"\b" + re.escape(match["ptr"]) + r"\b", masked)) == 4:
+        if fold_pointers and not scoped and len(re.findall(r"\b" + re.escape(match["ptr"]) + r"\b", masked)) == 4:
             assigned = re.search(r"\b" + re.escape(match["ptr"]) + r"\s*=\s*([^;{}]+);\s*$", masked[:start])
             if assigned and re.search(r"\bGfx\s*\*\s*" + re.escape(match["ptr"]) + r"\s*;", masked):
                 pointer = source[assigned.start(1) : assigned.end(1)].strip()
                 start = assigned.start()
         comments = re.findall(r"/\*.*?\*/|//[^\n]*", source[start:end], re.S)
-        text = "\n".join([*comments, f"{name}({', '.join([pointer, *args])});"])
+        indent = source[source.rfind("\n", 0, start) + 1 : start]
+        indent = indent if not indent.strip() else ""
+        text = ("\n" + indent).join(
+            [*comments, *([middle] if middle else []), f"{name}({', '.join([pointer, *args])});"]
+        )
         if scoped and re.match(r"\s*else\b", masked[end:]):
             text = text.removesuffix(";")
         edits.append((start, end, text))
         result.macros[name] += 1
+        result.headers.add("abi" if audio else "gbi")
     for start, end, _, _ in initializer_pairs(masked):
         # Recover actual operands from the lexical offsets, including symbols.
         element = source[start:end]
@@ -501,7 +557,7 @@ def lower(source: str, variant: str | None = None) -> Lowered:
         try:
             if unsafe_shiftl:
                 raise Ambiguous("local _SHIFTL definition is not proven standard")
-            hi_expr, lo_expr = (expand(value, definitions) for value in values)
+            hi_expr, lo_expr = (expression(value) for value in values)
             name, args = decode(hi_expr, lo_expr, variant)
         except Ambiguous as error:
             result.raw.append(Raw(source.count("\n", 0, start) + 1, "Gfx initializer", str(error)))
@@ -509,8 +565,33 @@ def lower(source: str, variant: str | None = None) -> Lowered:
         name = "gs" + name[1:]
         edits.append((start, end, f"{name}({', '.join(args)})"))
         result.macros[name] += 1
+        result.headers.add("gbi")
     for macro in definitions.values():
-        builder = word_builder(macro, definitions)
+        audio_builder = word_builder(macro, definitions, "Acmd")
+        if audio_builder is not None:
+            if unsafe_shiftl or not gbi_audio.equivalent(macro, definitions):
+                result.raw.append(
+                    Raw(
+                        source.count("\n", 0, macro.start) + 1,
+                        macro.name + " builder",
+                        "local _SHIFTL definition is not proven standard"
+                        if unsafe_shiftl
+                        else "local audio builder differs from the shared ABI encoding",
+                    )
+                )
+            else:
+                edits.append((macro.start, macro.end, ""))
+                result.macros[macro.name] += len(invocations(masked, macro.name))
+                result.headers.add("abi")
+            continue
+        builder = next(
+            (
+                found
+                for packet_type in sorted(packet_aliases(masked, "Gfx"))
+                if (found := word_builder(macro, definitions, packet_type)) is not None
+            ),
+            None,
+        )
         if builder is None:
             continue
         sites = invocations(masked, macro.name)
@@ -529,7 +610,7 @@ def lower(source: str, variant: str | None = None) -> Lowered:
             try:
                 if unsafe_shiftl:
                     raise Ambiguous("local _SHIFTL definition is not proven standard")
-                name, args = decode(expand(hi_expr, definitions), expand(lo_expr, definitions), variant)
+                name, args = decode(expression(hi_expr), expression(lo_expr), variant)
             except Ambiguous as error:
                 result.raw.append(Raw(source.count("\n", 0, start) + 1, macro.name, str(error)))
                 continue
@@ -539,18 +620,19 @@ def lower(source: str, variant: str | None = None) -> Lowered:
                 end += tail.end()
             edits.append((start, end, f"{name}({', '.join([pointer, *args])});"))
             result.macros[name] += 1
+            result.headers.add("gbi")
             converted += 1
         if converted == len(sites):
             edits.append((macro.start, macro.end, ""))
     # Report unmatched writes as well as paired commands.
-    starts = {match.start() for match in PAIR.finditer(masked)}
-    for match in re.finditer(ACCESS + r"\s*=", masked):
-        if match.start() not in starts:
+    for match in re.finditer(ACCESS.removesuffix("w0") + r"w[01]\s*=", masked):
+        if not any(pair.start() <= match.start() < pair.end() for pair in pairs):
             result.raw.append(
                 Raw(
                     source.count("\n", 0, match.start()) + 1,
                     "unpaired word write",
                     "stores are not a consecutive w0/w1 pair",
+                    (source.count("\n", 0, match.start()) + 1,),
                 )
             )
     for start, end, text in sorted(edits, reverse=True):
@@ -592,69 +674,70 @@ def install(project: Project) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists():
         destination.write_text(content)
-    sdk_include = '#include "n64sdk.h"\n' if any((root / "n64sdk.h").is_file() for root in project.include) else ""
-    return sdk_include + '#include "gbi.h"\n'
+    return '#include "gbi.h"\n'
+
+
+def install_audio(project: Project) -> str:
+    if not project.include:
+        raise Held("gbi", "paths.include: required include directory")
+    for template, name in (
+        (gbi_audio.HEADER, "shared/abi.h"),
+        (gbi_audio.TYPE_HEADER, "shared/acmd.h"),
+        (gbi_audio.HEADER.with_name("audio_callbacks.h"), "shared/audio_callbacks.h"),
+    ):
+        destination = project.include[0] / name
+        content = template.read_text()
+        if destination.is_symlink() or (destination.exists() and destination.read_text() != content):
+            raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            destination.write_text(content)
+    return '#include "shared/abi.h"\n'
+
+
+def prepare(project: Project, source: str, variant: str | None, *, fold_pointers: bool = True) -> Lowered:
+    normalized = canonical_types(project, source)
+    result = lower(normalized, variant, fold_pointers=fold_pointers)
+    # Diagnostics describe the input unit, even after declarations and includes
+    # have moved. Store identities let callers account for both words of a pair.
+    line_map = {}
+    for _, a, b, c, d in SequenceMatcher(
+        None, source.splitlines(), normalized.splitlines(), autojunk=False
+    ).get_opcodes():
+        for index in range(c, d):
+            line_map[index + 1] = a + min(index - c, max(0, b - a - 1)) + 1
+    for item in result.raw:
+        item.line = line_map.get(item.line, item.line)
+        item.word_lines = tuple(line_map.get(line, line) for line in item.word_lines)
+    definitions = macros(result.source)
+    shiftl = definitions.get("_SHIFTL")
+    if shiftl and standard_shiftl(shiftl):
+        result.source = result.source[: shiftl.start] + result.source[shiftl.end :]
+        result.headers.add("abi" if re.search(r"\bAcmd\b|shared/acmd.h", result.source) else "gbi")
+    if '#include "shared/acmd.h"' in result.source:
+        result.headers.add("abi")
+    if '#include "n64sdk.h"' in result.source and any(
+        item.reason.startswith("volatile packet requires volatile stores") for item in result.raw
+    ):
+        marker = (
+            "/* FAKEMATCH: retain the original volatile qualifiers and store order when using the SDK Gfx type. */\n"
+        )
+        if marker.strip() not in result.source:
+            result.source = marker + result.source
+    if result.source != source:
+        result.source = re.sub(r"\n(?:[ \t]*\n){2,}", "\n\n", result.source)
+    return result
 
 
 def canonical_types(project: Project, source: str) -> str:
-    """Reuse an existing SDK Gfx type instead of retaining per-unit imitations."""
-    sdk = next((root / "n64sdk.h" for root in project.include if (root / "n64sdk.h").is_file()), None)
-    if sdk is None:
-        return source
-    spans = gfx_typedefs(source)
-    if not spans:
-        return source
-    shared_gfx = sdk.parent / "shared/gfx.h"
-    sdk_text = sdk.read_text() + ("\n" + shared_gfx.read_text() if shared_gfx.is_file() else "")
-    sdk_types = typedefs(sdk_text)
-    source_types = typedefs(source)
-    removals = []
-    renames = {}
-    for name, (start, end, declaration) in source_types.items():
-        if name in sdk_types and (name == "Gfx" or tokens(declaration) == tokens(sdk_types[name][2])):
-            removals.append((start, end))
-        elif name in sdk_types:
-            local = "Unit" + name
-            if re.search(r"\b" + local + r"\b", source):
-                raise Held("gbi", f"local SDK type collision: {local}")
-            renames[name] = local
-    # The legacy two-field struct has the same byte layout as Gfx.words.
-    direct = any("words" not in source[start:end] for start, end in spans)
-    if direct:
-        names = set(re.findall(r"\bGfx\s*\*\s*(\w+)", source))
-        # Apply access normalization after removing declarations to keep offsets.
-    scalar = next(
-        (
-            path
-            for root in project.include
-            for path in sorted(root.glob("*.h"))
-            if all(
-                re.search(r"\btypedef\b[^;]+\b" + name + r"\s*;", path.read_text())
-                for name in ("u8", "u16", "u32", "s32", "s64", "f32")
-            )
-        ),
-        None,
-    )
-    if scalar is None:
-        raise Held("gbi", "n64sdk.h: cannot establish its scalar type include")
-    includes = f'#include "{scalar.name}"\n#include "n64sdk.h"'
-    for start, end in sorted(removals, reverse=True):
-        source = source[:start] + includes + source[end:]
-        includes = ""
+    from unbake.decomp.gbi_types import canonical
 
-    if direct:
-        for name in names:
-            source = re.sub(
-                r"\b" + re.escape(name) + r"(\s*->\s*)(w[01])\b",
-                lambda match: match[0].rsplit(match[2], 1)[0] + "words." + match[2],
-                source,
-            )
-    for name, replacement in renames.items():
-        source = re.sub(r"\b" + re.escape(name) + r"\b", replacement, source)
-    return source
+    return canonical(project, source)
 
 
-def rewrite(project: Project, files: list[Path], *, all_files: bool = False) -> dict[str, object]:
+def rewrite(project: Project, policy: Policy, files: list[Path], *, all_files: bool = False) -> dict[str, object]:
+    from unbake.decomp.gbi_proof import preserve
+
     if bool(files) == all_files:
         raise Held("gbi", "provide FILE... or --all")
     paths = sorted(project.src.rglob("*.c")) if all_files else files
@@ -668,30 +751,72 @@ def rewrite(project: Project, files: list[Path], *, all_files: bool = False) -> 
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(project.root):
             raise Held("gbi", f"{path}: required project-local regular C file")
         source = path.read_text()
-        result = lower(source, variant)
+        try:
+            result = prepare(project, source, variant)
+        except (Held, ValueError) as error:
+            raw.append(
+                {"file": str(path.relative_to(project.root)), "line": 1, "command": "types", "reason": str(error)}
+            )
+            # Even refused type cleanup must retain a complete word-write audit.
+            result = lower(source, variant)
+            result.source = source
         raw += [
             {
                 "file": str(path.relative_to(project.root)),
                 "line": item.line,
                 "command": item.command,
                 "reason": item.reason,
+                "word_lines": list(item.word_lines),
             }
             for item in result.raw
         ]
-        if result.macros:
-            result.source = canonical_types(project, result.source)
+        if result.source != source:
             prepared.append((path, source, result))
-            counts.update(result.macros)
     if prepared:
-        include = install(project)
+        requested = set().union(*(result.headers for _, _, result in prepared))
+        includes = {}
+        if "gbi" in requested or any('"n64sdk.h"' in result.source for _, _, result in prepared):
+            includes["gbi"] = install(project)
+        if "abi" in requested:
+            includes["abi"] = install_audio(project)
         for path, source, result in prepared:
             output = result.source
-            if '#include "gbi.h"' not in output:
-                # Types must precede GBI use; macros expand at their call sites.
-                output = include + output
+            for header in sorted(result.headers):
+                include = includes[header]
+                if include.strip() not in output:
+                    output = include + output
             if output != source:
+                try:
+                    preserve(project, policy, path, source, output)
+                except (Held, ValueError) as error:
+                    conservative = prepare(project, source, variant, fold_pointers=False)
+                    alternate = conservative.source
+                    for header in sorted(conservative.headers):
+                        include = includes[header]
+                        if include.strip() not in alternate:
+                            alternate = include + alternate
+                    if alternate != output:
+                        try:
+                            preserve(project, policy, path, source, alternate)
+                        except (Held, ValueError):
+                            pass
+                        else:
+                            path.write_text(alternate)
+                            changed.append(str(path.relative_to(project.root)))
+                            counts.update(conservative.macros)
+                            continue
+                    raw.append(
+                        {
+                            "file": str(path.relative_to(project.root)),
+                            "line": 1,
+                            "command": "rewrite",
+                            "reason": f"{path.stem}: {error}",
+                        }
+                    )
+                    continue
                 path.write_text(output)
                 changed.append(str(path.relative_to(project.root)))
+                counts.update(result.macros)
     return {
         "variant": variant,
         "files_rewritten": len(changed),

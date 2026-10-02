@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 
 from unbake.decomp import checks, gbi, type_context, work
-from unbake.decomp.gbi_source import macros, standard_shiftl
 from unbake.layout import split_apply
 from unbake.match import declarations, queue
 from unbake.match.common import atomic
@@ -31,15 +30,12 @@ def prepare(project: Project, policy: Policy, source: Path) -> Path:
             staged = work.overlay_project(project, directory)
         else:
             staged = work.overlay(project, directory)
-        text = gbi.canonical_types(staged, original.decode())
-        lowered = gbi.lower(text, gbi.microcode(staged))
+        lowered = gbi.prepare(staged, original.decode(), gbi.microcode(staged))
         text = lowered.source
-        removable = [item for item in macros(text).values() if item.name == "_SHIFTL" and standard_shiftl(item)]
-        for item in sorted(removable, key=lambda item: item.start, reverse=True):
-            text = text[: item.start] + text[item.end :]
-        if lowered.macros or removable:
-            include = gbi.install(staged)
-            text = include + text
+        if "gbi" in lowered.headers:
+            text = gbi.install(staged) + text
+        if "abi" in lowered.headers:
+            text = gbi.install_audio(staged) + text
         edits = declarations.folded_edits(staged, policy, source.stem, text, versions)
         headers = [edit for edit in edits if any(edit.path.is_relative_to(root) for root in staged.include)]
         split_apply._write_staging(staged, headers)

@@ -356,7 +356,15 @@ def findings(project: Project, policy: Policy) -> list[str]:
             _native_counts(saved, destination)
             expected = _measures(current, version)
             actual = _measures(saved, destination)
-            if any(actual.get(field, 0) != expected.get(field, 0) for field in actual.keys() | expected.keys()):
+            # Equal totals can conceal merged, renamed or reclassified rows.
+            # Compare each VERSION's own inventory, including its open state.
+            current_units = [(unit["name"], unit.get("metadata", {}).get("complete")) for unit in current["units"]]
+            saved_units = [
+                (unit.get("name"), unit.get("metadata", {}).get("complete")) for unit in saved.get("units", [])
+            ]
+            if current_units != saved_units or any(
+                actual.get(field, 0) != expected.get(field, 0) for field in actual.keys() | expected.keys()
+            ):
                 lines.append(f"HELD(check): stale report VERSION {version}: run unbake report")
         except Held as error:
             lines.append(f"HELD(check): report VERSION {version}: {error.reason}")
@@ -379,6 +387,12 @@ def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]
                         raise Held("report", f"VERSION {version}: generation changed during report; retry")
                 return write(project, policy, reports=reports)
     readme = project.root / "README.md"
+    for version, document in reports.items():
+        if "units" in document:
+            expected_units = [(row.name, row.kind == "c") for row in report_units.functions(project.version(version))]
+            reported_units = [(unit["name"], unit.get("metadata", {}).get("complete")) for unit in document["units"]]
+            if reported_units != expected_units:
+                raise Held("report", f"VERSION {version}: function rows changed; regenerate report")
     try:
         original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
         rendered = render(original, reports)

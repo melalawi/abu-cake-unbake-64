@@ -17,7 +17,8 @@ def load(project: Project, path: Path | None = None) -> set[str]:
     if not explicit and not path.exists():
         return set()
     try:
-        value = json.loads(path.read_text())
+        original = path.read_bytes()
+        value = json.loads(original)
     except (OSError, ValueError) as error:
         raise Held("exclusions", f"exclusions.file: {path}: {error}") from error
     if not isinstance(value, dict) or set(value) != {"schema", "functions"} or type(value["schema"]) is not int:
@@ -33,6 +34,13 @@ def load(project: Project, path: Path | None = None) -> set[str]:
         raise Held("exclusions", f"exclusions.functions: {path}: duplicate function")
     rows = [row for version in project.versions for row in split.functions(project, version)]
     available = {name for row in rows for name in (row.name, *row.aliases)}
+    if not explicit:
+        from unbake.decomp.exclusion_identity import canonical, publish
+
+        refreshed = canonical(project, names, rows)
+        if refreshed != names:
+            publish(project, path, original, refreshed)
+            names = refreshed
     unknown = set(names) - available
     if unknown:
         raise Held("exclusions", f"exclusions.function: {path}: unknown {', '.join(sorted(unknown))}")

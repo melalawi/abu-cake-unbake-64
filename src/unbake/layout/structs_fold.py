@@ -134,6 +134,44 @@ def _scalar_include(project: Any, texts: dict[Path, str], records: list[Layout])
     return f'#include "{relative.as_posix()}"\n'
 
 
+def _type_includes(project: Any, texts: dict[Path, str], records: list[Layout], destination: Path) -> str:
+    """Import shared aggregate and callback typedef homes used by new fields."""
+    combined = "\n".join(texts.values())
+    parser = Parser(combined)
+    parser.parse()
+    homes: dict[str, Path] = {}
+    cursor = 0
+    for path, text in texts.items():
+        for declaration in parser.declarations:
+            if not cursor <= declaration.start < cursor + len(text):
+                continue
+            value = combined[declaration.start : declaration.end]
+            if not value.lstrip().startswith("typedef "):
+                continue
+            name = re.search(r"\b(\w+)\s*(?:\[[^]]*\]\s*)*;\s*$", value)
+            callback = re.search(r"\(\s*\*\s*(\w+)\s*\)", value)
+            if callback or name:
+                found = callback or name
+                assert found is not None
+                target = parser.types.get(found[1])
+                if isinstance(target, tuple) and not target[1] and parser.type_name(target[0], ()) in SCALARS:
+                    # Scalar homes remain governed by _scalar_include. In
+                    # particular, inferred M2C preludes must not become imports.
+                    continue
+                homes.setdefault(found[1], path)
+        cursor += len(text) + 1
+    required = set(
+        re.findall(r"\b\w+\b", " ".join(field.declaration for record in records for field, _ in _nodes(record.fields)))
+    )
+    own = {name for record in records for name in (record.name, *record.aliases)}
+    paths = {homes[name] for name in required - own if name in homes and homes[name] != destination}
+    includes = {
+        next(path.relative_to(root).as_posix() for root in project.include if path.is_relative_to(root))
+        for path in paths
+    }
+    return "".join(f'#include "{name}"\n' for name in sorted(includes))
+
+
 def scalar_edits(project: Any, parser: Parser) -> tuple[set[str], list[tuple[int, int, str]]]:
     """Plan matching scalar typedef removal and required project header includes."""
     headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
@@ -281,6 +319,28 @@ def fold(
     combined = "\n".join(texts.values())
     parser = Parser(combined)
     existing = parser.parse()
+    own_types = {name for record in records for name in (record.name, *record.aliases)}
+
+    def opaque_pointer_fields(fields: tuple[Field, ...]) -> tuple[Field, ...]:
+        rewritten = []
+        for field in fields:
+            tag = re.match(r"((?:struct|union) \w+)\s*\*", field.type)
+            alias = re.match(r"^(\w+)(\s+.*)$", field.declaration, re.S)
+            declaration = field.declaration
+            if (
+                tag
+                and alias
+                and alias[1] not in ("struct", "union", "const", "volatile", "restrict", "__restrict")
+                and alias[1] not in parser.types
+                and alias[1] not in own_types
+            ):
+                # An opaque alias can remain local to the source. The shared
+                # pointer field names its measured tag and needs no typedef.
+                declaration = tag[1] + alias[2]
+            rewritten.append(replace(field, declaration=declaration, fields=opaque_pointer_fields(field.fields)))
+        return tuple(rewritten)
+
+    records = [replace(record, fields=opaque_pointer_fields(record.fields)) for record in records]
     locations: dict[str, list[tuple[Path, Layout, int]]] = {}
     identities: list[tuple[Path, Layout]] = []
     cursor = 0
@@ -468,6 +528,14 @@ def fold(
             + _scalar_include(project, texts, list(additions.values()))
             + "\n#endif\n"
         )
+        imports = _type_includes(project, texts, list(additions.values()), path)
+        extra = "".join(include + "\n" for include in imports.splitlines() if include not in before_header)
+        if extra:
+            # Dependencies such as n64sdk.h require the scalar home first.
+            # Keep existing include order when adding aggregate/callback homes.
+            current = list(re.finditer(r"^[ \t]*#\s*include[^\n]*\n", before_header, re.M))
+            position = current[-1].end() if current else 0
+            before_header = before_header[:position] + extra + before_header[position:]
         forward = "".join(
             f"{record.kind} {record.name};\n"
             + "".join(f"typedef {record.kind} {record.name} {alias};\n" for alias in record.aliases)
@@ -580,6 +648,19 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
 
     changed = {edit.path.resolve() for edit in edits}
     graph: dict[Path, set[Path]] = {}
+    resolved: dict[Path, Path] = {}
+    regular: dict[Path, bool] = {}
+
+    def canonical(path: Path) -> Path:
+        if path not in resolved:
+            resolved[path] = path.resolve()
+        return resolved[path]
+
+    def is_file(path: Path) -> bool:
+        if path not in regular:
+            regular[path] = path.is_file()
+        return regular[path]
+
     recipe = makefile.recipe(project)
     configured_flags = (
         *(compiler.cflags for compiler in project.compilers.values()),
@@ -601,7 +682,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
                 search.append(path if path.is_absolute() else project.root / path)
 
     def dependencies(path: Path) -> set[Path]:
-        path = path.resolve()
+        path = canonical(path)
         if path in graph:
             return graph[path]
         graph[path] = set()
@@ -616,8 +697,8 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
             # Include flags and conditional headers can choose different homes.
             # Scan all known candidates so the proof cannot miss an includer.
             for candidate in candidates:
-                if candidate.is_file():
-                    target = candidate.resolve()
+                if is_file(candidate):
+                    target = canonical(candidate)
                     if not target.is_relative_to(project.root):
                         held(str(path), f"cannot isolate external include {target} for header compile proof")
                     graph[path].add(target)
@@ -625,7 +706,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
         return graph[path]
 
     def affected(path: Path, visited: set[Path]) -> bool:
-        path = path.resolve()
+        path = canonical(path)
         if path in changed:
             return True
         if path in visited:
@@ -657,9 +738,25 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
     try:
         with tempfile.TemporaryDirectory(prefix="structs-proof-", dir=temporary_root) as temporary:
             overlay = Path(temporary)
-            for root in (project.src, *project.include):
+            for root in project.include:
                 shutil.copytree(root, overlay / root.relative_to(project.root), dirs_exist_ok=True)
-            for dependency in graph:
+            # Only selected consumers and their complete literal include
+            # closures are needed. Copying every unrelated C unit twice does
+            # not contribute to the physical compiler proof.
+            needed = {canonical(source) for source, _, _ in includers}
+            needed.update(
+                canonical(Path(flags[index + 1]))
+                for _, _, flags in includers
+                for index, flag in enumerate(flags)
+                if flag == "-include"
+            )
+            pending = list(needed)
+            while pending:
+                for dependency in dependencies(pending.pop()):
+                    if dependency not in needed:
+                        needed.add(dependency)
+                        pending.append(dependency)
+            for dependency in needed:
                 destination = overlay / dependency.relative_to(project.root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(dependency, destination)

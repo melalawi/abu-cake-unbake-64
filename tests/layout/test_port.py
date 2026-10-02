@@ -64,7 +64,9 @@ class PortTests(unittest.TestCase):
         row = port.candidates(self.project, "us", ["eu"])[0]
         row = port.Candidate(row.function, row.source, row.target, "different", 1)
         (self.project.src / "alpha.c").write_text("#if defined(VERSION_EU)\nvoid alpha(void) {}\n#endif\n")
-        with patch("unbake.decomp.trial.try_draft", return_value=SimpleNamespace(identical_everywhere=False)):
+        with patch(
+            "unbake.decomp.trial.try_draft", return_value=SimpleNamespace(identical_everywhere=False, compares={})
+        ):
             lines = port.port(self.project, self.policy, [row], self.scratch, apply=True)
         self.assertIn("target-version try is not identical", lines[0])
         self.assertIn(", asm, alpha]", self.project.version("eu").split.read_text())

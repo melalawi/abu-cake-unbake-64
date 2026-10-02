@@ -44,13 +44,17 @@ def register(phases: Subparsers) -> None:
     )
     cleanup.add_argument("source", type=Path, metavar="FILE")
     search = decomp_verbs.add_parser("search", phase="decomp")
-    search.add_argument("source", type=Path, metavar="FILE")
-    search.add_argument("--method", required=True)
-    search.add_argument("--out", type=Path, required=True)
-    search.add_argument("--budget-seconds", type=float, required=True)
+    search.add_argument("source", type=Path, nargs="?", metavar="FILE")
+    search.add_argument("--method", required=True, help="registers, order, permute; list prints available methods.")
+    search.add_argument("--out", type=Path)
+    search.add_argument("--budget-seconds", type=float)
     search.add_argument("--permute-version", metavar="V")
     search.add_argument("--permute-target", type=Path, metavar="OBJECT")
     search.add_argument("--permute-budget", type=float, metavar="SECONDS")
+    explain = decomp_verbs.add_parser("explain", phase="decomp", help="Read compiler scheduling evidence.")
+    explain.add_argument("kind", choices=("order",))
+    explain.add_argument("source", type=Path, metavar="FILE")
+    explain.add_argument("--version", required=True, metavar="V")
     best = decomp_verbs.add_parser("best", phase="decomp")
     best.add_argument("function")
     publish = decomp_verbs.add_parser("publish", phase="decomp")
@@ -91,7 +95,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
     elif args.verb == "gbi":
         from unbake.decomp import gbi
 
-        print(json.dumps(gbi.rewrite(project, args.files, all_files=args.all_files), indent=2))
+        print(json.dumps(gbi.rewrite(project, policy, args.files, all_files=args.all_files), indent=2))
     elif args.verb == "cleanup":
         from unbake.decomp.cleanup import prepare
 
@@ -99,9 +103,15 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
         suggest(shlex.join([*prefix(project), "try", str(source)]))
         receipt("decomp", [f"editable source prepared: {source}; headers remain staged"])
     elif args.verb == "search":
-        from unbake.search import methods
+        from unbake.search import available, methods
         from unbake.search.core import run as search_run
 
+        if args.method == "list":
+            receipt("search", list(available()))
+            return
+        for name, value in (("source", args.source), ("--out", args.out), ("--budget-seconds", args.budget_seconds)):
+            if value is None:
+                raise Held("search", f"{name}: missing value for method {args.method}")
         selected = args.method.split(",")
         permute_values = (args.permute_version, args.permute_target, args.permute_budget)
         if "permute" in selected:
@@ -129,6 +139,10 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
                 raise Held("search", "--permute-version/--permute-target/--permute-budget: require method permute")
             generators = methods(args.method)
         search_run(project, policy, args.source, generators, args.out, args.budget_seconds)
+    elif args.verb == "explain":
+        from unbake.decomp import explain
+
+        print(json.dumps(asdict(explain.order(project, policy, args.source, args.version)), indent=2))
     else:
         from unbake.decomp.drafts import Store
 

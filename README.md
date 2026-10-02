@@ -2,7 +2,7 @@
 
 Tools to help unbake a cake!
 
-> This is a personal toolkit. It is not officially maintained and may change or break without notice.
+This personal toolkit may change or break without notice.
 
 ## Install
 
@@ -10,32 +10,25 @@ Tools to help unbake a cake!
 python3 -m pip install git+https://github.com/melalawi/abu-cake-unbake-64
 ```
 
-## New project
+Python 3.11 or later is required.
+The build uses make and MIPS binutils.
+Tool paths belong in `~/.config/unbake/policy.toml`.
+Setup names any missing policy field.
+Compiler downloads have pinned SHA-256 hashes.
+
+## Start
 
 ```sh
 unbake init NAME
+cd NAME
 ```
 
-Init creates the named repo and prints its ROM folder.
-Put your ROMs there.
-Run these commands inside the repo.
+Put ROMs in the folder printed by init.
+Run `unbake setup` to read every ROM and review the compiler proposal.
+Accept its digest to prove every version before work starts.
+Init and setup leave commits to you.
 
-```sh
-unbake setup
-```
-
-Setup reads every ROM header.
-Each cross-version item gets one name.
-It shows compiler evidence and asks for one confirmation of the whole proposal.
-Clear regional winners and named tied candidate sets share one confirmation.
-The first `try` records separating or exact-equivalence evidence for tied sets.
-It proves every version before the project is ready.
-Setup prints the policy path and names any missing input.
-Machine paths go in `~/.config/unbake/policy.toml`.
-If setup asks for `names_from` choose a version.
-Run `unbake setup --names-from VERSION`.
-
-## Next command
+## Work
 
 ```sh
 unbake map
@@ -43,72 +36,20 @@ unbake solve
 unbake next
 ```
 
-Map reads the whole program across every version.
-Solve builds shared types from the measured facts.
-Every command ends with the next command to run.
-`unbake next` prints it again.
-Follow it through `draft` then `try` then `submit`.
-Exact submits feed proven facts back into solve.
-Passing fuzzy drafts publish under `NON_MATCHING`, retaining their assembly rows.
-They require at least 90% exact words in every containing version, clean source,
-and only register, order or relocation differences.
+Map measures the whole program across every version.
+Solve publishes shared types from those facts.
+Next ranks cross-version items and prints the command to run.
+Follow it through draft then try then submit.
+Try measures each containing version with its compiler candidates.
+Exact equivalents retain their proofs and a deterministic build choice.
+Submit proves the cartridge and feeds types back into solve.
+Passing fuzzy drafts keep their assembly under `NON_MATCHING`.
+Projects can reserve authored items with `unbake-exclusions.json`.
 
-To reserve existing authored work for a later port, put `unbake-exclusions.json`
-in the project root: `{"schema": 1, "functions": ["function_name"]}`.
-`next` skips excluded items (including editable work and redrafts); `draft`
-refuses them by name. Aliases exclude the entire item. Both commands accept
-`--exclude FILE` to override the project manifest. Missing explicit files,
-malformed manifests, duplicate entries and unknown function names are refused.
+## Development
 
-## Dependencies
-
-- Python 3.11 or later
-- [AbuMasN64](https://github.com/melalawi/abu-mas-n64) v0.1.0 at the commit pinned in `pyproject.toml`
-- make
-- MIPS binutils (as, ld, objcopy) and a C preprocessor
-- [splat](https://github.com/ethteck/splat) version 0.50.0
-- [m2c](https://github.com/matt-kempster/m2c) at `708d2d2cb2698f091a92492b328f73b24209f72d`
-- [decomp-permuter](https://github.com/simonlindholm/decomp-permuter) at `059609d4aec73eb0650726772954e1ad575825f8`
-- [objdiff](https://github.com/encounter/objdiff) CLI version 3.8.1
-
-Setup checks compiler downloads against pinned SHA-256 hashes.
+Run `bin/test` then `bin/lint` and `bin/hygiene`.
 
 ## License
 
-Released under [GNU GPL version 3 or later](LICENSE).
-
-For authored batches, `unbake submit --batch FILE...` admits each explicitly named
-latest trial, proves exact candidates together, and reports held files by name.
-Only requested functions are published. Passing fuzzy candidates retain their
-assembly rows and require a fresh current-input trial after an exact batch.
-
-Compiler proposal ties run the pinned registry calibration source and canonical
-idiom probes against the region's ROM functions, masking only recorded ELF
-relocations. The proposal retains sources, pins, flags, generated words,
-matches and scores. Separating reproduction evidence selects the release.
-Otherwise setup displays and confirms an explicit `tie:<region>` candidate set
-in the same acceptance as the other assignments. No release is selected for
-that set, and the all-assembly proof can proceed.
-
-`config.toml` records each set under `compiler_ties`, with unit assignments
-referencing its name. Draft uses a temporary recipe carrier; this is not a pin.
-The first `unbake try` compiles every member against every containing version.
-A unique exact reproduction or strictly better measured rank pins the entire
-region, recording source and target hashes, compiler pins, flags, per-version
-scores and the selection reason under `compiler_selections`. Multiple exact
-members are accepted as `equivalent` for that item. Non-reproducing members
-are excluded with their differing words retained. The build uses the region's
-decided compiler when it is a member, otherwise the first exact member in
-registry order; config records this rule and every member's exact proof.
-Later tries remeasure the remaining set, including after source edits.
-Non-exact equal ranks or an incomplete comparison remain named refusals.
-Malformed sets refuse `compiler.tied_set`. Recording the build choice
-updates the generated build recipe and its checksum entry together with config,
-with rollback if publication fails.
-
-For an existing ready project, `unbake setup --repropose-compilers` reviews new
-compiler evidence against the saved layout. Accept its exact digest with
-`unbake setup --repropose-compilers --confirm SHA256`, then run `unbake solve`.
-This updates compiler configuration and generated recipes without changing
-layout boundaries or running map. Published C and prior measured pins retain
-their proved recipes; undecided items receive independent candidate sets.
+[GNU GPL version 3 or later](LICENSE).

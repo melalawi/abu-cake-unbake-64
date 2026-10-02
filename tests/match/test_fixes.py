@@ -17,6 +17,23 @@ from unbake.project.config import Held
 
 
 class MatchFixTests(MatchFixture):
+    def test_submit_refuses_arbitrary_source_name_without_rewriting_it(self) -> None:
+        original = self.draft("alpha")
+        source = self.sources / "draft-variant.input"
+        source.write_bytes(original.read_bytes())
+        before = source.read_bytes()
+        with self.assertRaises(Held):
+            match.submit(self.project, self.policy, source)
+        self.assertEqual(self.queued(), [])
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_submit_uses_selected_trial_policy_even_when_clone_policy_exists(self) -> None:
+        source = self.draft("alpha")
+        self.project.tools.joinpath("clone-policy.toml").write_text(isolated_policy(self.policy, self.root))
+        with patch("unbake.project.config.load_policy", side_effect=AssertionError("policy changed")):
+            match.submit(self.project, self.policy, source)
+        self.assertEqual([row["function"] for row in self.queued()], ["alpha"])
+
     def test_submit_refuses_missing_trial_without_running_one(self) -> None:
         source = self.sources / "alpha.c"
         source.write_text("#ifdef NON_MATCHING\nint alpha(void) { return 1; }\n#endif\n")
@@ -96,3 +113,79 @@ class MatchFixTests(MatchFixture):
         self.assertEqual(source.read_bytes(), b"#ifdef NON_MATCHING\n" + original + b"#endif\n")
         self.assertEqual(common.queue(self.project), [])
         self.assertEqual(legacy.read_bytes(), legacy_before)
+
+    def test_cli_current_exact_try_satisfies_submit_with_publication_wrapper(self) -> None:
+        import io
+        from contextlib import nullcontext, redirect_stderr, redirect_stdout
+
+        from unbake.cli.main import main
+        from unbake.decomp.trial_compare import Compare
+
+        for version in self.versions:
+            path = self.project.version(version).split
+            path.write_text(
+                path.read_text().replace("    start: 0x1000\n", "    start: 0x1000\n    vram: 0x80001000\n")
+            )
+        source = self.sources / "alpha.c"
+        plain = b'#include "types.h"\n\nint alpha(void) { return 0; }\n'
+        source.write_bytes(b'#include "types.h"\n#ifdef NON_MATCHING\nint alpha(void) { return 0; }\n#endif\n')
+        # Use exactly the canonical bytes preserved by the wrapper removal.
+        digest = drafts.source_identity(source.read_bytes())
+        result = trial.Trial(
+            "alpha",
+            digest,
+            {
+                version: Compare(
+                    version,
+                    4,
+                    4,
+                    dict.fromkeys(
+                        ("register", "order", "immediate", "relocation", "inserted", "missing", "changed"), 0
+                    ),
+                    [],
+                    match_percent=100,
+                    register_changes=(),
+                )
+                for version in self.versions
+            },
+            [],
+            "unbake submit alpha.c",
+        )
+        from unbake.decomp.work import identity as original_identity
+
+        output = io.StringIO()
+        with (
+            patch("unbake.cli.main.config.load", return_value=self.project),
+            patch("unbake.cli.main.config.load_policy", return_value=self.policy),
+            patch.object(trial, "trial_inputs", return_value=nullcontext({})),
+            patch(
+                "unbake.decomp.work.identity",
+                side_effect=lambda project, source, versions, **kw: original_identity(
+                    project, source, versions, policy=kw.get("policy")
+                ),
+            ),
+            patch.object(trial, "try_draft", return_value=result) as tried,
+            redirect_stdout(output),
+            redirect_stderr(output),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        "--project",
+                        str(self.root),
+                        "try",
+                        str(source),
+                    ]
+                ),
+                0,
+                output.getvalue(),
+            )
+            match.submit(self.project, self.policy, source)
+            self.assertEqual(tried.call_count, 1)
+        row = self.queued()[0]
+        self.assertEqual(row["source_sha256"], digest)
+        self.assertEqual(row["source"], str(source))
+        self.assertIn(b"NON_MATCHING", source.read_bytes())
+        source.write_bytes(plain.replace(b"return 0", b"return 1"))
+        with self.assertRaisesRegex(Held, "trial.source_sha256"):
+            match.submit(self.project, self.policy, source)
