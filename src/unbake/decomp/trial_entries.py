@@ -28,7 +28,7 @@ def target(project: Project, policy: Policy, source: Path, version: str, generat
         relative = Path("obj/asm") / (row.path + ".o")
         path = generation / relative
         if not path.is_file():
-            path = target_object(project, row.name, version)
+            path = target_object(project, row.name, version, generation=generation)
             if not path.is_relative_to(generation):
                 raise Held("try", "trial.entries_target: secondary entry generation changed")
         objects.append(path)

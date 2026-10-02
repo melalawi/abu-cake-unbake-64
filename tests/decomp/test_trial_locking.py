@@ -38,10 +38,10 @@ class TrialLockingTests(unittest.TestCase):
                 with (project.root / "build/.lock").open("a+b") as lock:
                     fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
 
-            def prepare(project: Project, function: str, version: str) -> Path:
-                with (old.parent / ".lock").open("a+b") as lock, self.assertRaises(BlockingIOError):
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return original_target(project, function, version)
+            def prepare(project: Project, function: str, version: str, *, generation: Path) -> Path:
+                assert_writer_free()
+                self.assertEqual(generation, old)
+                return original_target(project, function, version, generation=generation)
 
             def compile_draft(project: object, policy: object, copied: Path, version: str, output: Path) -> Path:
                 barrier.wait(timeout=10)

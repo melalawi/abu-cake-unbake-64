@@ -1,10 +1,13 @@
+import fcntl
 import shutil
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import WORK, fixture
+from unbake.match import publication
 from unbake.project import build, config, setup
 
 
@@ -28,6 +31,46 @@ class BuildTests(unittest.TestCase):
         self.project.build_link("us").symlink_to("gone")
         with self.assertRaises(config.Held):
             build.current_generation(self.project, "us")
+
+    def test_pin_current_retries_publication_before_and_after_pin(self) -> None:
+        for collected in (False, True):
+            with self.subTest(collected=collected):
+                old = self.root / f"build/us.{int(collected) * 2}"
+                new = old.with_name(f"us.{int(collected) * 2 + 1}")
+                old.mkdir(parents=True)
+                new.mkdir()
+                publication.swap(self.project.build_link("us"), old)
+                original_pin = build.pin
+                attempts = []
+
+                @contextmanager
+                def racing_pin(
+                    generation, old=old, new=new, collected=collected, attempts=attempts, original_pin=original_pin
+                ):
+                    attempts.append(generation)
+                    if generation == old and collected:
+                        publication.swap(self.project.build_link("us"), new)
+                        publication.collect(self.project)
+                    with original_pin(generation):
+                        if generation == old and not collected:
+                            publication.swap(self.project.build_link("us"), new)
+                            publication.collect(self.project)
+                            self.assertTrue(old.is_dir())
+                        yield generation
+
+                with (
+                    patch.object(build, "pin", side_effect=racing_pin),
+                    build.pin_current(self.project, "us") as pinned,
+                ):
+                    self.assertEqual(pinned, new)
+                    self.assertEqual(attempts, [old, new])
+                    with (new / ".inuse").open("a+b") as stream, self.assertRaises(BlockingIOError):
+                        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if old.exists():
+                        with (old / ".inuse").open("a+b") as stream:
+                            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                publication.collect(self.project)
+                self.assertFalse(old.exists())
 
     def test_make_proves_generation_and_records_comparison_failure(self) -> None:
         setup.run(self.project, self.policy)

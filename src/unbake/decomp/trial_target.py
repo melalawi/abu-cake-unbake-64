@@ -35,31 +35,55 @@ def owning_versions(project: Project, function: str, versions: list[str] | None)
 def inputs(
     project: Project, function: str, versions: list[str], *, source: Path | None = None, policy: Policy | None = None
 ) -> Iterator[dict[str, tuple[Path, Path]]]:
-    """Build missing targets, then pin their generations before releasing the writer lock."""
+    """Pin published targets; serialize only missing inventory/object builds."""
     if not versions or len(set(versions)) != len(versions):
         raise Held("try", "versions must be nonempty and unique")
     for version in versions:
         project.version(version)
     with ExitStack() as holds:
         pinned = {}
-        with build.lock(project):
-            for version in versions:
-                target = target_object(project, function, version)
-                generation = holds.enter_context(build.pin(build.current_generation(project, version)))
-                if source is not None and policy is not None:
-                    from unbake.decomp import trial_entries
+        for version in versions:
+            generation = holds.enter_context(_target_generation(project, version))
+            target = target_object(project, function, version, generation=generation)
+            if source is not None and policy is not None:
+                from unbake.decomp import trial_entries
 
-                    target = trial_entries.target(project, policy, source, version, generation, target)
-                pinned[version] = (generation, target)
+                target = trial_entries.target(project, policy, source, version, generation, target)
+            pinned[version] = (generation, target)
         yield pinned
 
 
-def make_target(project: Project, version: str, target: Path, *, changed: Path | None = None) -> None:
+@contextmanager
+def _target_generation(project: Project, version: str) -> Iterator[Path]:
+    link = project.build_link(version)
+    inventory = project.name + ".ld"
+
+    def ready() -> bool:
+        return link.is_symlink() and (link / inventory).is_file()
+
+    while True:
+        if ready():
+            with build.pin_current(project, version) as generation:
+                if (generation / inventory).is_file():
+                    yield generation
+                    return
+        with build.lock(project):
+            if not ready():
+                make_target(project, version, Path("build") / version / inventory)
+            if not ready():
+                raise Held("try", f"VERSION {version}: make produced no build inventory")
+
+
+def make_target(
+    project: Project, version: str, target: Path, *, changed: Path | None = None, generation: Path | None = None
+) -> None:
     # Disable the Makefile's cold C batch so one target cannot compile its peers.
     command = ["make", "-j4", f"VERSION={version}", "C_COLD="]
     if changed is not None:
         command.extend(["-W", str(changed)])
     command.append(str(target))
+    if generation is not None:
+        command.append(f"BUILD={generation}")
     try:
         result = subprocess.run(command, cwd=project.root, capture_output=True, text=True)
     except OSError as error:
@@ -70,8 +94,11 @@ def make_target(project: Project, version: str, target: Path, *, changed: Path |
         )
 
 
-def target_object(project: Project, function: str, version: str) -> Path:
-    """Resolve the owning text row, then build only its missing inventory/object."""
+def target_object(project: Project, function: str, version: str, *, generation: Path | None = None) -> Path:
+    """Read a pinned target, taking the writer lock only to build a missing object."""
+    if generation is None:
+        with _target_generation(project, version) as pinned:
+            return target_object(project, function, version, generation=pinned)
     configured = project.version(version)
     _, _, segments = split.layout(configured.split)
     _, symbols = split.symbols(configured.symbols)
@@ -95,11 +122,7 @@ def target_object(project: Project, function: str, version: str) -> Path:
         )
     row = rows[0]
     relative = Path("obj") / ("src" if row.kind == "c" else "asm") / (row.path + ".o")
-    link = project.build_link(version)
-    inventory_target = Path("build") / version / (project.name + ".ld")
-    if not link.is_symlink() or not (link / ".split.mk").is_file() or not (link / inventory_target.name).is_file():
-        make_target(project, version, inventory_target)
-    generation = build.current_generation(project, version)
+    inventory_target = generation / (project.name + ".ld")
     inventory = set(re.findall(r'obj/(?:src|asm)/[^\s()";]+\.o', (generation / inventory_target.name).read_text()))
     if relative.as_posix() not in inventory:
         raise Held(
@@ -107,13 +130,15 @@ def target_object(project: Project, function: str, version: str) -> Path:
         )
     target = generation / relative
     if not target.is_file():
-        # A removed object can leave a successful compile receipt behind. Tell
-        # make its source changed so that the receipt's own recipe runs again.
-        source = (project.src if row.kind == "c" else project.asm / version) / (
-            row.path + (".c" if row.kind == "c" else ".s")
-        )
-        changed = source.relative_to(project.root) if target.with_suffix(".built").is_file() else None
-        make_target(project, version, Path("build") / version / relative, changed=changed)
+        with build.lock(project):
+            if not target.is_file():
+                # A removed object can leave a successful compile receipt behind.
+                source = (project.src if row.kind == "c" else project.asm / version) / (
+                    row.path + (".c" if row.kind == "c" else ".s")
+                )
+                changed = source.relative_to(project.root) if target.with_suffix(".built").is_file() else None
+                # Publication may have moved the link while we waited for the lock.
+                make_target(project, version, target, changed=changed, generation=generation)
     if not target.is_file():
         raise Held("try", f"VERSION {version}: make target build/{version}/{relative} produced no object")
     return target.resolve()

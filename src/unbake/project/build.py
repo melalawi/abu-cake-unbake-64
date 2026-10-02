@@ -11,7 +11,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,10 +74,28 @@ def current_generation(project: Project, v: str) -> Path:
 
 @contextmanager
 def pin(generation: Path) -> Iterator[Path]:
-    """Keep a generation alive; acquire under lock(project) before releasing it."""
+    """Keep a generation alive; use pin_current for published-generation reads."""
     with (generation / ".inuse").open("a+b") as stream:
         fcntl.flock(stream, fcntl.LOCK_SH)
         yield generation
+
+
+@contextmanager
+def pin_current(project: Project, v: str) -> Iterator[Path]:
+    """Pin a published generation without taking the build writer lock."""
+    while True:
+        generation = current_generation(project, v)
+        with ExitStack() as holds:
+            try:
+                holds.enter_context(pin(generation))
+            except FileNotFoundError:
+                # Collection won the race between resolving and opening .inuse.
+                continue
+            if project.build_link(v).resolve() != generation or not generation.is_dir():
+                # Publication or collection won before the shared pin was held.
+                continue
+            yield generation
+            return
 
 
 def discard_generation(generation: Path) -> None:

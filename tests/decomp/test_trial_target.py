@@ -1,12 +1,16 @@
 """Cold trial targets use the standalone Makefile without linking a ROM."""
 
+import fcntl
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import executable, fixture, write_rendered
-from unbake.decomp.trial_target import make_target, target_object
+from unbake.decomp.trial_target import inputs, make_target, target_object
 from unbake.project import build
 from unbake.project.config import Held
 
@@ -50,6 +54,73 @@ class TrialTargetTests(unittest.TestCase):
             self.assertEqual(target_object(self.project, "first", "us"), target)
         run.assert_not_called()
 
+    def test_published_target_inputs_do_not_acquire_writer_lock(self) -> None:
+        target = target_object(self.project, "first", "us")
+        # Make's extraction graph is irrelevant to reading an existing target.
+        (build.current_generation(self.project, "us") / ".split.mk").unlink()
+        with (self.project.build / ".lock").open("a+b") as writer:
+            fcntl.flock(writer, fcntl.LOCK_EX)
+            with (
+                patch.object(build, "lock", side_effect=AssertionError("writer lock requested")),
+                inputs(self.project, "first", ["us"]) as pinned,
+            ):
+                generation, actual = pinned["us"]
+                self.assertEqual(actual, target)
+                with (generation / ".inuse").open("a+b") as stream, self.assertRaises(BlockingIOError):
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_missing_target_waits_for_writer_then_builds_pinned_generation(self) -> None:
+        target = target_object(self.project, "first", "us")
+        generation = build.current_generation(self.project, "us")
+        target.unlink()
+        waiting = threading.Event()
+        original_lock = build.lock
+
+        @contextmanager
+        def writer_lock(project):
+            waiting.set()
+            with original_lock(project):
+                yield
+
+        def read():
+            with inputs(self.project, "first", ["us"]) as pinned:
+                return pinned["us"][1].read_bytes()
+
+        with (self.project.build / ".lock").open("a+b") as writer, ThreadPoolExecutor(max_workers=1) as pool:
+            fcntl.flock(writer, fcntl.LOCK_EX)
+            with patch.object(build, "lock", side_effect=writer_lock):
+                future = pool.submit(read)
+                try:
+                    self.assertTrue(waiting.wait(timeout=5))
+                    with self.assertRaises(TimeoutError):
+                        future.result(timeout=0.2)
+                    # Simulate publication while the cold target waits for the writer.
+                    replacement = generation.with_name("us.1")
+                    replacement.mkdir()
+                    from unbake.match import publication
+
+                    publication.swap(self.project.build_link("us"), replacement)
+                finally:
+                    fcntl.flock(writer, fcntl.LOCK_UN)
+                self.assertEqual(future.result(timeout=10), b"A")
+        self.assertTrue(target.is_file())
+        self.assertFalse((replacement / "obj/asm/first.o").exists())
+
+    def test_missing_target_is_rechecked_after_waiting_for_writer(self) -> None:
+        target = target_object(self.project, "first", "us")
+        target.unlink()
+
+        @contextmanager
+        def another_writer(project):
+            target.write_bytes(b"other writer")
+            yield
+
+        with (
+            patch.object(build, "lock", side_effect=another_writer),
+            patch("unbake.decomp.trial_target.make_target", side_effect=AssertionError("already built")),
+        ):
+            self.assertEqual(target_object(self.project, "first", "us").read_bytes(), b"other writer")
+
     def test_c_target_does_not_build_other_cold_c_units(self) -> None:
         (self.root / "src/unused.c").write_text("B")
         make_target(self.project, "us", Path("build/us/game.ld"))
@@ -71,11 +142,12 @@ class TrialTargetTests(unittest.TestCase):
 
     def test_object_build_failure_quotes_target_and_stderr(self) -> None:
         target_object(self.project, "middle", "us")
+        target_object_path = build.current_generation(self.project, "us") / "obj/asm/first.o"
         executable(self.root / "tools/as", "import sys\nsys.stderr.write('assembler unavailable\\n')\nsys.exit(7)\n")
         with self.assertRaises(Held) as failure:
             target_object(self.project, "first", "us")
         self.assertEqual(failure.exception.phase, "try")
-        self.assertIn("make -j4 VERSION=us C_COLD= build/us/obj/asm/first.o", failure.exception.reason)
+        self.assertIn(f"make -j4 VERSION=us C_COLD= {target_object_path}", failure.exception.reason)
         self.assertIn("assembler unavailable", failure.exception.reason)
 
     def test_inventory_does_not_fall_back_to_objdiff_wrappers(self) -> None:
