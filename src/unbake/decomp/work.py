@@ -153,8 +153,6 @@ def overlay_data(project: Project, source: Path) -> dict[str, Any]:
         return {"base": headers(project), "edits": {}}
     data: dict[str, Any] = json.loads(path.read_bytes())
     current = source_headers(project, source)
-    if any(data.get("base", {}).get(name) != value for name, value in current.items()):
-        raise Held("try", "trial.overlay_stale: project headers changed; draft again")
     directory = source.parent / "overlay"
     actual = {}
     for path in sorted(directory.rglob("*")):
@@ -164,6 +162,11 @@ def overlay_data(project: Project, source: Path) -> dict[str, Any]:
             actual[str(path.relative_to(directory))] = digest(path.read_bytes())
     if any(relative not in actual for relative in data["base"]):
         raise Held("try", "trial.overlay: staged header deletion requires an explicit edit")
+    if any(data["base"].get(name) != value and actual.get(name) != value for name, value in current.items()):
+        raise Held("try", "trial.overlay_stale: project headers changed; draft again")
+    # A preceding publication may already have installed this exact proposal.
+    # Bind its proved bytes as the current base instead of proposing it again.
+    data["base"] = {**data["base"], **{name: value for name, value in current.items() if actual.get(name) == value}}
     data["edits"] = {relative: sha for relative, sha in actual.items() if data["base"].get(relative) != sha}
     return data
 

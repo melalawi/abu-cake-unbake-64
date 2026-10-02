@@ -168,6 +168,42 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before["include/" + name])
         self.assertIn(": OK", self.make())
 
+    def test_installed_batch_shares_one_new_sdk_header_overlay(self):
+        from unbake.decomp import work
+
+        self.install_sdk()
+        for source in self.sources:
+            work.overlay(self.project, source.parent)
+            header = source.parent / "overlay/include/shared/holder.h"
+            header.write_text(
+                '#ifndef HOLDER_H\n#define HOLDER_H\n#include "acmd.h"\n'
+                "typedef struct { Acmd command; } Holder;\n#endif\n"
+            )
+            source.write_text(f'#include "shared/holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
+            self.cli("try", source)
+        output = self.cli("submit", "--batch", *self.sources)
+        for source in self.sources:
+            self.assertIn(source.stem + " matched on VERSION us, us-rev1", output)
+        self.assertTrue((self.project.include[0] / "shared/holder.h").is_file())
+        self.assertIn(": OK", self.make())
+
+    def test_installed_try_reuses_a_header_already_published_from_another_overlay(self):
+        from unbake.decomp import work
+
+        self.install_sdk()
+        for source in self.sources:
+            work.overlay(self.project, source.parent)
+            (source.parent / "overlay/include/shared/holder.h").write_text(
+                '#ifndef HOLDER_H\n#define HOLDER_H\n#include "acmd.h"\n'
+                "typedef struct { Acmd command; } Holder;\n#endif\n"
+            )
+            source.write_text(f'#include "shared/holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
+        self.cli("try", self.sources[0])
+        self.cli("submit", self.sources[0])
+        self.cli("try", self.sources[1])
+        self.cli("submit", self.sources[1])
+        self.assertIn(": OK", self.make())
+
     def test_installed_submit_names_missing_sdk_header_prerequisite_for_exact_source(self):
         self.install_sdk()
         path = self.project.include[0] / "shared/missing_sdk.h"

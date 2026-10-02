@@ -268,9 +268,14 @@ def attempt(
         resolved = needs.resolve([need for draft in candidates for need in draft.needs], staged_project, policy, apply)
         for draft in candidates:
             manifest = draft.row["work"]
-            overlays = [
-                replace(edit, path=tree / relative(project, edit.path)) for edit in work.header_edits(project, manifest)
-            ]
+            overlays = []
+            for edit in work.header_edits(project, manifest):
+                path = tree / relative(project, edit.path)
+                # Several sources may propose the same shared declaration. The
+                # first overlay owns the edit; later identical uses need no write.
+                if path.is_file() and path.read_text() == edit.after:
+                    continue
+                overlays.append(replace(edit, path=path))
             apply(staged_project, policy, overlays)
             apply(
                 staged_project,
@@ -448,7 +453,10 @@ def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
         ):
             held(f"{edit.path}: outside publication inputs")
         if (edit.path.read_text() if edit.path.exists() else "") != edit.before:
-            held(f"{edit.path}: changed since publication preview")
+            prerequisite = (
+                "headers.declaration: " if any(edit.path.is_relative_to(root) for root in project.include) else ""
+            )
+            held(f"{prerequisite}{edit.path}: changed since publication preview")
         for version in edit.versions:
             project.version(version)
     written = []
