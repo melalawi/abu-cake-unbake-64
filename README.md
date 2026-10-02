@@ -27,7 +27,8 @@ unbake setup
 Setup reads every ROM header.
 Each cross-version item gets one name.
 It shows compiler evidence and asks for one confirmation of the whole proposal.
-Clear regional winners need no `--compiler` flags; a tied region needs an explicit choice.
+Clear regional winners and named tied candidate sets share one confirmation.
+Tied sets are pinned by separating evidence from the first `try`.
 It proves every version before the project is ready.
 Setup prints the policy path and names any missing input.
 Machine paths go in `~/.config/unbake/policy.toml`.
@@ -80,3 +81,20 @@ For authored batches, `unbake submit --batch FILE...` admits each explicitly nam
 latest trial, proves exact candidates together, and reports held files by name.
 Only requested functions are published. Passing fuzzy candidates retain their
 assembly rows and require a fresh current-input trial after an exact batch.
+
+Compiler proposal ties run the pinned registry calibration source and canonical
+idiom probes against the region's ROM functions, masking only recorded ELF
+relocations. The proposal retains sources, pins, flags, generated words,
+matches and scores. Separating reproduction evidence selects the release.
+Otherwise setup displays and confirms an explicit `tie:<region>` candidate set
+in the same acceptance as the other assignments. No release is selected for
+that set, and the all-assembly proof can proceed.
+
+`config.toml` records each set under `compiler_ties`, with unit assignments
+referencing its name. Draft uses a temporary recipe carrier; this is not a pin.
+The first `unbake try` compiles every member against every containing version.
+A unique exact reproduction or strictly better measured rank pins the entire
+region, recording source and target hashes, compiler pins, flags, per-version
+scores and the selection reason under `compiler_selections`. Equal results or
+an incomplete comparison leave the set intact with a named refusal. Malformed
+sets refuse `compiler.tied_set`. C builds require a resolved pin.

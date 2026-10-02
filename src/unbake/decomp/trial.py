@@ -90,6 +90,9 @@ def retain_draft(
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=directory))
     selected = owning_versions(project, source.stem, versions)
     with trial_inputs(project, source.stem, selected) as pinned:
+        from unbake.decomp.trial_compilers import resolve
+
+        project = resolve(project, policy, source, work, pinned)
         before = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         result = (
             try_draft(project, policy, source, work, versions=versions, flags=True, pinned=pinned)

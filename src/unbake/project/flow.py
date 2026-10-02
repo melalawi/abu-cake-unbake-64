@@ -62,6 +62,7 @@ class CompilerCandidate(TypedDict):
 
 
 class CompilerProposal(Identity):
+    compiler_ties: NotRequired[dict[str, list[str]]]
     choices: NotRequired[dict[str, str]]
     layout_sha256: str
     inputs_sha256: dict[str, str]

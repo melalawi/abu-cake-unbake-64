@@ -102,11 +102,10 @@ class ProposalTests(unittest.TestCase):
         proposal = self.propose(census, layout)
         self.assertEqual(proposal["candidates"]["us:gcc"][0]["id"], "gcc-2.7.2-kmc")
         self.assertEqual(proposal["candidates"]["us:ido"][0]["rank"], proposal["candidates"]["us:ido"][1]["rank"])
-        self.assertIn("us:ido", proposal["unresolved"])
+        self.assertEqual(proposal["assignments"]["f1"], "tie:us:ido")
         self.assertNotIn("default:mixed", proposal["unresolved"])
         self.assertEqual(proposal["default_compiler"], "gcc-2.7.2-kmc")
-        with self.assertRaisesRegex(config.Held, "setup.compiler_candidate:"):
-            self.accept(census, layout, proposal, self.token())
+        self.accept(census, layout, proposal, self.token())
         choices = {"us:ido": "ido-7.1", "default": "gcc-2.7.2-kmc"}
         proposal = self.propose(census, layout, choices)
         self.assertEqual(proposal["assignments"], {"f0": "gcc-2.7.2-kmc", "f1": "ido-7.1", "f2": "gcc-2.7.2-kmc"})
@@ -117,21 +116,39 @@ class ProposalTests(unittest.TestCase):
     def test_uninformative_unit_does_not_inherit_a_ranked_region(self) -> None:
         census, layout = self.layout(SN64, LEAF)
         proposal = self.propose(census, layout)
-        self.assertNotIn("f1", proposal["assignments"])
-        self.assertIn("us:undecided", proposal["unresolved"])
-        with self.assertRaisesRegex(config.Held, "setup.compiler_candidate:"):
-            self.accept(census, layout, proposal, self.token())
+        self.assertEqual(proposal["assignments"]["f1"], "tie:us:undecided")
+        self.assertEqual(len(proposal["compiler_ties"]["tie:us:undecided"]), 4)
+        self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
-    def test_tie_never_selects_registry_order_or_prints_acceptance_token(self) -> None:
+    def test_tie_accepts_explicit_candidate_set_without_selecting_registry_order(self) -> None:
         census, layout = self.layout(IDO)
         proposal = self.propose(census, layout)
-        self.assertEqual(proposal["assignments"], {})
+        self.assertEqual(proposal["assignments"], {"f0": "tie:us:ido"})
+        self.assertEqual(proposal["compiler_ties"], {"tie:us:ido": ["ido-5.3", "ido-7.1"]})
         self.assertTrue(all(len(rows) == 4 for rows in proposal["candidates"].values()))
-        self.assertFalse(any("setup --confirm" in line for line in fingerprint.receipt(proposal)))
-        with self.assertRaisesRegex(config.Held, "setup.compiler_candidate:"):
-            self.accept(census, layout, proposal, self.token())
+        self.assertTrue(any("setup --confirm" in line for line in fingerprint.receipt(proposal)))
+        self.assertTrue(any("{ido-5.3, ido-7.1}" in line for line in fingerprint.receipt(proposal)))
+        self.accept(census, layout, proposal, self.token())
         self.unchanged()
+
+    def test_real_probe_match_separates_static_release_tie(self) -> None:
+        from unbake.project import compiler_probes
+
+        census, layout = self.layout(IDO)
+        report = {
+            "attempted": 4,
+            "successful_comparable": 4,
+            "errors": [],
+            "candidates": {"ido-5.3": {"score": [0, 0]}, "ido-7.1": {"score": [1, 1]}},
+        }
+        with patch.object(compiler_probes, "reproduce", return_value=report) as reproduce:
+            proposal = self.propose(census, layout)
+        self.assertEqual(proposal["assignments"], {"f0": "ido-7.1"})
+        self.assertEqual(proposal["compiler_ties"], {})
+        self.assertEqual(proposal["source_reproduction_probes"]["successful_comparable"], 4)
+        self.assertEqual(reproduce.call_args.args[2], ["ido-5.3", "ido-7.1"])
+        self.accept(census, layout, proposal, self.token())
 
     def test_clear_regional_release_is_a_confirmable_whole_proposal(self) -> None:
         census, layout = self.layout(SN64, SN64, GCC)

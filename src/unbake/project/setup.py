@@ -574,6 +574,7 @@ def complete_setup(
                 title=facts["project"]["title"],
                 default_compiler=proposal["default_compiler"],
                 assignments=proposal["assignments"],
+                compiler_ties=proposal.get("compiler_ties", {}),
                 cflags={ident: tuple(flags) for ident, flags in proposal["cflags"].items()},
                 build=_build_options(layout, policy),
             ),

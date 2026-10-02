@@ -69,15 +69,21 @@ def render_ready(
     assignments: dict[str, str],
     cflags: dict[str, tuple[str, ...]],
     build: dict[str, Any],
+    compiler_ties: dict[str, list[str]] | None = None,
 ) -> str:
     """Caller must confirm the proposal, then prove and atomically publish this text."""
-    if not cflags or default_compiler not in cflags:
+    from unbake.project.compiler_ties import read as read_ties
+
+    ties = read_ties(compiler_ties or {}, cflags)
+    if not cflags or (default_compiler not in cflags and default_compiler not in ties):
         raise Held("setup", "project.default_compiler: explicit confirmed compiler required")
-    if not assignments or set(assignments.values()) - cflags.keys():
+    if not assignments or set(assignments.values()) - (cflags.keys() | ties.keys()):
         raise Held("setup", "units: complete confirmed compiler assignments required")
     data = facts(project, census, name=name, title=title)
     data["project"].update(state="ready", default_compiler=default_compiler)
     data["compilers"] = {ident: {"cflags": list(flags)} for ident, flags in cflags.items()}
     data["units"] = assignments
+    if ties:
+        data["compiler_ties"] = {ref: list(ids) for ref, ids in ties.items()}
     data["build"] = build
     return str(toml.dumps(data))

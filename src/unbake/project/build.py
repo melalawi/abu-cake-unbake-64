@@ -146,7 +146,10 @@ def compile_object(project: Project, policy: Policy, source: Path, v: str, out: 
     if not source.is_file():
         raise Held("compile", f"source {source} is missing")
     from unbake.project import toolchain
+    from unbake.project.compiler_ties import reference
 
+    if ref := reference(project, source):
+        raise Held("compile", f"compiler.tied_set: {ref}: compare every candidate with try before compiling C")
     compiler = project.compiler_for(source)
     toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
     out.parent.mkdir(parents=True, exist_ok=True)

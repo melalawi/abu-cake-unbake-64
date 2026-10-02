@@ -4,7 +4,7 @@ import math
 import os
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast, overload
 
@@ -66,6 +66,11 @@ class Project:
     build: Path
     work: Path
     drafts: Path
+    compiler_ties: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    def compiler_id(self, ident: str) -> str:
+        """A carrier for draft/assembly recipes, never a regional pin."""
+        return self.compiler_ties[ident][0] if ident in self.compiler_ties else ident
 
     def compiler_for(self, unit: str | Path) -> Compiler:
         path = Path(unit)
@@ -97,6 +102,7 @@ class Project:
             if len(regions) > 1:
                 raise Held("config", f"[units].{path.stem}: conflicting segment compilers across VERSIONs")
         ident = direct or stem or next(iter(regions), self.default_compiler)
+        ident = self.compiler_id(ident)
         if ident not in self.compilers:
             raise Held("config", f"[units].{spelling}: unknown compiler {ident}")
         return self.compilers[ident]
@@ -403,14 +409,19 @@ def load(root: Path) -> Project:
             cflags,
             tools / "compiler.sha256",
         )
+    from unbake.project.compiler_ties import read as read_ties
+
+    ties = read_ties(data.get("compiler_ties", {}), compilers)
     default_compiler = _text(value(project, "project", "default_compiler"), _label(path, "project", "default_compiler"))
-    if default_compiler not in compilers:
-        raise Held("config", f"{path} [project].default_compiler: unknown compiler {default_compiler}")
+    if default_compiler not in compilers and default_compiler not in ties:
+        key = "compiler.tied_set" if default_compiler.startswith("tie:") else "unknown compiler"
+        raise Held("config", f"{path} [project].default_compiler: {key}: {default_compiler}")
     units = {}
     for unit, ident in units_table.items():
         ident = _text(ident, f"{path} [units].{unit}")
-        if ident not in compilers:
-            raise Held("config", f"{path} [units].{unit}: unknown compiler {ident}")
+        if ident not in compilers and ident not in ties:
+            key = "compiler.tied_set" if ident.startswith("tie:") else "unknown compiler"
+            raise Held("config", f"{path} [units].{unit}: {key}: {ident}")
         unit_path = Path(unit)
         if unit_path.is_absolute() or ".." in unit_path.parts:
             raise Held("config", f"{path} [units].{unit}: expected project-relative unit")
@@ -451,6 +462,7 @@ def load(root: Path) -> Project:
         pending.build,
         pending.work,
         pending.drafts,
+        ties,
     )
 
 

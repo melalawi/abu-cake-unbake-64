@@ -161,6 +161,11 @@ def shell_words(words: Iterable[str | Path]) -> str:
 
 
 def description(project: Project) -> dict[str, Any]:
+    from unbake.project.compiler_ties import reference
+
+    for source in project.src.rglob("*.c"):
+        if ref := reference(project, source):
+            raise Held("build", f"compiler.tied_set: {ref}: run try to pin before building C {source.stem}")
     build = recipe(project)
     compilers = {}
     for ident, compiler in project.compilers.items():
@@ -170,7 +175,7 @@ def description(project: Project) -> dict[str, Any]:
             "as": str(compiler.as_) if str(compiler.as_).startswith("policy:") else relative(project, compiler.as_),
             "cflags": list(compiler.cflags),
         }
-    units = dict(project.units)
+    units = {name: project.compiler_id(ident) for name, ident in project.units.items()}
     memberships: dict[str, set[str]] = {}
     for version in project.version_map.values():
         segment = None
@@ -187,12 +192,12 @@ def description(project: Project) -> dict[str, Any]:
         if str(source.relative_to(project.root)) in project.units or name in project.units:
             units[name] = project.compiler_for(source).id
         elif len(choices) == 1:
-            units[name] = next(iter(choices))
+            units[name] = project.compiler_id(next(iter(choices)))
         else:
             raise Held("config", f"[units].{name}: conflicting segment compilers across VERSIONs")
     return {
         "compilers": compilers,
-        "default_compiler": project.default_compiler,
+        "default_compiler": project.compiler_id(project.default_compiler),
         "units": units,
         "src": relative(project, project.src),
         "include": [relative(project, p) for p in project.include],
