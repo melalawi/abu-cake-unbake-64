@@ -145,7 +145,7 @@ def private_constants(
     project: Project, version: str, function: str, assembly: str, *, generation: Path | None = None
 ) -> str:
     """Expose only byte-pinned, sole-owner immutable literals to m2c."""
-    manifest = project.root / "docs/setup" / (version + ".json")
+    manifest = project.build / "setup" / (version + ".json")
     if not manifest.is_file():
         return assembly
     try:

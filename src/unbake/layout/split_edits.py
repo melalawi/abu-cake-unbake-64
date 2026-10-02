@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING
 
-from unbake.layout import split, split_apply
+from unbake.layout import split
 from unbake.project.config import Held
 
 if TYPE_CHECKING:
     from unbake.project.config import Policy, Project
-
-
-class MatchedRow(TypedDict):
-    function: str
-    versions: list[str]
 
 
 def align(project: Project, v: str, function: str, value: object) -> list[split.Edit]:
@@ -129,105 +123,3 @@ def code(
 
 def data_cut(project: Project, v: str, function: str, start: object, end: object) -> list[split.Edit]:
     return _cut(project, v, function, start, end, "data")
-
-
-def rename_version(project: Project, v: str, function: str, new_name: str) -> list[split.Edit]:
-    version = project.version(v)
-    before, lines, segments = split.layout(version.split)
-    symbols_before, symbols = split.symbols(version.symbols)
-    symbol = symbols.get(function)
-    rows = [
-        row
-        for segment in segments
-        for row in segment.rows
-        if Path(row.path).name == function or (symbol is not None and split.address(row, version.split) == symbol[0])
-    ]
-    if not rows and symbol is None:
-        return []
-    if new_name in symbols or any(Path(row.path).name == new_name for segment in segments for row in segment.rows):
-        raise Held("split", f"VERSION {v}: new_name {new_name} already exists")
-    for row in rows:
-        renamed = str(Path(row.path).with_name(new_name))
-        lines[row.line] = split.replace_row(lines[row.line], row.match, path=renamed)
-    edits = []
-    after = "".join(lines)
-    if before != after:
-        edits.append(split.Edit(version.split, before, after, (v,)))
-    if symbol is not None:
-        symbol_lines = symbols_before.splitlines(keepends=True)
-        _, index, match = symbol
-        line = symbol_lines[index]
-        symbol_lines[index] = line[: match.start("name")] + new_name + line[match.end("name") :]
-        edits.append(split.Edit(version.symbols, symbols_before, "".join(symbol_lines), (v,)))
-    return edits
-
-
-def rename(project: Project, function: str, new_name: str) -> list[split.Edit]:
-    function, new_name = split.name(function), split.name(new_name, "new_name")
-    if function == new_name:
-        raise Held("split", "new_name: must differ from function")
-    from unbake.layout.data_symbols import counterparts
-
-    text_names = {item for v in project.versions for row in split.functions(project, v) for item in row.aliases}
-    present = [v for v in project.versions if function in split.symbols(project.version(v).symbols)[1]]
-    names = (
-        {}
-        if function in text_names or not present or len(present) == len(project.versions)
-        else counterparts(project, function)
-    )
-    edits = [edit for v in project.versions for edit in rename_version(project, v, names.get(v, function), new_name)]
-    if not edits:
-        raise Held("split", f"function {function}: not present in any VERSION")
-    return edits
-
-
-def matched(project: Project) -> list[MatchedRow]:
-    path = project.root / "data" / "matched.jsonl"
-    if not path.exists():
-        return []
-    result: list[MatchedRow] = []
-    for index, line in enumerate(split.read(path).splitlines()):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError as exc:
-            raise Held("split", f"{path}:{index + 1}: JSON") from exc
-        if (
-            not isinstance(row, dict)
-            or not isinstance(row.get("function"), str)
-            or not isinstance(row.get("versions"), list)
-        ):
-            raise Held("split", f"{path}:{index + 1}: function/versions")
-        result.append(cast(MatchedRow, row))
-    return result
-
-
-def twins(project: Project, v: str, function: str) -> list[split.Edit]:
-    function = split.name(function)
-    project.version(v)
-    matches = matched(project)
-    if not any(row["function"] == function and v in row["versions"] for row in matches):
-        raise Held("split", f"function {function}: not matched in VERSION {v}")
-    source = [item for item in split.functions(project, v) if function in item.aliases]
-    if len(source) != 1 or source[0].kind != "c":
-        raise Held("split", f"function {function}: requires one c row in VERSION {v}")
-    words = split.words(project, source[0])
-    edits = []
-    for other in project.versions:
-        if other == v:
-            continue
-        candidates = [
-            item
-            for item in split.functions(project, other)
-            if item.kind == "asm"
-            and item.end - item.start == len(words)
-            and not any(row["function"] in item.aliases and other in row["versions"] for row in matches)
-            and split.words(project, item) == words
-        ]
-        if len(candidates) > 1:
-            raise Held("split", f"VERSION {other}: ambiguous twins for {function}")
-        if candidates and function not in candidates[0].aliases:
-            candidate = candidates[0]
-            edits.extend(rename_version(project, other, candidate.name, function))
-    return split_apply.coalesce(edits)

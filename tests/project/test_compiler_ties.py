@@ -197,7 +197,7 @@ class CompilerTieTests(unittest.TestCase):
 
     def test_recorded_region_choice_precedes_registry_order(self):
         project = replace(self.project, default_compiler=self.ref)
-        path = self.root / "docs/setup/compiler.json"
+        path = self.root / "build/setup/compiler.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(

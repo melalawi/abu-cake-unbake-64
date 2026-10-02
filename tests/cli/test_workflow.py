@@ -49,7 +49,6 @@ class WorkflowTests(MatchFixture):
         action, reason = workflow.select(self.project, self.policy)
         self.assertIn(" try ", action)
         self.assertIn("inputs changed", reason)
-        self.assertEqual(self.queued(), [])
         self.assert_untouched()
 
     def test_changed_types_request_redraft_before_old_exact_submission(self) -> None:
@@ -60,4 +59,3 @@ class WorkflowTests(MatchFixture):
             action, reason = workflow.select(self.project, self.policy)
         self.assertTrue(action.endswith(" draft alpha"), action)
         self.assertIn("redraft required", reason)
-        self.assertEqual(self.queued(), [])

@@ -118,7 +118,8 @@ proved. Each receipt explains the refused placements or edges and prints a
 runnable command with the original map path.
 
 Accepted assertions and their byte pins, supplied evidence and validation are
-stored in `docs/setup/layout.json`. Setup refresh retains them and symbol
+stored in `build/setup/layout.json`, regenerable output that is never committed.
+The joined names live in the split and symbol files. Setup refresh retains them and symbol
 replanning seeds them before proposing further joins. Changed assertion bytes
 or boundaries refuse by name. Publication proves every containing ROM using retained objects when names alone
 change, and occurs only after all versions succeed. Independent body hashes,

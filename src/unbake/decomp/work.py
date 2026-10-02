@@ -298,7 +298,7 @@ def identity(
             ],
             "symbols": {name: value[0] for name, value in symbols.items() if name in identifiers},
         }
-        providers = project.root / "docs/setup" / (version + ".json")
+        providers = project.build / "setup" / (version + ".json")
         if providers.is_file():
             from unbake.project.cache import parsed
 

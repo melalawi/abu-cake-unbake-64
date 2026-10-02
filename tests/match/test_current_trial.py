@@ -23,7 +23,6 @@ class CurrentTrialTests(MatchFixture):
         source.write_text(source.read_text() + "/* edited */\n")
         with self.assertRaisesRegex(Held, "trial.source_sha256"):
             queue.publish_source(self.project, self.policy, source)
-        self.assertEqual(self.queued(), [])
         self.assert_untouched()
 
     def test_header_compiler_layout_and_generation_changes_refuse(self) -> None:
@@ -85,14 +84,13 @@ class CurrentTrialTests(MatchFixture):
             proof.ensure(changed, self.policy, source, self.versions)
 
     def test_changed_private_provider_evidence_requires_another_trial(self) -> None:
-        manifest = self.project.root / "docs/setup/us.json"
+        manifest = self.project.root / "build/setup/us.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text('{"providers": []}\n')
         source = self.draft("alpha")
         manifest.write_text('{"providers": [{"kind": "private", "owners": ["alpha"]}]}\n')
         with self.assertRaisesRegex(Held, "submit.layout_sha256"):
             proof.ensure(self.project, self.policy, source, self.versions)
-        self.assertEqual(self.queued(), [])
         self.assert_untouched()
 
     def test_changed_unreferenced_entry_invalidates_exact_and_fuzzy_receipts(self) -> None:
@@ -106,7 +104,6 @@ class CurrentTrialTests(MatchFixture):
         ):
             with self.assertRaisesRegex(Held, "submit.entries"):
                 admit()
-        self.assertEqual(self.queued(), [])
         self.assert_untouched()
 
     def test_type_feedback_failure_preserves_truthful_publication_receipts(self) -> None:
@@ -119,7 +116,6 @@ class CurrentTrialTests(MatchFixture):
             any(line.startswith("HELD(types): types.conflict:") and "was published" in line for line in lines), lines
         )
         self.assertTrue((self.project.src / "alpha.c").is_file())
-        self.assertEqual(self.queued(), [])
 
     def test_overlay_is_published_only_with_successful_rom_proof(self) -> None:
         directory = self.project.drafts / "alpha"

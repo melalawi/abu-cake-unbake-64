@@ -436,12 +436,21 @@ def infer(
         )
     }
     # Partial layouts describe only the observed prefix, never the full object extent.
+    # Inferred layouts are named after their first user; ordered origins break ties.
+    readable: dict[str, str] = {}
+    taken: dict[str, int] = {}
+    for origin in sorted(shared_fields):
+        users = sorted({access["function"] for accesses in shared_fields[origin].values() for access in accesses})
+        if len(users) >= 2:
+            base = "Shape_" + users[0]
+            taken[base] = taken.get(base, 0) + 1
+            readable[origin] = base if taken[base] == 1 else f"{base}_{taken[base]}"
     for origin, offsets in shared_fields.items():
         users = sorted({access["function"] for accesses in offsets.values() for access in accesses})
         base_type = graph.resolved.get(origin, {}).get("type")
         if len(users) < 2:
             continue
-        name = "Shape_" + storage.digest(origin.encode())[:12]
+        name = readable[origin]
 
         def unresolved(
             reason: str,

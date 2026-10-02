@@ -31,7 +31,7 @@ class SymbolJoinTests(unittest.TestCase):
         return result.stdout + result.stderr
 
     def layout(self):
-        return json.loads((self.project / "docs/setup/layout.json").read_bytes())
+        return json.loads((self.project / "build/setup/layout.json").read_bytes())
 
     def share(self, indices):
         layout = self.layout()
@@ -42,7 +42,7 @@ class SymbolJoinTests(unittest.TestCase):
             other["name"] = new
             for path in (self.project / "versions/us-rev1").glob("*"):
                 path.write_text(path.read_text().replace(old, new))
-        (self.project / "docs/setup/layout.json").write_text(json.dumps(layout))
+        (self.project / "build/setup/layout.json").write_text(json.dumps(layout))
 
     def request(self, name, *positions):
         layout = self.layout()

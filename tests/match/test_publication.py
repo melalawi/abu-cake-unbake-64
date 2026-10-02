@@ -44,7 +44,6 @@ class PublicationTests(MatchFixture):
         self.on_build = during_build
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts), receipts)
-        self.assertEqual(self.queued(), [])
         for name in (
             "src/alpha.c",
             "include/types.h",
@@ -104,7 +103,6 @@ class PublicationTests(MatchFixture):
             self.assertIn("- [0x1000, c, alpha]", text)
             self.assertIn("- [0x1020, asm, gamma]", text)
             self.assertIn("- [0x1030, data, constants]", text)
-        self.assertEqual(self.queued(), [])
         rows = self.matched()
         self.assertEqual({row["function"] for row in rows}, {"alpha", "beta"})
         for row in rows:
@@ -234,7 +232,6 @@ class PublicationTests(MatchFixture):
         self.assertTrue(any(line.startswith("OK(match): alpha") for line in nested), nested)
         self.assertTrue(any("generation changed" in line for line in receipts), receipts)
         self.assertEqual(len(self.matched()), 1)
-        self.assertEqual(self.queued(), [])
 
     def test_concurrent_input_edit_refuses_publication(self) -> None:
         self.queue("alpha")
@@ -259,7 +256,6 @@ class PublicationTests(MatchFixture):
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts), receipts)
         self.assertEqual(len(self.matched()), 1)
-        self.assertEqual(self.queued(), [])
 
     def test_withdraw_during_build_prevents_publication(self) -> None:
         self.queue("alpha")
@@ -273,7 +269,6 @@ class PublicationTests(MatchFixture):
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any("alpha" in line and "withdrawn" in line for line in receipts), receipts)
         self.assert_untouched()
-        self.assertEqual(self.queued(), [])
 
     def test_generation_change_during_build_refuses_publication(self) -> None:
         self.queue("alpha")

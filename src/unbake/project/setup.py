@@ -198,10 +198,29 @@ def _inputs(project: PendingProject | Project) -> dict[str, str]:
     return result
 
 
+# Setup evidence is regenerable build output, never part of the game repository.
+_EVIDENCE = "build/setup"
+_RETIRED_EVIDENCE = "docs/setup/"
+
+
+def _retired_evidence(relative: str) -> bool:
+    return relative.startswith(_RETIRED_EVIDENCE) and relative.endswith(".json")
+
+
 def _copy_inputs(project: PendingProject | Project, tree: Path, fingerprint: dict[str, str]) -> None:
     tree.mkdir()
+    evidence = project.build / "setup"
+    if evidence.is_dir():
+        for path in evidence.iterdir():
+            if path.is_file():
+                destination = tree / _EVIDENCE / path.name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, destination)
     for relative in fingerprint:
-        destination = tree / relative
+        # Committed evidence moves to build output; publication deletes it.
+        destination = tree / (
+            _EVIDENCE + "/" + relative[len(_RETIRED_EVIDENCE) :] if _retired_evidence(relative) else relative
+        )
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(project.root / relative, destination)
 
@@ -247,7 +266,7 @@ def _layout_inputs(project: PendingProject, census: Census, layout: LayoutManife
 
     for relative, content in planner.render_layout(project, census, layout).items():
         _write(tree, relative, content)
-    _write(tree, "docs/setup/layout.json", json.dumps(layout, indent=2, sort_keys=True) + "\n")
+    _write(tree, "build/setup/layout.json", json.dumps(layout, indent=2, sort_keys=True) + "\n")
 
 
 def _build_options(layout: LayoutManifest, policy: SetupPolicy) -> dict[str, Any]:
@@ -409,6 +428,12 @@ def _publish(
         staged_config = staged.root / "config.toml"
         writes[config_path] = (staged_config, 0o644, staged_config.stat().st_mtime_ns)
     obsolete = [project.root / relative for relative in removed_inputs]
+    obsolete += [project.root / relative for relative in fingerprint if _retired_evidence(relative)]
+    staged_evidence = staged.root / _EVIDENCE
+    if staged_evidence.is_dir():
+        for path in staged_evidence.iterdir():
+            if path.is_file():
+                writes[project.build / "setup" / path.name] = (path, 0o644, path.stat().st_mtime_ns)
     manifest = project.tools / "compiler.sha256"
     if manifest.is_file():
         for row in manifest.read_text().splitlines():
@@ -473,6 +498,9 @@ def _publish(
                     os.utime(target, ns=(target.stat().st_atime_ns, mtime))
             for target in obsolete:
                 target.unlink()
+            for directory in (project.root / _RETIRED_EVIDENCE, project.root / "docs"):
+                if directory.is_dir() and not any(directory.iterdir()):
+                    directory.rmdir()
             for version, generation in zip(() if reuse_generations else staged.versions, moved, strict=True):
                 _swap(project.build / version, generation.name)
             if config_path in writes:
@@ -612,12 +640,12 @@ def prepare_setup(
                 build=_build_options(layout, policy),
             ),
         )
-        compiler_document = tree / "docs/setup/compiler.json"
+        compiler_document = tree / "build/setup/compiler.json"
         compiler_document.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(accepted_path, compiler_document)
         _write(
             tree,
-            "docs/setup/confirmation.json",
+            "build/setup/confirmation.json",
             json.dumps({"proposal_sha256": accepted_sha256}) + "\n",
         )
         pending = config.load_pending(tree)
@@ -679,7 +707,7 @@ def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(manifest, destination)
             measured = census.run(config.load_pending(tree), policy, names_from=project.names_from)
-            layout_path = tree / "docs/setup/layout.json"
+            layout_path = tree / "build/setup/layout.json"
             if layout_path.is_file():
                 _ready_readme(project, measured, cast("LayoutManifest", json.loads(layout_path.read_bytes())), tree)
             del measured

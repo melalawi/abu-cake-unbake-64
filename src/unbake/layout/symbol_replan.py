@@ -26,7 +26,7 @@ def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[st
     """Only instruction/position/graph evidence establishes identity."""
     ff = {v: port.functions(project, v) for v in project.versions}
     images = {v: load(project.version(v).baserom, retain_data=False) for v in project.versions}
-    layout_path = project.root / "docs/setup/layout.json"
+    layout_path = project.build / "setup/layout.json"
     try:
         layout = cast(LayoutManifest, json.loads(layout_path.read_bytes()))
     except (OSError, ValueError) as error:
@@ -252,10 +252,10 @@ def publish(
                 provider["name"] = path_name(provider["name"], replacements)
                 provider["owners"] = [replacements.get(owner, owner) for owner in provider["owners"]]
         (tree / "config.toml").write_text(toml.dumps(data))
-        (tree / "docs/setup/layout.json").write_text(
+        (tree / "build/setup/layout.json").write_text(
             json.dumps(report["layout"], separators=(",", ":"), sort_keys=True) + "\n"
         )
-        with (tree / "docs/setup/symbol-correspondence.json").open("w") as stream:
+        with (tree / "build/setup/symbol-correspondence.json").open("w") as stream:
             json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
             stream.write("\n")
         if fast:

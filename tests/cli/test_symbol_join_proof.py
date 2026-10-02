@@ -70,7 +70,7 @@ class SymbolJoinProofTests(unittest.TestCase):
             command(*arguments, expected=1)
             token = hashlib.sha256((project / "build/setup/proposal.json").read_bytes()).hexdigest()
             command("--project", str(project), "setup", "--confirm", token)
-            path = project / "docs/setup/layout.json"
+            path = project / "build/setup/layout.json"
             layout = json.loads(path.read_bytes())
             ff = {v: {f["start"]: f for f in row["functions"]} for v, row in layout["versions"].items()}
             joins = []

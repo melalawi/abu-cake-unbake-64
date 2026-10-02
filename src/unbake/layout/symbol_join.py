@@ -42,7 +42,7 @@ def read(path: Path) -> list[dict[str, Any]]:
 def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, Any]]:
     """Validate a simultaneous batch and retain only its independently passing subset."""
     try:
-        with (project.root / "docs/setup/layout.json").open() as stream:
+        with (project.build / "setup/layout.json").open() as stream:
             layout = cast(LayoutManifest, json.load(stream))
     except (OSError, ValueError) as error:
         raise Held("split", f"split.join.layout: {error}") from error

@@ -228,7 +228,7 @@ class Proof:
             arguments.extend(["--supply", supply])
         self.cli(*arguments, cwd=project)
         require(read_config(project)["project"]["state"] == "ready", "setup.publication: project not ready")
-        accepted = (project / "docs/setup/compiler.json").read_bytes()
+        accepted = (project / "build/setup/compiler.json").read_bytes()
         require(hashlib.sha256(accepted).hexdigest() == token, "setup.confirmation: published evidence differs")
         require(
             accepted == (self.logs / (project.name + ".proposal.json")).read_bytes(),
@@ -556,58 +556,6 @@ class Proof:
         result = self.run([self.python, "-c", code])
         require(result.returncode == 0, "retire.imports: retired API remains")
 
-    def resubmit(
-        self, project: Path, source_dir: Path, *, cleanup: bool = False, only: list[str] | None = None
-    ) -> None:
-        require(source_dir.is_dir(), "accept.source_dir: missing authored C directory")
-        sources = sorted(source_dir.rglob("*.c"))
-        require(sources, "accept.sources: no authored C inputs")
-        require(len({source.stem for source in sources}) == len(sources), "accept.sources: duplicate function names")
-        if only:
-            missing = set(only) - {source.stem for source in sources}
-            require(not missing, f"accept.sources: missing named inputs {sorted(missing)}")
-            sources = [source for source in sources if source.stem in only]
-        config = read_config(project)
-        drafts = project / config["paths"]["drafts"]
-        summary_path = self.logs / (project.name + ".resubmit.json")
-        rows = json.loads(summary_path.read_text()) if summary_path.exists() else {}
-        for source in sources:
-            original = source.read_bytes()
-            digest = hashlib.sha256(original).hexdigest()
-            previous = rows.get(source.stem, {})
-            published = project / config["paths"]["src"] / (source.stem + ".c")
-            if (
-                previous.get("status") == "passed"
-                and previous.get("input_sha256") == digest
-                and published.is_file()
-                and hashlib.sha256(published.read_bytes()).hexdigest() == previous.get("published_sha256")
-            ):
-                continue
-            copied = drafts / ("resubmit-" + source.stem) / source.name
-            copied.parent.mkdir(parents=True, exist_ok=True)
-            copied.write_bytes(original)
-            record = {"input": str(source), "input_sha256": digest, "copy": str(copied)}
-            before = self.canonical(project)
-            try:
-                if cleanup:
-                    self.cli("decomp", "cleanup", copied, cwd=project)
-                    require(self.canonical(project) == before, "cleanup.overlay: canonical files changed")
-                    record["prepared_sha256"] = hashlib.sha256(copied.read_bytes()).hexdigest()
-                self.cli("try", copied, cwd=project)
-                require(self.canonical(project) == before, "trial.overlay: canonical files changed")
-                self.cli("submit", copied, cwd=project)
-                require(published.is_file(), "submit.source: canonical C missing after publication")
-                record.update(status="passed", published_sha256=hashlib.sha256(published.read_bytes()).hexdigest())
-            except ProofError as error:
-                require(self.canonical(project) == before, "submit.refusal: canonical files changed")
-                record.update(status="held", reason=str(error))
-            require(source.read_bytes() == original, "accept.source: authored input changed")
-            rows[source.stem] = record
-            summary_path.write_text(json.dumps(rows, indent=2) + "\n")
-        failures = [name for name, row in rows.items() if row["status"] != "passed"]
-        self.verify(project)
-        require(not failures, f"accept.resubmit: {len(failures)} held inputs, see {summary_path}")
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -640,14 +588,8 @@ def main() -> int:
     measure = phases.add_parser("measure", help="Record observed compile, fuzzy and matched round measures.")
     measure.add_argument("--label", required=True)
     measure.add_argument("--fuzzy-bar", type=float, help="Explicit owner threshold on the weakest version score.")
-    resubmit = phases.add_parser(
-        "resubmit", help="Re-submit each read-only authored C input through public work commands."
-    )
-    resubmit.add_argument("--source-dir", type=Path, required=True)
-    resubmit.add_argument("--cleanup", action="store_true", help="Prepare copied authored C through public cleanup.")
-    resubmit.add_argument("--only", action="append", metavar="FUNCTION", help="Retry explicit named authored inputs.")
     verify = phases.add_parser("verify", help="Check digests, generated docs, hygiene and repeat setup.")
-    for command in (prepare, propose, confirm, cycle, resubmit, verify, mapping, measure):
+    for command in (prepare, propose, confirm, cycle, verify, mapping, measure):
         command.add_argument("--project", type=Path, required=True)
     phases.add_parser("retirement", help="Refuse every retired route and check removed imports.")
     refusals = phases.add_parser("refusals", help="Prove named input refusals and pending-state protection.")
@@ -688,10 +630,8 @@ def main() -> int:
                 proof.map_solve(project)
             elif args.phase == "measure":
                 proof.measure(project, args.label, args.fuzzy_bar)
-            elif args.phase == "verify":
-                proof.verify(project)
             else:
-                proof.resubmit(project, args.source_dir, cleanup=args.cleanup, only=args.only)
+                proof.verify(project)
         print("PASS: " + args.phase)
         return 0
     except (ProofError, OSError, ValueError, KeyError, IndexError) as error:
