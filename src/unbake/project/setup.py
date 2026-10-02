@@ -9,7 +9,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -527,17 +527,29 @@ def _prove_publish(
         contributing.write_bytes(previous)
     workers = min(policy.setup_version_jobs, policy.cores, len(staged.versions))
 
+    def extract_version(version: str) -> None:
+        log = project.build / "setup/logs" / f"{version}.log"
+        setup_proof.extract(staged, version, policy.cores, log=log, slots=slots)
+
     def prove_version(version: str) -> str:
         data = staged.version(version).baserom
         log = project.build / "setup/logs" / f"{version}.log"
-        setup_proof.proof(staged, version, data, policy.cores, log=log, slots=slots)
+        setup_proof.proof(staged, version, data, policy.cores, log=log, slots=slots, extracted=True)
         with data.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha1").hexdigest()
         return f"{version}: SHA1 {digest}; every cartridge byte proved"
 
     with setup_proof.job_slots(policy.cores, workers) as slots, ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(prove_version, version) for version in staged.versions]
-        receipts = [future.result() for future in futures]
+        # Start larger splits first to keep the last extraction from becoming
+        # a serial tail. Receipts and naming retain the declared version order.
+        order = sorted(staged.versions, key=lambda version: staged.version(version).split.stat().st_size, reverse=True)
+        extractions = {executor.submit(extract_version, version): version for version in order}
+        proofs = {}
+        for future in as_completed(extractions):
+            future.result()
+            version = extractions[future]
+            proofs[version] = executor.submit(prove_version, version)
+        receipts = [proofs[version].result() for version in staged.versions]
     if before_publish is not None:
         before_publish()
     _publish(project, staged, fingerprint, fresh=fresh, generations=generations)

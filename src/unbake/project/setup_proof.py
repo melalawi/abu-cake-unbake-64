@@ -60,22 +60,12 @@ def run(
     return result.stdout.strip()
 
 
-def proof(
-    project: Project,
-    version: str,
-    data: bytes | Path,
-    cores: int,
-    *,
-    log: Path | None = None,
-    slots: JobSlots | None = None,
-) -> None:
-    root = project.root
-    project.version(version)
-    built = project.build_link(version) / f"{project.name}.{version}.z64"
-    log = log or project.build / "setup" / f"{version}.log"
+def extract(project: Project, version: str, cores: int, *, log: Path, slots: JobSlots | None = None) -> None:
+    """Consume one extraction slot; keep generated inputs on disk for the proof."""
     options = [] if slots is not None else [f"-j{cores}"]
     environment = slots.environment if slots is not None else None
     descriptors = slots.descriptors if slots is not None else ()
+    root = project.root
     try:
         run(
             ["make", *options, "extract", f"VERSION={version}"],
@@ -88,6 +78,27 @@ def proof(
         raise Held(
             "setup", f"setup.sha1.{version}: extraction failed; log {log.with_suffix('.extract.log')}; {error.reason}"
         ) from error
+
+
+def proof(
+    project: Project,
+    version: str,
+    data: bytes | Path,
+    cores: int,
+    *,
+    log: Path | None = None,
+    slots: JobSlots | None = None,
+    extracted: bool = False,
+) -> None:
+    root = project.root
+    project.version(version)
+    built = project.build_link(version) / f"{project.name}.{version}.z64"
+    log = log or project.build / "setup" / f"{version}.log"
+    options = [] if slots is not None else [f"-j{cores}"]
+    environment = slots.environment if slots is not None else None
+    descriptors = slots.descriptors if slots is not None else ()
+    if not extracted:
+        extract(project, version, cores, log=log, slots=slots)
     failure = None
     try:
         run(

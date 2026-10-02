@@ -23,6 +23,7 @@ class SetupTransactionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=WORK)
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
+        patch.object(setup_proof, "extract").start()
         self.root = Path(self.temporary.name)
         self.project, self.policy = fixture(self.root)
         data = tomllib.loads((self.root / "config.toml").read_text())
@@ -90,6 +91,7 @@ class SetupTransactionTests(unittest.TestCase):
         *,
         log: Path,
         slots: setup_proof.JobSlots | None = None,
+        extracted: bool = False,
     ) -> None:
         generation = project.build / f"{version}.0"
         generation.mkdir(parents=True)
@@ -136,6 +138,18 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
         self.assertFalse(self.project.asm.exists())
         self.assertFalse((self.project.build / "us.1").exists())
+
+    def test_extraction_failure_never_builds_or_publishes(self) -> None:
+        before = setup._inputs(self.project)
+        with (
+            patch.object(setup_proof, "extract", side_effect=config.Held("setup", "setup.sha1.us: extraction failed")),
+            patch.object(setup_proof, "proof") as proof,
+            self.assertRaisesRegex(config.Held, "setup.sha1.us"),
+        ):
+            setup.refresh(self.project, self.settings)
+        proof.assert_not_called()
+        self.assertEqual(setup._inputs(self.project), before)
+        self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
 
     def test_changed_input_during_proof_refuses_publication(self) -> None:
         def proof(*args: object, **kwargs: object) -> None:
@@ -416,6 +430,7 @@ class SetupTransactionTests(unittest.TestCase):
             *,
             log: Path,
             slots: setup_proof.JobSlots | None = None,
+            extracted: bool = False,
         ) -> None:
             if version == "eu":
                 raise config.Held("setup", "setup.sha1.eu: injected second-version failure")
