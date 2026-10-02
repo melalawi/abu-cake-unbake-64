@@ -2,7 +2,6 @@
 
 import hashlib
 import io
-import json
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from unittest.mock import patch
@@ -12,7 +11,7 @@ from tests.match.support import MatchFixture
 from unbake.cli import main
 from unbake.decomp import drafts, fuzzy_bar, trial
 from unbake.decomp.trial_compare import TYPES, Compare, compare_object
-from unbake.layout import name_transaction, rename_map
+from unbake.layout import name_transaction
 from unbake.match import nonmatching, staging
 from unbake.project import build, config
 from unbake.project.config import Held
@@ -25,42 +24,6 @@ def comparison(version="us", exact=9, total=10, **differences):
 
 
 class GateCliTests(MainCase):
-    def test_bulk_rename_preview_is_simultaneous_and_preserves_c_strings(self):
-        symbols = self.project.version("us").symbols
-        symbols.write_text("alpha = 0x80001000;\nbeta = 0x80001010;\n")
-        self.source.write_text('int alpha(void) { /* alpha */ const char *s="alpha"; return beta(); }\n')
-        mapping = self.directory / "names.json"
-        mapping.write_text(json.dumps({"alpha": "beta", "beta": "alpha"}))
-        before = {p: p.read_bytes() for p in (symbols, self.source)}
-        code, out, err = self.run_main(self.args("split", "rename", "--map", str(mapping)))
-        self.assertEqual(code, 0, out + err)
-        self.assertIn("2 simultaneous renames", out)
-        self.assertIn('int beta(void) { /* alpha */ const char *s="alpha"; return alpha(); }', out)
-        self.assertEqual(before, {p: p.read_bytes() for p in before})
-
-    def test_name_conflicts_and_missing_inputs_are_refused_by_name(self):
-        for mapping, reason in (
-            ({"alpha": "beta"}, "split.rename.conflict"),
-            ({"absent": "present"}, "split.rename.missing: absent"),
-            ({"alpha": "gamma", "beta": "gamma"}, "split.rename.conflict: gamma"),
-        ):
-            with self.subTest(mapping=mapping):
-                path = self.directory / "names.json"
-                path.write_text(json.dumps(mapping))
-                code, out, err = self.run_main(self.args("split", "rename", "--map", str(path), "--apply"))
-                self.assertEqual(code, 1, out + err)
-                self.assertIn(reason, out)
-        code, out, err = self.run_main(self.args("split", "rename"))
-        self.assertEqual(code, 1)
-        self.assertIn("split.rename.names", out)
-
-    def test_duplicate_json_keys_are_refused(self):
-        path = self.directory / "names.json"
-        path.write_text('{"alpha":"x","alpha":"y"}')
-        code, out, _ = self.run_main(self.args("split", "rename", "--map", str(path)))
-        self.assertEqual(code, 1)
-        self.assertIn("duplicate source name alpha", out)
-
     def test_try_reports_exact_boundary_and_each_forbidden_difference(self):
         for difference in (None, "immediate", "changed", "inserted", "missing"):
             with self.subTest(difference=difference):
@@ -87,56 +50,6 @@ class GateCliTests(MainCase):
             _, out, _ = self.run_main(self.args("try", str(self.source)))
         self.assertIn("owner fuzzy bar: FAIL", out)
         self.assertIn("below 90%", out)
-
-    def test_equal_address_symbol_alias_is_consolidated(self):
-        for v in self.project.versions:
-            self.project.version(v).symbols.write_text("alpha = 0x80001000;\ncarried = 0x80001000;\n")
-        edits = rename_map.plan(self.project, {"alpha": "carried"})
-        symbol_edits = [e for e in edits if e.path in {self.project.version(v).symbols for v in self.project.versions}]
-        self.assertEqual(len(symbol_edits), 2)
-        for edit in symbol_edits:
-            self.assertEqual(edit.after.count(b"carried ="), 1)
-            self.assertNotIn(b"alpha =", edit.after)
-
-    def test_data_rename_invalidates_receipt_for_changed_calling_source(self):
-        self.source.write_text("extern int D_value; int alpha(void) { return D_value; }\n")
-        for version in self.project.versions:
-            with self.project.version(version).symbols.open("a") as output:
-                output.write("D_value = 0x80002000;\n")
-        path = self.project.build / "types/proven.json"
-        path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"records": {"alpha": {"source": "src/alpha.c"}}}))
-        changes = rename_map.plan(self.project, {"D_value": "carried_value"})
-        record_edit = next(change for change in changes if change.path == path)
-        self.assertEqual(json.loads(record_edit.after)["records"], {})
-        source_edit = next(change for change in changes if change.path == self.source)
-        self.assertIn(b"return carried_value", source_edit.after)
-
-    def test_cross_version_name_collision_refuses_entire_map(self):
-        self.project.version(self.project.versions[-1]).symbols.write_text(
-            "alpha = 0x80001000;\ncarried = 0x80001010;\n"
-        )
-        with self.assertRaisesRegex(Held, "split.rename.conflict.*carried"):
-            rename_map.plan(self.project, {"alpha": "carried"})
-
-    def test_name_changes_invalidate_only_affected_proven_type_receipts(self):
-        path = self.project.build / "types/proven.json"
-        path.parent.mkdir(parents=True)
-        path.write_text(
-            json.dumps(
-                {
-                    "records": {
-                        "alpha": {"source": "src/alpha.c", "source_sha256": "a" * 64},
-                        "beta": {"source": "src/beta.c", "source_sha256": "b" * 64},
-                    }
-                }
-            )
-        )
-        before = path.read_bytes()
-        changes = rename_map.plan(self.project, {"alpha": "carried"})
-        edit = next(change for change in changes if change.path == path)
-        self.assertEqual(set(json.loads(edit.after)["records"]), {"beta"})
-        self.assertEqual(path.read_bytes(), before)
 
 
 class GateAdmissionTests(MatchFixture):

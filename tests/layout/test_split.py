@@ -69,16 +69,6 @@ class ProjectFixture:
         symbols = "".join(f"{Path(name).name} = 0x{vram + start - 0x10:08X};\n" for start, kind, name in rows)
         version.symbols.write_bytes(symbols.replace("\n", newline).encode())
 
-    def matched(self, function: str, versions: Sequence[str]) -> None:
-        path = self.root / "data" / "matched.jsonl"
-        path.parent.mkdir(exist_ok=True)
-        path.write_text(
-            json.dumps(
-                {"function": function, "versions": versions, "sha256": "a" * 64, "at": "2026-01-01T00:00:00+00:00"}
-            )
-            + "\n"
-        )
-
     def generations(self) -> None:
         directory = self.root / "build"
         directory.mkdir()
@@ -181,32 +171,6 @@ class SplitTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "vram"):
             split_edits.cut(self.project, "us", "tiny", 0x14, 0x1C)
 
-    def test_rename_exact_symbol_across_versions_preserves_metadata(self) -> None:
-        version = self.project.version("us")
-        version.symbols.write_text(
-            split.read(version.symbols).replace("alpha = 0x80001000;", "  alpha  = 0x80001000; // type:func size:0x10")
-            + "alpha_extra = 0x80005000;\n"
-        )
-        edits = split_edits.rename(self.project, "alpha", "entry")
-        self.assertEqual(len(edits), 4)
-        self.assertEqual({v for edit in edits for v in edit.versions}, {"us", "eu"})
-        symbol = next(edit for edit in edits if edit.path == version.symbols)
-        self.assertIn("  entry  = 0x80001000; // type:func size:0x10", symbol.after)
-        self.assertIn("alpha_extra =", symbol.after)
-        self.assertIn("alpha =", split.read(self.project.version("eu").symbols))
-
-    def test_rename_symbol_whose_row_has_different_stem(self) -> None:
-        version = self.project.version("us")
-        version.symbols.write_text(split.read(version.symbols).replace("alpha =", "callable ="))
-        edits = split_edits.rename(self.project, "callable", "entry")
-        self.assertEqual(len(edits), 2)
-        self.assertIn("[0x000010, asm, entry]", edits[0].after)
-
-    def test_rename_refuses_missing_or_colliding_name(self) -> None:
-        for old, new in (("alpha", "beta"), ("missing", "entry"), ("alpha", "alpha"), (None, "entry")):
-            with self.subTest(old=old, new=new), self.assertRaises(Held):
-                split_edits.rename(self.project, old, new)
-
     def test_place_is_idempotent_and_rejects_conflict(self) -> None:
         self.assertEqual(split_edits.place(self.project, "us", "alpha", 0x80001000), [])
         with self.assertRaisesRegex(Held, "alpha"):
@@ -218,41 +182,9 @@ class SplitTests(unittest.TestCase):
         edit = split_edits.place(self.project, "us", "extra", 0x80002000)[0]
         self.assertEqual(edit.after, "alpha = 0x80001000;\nextra = 0x80002000;\n")
 
-    def test_twins_rename_equal_words_from_matched_other_version(self) -> None:
-        self.project.layout("us", [(0x10, "c", "alpha"), (0x20, "asm", "beta"), (0x40, "data", "pool")])
-        self.project.layout("eu", [(0x10, "asm", "different"), (0x20, "asm", "beta"), (0x40, "data", "pool")])
-        self.project.matched("alpha", ["us"])
-        edits = split_edits.twins(self.project, "us", "alpha")
-        self.assertEqual(len(edits), 2)
-        self.assertTrue(all(edit.versions == ("eu",) for edit in edits))
-        self.assertIn("[0x000010, asm, alpha]", edits[0].after)
-        self.assertIn("alpha =", edits[1].after)
-
-    def test_twins_requires_matched_c_and_rejects_ambiguous_words(self) -> None:
-        with self.assertRaisesRegex(Held, "not matched"):
-            split_edits.twins(self.project, "us", "alpha")
-        self.project.matched("alpha", ["us"])
-        with self.assertRaisesRegex(Held, "c row"):
-            split_edits.twins(self.project, "us", "alpha")
-        self.project.layout("us", [(0x10, "c", "alpha"), (0x20, "data", "pool")])
-        self.project.layout("eu", [(0x10, "asm", "one"), (0x20, "asm", "two"), (0x30, "data", "pool")])
-        rom = self.project.version("eu").baserom
-        content = bytearray(rom.read_bytes())
-        content[0x20:0x30] = content[0x10:0x20]
-        rom.write_bytes(content)
-        with self.assertRaisesRegex(Held, "ambiguous"):
-            split_edits.twins(self.project, "us", "alpha")
-
-    def test_twins_no_candidate_returns_empty(self) -> None:
-        self.project.layout("us", [(0x10, "c", "alpha"), (0x20, "data", "pool")])
-        self.project.layout("eu", [(0x10, "asm", "other"), (0x20, "data", "pool")])
-        self.project.version("eu").baserom.write_bytes(b"\xff" * 128)
-        self.project.matched("alpha", ["us"])
-        self.assertEqual(split_edits.twins(self.project, "us", "alpha"), [])
-
     def test_apply_builds_every_affected_version_and_publishes_after_success(self) -> None:
         self.project.generations()
-        edits = split_edits.rename(self.project, "alpha", "entry")
+        edits = [edit for v in ("us", "eu") for edit in split_edits.place(self.project, v, "extra", 0x80002000)]
         with fake_build(self.project) as calls:
             results = split_apply.apply(self.project, self.project.policy, edits)
         self.assertEqual(calls, [(["us", "eu"], self.project.root)])
@@ -266,7 +198,7 @@ class SplitTests(unittest.TestCase):
 
     def test_apply_fail_restores_files_and_leaves_build_links(self) -> None:
         self.project.generations()
-        edits = split_edits.rename(self.project, "alpha", "entry")
+        edits = [edit for v in ("us", "eu") for edit in split_edits.place(self.project, v, "extra", 0x80002000)]
         with fake_build(self.project, failing="eu"):
             results = split_apply.apply(self.project, self.project.policy, edits)
         self.assertEqual([result.ok for result in results], [True, False])

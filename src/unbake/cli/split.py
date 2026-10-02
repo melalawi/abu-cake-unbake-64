@@ -34,11 +34,6 @@ def register(phases: Subparsers) -> None:
     classify = split_verbs.add_parser("classify", phase="split", help="Type measured in-text data runs.")
     classify.add_argument("--version", required=True, metavar="V")
     classify.add_argument("--apply", action="store_true")
-    rename = split_verbs.add_parser("rename", phase="split")
-    rename.add_argument("function", nargs="?")
-    rename.add_argument("new_name", nargs="?")
-    rename.add_argument("--map", type=Path, help="JSON old->new names; simultaneous transaction with all-ROM proof.")
-    rename.add_argument("--apply", action="store_true")
     place = split_verbs.add_parser("place", phase="split")
     place.add_argument("function")
     place.add_argument("--version", required=True, metavar="V")
@@ -58,10 +53,6 @@ def register(phases: Subparsers) -> None:
     port.add_argument("--measure", type=Path, metavar="CSV", help="Write candidate inventory without compiling.")
     port.add_argument("--all-identical", action="store_true")
     port.add_argument("--apply", action="store_true", help="Stage rows after target-version object proofs.")
-    twins = split_verbs.add_parser("twins", phase="split")
-    twins.add_argument("function")
-    twins.add_argument("--version", required=True, metavar="V")
-    twins.add_argument("--apply", action="store_true")
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
@@ -74,15 +65,6 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         return receipt(
             "split", symbol_join.run(project, load_policy(args.policy, stage="setup"), args.map, apply=args.apply)
         )
-
-    if args.verb == "rename" and args.map is None and (args.function is None or args.new_name is None):
-        from unbake.project.config import Held
-
-        raise Held("split", "split.rename.names: supply FUNCTION NEW_NAME or --map JSON")
-    if args.verb == "rename":
-        from unbake.cli import gate_split
-
-        return gate_split.run(args, project, policy)
 
     if args.verb == "boundary-map":
         from unbake.layout import boundary_map
@@ -137,10 +119,8 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     elif args.verb in ("cut", "data-cut"):
         operation = split_edits.cut if args.verb == "cut" else split_edits.data_cut
         edits = operation(project, args.version, args.function, args.start, args.end)
-    elif args.verb == "place":
-        edits = split_edits.place(project, args.version, args.function, args.address)
     else:
-        edits = split_edits.twins(project, args.version, args.function)
+        edits = split_edits.place(project, args.version, args.function, args.address)
     preview = split_apply.diff(edits)
     if preview:
         print(preview, end="" if preview.endswith("\n") else "\n")
