@@ -56,7 +56,8 @@ class SetupMemoryTests(unittest.TestCase):
                     )
                     try:
                         while process.poll() is None:
-                            resident = jobs = 0
+                            resident = 0
+                            jobs = set()
                             for path in Path("/proc").glob("[0-9]*/stat"):
                                 try:
                                     fields = path.read_text().rsplit(")", 1)[1].split()
@@ -64,10 +65,11 @@ class SetupMemoryTests(unittest.TestCase):
                                         continue
                                     resident += int(fields[21]) * os.sysconf("SC_PAGE_SIZE")
                                     words = (path.parent / "cmdline").read_bytes().split(b"\0")
-                                    jobs += bool(words[0] == b"make" and b"extract" in words)
+                                    if words[0] == b"make" and (b"extract" in words or b"check" in words):
+                                        jobs.update(word for word in words if word.startswith(b"VERSION="))
                                 except (OSError, ValueError, IndexError):
                                     continue
-                            peak, active = max(peak, resident), max(active, jobs)
+                            peak, active = max(peak, resident), max(active, len(jobs))
                             self.assertLess(resident, 1_000_000_000, "setup exceeded the test's resident memory guard")
                             self.assertLess(time.monotonic() - started, 180, "setup timed out")
                             time.sleep(0.025)
@@ -114,4 +116,4 @@ class SetupMemoryTests(unittest.TestCase):
             # and concurrent extractors from the previous scheduling boundary.
             self.assertLess(samples[-1][1], samples[0][1] + 64 * 1024 * 1024, samples)
             self.assertLess(samples[-1][2], samples[0][2] + 96 * 1024 * 1024, samples)
-            print("setup memory (versions, proposal RSS, confirm RSS, extraction jobs, seconds):", samples)
+            print("setup memory (versions, proposal RSS, confirm RSS, version jobs, seconds):", samples)
