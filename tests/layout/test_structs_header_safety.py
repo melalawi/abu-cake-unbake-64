@@ -48,6 +48,41 @@ class HeaderSafetyTests(unittest.TestCase):
         self.unit = self.project.src / "unrelated.c"
         self.unit.write_text('#include "wrapper.h"\nint unrelated(void) { return external.value; }\n')
 
+    def test_extending_existing_header_with_new_pointer_type_preserves_aliases(self) -> None:
+        import subprocess
+
+        self.header.write_text(
+            "#ifndef STRUCTS_H\n#define STRUCTS_H\n"
+            "struct Node {int value;};\n"
+            "struct Owner {unsigned char pad0[96];struct Node *nodes;};\n#endif\n"
+        )
+        self.unit.write_text('#include "wrapper.h"\nint unrelated(struct Owner *p) {return p->nodes->value;}\n')
+        destination = self.project.include[0] / "shared/slots.h"
+        records = layouts(
+            "typedef struct Slot {char pad0[40];int value;char pad2[4];} Slot;\n"
+            "typedef struct Owner {char pad0[60];int current;Slot *slots;} Owner;\n"
+        )
+        edits = fold(records, self.project, destination=destination)
+        extended = next(edit.after for edit in edits if edit.path == self.header)
+        self.assertIn("struct Slot *slots;", extended)
+        self.assertIn("typedef struct Owner Owner;", extended)
+        for edit in edits:
+            edit.path.parent.mkdir(parents=True, exist_ok=True)
+            edit.path.write_text(edit.after)
+        consumer = self.project.src / "consumer.c"
+        consumer.write_text(
+            '#include "wrapper.h"\n#include "shared/slots.h"\n'
+            "int consumer(Owner *p) {return p->slots[p->current].value;}\n"
+            "typedef char slot_size[(sizeof(Slot)==48)?1:-1];\n"
+        )
+        completed = subprocess.run(
+            ["cc", "-std=c89", "-fsyntax-only", "-I", str(self.project.include[0]), str(consumer)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_missing_m2c_scalar_refuses_fold_without_writing_any_header(self) -> None:
         self.unit.write_text(
             '#ifdef NON_MATCHING\n#include "wrapper.h"\nint unrelated(void) { return external.value; }\n#endif\n'

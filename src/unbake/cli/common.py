@@ -81,7 +81,7 @@ def receipt(phase: str, lines: Iterable[object]) -> bool:
         if line.startswith("HELD:"):
             line = f"HELD({phase}): {line.removeprefix('HELD:').strip()}"
         if line.startswith(("OK(", "HELD(")):
-            print(line)
+            print(line, flush=True)
         else:
             print(f"OK({phase}): {line}")
     if not emitted:

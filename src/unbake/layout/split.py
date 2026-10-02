@@ -326,7 +326,7 @@ def functions(project: Project, v: str) -> list[Function]:
     function_addresses = [value for value, _ in function_symbols]
     result = []
     for segment in segments:
-        for row in segment.rows:
+        for index, row in enumerate(segment.rows):
             if row.kind not in ("asm", "c"):
                 continue
             vram_address = address(row, version.split)
@@ -338,7 +338,7 @@ def functions(project: Project, v: str) -> list[Function]:
                     v,
                     name,
                     row.start,
-                    end(row),
+                    segment.rows[index + 1].start if index + 1 < len(segment.rows) else end(row),
                     vram_address,
                     row.path,
                     row.kind,

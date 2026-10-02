@@ -46,6 +46,10 @@ class Attempt:
     holds: ExitStack = field(default_factory=ExitStack)
     sha1: dict[str, str] = field(default_factory=dict)
 
+    object_inputs: dict[str, dict[str, str]] = field(default_factory=dict)
+    culprits: dict[str, list[str]] = field(default_factory=dict)
+    refused: dict[str, str] = field(default_factory=dict)
+
     def discard(self) -> None:
         self.holds.close()
         shutil.rmtree(self.tree, ignore_errors=True)

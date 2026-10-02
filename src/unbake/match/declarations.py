@@ -69,12 +69,14 @@ def final_source(project: Project, text: str, parsers: list[Parser], edits: list
     return re.sub(r"^[ \t]*/\*\s*NON_MATCHING:\s*draft\b[^\n]*\*/[ \t]*\n?", "", text, flags=re.M)
 
 
-def folded_edits(project: Project, policy: Policy, function: str, text: str, versions: tuple[str, ...]) -> list[Edit]:
+def folded_edits(
+    project: Project, policy: Policy, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
+) -> list[Edit]:
     """Plan aggregate promotion and source removal as one publication unit."""
     parsers = source_views.parsers(project, policy, text, versions)
     records = [record for parser in parsers for record in parser.parse()]
     destination = project.include[0] / "shared" / f"{function.lower()}.h"
-    headers = fold(records, project, destination=destination)
+    headers = fold(records, project, destination=destination, prove_headers=prove_headers)
     final = final_source(project, text, parsers, headers)
     edits = match_edits(project, function, final, versions)
     for version in versions:

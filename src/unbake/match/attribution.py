@@ -1,0 +1,159 @@
+"""Attribute cartridge failures from linked object extents and symbol evidence."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from unbake.layout import split
+from unbake.match.common import Attempt, Draft
+from unbake.project.config import Project
+from unbake.project_tools.elf import Object
+
+_CONTRIBUTION = re.compile(r"^\s+(\.[\w.]+)\s*\n?\s*(0x[\da-fA-F]+)\s+(0x[\da-fA-F]+)\s+(obj/[^\s]+\.o)\s*$", re.M)
+
+
+def material(obj: Object, address: int, size: int) -> bytes | None:
+    for index, section in enumerate(obj.sections):
+        if section[2] & 2 and section[1] != 8 and section[3] <= address < address + size <= section[3] + section[5]:
+            start = address - section[3]
+            return obj.content(index)[start : start + size]
+    return None
+
+
+def diagnose(project: Project, result: Attempt, candidates: list[Draft]) -> dict[str, list[str]]:
+    """Compare every allocated input object and defined symbol, retaining all faults."""
+    names = {draft.function for draft in candidates}
+    faults: dict[str, list[str]] = {}
+
+    def blame(name: str, detail: str) -> None:
+        if name in names:
+            faults.setdefault(name, []).append(detail)
+
+    for version in result.failures:
+        if version not in result.generations:
+            continue
+        generation = result.generations[version]
+        log = (generation / "build.log").read_text(errors="replace")
+        context: list[str] = []
+        for line in log.splitlines():
+            if "in function" in line:
+                context = re.findall(r"obj/src/([^\s/:()]+)\.o", line)
+            if any(word in line for word in ("Error:", "HELD(compile)", "batch objects failed")):
+                for name in re.findall(r"src/([^\s/:()]+)\.c", line):
+                    blame(name, f"{version}: compile diagnostic: {line}")
+            if "submit.reuse_inputs:" in line:
+                for name in re.findall(r"src/([^\s/:()]+)\.c", line):
+                    blame(name, f"{version}: {line}")
+            if any(
+                word in line for word in ("HELD(", "undefined reference", "multiple definition", "overlap", "overflow")
+            ):
+                for name in context + re.findall(r"obj/src/([^\s/:()]+)\.o", line):
+                    blame(name, f"{version}: link diagnostic: {line}")
+                context = []
+        elf_path = generation / f"{project.name}.elf"
+        map_path = generation / f"{project.name}.map"
+        if not elf_path.is_file() or not map_path.is_file():
+            continue
+        elf = Object(elf_path)
+        _, _, segments = split.layout(project.version(version).split)
+        image = project.version(version).baserom.read_bytes()
+
+        def resident(
+            address: int, size: int, spans: list[split.Segment] = segments, rom: bytes = image
+        ) -> bytes | None:
+            for segment in spans:
+                if "vram" in segment.fields and "start" in segment.fields and segment.end is not None:
+                    start = int(segment.fields["start"], 0)
+                    offset = start + address - int(segment.fields["vram"], 0)
+                    if start <= offset < offset + size <= segment.end:
+                        return rom[offset : offset + size]
+            return None
+
+        owners = {Path(row.path).name: row for row in split.functions(project, version)}
+        linked = {symbol["name"]: symbol for table in elf.symbols.values() for symbol in table}
+        _, known = split.symbols(project.version(version).symbols)
+        oversized = set()
+        contributions = _CONTRIBUTION.findall(map_path.read_text())
+        for section, _, size_hex, path in contributions:
+            name = Path(path).stem
+            if path.startswith("obj/src/") and section == ".text" and name in owners:
+                row = owners[name]
+                if int(size_hex, 16) > row.end - row.start:
+                    oversized.add(name)
+                    blame(
+                        name,
+                        f"{version}: object {path}: .text size {int(size_hex, 16)} exceeds target span "
+                        f"{row.end - row.start}",
+                    )
+        for draft in candidates:
+            path = generation / "obj/src" / (draft.function + ".o")
+            if not path.is_file():
+                continue
+            obj = Object(path)
+            for table in obj.symbols.values():
+                for symbol in table:
+                    if symbol["section"] == 0 or symbol["info"] >> 4 == 0:
+                        continue
+                    name = symbol["name"]
+                    if (
+                        name in known
+                        and name in linked
+                        and linked[name]["value"] != known[name][0]
+                        and (not oversized or draft.function in oversized)
+                    ):
+                        blame(
+                            draft.function,
+                            f"{version}: defined symbol {name}: address "
+                            f"0x{linked[name]['value']:08X}, target 0x{known[name][0]:08X}",
+                        )
+        for section, address_hex, size_hex, path in contributions:
+            address, size = int(address_hex, 16), int(size_hex, 16)
+            if not size or not address:
+                continue
+            actual, expected = material(elf, address, size), resident(address, size)
+            if actual is None or expected is None:
+                continue
+            if path.startswith("obj/src/") and (not oversized or Path(path).stem in oversized):
+                obj = Object(generation / path)
+                section_index = obj.section(section)
+                for table in obj.symbols.values():
+                    for symbol in table:
+                        if symbol["section"] != section_index or not symbol["size"]:
+                            continue
+                        at, count = symbol["value"], symbol["size"]
+                        left, right = expected[at : at + count], actual[at : at + count]
+                        if left != right:
+                            blame(
+                                Path(path).stem,
+                                f"{version}: symbol {symbol['name']} in {path}: "
+                                f"expected {left[:16].hex()}, produced {right[:16].hex()}",
+                            )
+            if actual != expected:
+                if oversized and Path(path).stem not in oversized:
+                    continue
+                at = next(i for i, (left, right) in enumerate(zip(expected, actual, strict=True)) if left != right)
+                name = Path(path).stem
+                if path.startswith("obj/src/"):
+                    blame(
+                        name,
+                        f"{version}: object {path} {section}+0x{at:X} at 0x{address + at:08X}: "
+                        f"expected {expected[at : at + 16].hex()}, produced {actual[at : at + 16].hex()}",
+                    )
+        symbols = [symbol for table in elf.symbols.values() for symbol in table]
+        for row in split.functions(project, version):
+            name = Path(row.path).name
+            if name not in names or (oversized and name not in oversized):
+                continue
+            for symbol in symbols:
+                if symbol["name"] != name or symbol["section"] in (0, 0xFFF1):
+                    continue
+                if symbol["value"] != row.address:
+                    blame(
+                        name, f"{version}: symbol {name}: address 0x{symbol['value']:08X}, expected 0x{row.address:08X}"
+                    )
+                actual = material(elf, symbol["value"], row.end - row.start)
+                expected = image[row.start : row.end]
+                if actual is not None and actual != expected:
+                    blame(name, f"{version}: symbol {name}: bytes differ over {len(expected)} target bytes")
+    return faults
