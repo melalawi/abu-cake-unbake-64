@@ -29,6 +29,19 @@ def stream(sink: Callable[[str], object]) -> Iterator[None]:
 
 
 @contextmanager
+def captured() -> Iterator[list[str]]:
+    """Collect learned receipts instead of journaling them, for replay in order."""
+    lines: list[str] = []
+    tokens = _sink.set(lines.append), _report.set(None), _seen.set(None)
+    try:
+        yield lines
+    finally:
+        _seen.reset(tokens[2])
+        _report.reset(tokens[1])
+        _sink.reset(tokens[0])
+
+
+@contextmanager
 def session(project: Project) -> Iterator[None]:
     if _report.get() is not None:
         yield

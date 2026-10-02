@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
@@ -346,12 +346,20 @@ def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
     return parsed("split.aliases", (version.split, version.symbols), build, extra=v)
 
 
-def holding_versions(project: Project, function: str) -> tuple[str, ...]:
-    """Versions whose split has a code row named for function, in project order."""
+def holding_versions(
+    project: Project, function: str, owners: Mapping[str, Mapping[str, list[Function]]] | None = None
+) -> tuple[str, ...]:
+    """Versions whose split has a code row named for function, in project order.
+
+    owners holds owners_by_alias per VERSION when a caller already read it once.
+    """
     versions = tuple(
         v
         for v in project.versions
-        if any(Path(row.path).name == function for row in owners_by_alias(project, v).get(function, ()))
+        if any(
+            Path(row.path).name == function
+            for row in (owners[v] if owners is not None else owners_by_alias(project, v)).get(function, ())
+        )
     )
     if not versions:
         raise Held("match", f"{function}: split row missing in every VERSION")

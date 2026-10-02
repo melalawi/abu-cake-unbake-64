@@ -28,7 +28,16 @@ from unbake.decomp import checks, drafts, symbols_edits, type_context
 from unbake.decomp.needs import Need, SymbolNeed
 from unbake.layout import split, split_apply
 from unbake.layout.header_context import Headers
-from unbake.match import attribution, data_symbols, declarations, incremental, relink, reporting, staging
+from unbake.match import (
+    attribution,
+    batch_fold,
+    data_symbols,
+    forked,
+    incremental,
+    relink,
+    reporting,
+    staging,
+)
 from unbake.match.common import atomic, held
 from unbake.match.publication import collect, swap
 from unbake.project import build, compiler_choice, config, makefile
@@ -68,12 +77,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
     receipts = reporting.Receipts()
     started = staging.fingerprint(project, project.root)
     with reporting.phase("admission", sources=len(sources)):
-        candidates = []
-        for source in sources:
-            try:
-                candidates.append(_admit(project, policy, source))
-            except Held as error:
-                receipts.append(f"HELD(submit): {source.stem}: {error.reason}")
+        candidates = _admission(project, policy, sources, receipts)
     if not candidates:
         return receipts
     project.build.mkdir(parents=True, exist_ok=True)
@@ -153,7 +157,42 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
         shutil.rmtree(workspace, ignore_errors=True)
 
 
-def _admit(project: Project, policy: Policy, source: Path) -> Candidate:
+class _Inputs:
+    """Trial rows and split owners read once for a whole admission."""
+
+    def __init__(self, project: Project, policy: Policy) -> None:
+        # The build lock holds these inputs still; a refusal repeats per source.
+        self.owners: dict[str, Any] | None = None
+        self.trials: dict[str, list[Any]] | None = None
+        try:
+            self.owners = {v: split.owners_by_alias(project, v) for v in project.versions}
+            self.trials = drafts.Store(policy, project).by_function()
+        except Held:
+            pass
+
+
+def _admission(project: Project, policy: Policy, sources: list[Path], receipts: list[str]) -> list[Candidate]:
+    """Admit every source on all cores; candidates and refusals keep source order."""
+    shared = project, policy, _Inputs(project, policy)
+    candidates = []
+    for source, (lines, outcome) in zip(sources, forked.ordered(_admitted, shared, sources, policy.cores), strict=True):
+        for line in lines:
+            reporting.learn(line)
+        if isinstance(outcome, str):
+            receipts.append(f"HELD(submit): {source.stem}: {outcome}")
+        else:
+            candidates.append(outcome)
+    return candidates
+
+
+def _admitted(shared: tuple[Project, Policy, _Inputs], source: Path) -> Candidate | str:
+    try:
+        return _admit(*shared, source)
+    except Held as error:
+        return error.reason
+
+
+def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> Candidate:
     function = source.stem
     if source.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", function):
         held(f"submit.source: {source} must be named <function>.c")
@@ -162,12 +201,15 @@ def _admit(project: Project, policy: Policy, source: Path) -> Candidate:
         text = content.decode("utf-8")
     except (OSError, UnicodeError) as error:
         held(f"submit.source: {source}: {error}")
-    versions = split.holding_versions(project, function)
+    versions = split.holding_versions(project, function, inputs.owners)
     blockers = [f for f in checks.run(text) if f.fakematch is None and f.rule not in FOLDED_RULES]
     if blockers:
         held("submit.source_rules: " + "; ".join(checks.message(finding) for finding in blockers))
     sha = drafts.source_identity(content)
-    rows = [row for row in drafts.Store(policy, project).rows(function) if row["source_sha256"] == sha]
+    trials = (
+        inputs.trials.get(function, []) if inputs.trials is not None else drafts.Store(policy, project).rows(function)
+    )
+    rows = [row for row in trials if row["source_sha256"] == sha]
     latest = rows[-1] if rows else None
     destination = project.src / f"{function}.c"
     published = destination.is_file() and not drafts.is_partial(destination.read_text())
@@ -199,47 +241,14 @@ def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts
     """Fold every source against one context; a refused source leaves the context unchanged."""
     headers = Headers.read(staged)
     base = dict(headers.texts)
-    accepted = []
-    for candidate in candidates:
-        try:
-            # Headers a trial staged in its overlay become part of this source's context.
-            from unbake.decomp import work
-
-            overlay = candidate.source.parent / "overlay"
-            staged_headers = [
-                split.Edit(
-                    staged.root / relative,
-                    headers.texts.get(staged.root / relative, ""),
-                    (overlay / relative).read_text(),
-                    tuple(staged.versions),
-                )
-                for relative in sorted(work.overlay_data(staged, candidate.source)["edits"])
-            ]
-            if staged_headers:
-                headers.apply(staged_headers)
-            folded = declarations.fold_source(
-                staged,
-                policy,
-                headers,
-                candidate.function,
-                candidate.content.decode("utf-8"),
-                candidate.versions,
-                prove_headers=False,
-            )
-            blockers = [f for f in checks.run(folded.source) if f.fakematch is None]
-            if blockers:
-                held("submit.source_rules: " + "; ".join(checks.message(finding) for finding in blockers))
-            headers.apply(folded.headers)
-        except Held as error:
-            receipts.append(f"HELD(submit): {candidate.function}: submit.fold: {error.reason}")
-            continue
+    folds = batch_fold.fold(staged, policy, headers, candidates, receipts)
+    for candidate, folded in folds:
         candidate.final = folded.source
         candidate.removed_rows = folded.removed_rows
-        accepted.append(candidate)
     for path, text in headers.texts.items():
         if base.get(path) != text:
             split_apply.write(path, text)
-    return accepted
+    return [candidate for candidate, _ in folds]
 
 
 def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> None:

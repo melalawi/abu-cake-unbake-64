@@ -179,6 +179,13 @@ class Store:
         function = _function(function)
         return [row for row in self.history() if row["function"] == function]
 
+    def by_function(self) -> dict[str, list[TrialRecord]]:
+        """Every trial record grouped by function, each group in append order."""
+        groups: dict[str, list[TrialRecord]] = {}
+        for row in self.history():
+            groups.setdefault(row["function"], []).append(row)
+        return groups
+
     def history(self) -> list[TrialRecord]:
         """Read every validated trial record in append order."""
         from unbake.project.cache import parsed
