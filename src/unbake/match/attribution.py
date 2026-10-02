@@ -12,6 +12,11 @@ from unbake.project_tools.elf import Object
 _CONTRIBUTION = re.compile(r"^\s+(\.[\w.]+)\s*\n?\s*(0x[\da-fA-F]+)\s+(0x[\da-fA-F]+)\s+(obj/[^\s]+\.o)\s*$", re.M)
 
 
+def _local(line: str) -> str:
+    """Drop directory prefixes so a compiler diagnostic keeps its message, not its paths."""
+    return re.sub(r"(?<![\w.])/?(?:[^\s/:]+/)+", "", line.strip())
+
+
 def material(obj: Object, address: int, size: int) -> bytes | None:
     for index, section in enumerate(obj.sections):
         if section[2] & 2 and section[1] != 8 and section[3] <= address < address + size <= section[3] + section[5]:
@@ -61,12 +66,20 @@ def diagnose(
         generation = generations[version]
         log = (generation / "build.log").read_text(errors="replace")
         context: list[str] = []
+        # A batch compile reports each failed source on one line; the compiler's
+        # own diagnostic lines follow it until the next source or driver line.
+        compiled: dict[str, list[str]] = {}
+        current: list[str] | None = None
         for line in log.splitlines():
-            # A batch compile reports each failed source on its own line.
             failed = re.match(r"^(?:\S*/)?src/([A-Za-z_]\w*)\.c: (.*)$", line)
             if failed:
-                blame(failed[1], f"{version}: compile diagnostic: {failed[2][:400]}")
+                current = compiled.setdefault(failed[1], [_local(failed[2])])
                 continue
+            if current is not None and not re.match(r"^(make|python3|HELD|OK|\S+\.py)\b", line):
+                if re.search(r"(?i)\berror\b|:\d+:", line):
+                    current.append(_local(line))
+                continue
+            current = None
             if "in function" in line:
                 context = re.findall(r"obj/src/([^\s/:()]+)\.o", line)
             if any(word in line for word in ("Error:", "HELD(compile)", "batch objects failed")):
@@ -81,6 +94,8 @@ def diagnose(
                 for name in context + re.findall(r"obj/src/([^\s/:()]+)\.o", line):
                     blame(name, f"{version}: link diagnostic: {line}")
                 context = []
+        for name, lines in compiled.items():
+            blame(name, f"{version}: compile diagnostic: {'; '.join(lines)[:600]}")
         elf_path = generation / f"{project.name}.elf"
         map_path = generation / f"{project.name}.map"
         if not elf_path.is_file() or not map_path.is_file():

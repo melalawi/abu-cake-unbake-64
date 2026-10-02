@@ -3,12 +3,55 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any
 
 from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
 
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
+
+
+def _gnu_blank(view: str, blank: Any) -> str:
+    """Blank GNU extensions pycparser rejects, keeping every offset: attributes,
+    label addresses (&&label) and computed gotos (goto *expr)."""
+    result, at = [], 0
+    for match in re.finditer(r"\b__attribute__\s*\(", view):
+        if match.start() < at:
+            continue
+        depth, end = 0, match.end() - 1
+        while end < len(view):
+            depth += {"(": 1, ")": -1}.get(view[end], 0)
+            end += 1
+            if depth == 0:
+                break
+        result.append(view[at : match.start()] + blank(re.match(r"(?s).*", view[match.start() : end])))
+        at = end
+    view = "".join(result) + view[at:]
+    view = re.sub(r"([{,(=]\s*)&&(?=\s*[A-Za-z_])", r"\1 &", view)
+    return re.sub(r"\bgoto\s*\*", blank, view)
+
+
+@lru_cache(maxsize=8)
+def _context(prefix: str) -> tuple[list[Any], dict[str, bool]]:
+    """Parse the shared typed headers once; sources reuse their declarations and typedef scope."""
+    parser = c_parser.CParser()
+    tree = parser.parse(prefix)
+    return list(tree.ext), dict(parser._scope_stack[0])
+
+
+def _parse(prefix: str, view: str) -> c_ast.FileAST:
+    """Parse VIEW after PREFIX with source coordinates as if both were one text."""
+    declarations, scope = _context(prefix)
+    parser = c_parser.CParser()
+    parser._scope_stack = [dict(scope)]
+    parser.clex.input("\n" * prefix.count("\n") + view, "")
+    parser._tokens = c_parser._TokenStream(parser.clex)
+    tree = parser._parse_translation_unit_or_empty()
+    token = parser._peek()
+    if token is not None:
+        parser._parse_error(f"before: {token.value}", parser._tok_coord(token))
+    return c_ast.FileAST([*declarations, *tree.ext])
 
 
 def edits(
@@ -36,9 +79,10 @@ def edits(
         flags=re.S,
     )
     view = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", blank, view, flags=re.M)
+    view = _gnu_blank(view, blank)
     prefix = context.rstrip() + "\n"
     try:
-        tree = c_parser.CParser().parse(prefix + view)
+        tree = _parse(prefix, view)
     except c_parser.ParseError as error:
         held("source types", f"cannot rewrite resolved layouts: {error}")
     first_line = prefix.count("\n") + 1
@@ -151,6 +195,16 @@ def edits(
             aliases[node.name] = node.type
             if node.name in resolution:
                 replace(node, node.name, resolution[node.name][0])
+                # An anonymous aggregate is recorded under its typedef name.
+                inner = node.type.type if isinstance(node.type, c_ast.TypeDecl) else None
+                if (
+                    isinstance(inner, (c_ast.Struct, c_ast.Union))
+                    and not inner.name
+                    and inner.decls
+                    and node.name in records
+                    and position(node) is not None
+                ):
+                    field_names(inner, records[node.name].fields, resolution[node.name][1].fields)
             self.generic_visit(node)
 
         def visit_IdentifierType(self, node: Any) -> None:

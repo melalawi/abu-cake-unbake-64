@@ -4,7 +4,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
@@ -25,17 +25,24 @@ _OUTPUTS = frozenset({".git", "artifacts", ".unbake", ".splat", ".mypy_cache", "
 
 def project_input(project: Project, path: Path) -> bool:
     """Classify a project-relative path for both staging and publication checks."""
-    return (
-        bool(path.parts)
-        and path.parts[0] not in _OUTPUTS
-        and not any(
-            path.is_relative_to(root.relative_to(project.root))
-            for root in (project.build, project.work, project.drafts)
+    return _classifier(project)(path.parts)
+
+
+def _classifier(project: Project) -> Callable[[tuple[str, ...]], bool]:
+    """Return a parts predicate with the project's output roots resolved once."""
+    outputs = tuple(root.relative_to(project.root).parts for root in (project.build, project.work, project.drafts))
+
+    def accept(parts: tuple[str, ...]) -> bool:
+        return (
+            bool(parts)
+            and parts[0] not in _OUTPUTS
+            and not any(parts[: len(root)] == root for root in outputs)
+            and not any(part in {"__pycache__", ".venv", "venv"} for part in parts)
+            and parts[-1] != "clone-policy.toml"
+            and not parts[-1].endswith((".pyc", ".pyo"))
         )
-        and not any(part in {"__pycache__", ".venv", "venv"} for part in path.parts)
-        and path.name != "clone-policy.toml"
-        and path.suffix not in {".pyc", ".pyo"}
-    )
+
+    return accept
 
 
 def compare_failure(project: Project, version: str, result: build.BuildResult) -> str:
@@ -96,17 +103,19 @@ def fingerprint(project: Project, root: Path) -> dict[str, str]:
     Writers replace files atomically or rewrite them; either changes the signature.
     """
     result = {}
+    accept = _classifier(project)
+    base = len(str(root).rstrip(os.sep)) + 1
     for directory, names, files in os.walk(root, followlinks=True):
-        parent = Path(directory).relative_to(root)
-        names[:] = [name for name in names if project_input(project, parent / name)]
+        parent = tuple(Path(directory[base:]).parts) if len(directory) >= base else ()
+        names[:] = [name for name in names if accept((*parent, name))]
         for name in files:
-            path = Path(directory) / name
-            if project_input(project, path.relative_to(root)):
+            if accept((*parent, name)):
+                path = os.path.join(directory, name)
                 try:
-                    stat = path.stat()
+                    stat = os.stat(path)
                 except OSError as error:
                     held(f"{path}: {error}")
-                result[str(path.relative_to(root))] = f"{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}"
+                result[path[base:]] = f"{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}"
     return result
 
 

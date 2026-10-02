@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
@@ -277,6 +277,33 @@ def _order_header(text: str, headers: Headers, before: str = "") -> str:
     return text
 
 
+def _definition_order(records: Iterable[Layout]) -> list[Layout]:
+    """Name order, except a by-value member's aggregate is defined before its user."""
+    pending = sorted(records, key=lambda item: item.name)
+    names = {record.name for record in pending}
+
+    def needs(record: Layout) -> set[str]:
+        found: set[str] = set()
+        stack = list(record.fields)
+        while stack:
+            field = stack.pop()
+            stack.extend(field.fields)
+            for name in names - {record.name}:
+                if re.search(rf"\b{re.escape(name)}\b(?!\s*\*)", field.type):
+                    found.add(name)
+        return found
+
+    wanted = {record.name: needs(record) for record in pending}
+    ordered: list[Layout] = []
+    done: set[str] = set()
+    while pending:
+        ready = next((record for record in pending if wanted[record.name] <= done), pending[0])
+        pending.remove(ready)
+        ordered.append(ready)
+        done.add(ready.name)
+    return ordered
+
+
 def fold(
     records: list[Layout],
     headers: Any,
@@ -545,8 +572,7 @@ def fold(
             for record in sorted(additions.values(), key=lambda item: item.name)
         )
         new_declarations = "\n".join(
-            shared.declaration(replace(record, aliases=()))
-            for record in sorted(additions.values(), key=lambda item: item.name)
+            shared.declaration(replace(record, aliases=())) for record in _definition_order(additions.values())
         )
         existing_edit = next((edit for edit in edits if edit.path == path), None)
         if existing_edit is not None:
