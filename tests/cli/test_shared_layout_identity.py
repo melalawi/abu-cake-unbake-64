@@ -28,11 +28,11 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
             )
             self.cli("try", source)
         output = self.cli("submit", "--batch", *self.sources)
-        self.assertIn("rename Owner -> Shape_", output)
-        self.assertIn("rename Other -> Shape_", output)
+        self.assertIn("rename Owner -> Owner_", output)
+        self.assertIn("rename Other -> Owner_", output)
         headers = sorted((self.root / "include/shared").glob("*.h"))
         records = [record for path in headers for record in Parser(path.read_text()).parse() if record.fields]
-        owners = [record for record in records if record.name == "Owner" or record.name.startswith("Shape_")]
+        owners = [record for record in records if record.name == "Owner" or record.name.startswith("Owner_")]
         self.assertEqual(len(owners), 2)
         renamed = next(record.name for record in owners if record.name != "Owner")
         published = [(self.project.src / source.name).read_text() for source in self.sources]
@@ -87,8 +87,8 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
             "typedef struct Owner {short value;} Owner;\nint alpha(void) {return sizeof(Owner) / sizeof(Owner);}\n"
         )
         output = self.cli("decomp", "cleanup", source)
-        self.assertIn("rename Owner -> Shape_", output)
-        self.assertIn("sizeof(Shape_", source.read_text())
+        self.assertIn("rename Owner -> Owner_", output)
+        self.assertIn("sizeof(Owner_", source.read_text())
         self.assertNotIn("typedef", source.read_text())
         self.assertEqual(shared.read_bytes(), before)
         generated = self.project.include[0] / "shared/alpha.h"
