@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-import unbake.match.queue as match
+from unbake.layout import split as layout_split
 
 import unbake.decomp.drafts as drafts
 import unbake.decomp.needs as needs
@@ -214,7 +214,7 @@ class MatchFixture(unittest.TestCase):
         versions: Iterable[str] | None = None,
         pending: list[needs.Need] | None = None,
     ) -> None:
-        selected = match.holding_versions(self.project, source.stem) if versions is None else tuple(versions)
+        selected = layout_split.holding_versions(self.project, source.stem) if versions is None else tuple(versions)
         from unbake.layout import split
 
         for version in selected:
@@ -251,14 +251,6 @@ class MatchFixture(unittest.TestCase):
     def remove_proofs(self, function: str) -> None:
         rows = [row for row in self.store.history() if row["function"] != function]
         (self.store.root / "trials.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-
-    def queue(self, *functions: str) -> None:
-        for function in functions:
-            match.submit(self.project, self.policy, self.draft(function))
-
-    def queued(self) -> list[dict[str, Any]]:
-        path = self.root / ".unbake" / "state" / "match-queue.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def matched(self) -> list[dict[str, Any]]:
         path = self.policy.state_root / self.project.id / self.project.workspace_id / "receipts" / "match.jsonl"

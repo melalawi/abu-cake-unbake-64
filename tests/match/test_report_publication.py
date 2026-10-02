@@ -74,7 +74,6 @@ class ReportPublicationTests(MatchFixture):
                     self.assertEqual({path: path.read_bytes() if path.exists() else None for path in paths}, before)
                 else:
                     self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
-                    self.assertEqual(self.queued(), [])
                     self.assertEqual(len(self.matched()), 1)
                     for path in paths[1:]:
                         self.assertIn(b'"complete_units": 1', path.read_bytes())

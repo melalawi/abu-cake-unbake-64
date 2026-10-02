@@ -24,7 +24,6 @@ class MatchFixTests(MatchFixture):
         before = source.read_bytes()
         with self.assertRaises(Held):
             match.submit(self.project, self.policy, source)
-        self.assertEqual(self.queued(), [])
         self.assertEqual(source.read_bytes(), before)
 
     def test_submit_uses_selected_trial_policy_even_when_clone_policy_exists(self) -> None:
@@ -41,7 +40,6 @@ class MatchFixTests(MatchFixture):
             with self.assertRaisesRegex(Held, "trial.source_sha256"):
                 match.submit(self.project, self.policy, source)
             tried.assert_not_called()
-        self.assertEqual(self.queued(), [])
 
     def test_one_version_lands_all_matching_partials_and_keeps_nonmatches(self) -> None:
         for name, identical in (("alpha", True), ("beta", True), ("gamma", False)):
@@ -56,7 +54,6 @@ class MatchFixTests(MatchFixture):
         self.assertIn("#ifdef NON_MATCHING", (self.src / "gamma.c").read_text())
         self.assertNotEqual(self.current(self.project, "eu"), self.original["eu"])
         self.assertIn(", c, ", self.project.version("eu").split.read_text())
-        self.assertEqual(self.queued(), [])
 
     def test_queue_lock_lives_with_queue_and_is_shared_by_queue_operations(self) -> None:
         source = self.draft("alpha")

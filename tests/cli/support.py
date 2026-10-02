@@ -49,7 +49,6 @@ class MainCase(unittest.TestCase):
                         "setup": "unbake.project.setup",
                         "init": "unbake.project.init",
                         "split": "unbake.layout.split",
-                        "match": "unbake.match.queue",
                         "report": "unbake.report.progress",
                     }.get(name, f"unbake.decomp.{name}")
                 )

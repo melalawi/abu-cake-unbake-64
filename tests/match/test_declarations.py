@@ -126,7 +126,6 @@ class DeclarationTests(MatchFixture):
             self.assertRaisesRegex(Held, "folded source compile failed.*VERSION us"),
         ):
             match.submit(self.project, self.policy, invalid)
-        self.assertEqual(self.queued(), [])
 
     def test_folded_scalar_typedefs_use_project_home_or_refuse_by_name(self) -> None:
         header = self.root / "include" / "basetypes.h"
@@ -326,7 +325,6 @@ class DeclarationTests(MatchFixture):
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any("alpha matched" in line for line in receipts), receipts)
         self.assertEqual(self.matched()[0]["sha256"], digest)
-        self.assertEqual(self.queued(), [])
 
     def test_landing_removes_draft_marker_and_preserves_other_comments(self) -> None:
         text = (

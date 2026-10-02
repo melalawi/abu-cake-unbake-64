@@ -270,8 +270,6 @@ class GateBatchTests(MatchFixture):
         from unbake.decomp import type_context
 
         alpha, beta = self.draft("alpha"), self.draft("beta")
-        # A separately queued source must not be published by this request.
-        self.queue("gamma")
         self.prove(alpha)
         self.prove(beta)
         with (
@@ -284,33 +282,32 @@ class GateBatchTests(MatchFixture):
         self.assertEqual(self.calls, [("alpha", "beta")])
         feedback.assert_called_once()
         self.assertEqual({entry[0] for entry in feedback.call_args.args[1]}, {"alpha", "beta"})
-        self.assertEqual([row["function"] for row in self.queued()], ["gamma"])
 
     def test_batch_refuses_changed_source_by_name_and_still_proves_other_source(self):
-        from unbake.match import queue
+        from unbake.match import batch
 
         alpha, beta = self.draft("alpha"), self.draft("beta")
         beta.write_text("int beta(void) { return 2; }\n")
-        lines = queue.publish_sources(self.project, self.policy, [alpha, beta])
+        lines = batch.publish(self.project, self.policy, [alpha, beta])
         self.assertTrue(any(line.startswith("HELD(submit): beta:") and "source_sha256" in line for line in lines))
         self.assertTrue(any("alpha matched on VERSION" in line for line in lines))
         self.assertTrue((self.src / "alpha.c").exists())
         self.assertFalse((self.src / "beta.c").exists())
 
     def test_batch_isolates_shared_header_conflict_before_build(self):
-        from unbake.match import queue
+        from unbake.match import batch
 
         sources = [self.draft(name) for name in ("alpha", "beta", "gamma")]
-        actual = staging.declarations.folded_edits
+        actual = batch.declarations.fold_source
 
-        def conflict(project, policy, function, content, versions):
-            if function == "beta" and (project.src / "alpha.c").exists():
+        def conflict(project, policy, headers, function, *args, **kwargs):
+            if function == "beta":
                 raise Held("structs", "struct L: duplicate definition")
-            return actual(project, policy, function, content, versions)
+            return actual(project, policy, headers, function, *args, **kwargs)
 
-        with patch.object(staging.declarations, "folded_edits", side_effect=conflict):
-            lines = queue.publish_sources(self.project, self.policy, sources)
-        self.assertTrue(any("HELD(match): beta:" in line and "struct L" in line for line in lines))
+        with patch.object(batch.declarations, "fold_source", side_effect=conflict):
+            lines = batch.publish(self.project, self.policy, sources)
+        self.assertTrue(any("HELD(submit): beta:" in line and "struct L" in line for line in lines))
         self.assertTrue(any("alpha matched on VERSION" in line for line in lines))
         self.assertTrue(any("gamma matched on VERSION" in line for line in lines))
         self.assertFalse((self.src / "beta.c").exists())
