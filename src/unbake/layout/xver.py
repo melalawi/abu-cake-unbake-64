@@ -98,34 +98,81 @@ def body(data: bytes, start: int, end: int, function: str) -> list[int]:
 
 
 def _masks(words: list[int]) -> list[int]:
+    """Mask paired N64 address halves, retaining provenance through indexing.
+
+    Unresolved high halves flow through addu indexing. Completed addiu/ori
+    addresses consume their high half; later arithmetic immediates are offsets,
+    never relocations. Integer/float constants outside the direct-mapped
+    address range stay fixed, as do unpaired high halves.
+    """
     masks = [0x03FFFFFF if word >> 26 in (2, 3) else 0 for word in words]
-    pending = {}
-    low_ops = {9, 13, 32, 33, 35, 36, 37, 40, 41, 43, 49, 53, 57, 61}
+    # Register -> (lui index, low-half index or None, indexed).
+    pending: dict[int, tuple[int, int | None, bool]] = {}
+    memory_ops = {32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 48, 49, 52, 53, 55, 56, 57, 60, 61, 63}
     for index, word in enumerate(words):
-        op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
+        op, rs, rt, rd = word >> 26, word >> 21 & 31, word >> 16 & 31, word >> 11 & 31
         if op == 15 and rt:
-            pending[rt] = index
+            pending.pop(rt, None)
+            if 0x8000 <= word & 0xFFFF <= 0xC000:
+                pending[rt] = (index, None, False)
             continue
-        if op in low_ops and rs in pending:
-            masks[pending[rs]] = 0xFFFF
-            masks[index] = 0xFFFF
-        # Stop following an address register after an instruction overwrites it.
+        source = pending.get(rs)
+        if source is not None and (op in memory_ops or (op == 0 and word & 63 in (8, 9))):
+            high_index, low_index, _ = source
+            if low_index is not None:
+                masks[high_index] = masks[low_index] = 0xFFFF
+            elif op in memory_ops:
+                high = words[high_index] << 16 & 0xFFFFFFFF
+                low = word & 0xFFFF
+                address = (high + (low & 0x7FFF) - (low & 0x8000)) & 0xFFFFFFFF
+                if 0x80000000 <= address < 0xC0000000:
+                    masks[high_index] = masks[index] = 0xFFFF
+        if op in (9, 13):
+            pending.pop(rt, None)
+            if rt and source is not None:
+                high_index, low_index, indexed = source
+                # An immediate added to a dynamic index is not proved to be
+                # the symbol's low half. Leave that arithmetic significant.
+                if low_index is None and not indexed:
+                    high = words[high_index] << 16 & 0xFFFFFFFF
+                    low = word & 0xFFFF
+                    address = high | low if op == 13 else (high + (low & 0x7FFF) - (low & 0x8000)) & 0xFFFFFFFF
+                    if 0x80000000 <= address < 0xC0000000:
+                        masks[high_index] = masks[index] = 0xFFFF
+                        pending[rt] = (high_index, index, False)
+                elif low_index is not None and op == 9:
+                    pending[rt] = source
+            continue
+        if op == 0 and word & 63 == 33:
+            sources = [pending[r] for r in (rs, rt) if r in pending]
+            pending.pop(rd, None)
+            if rd and len(sources) == 1:
+                high_index, low_index, _ = sources[0]
+                pending[rd] = (high_index, low_index, True)
+            continue
+        # Stores and floating-point loads do not overwrite their GPR base.
         destination = (
-            word >> 11 & 31 if op == 0 else rt if op in {8, 9, 10, 11, 12, 13, 14, 32, 33, 35, 36, 37} else None
+            rd
+            if op == 0
+            else 31
+            if op == 3
+            else rt
+            if op in {8, 10, 11, 12, 14, 24, 25, 26, 27, 32, 33, 34, 35, 36, 37, 38, 39, 48, 52, 55, 56, 60}
+            or (op in (16, 17, 18) and rs in (0, 1, 2))
+            else None
         )
-        if destination is not None and destination in pending:
-            del pending[destination]
+        if destination is not None:
+            pending.pop(destination, None)
     return masks
 
 
 def _equal(words: list[int], masks: list[int], data: bytes, start: int) -> bool:
     if start % 4 or start < 0 or start + len(words) * 4 > len(data):
         return False
-    return all(
+    actual_words = list(struct.unpack(f">{len(words)}I", data[start : start + len(words) * 4]))
+    return _masks(actual_words) == masks and all(
         (actual ^ wanted) & (~mask & 0xFFFFFFFF) == 0
-        for wanted, mask, (actual,) in zip(
-            words, masks, struct.iter_unpack(">I", data[start : start + len(words) * 4]), strict=False
-        )
+        for wanted, mask, actual in zip(words, masks, actual_words, strict=True)
     )
 
 

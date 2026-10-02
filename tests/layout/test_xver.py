@@ -180,3 +180,49 @@ class PlacementTests(unittest.TestCase):
                 alignment_rows(text)
         with self.assertRaisesRegex(ValueError, "entry"):
             render_alignment("", {"entry": 16})
+
+    def test_indexed_high_half_flows_through_either_source_and_another_destination(self) -> None:
+        for arithmetic in (0x00220821, 0x00410821, 0x00221821, 0x00411821):
+            with self.subTest(arithmetic=arithmetic):
+                base = (arithmetic >> 11 & 31) << 21
+                code = [0x3C018001, arithmetic, 0x8C020100 | base, 0x03E00008, 0]
+                self.assertEqual(xver._masks(code), [0xFFFF, 0, 0xFFFF, 0, 0])
+                self.prepare(body=struct.pack(">5I", *code))
+                code[0] = 0x3C018002
+                code[2] += 0x100
+                self.project.image("eu-x", [(0x40, struct.pack(">5I", *code))])
+                self.assertIsNotNone(xver.locate(self.project, "entry")["eu-x"])
+                code[1] ^= 0x00200000
+                self.project.image("eu-x", [(0x40, struct.pack(">5I", *code))])
+                self.assertIsNone(xver.locate(self.project, "entry")["eu-x"])
+
+    def test_masks_preserve_nonaddress_immediates_and_stop_at_overwrites(self) -> None:
+        for code in (
+            [0x3C013F80, 0x34211234],  # Float/integer constant.
+            [0x3C010002, 0x24210001],  # Ordinary integer materialization.
+            [0x3C018001, 0x24010004, 0x8C220100],  # Base overwritten by a constant.
+            [0x3C018001, 0x8C810000, 0x8C220100],  # Base overwritten by a load.
+            [0x3C018001, 0x00430821, 0x8C220100],  # Unrelated address arithmetic.
+            [0x3C018001, 0x3C028002, 0x00220821, 0x8C220100],  # Two address bases.
+            [0x3C018001, 0x48210000, 0x8C220100],  # Coprocessor overwrites GPR.
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(xver._masks(code), [0] * len(code))
+        code = [0x3C018001, 0x24210100, 0x24210004, 0x8C220000]
+        self.assertEqual(xver._masks(code), [0xFFFF, 0xFFFF, 0, 0])
+        # Materializing into another register does not destroy the original hi.
+        code = [0x3C018001, 0x24230100, 0x8C220104]
+        self.assertEqual(xver._masks(code), [0xFFFF, 0xFFFF, 0xFFFF])
+
+    def test_index_arithmetic_immediates_are_not_low_half_relocations(self) -> None:
+        code = [0x3C018001, 0x00220821, 0x24210004, 0x8C220100]
+        self.assertEqual(xver._masks(code), [0, 0, 0, 0])
+        code = [0x3C018001, 0x00220821, 0x34210004, 0x8C220100]
+        self.assertEqual(xver._masks(code), [0, 0, 0, 0])
+
+    def test_location_requires_address_provenance_in_the_target_too(self) -> None:
+        code = [0x3C018001, 0x8C220000, 0x03E00008, 0]
+        self.prepare(body=struct.pack(">4I", *code))
+        code[0] = 0x3C010000
+        self.project.image("eu-x", [(0x40, struct.pack(">4I", *code))])
+        self.assertIsNone(xver.locate(self.project, "entry")["eu-x"])
