@@ -244,6 +244,20 @@ class GateTransactionTests(MatchFixture):
         for version in self.versions:
             self.assertNotEqual(build.current_generation(self.project, version), self.original[version])
 
+    def test_proof_generated_assembly_paths_publish_with_the_generation(self):
+        generated = self.project.asm / "us/data/rodata/carried/constant.s"
+
+        def extract(*args, **kwargs):
+            tree = kwargs["tree"]
+            path = tree / generated.relative_to(self.root)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b".word 0\n")
+            return self.compiler(*args, **kwargs)
+
+        with patch.object(build, "build", side_effect=extract):
+            name_transaction.apply(self.project, self.policy, [self.change])
+        self.assertEqual(generated.read_bytes(), b".word 0\n")
+
     def test_false_rom_proof_publishes_no_file_or_generation(self):
         def wrong(*args, **kwargs):
             results = self.compiler(*args, **kwargs)

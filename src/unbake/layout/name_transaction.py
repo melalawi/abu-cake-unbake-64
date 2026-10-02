@@ -88,6 +88,15 @@ def apply(
                     detail = (
                         "missing build result" if result is None else staging.compare_failure(staged, version, result)
                     )
+                    if result is not None and result.log.is_file():
+                        diagnostics = [
+                            line
+                            for line in result.log.read_text().splitlines()
+                            if "HELD(" in line
+                            or ": error:" in line
+                            or line.startswith(("Traceback", "FileNotFoundError", "RuntimeError", "ValueError"))
+                        ]
+                        detail += "; " + "; ".join(diagnostics[:8])
                     raise Held("split", f"split.rename.sha1.{version}: {detail}")
                 rom = result.generation / f"{project.name}.{version}.z64"
                 digest = hashlib.sha1(rom.read_bytes()).hexdigest()
@@ -97,6 +106,17 @@ def apply(
                         f"split.rename.sha1.{version}: expected {project.version(version).baserom_sha1}, got {digest}",
                     )
                 ordered.append(result)
+            # Extraction may materialize renamed asm/rodata paths in the proof
+            # tree. The published generation must keep those exact inputs.
+            changed_paths = {change.path for change in all_changes}
+            for path in sorted(staged.asm.rglob("*")):
+                if not path.is_file():
+                    continue
+                destination = project.root / path.relative_to(tree)
+                before = destination.read_bytes() if destination.exists() else None
+                after = path.read_bytes()
+                if before != after and destination not in changed_paths:
+                    all_changes.append(Change(destination, before, after))
             with build.lock(project):
                 if staging.fingerprint(project, project.root) != fingerprint:
                     raise Held("split", "split.rename.stale: project inputs changed during proof")
