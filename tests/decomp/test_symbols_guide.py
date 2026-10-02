@@ -65,6 +65,7 @@ class SymbolTests(unittest.TestCase):
         self.family = family_for("ido-7.1")
         root = Path(tempfile.gettempdir())
         self.policy = Policy(
+            setup_version_jobs=1,
             cores=1,
             stall_trials=1,
             search_beam=1,

@@ -62,6 +62,20 @@ class RomTests(unittest.TestCase):
                     ("Example Game", "EX", 0x1444),
                 )
 
+    def test_nonresident_input_reads_normalized_bytes_and_refuses_later_changes(self) -> None:
+        normal = cartridge()
+        path = self.root / "swapped.v64"
+        path.write_bytes(b"".join(normal[index : index + 2][::-1] for index in range(0, len(normal), 2)))
+        loaded = rom.load(path, retain_data=False)
+        self.assertIsNone(loaded.data)
+        self.assertEqual(loaded.image(), normal)
+        self.assertIsNone(loaded.data)
+        altered = bytearray(path.read_bytes())
+        altered[-1] ^= 1
+        path.write_bytes(altered)
+        with self.assertRaisesRegex(Held, "setup.rom_changed"):
+            loaded.image()
+
     def test_invalid_files_are_refused_by_name(self) -> None:
         valid = cartridge()
         corrupt = bytearray(valid)

@@ -98,7 +98,7 @@ def candidates(project: PendingProject) -> list[Path]:
 
 def measured_code(cartridge: rom.Rom) -> tuple[Function, ...]:
     """Reuse independently measured loaded bounds and control-flow extents."""
-    data = cartridge.data
+    data = cartridge.image()
     spans = split_analysis.copied_text(data)
     if not spans:
         bounds = split_analysis.loaded_bounds(data)
@@ -140,7 +140,7 @@ def run(
     renames: dict[str, str] | None = None,
     order: tuple[str, ...] | None = None,
 ) -> Census:
-    cartridges = [rom.load(path) for path in candidates(project)]
+    cartridges = [rom.load(path, retain_data=False) for path in candidates(project)]
     seen: dict[str, Path] = {}
     for cartridge in cartridges:
         if cartridge.sha1 in seen:
@@ -203,7 +203,7 @@ def run(
                 "sha1": item.sha1,
                 "header": asdict(item.header),
                 "crc_validated": True,
-                "ipl3_crc32": f"{zlib.crc32(item.data[0x40:0x1000]):08x}",
+                "ipl3_crc32": f"{zlib.crc32(item.image()[0x40:0x1000]):08x}",
                 "code_ranges": [
                     {"start": row.start, "end": row.end, "address": row.address} for row in inventories[item.path]
                 ],
@@ -249,16 +249,18 @@ def run(
     # Validate every destination before writing any normalized input.
     for item in cartridges:
         target = project.roms / f"baserom.{names[item.path]}.z64"
-        if target == item.path and target.read_bytes() != item.data:
+        image = item.image()
+        if target == item.path and target.read_bytes() != image:
             raise Held("setup", f"setup.roms.destination: {target}: normalization would overwrite original input")
-        if target.is_symlink() or (target.exists() and target.read_bytes() != item.data):
+        if target.is_symlink() or (target.exists() and target.read_bytes() != image):
             raise Held("setup", f"setup.roms.destination: {target}: existing input differs")
+    del image
     created = []
     try:
         for item in cartridges:
             target = project.roms / f"baserom.{names[item.path]}.z64"
             if not target.exists():
-                compiler_files.atomic_bytes(target, item.data)
+                compiler_files.atomic_bytes(target, item.image())
                 created.append(target)
         document["ingestion_complete"] = True
         compiler_files.atomic_bytes(manifest, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())

@@ -48,6 +48,7 @@ class ProposalTests(unittest.TestCase):
             (),
             (),
             5,
+            1,
         )
         self.initial_config = (self.project.root / "config.toml").read_bytes()
 
@@ -181,6 +182,28 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(proposal["choices"], {})
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
+
+    def test_confirmation_guard_retains_pins_and_refuses_changed_or_missing_inputs(self) -> None:
+        census, layout = self.layout(GCC)
+        path = self.project.build / "setup/layout.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        original = compiler_proposal.encoded(layout)
+        path.write_bytes(original)
+        proposal = compiler_proposal.propose_compilers(self.project, census, layout, self.policy)
+        guard = compiler_proposal.confirmation_guard(self.project, proposal, self.policy)
+        guard()
+        path.write_bytes(original + b" ")
+        with self.assertRaisesRegex(config.Held, "setup.proposal_stale"):
+            guard()
+        path.write_bytes(original)
+        proposal_path = compiler_proposal.proposal_path(self.project)
+        content = proposal_path.read_bytes()
+        proposal_path.write_bytes(content + b" ")
+        with self.assertRaisesRegex(config.Held, "setup.proposal_stale"):
+            guard()
+        proposal_path.unlink()
+        with self.assertRaisesRegex(config.Held, "setup.proposal_stale"):
+            guard()
 
     def test_exact_prologue_words_and_interpreter_digest_are_evidence(self) -> None:
         census, layout = self.layout(SN64)

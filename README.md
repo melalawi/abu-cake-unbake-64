@@ -14,6 +14,9 @@ Python 3.11 or later is required.
 The build uses make and MIPS binutils.
 Tool paths belong in `~/.config/unbake/policy.toml`.
 Setup names any missing policy field.
+Supply `setup_version_jobs` explicitly in host policy to limit simultaneous version
+extractions and builds. `cores` is divided between those jobs.
+Choose the version limit for the memory available on the host.
 Compiler downloads have pinned SHA-256 hashes.
 
 ## Start

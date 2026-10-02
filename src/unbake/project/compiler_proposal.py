@@ -7,6 +7,7 @@ import json
 import struct
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -40,7 +41,12 @@ def proposal_path(project: PendingProject) -> Path:
 
 
 def _inputs(
-    project: PendingProject, layout: LayoutManifest, policy: SetupPolicy, choices: dict[str, str]
+    project: PendingProject,
+    layout: LayoutManifest,
+    policy: SetupPolicy,
+    choices: dict[str, str],
+    *,
+    layout_sha256: str | None = None,
 ) -> dict[str, str]:
     try:
         registry = toolchain.REGISTRY_PATH.read_bytes()
@@ -52,7 +58,7 @@ def _inputs(
         "registry": hashlib.sha256(registry).hexdigest(),
         "profiles": digest(toolchain._read(toolchain.REGISTRY_PATH).get("fingerprints", {})),
         "choices": digest(choices),
-        "layout": digest(layout),
+        "layout": layout_sha256 if layout_sha256 is not None else digest(layout),
         "pending_config": hashlib.sha256(config).hexdigest(),
         "evidence_engine": digest(
             {
@@ -157,6 +163,7 @@ def propose_compilers(
                     )
             if type(function["start"]) is not int:
                 raise Held("setup", f"setup.compiler_proposal: {version}: functions.{index}.start: expected integer")
+        image = rom.image()
         clues[version] = evidence(rom)
         previous_end = -1
         names = set()
@@ -165,7 +172,7 @@ def propose_compilers(
             if (
                 type(start) is not int
                 or type(end) is not int
-                or not 0 <= start < end <= len(rom.data)
+                or not 0 <= start < end <= len(image)
                 or start % 4
                 or end % 4
                 or start < previous_end
@@ -177,7 +184,7 @@ def propose_compilers(
                 raise Held("setup", f"setup.compiler_proposal: {version}:{name}: invalid/overlapping function span")
             names.add(name)
             previous_end = end
-            body = rom.data[start:end]
+            body = image[start:end]
             words = tuple(word for (word,) in struct.iter_unpack(">I", body))
             measured = compiler_profiles.measure(body)
             moves = measured["addu_moves"] + measured["or_moves"]
@@ -203,7 +210,6 @@ def propose_compilers(
                     "address": address,
                     "body_sha256": hashlib.sha256(body).hexdigest(),
                     "prologue": prologue(words),
-                    "probe_words": [{"word": f"0x{word:08X}"} for word in words],
                     "prologue_words": [
                         {"rom_offset": start + index * 4, "word": f"0x{word:08X}"}
                         for index, word in enumerate(words[:16])
@@ -215,6 +221,7 @@ def propose_compilers(
             )
             unit_regions[name].append(region)
             unit_measurements[name].append(regions[region][-1])
+        del image
     unknown = set(selected) - (set(regions) | set(unit_regions) | {"default"})
     if unknown:
         key = "setup.proposal_stale" if choices is None else "setup.compiler_candidate"
@@ -235,6 +242,7 @@ def propose_compilers(
     reasons: dict[str, str] = {}
     ties: dict[str, list[str]] = {}
     probes: dict[str, Any] = {}
+    cartridges = {census.names[rom.path]: rom for rom in census.cartridges}
     for region, units in sorted(regions.items()):
         measured = {feature: sum(unit["features"][feature] for unit in units) for feature in compiler_profiles.FEATURES}
         matches = {
@@ -270,7 +278,7 @@ def propose_compilers(
             # Weak move evidence cannot decide a family by aggregate rank.
             tied = sorted(profiles)
         if len(tied) > 1 and region not in selected and not region.endswith(":undecided"):
-            probe = compiler_probes.reproduce(project, policy, tied, units)
+            probe = compiler_probes.reproduce(project, policy, tied, units, cartridges[region.split(":")[0]].image())
             probes[region] = probe
             scores = {ident: row["score"] for ident, row in probe["candidates"].items()}
             probe_best = max(scores.values())
@@ -477,3 +485,22 @@ def confirm_proposal(
             raise Held("setup", "setup.compiler_confirmation: rejected; explicit yes required")
         # A file edited while the TTY prompt is open invalidates acceptance.
         confirm_proposal(project, census, layout, proposal, policy, confirm=token)
+
+
+def confirmation_guard(project: PendingProject, proposal: CompilerProposal, policy: SetupPolicy) -> Callable[[], None]:
+    """Retain input pins, not measured bodies, while the staged cartridges build."""
+    token = compiler_files.sha(proposal_path(project))
+    expected = dict(proposal["inputs_sha256"])
+    layout_sha256 = proposal["layout_sha256"]
+    choices = dict(proposal.get("choices", {}))
+
+    def verify() -> None:
+        try:
+            current = _inputs(project, cast("LayoutManifest", {}), policy, choices, layout_sha256=layout_sha256)
+            actual = compiler_files.sha(proposal_path(project))
+        except OSError as error:
+            raise Held("setup", f"setup.proposal_stale: confirmed input unavailable: {error}") from error
+        if actual != token or current != expected:
+            raise Held("setup", "setup.proposal_stale: confirmed proposal or input pins changed during proof")
+
+    return verify

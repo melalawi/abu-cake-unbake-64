@@ -18,9 +18,21 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class Rom:
     path: Path
-    data: bytes
+    data: bytes | None
     header: header.Header
     sha1: str
+
+    def image(self) -> bytes:
+        """Read a normalized image only while its version is being consumed."""
+        if self.data is not None:
+            return self.data
+        try:
+            data = normalise(self.path.read_bytes())
+        except OSError as error:
+            raise Held("setup", f"{self.path}: {error}") from error
+        if hashlib.sha1(data).hexdigest() != self.sha1:
+            raise Held("setup", f"setup.rom_changed: {self.path}: sha1 changed after census")
+        return data
 
 
 def shingles(data: bytes) -> frozenset[bytes]:
@@ -35,7 +47,7 @@ def shingles(data: bytes) -> frozenset[bytes]:
     return frozenset(bytes(tokens[index : index + 16]) for index in range(0, len(tokens) - 15, 2))
 
 
-def load(path: Path) -> Rom:
+def load(path: Path, *, retain_data: bool = True) -> Rom:
     path = Path(path)
     try:
         data = path.read_bytes()
@@ -51,7 +63,7 @@ def load(path: Path) -> Rom:
     except Held as error:
         field, reason = error.reason.split(":", 1)
         raise Held("setup", f"{field}: {path}:{reason}") from error
-    return Rom(path, data, facts, hashlib.sha1(data).hexdigest())
+    return Rom(path, data if retain_data else None, facts, hashlib.sha1(data).hexdigest())
 
 
 def normalise(data: bytes) -> bytes:
@@ -79,6 +91,7 @@ def similarity_matrix(
         raise Held("setup", "inventories: required mapping of ROM paths to detected code ranges")
     signatures: dict[Rom, frozenset[bytes]] = {}
     for cartridge in cartridges:
+        image = cartridge.image()
         functions = inventories.get(cartridge.path)
         if not functions:
             raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: detected code ranges missing")
@@ -88,15 +101,16 @@ def similarity_matrix(
             if (
                 type(start) is not int
                 or type(end) is not int
-                or not 0 <= start < end <= len(cartridge.data)
+                or not 0 <= start < end <= len(image)
                 or start % 4
                 or end % 4
             ):
                 raise Held("setup", f"{cartridge.path}: detected code range {start!r}-{end!r}: invalid word range")
-            signature.update(shingles(cartridge.data[start:end]))
+            signature.update(shingles(image[start:end]))
         if not signature:
             raise Held("setup", f"setup.same_game.code_ranges: {cartridge.path}: detected code shingles missing")
         signatures[cartridge] = frozenset(signature)
+        del image
     matrix = {(cartridge, cartridge): 1.0 for cartridge in cartridges}
     for index, cartridge in enumerate(cartridges):
         for other in cartridges[index + 1 :]:

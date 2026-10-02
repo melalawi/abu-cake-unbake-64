@@ -53,6 +53,21 @@ def atomic_bytes(path: Path, content: bytes, *, mode: int | None = None) -> None
             temporary.unlink(missing_ok=True)
 
 
+def atomic_copy(path: Path, source: Path, *, mode: int) -> None:
+    """Publish a staged file without retaining its contents in memory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".write-", delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            with source.open("rb") as input_stream:
+                shutil.copyfileobj(input_stream, stream)
+            stream.close()
+            temporary.chmod(mode)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def download(entry: Download, cache: Path) -> Path:
     path = cache / "downloads" / entry.sha256
     if path.exists():

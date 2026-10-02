@@ -82,11 +82,13 @@ class SetupTransactionTests(unittest.TestCase):
         self.project.build_link("us").symlink_to(generation.name)
 
     @staticmethod
-    def proof(project: config.Project, version: str, data: bytes, cores: int, *, log: Path) -> None:
+    def proof(project: config.Project, version: str, data: bytes | Path, cores: int, *, log: Path) -> None:
         generation = project.build / f"{version}.0"
         generation.mkdir(parents=True)
         project.build_link(version).symlink_to(generation.name)
-        (generation / f"{project.name}.{version}.z64").write_bytes(data)
+        (generation / f"{project.name}.{version}.z64").write_bytes(
+            data.read_bytes() if isinstance(data, Path) else data
+        )
         project.asm.mkdir(parents=True, exist_ok=True)
         (project.asm / "generated.s").write_bytes(b".text\n")
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +222,17 @@ class SetupTransactionTests(unittest.TestCase):
         ):
             setup_proof.proof(self.project, "us", b"ABC", 1)
 
+    def test_streamed_cartridge_mismatch_crosses_chunk_boundary(self) -> None:
+        expected = self.root / "expected.z64"
+        expected.write_bytes(bytes(1024 * 1024) + b"ABCD")
+        built = self.project.build_link("us") / "game.us.z64"
+        built.write_bytes(bytes(1024 * 1024) + b"AXCD")
+        with (
+            patch.object(setup_proof, "run"),
+            self.assertRaisesRegex(config.Held, r"setup.sha1.us:.*offset 0x100001.*expected 424344.*produced 584344"),
+        ):
+            setup_proof.proof(self.project, "us", expected, 1)
+
     def test_unconfirmed_proposal_does_not_stage_ready_configuration(self) -> None:
         data = tomllib.loads((self.root / "config.toml").read_text())
         data["project"]["state"] = "awaiting-roms"
@@ -301,11 +314,13 @@ class SetupTransactionTests(unittest.TestCase):
         with (
             patch.object(fingerprint, "receipt", return_value=[]),
             patch.object(fingerprint, "confirm_proposal") as confirmation,
+            patch("unbake.project.compiler_proposal.confirmation_guard", return_value=Mock()) as guard,
             patch.object(setup_proof, "proof", side_effect=prove),
         ):
             setup.complete_setup(pending, census, layout, proposal, self.settings, confirm=token)
         self.assertEqual(config.load_pending(self.root).state, "ready")
-        self.assertEqual(confirmation.call_count, 2)
+        self.assertEqual(confirmation.call_count, 1)
+        guard.return_value.assert_called_once_with()
         self.assertEqual(confirmation.call_args.kwargs["confirm"], token)
         self.assertEqual((self.root / "docs/setup/compiler.json").read_bytes(), accepted)
         self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), rom.sha1 + "  roms/baserom.us.z64\n")

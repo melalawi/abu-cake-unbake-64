@@ -183,6 +183,7 @@ class ConfigTests(unittest.TestCase):
             "objdiff_cli",
             "objdiff_sha256",
             "m2c",
+            "setup_version_jobs",
             "splat",
             "mips_ld",
             "mips_objdump",
@@ -286,6 +287,21 @@ class ConfigTests(unittest.TestCase):
         path.write_text(original.replace("same_game_similarity = 0.1", "same_game_similarity = nan"))
         with self.assertRaisesRegex(config.Held, "policy.same_game_similarity"):
             config.load_policy(path, stage="census")
+
+    def test_setup_version_jobs_is_required_and_has_no_packaged_default(self) -> None:
+        path = write_policy(self.directory)
+        original = path.read_text()
+        path.write_text("\n".join(row for row in original.splitlines() if not row.startswith("setup_version_jobs")))
+        self.assertIsInstance(config.load_policy(path, stage="census"), config.CensusPolicy)
+        for stage in ("setup", "all"):
+            with self.subTest(stage=stage), self.assertRaisesRegex(config.Held, "policy.setup_version_jobs"):
+                config.load_policy(path, stage=stage)
+        for value in (0, -1, True, 1.5):
+            path.write_text(original + "\n")
+            rows = [row for row in original.splitlines() if not row.startswith("setup_version_jobs")]
+            path.write_text("\n".join(rows) + "\nsetup_version_jobs = " + json.dumps(value) + "\n")
+            with self.subTest(value=value), self.assertRaisesRegex(config.Held, "policy.setup_version_jobs"):
+                config.load_policy(path, stage="setup")
 
     def test_missing_policy_creates_only_an_incomplete_template(self) -> None:
         path = self.directory / "operator/policy.toml"
