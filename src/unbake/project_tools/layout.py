@@ -168,11 +168,11 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
         # The reference proof assigns bytes, rather than compiler section order.
         # Both sections together may be present, but a slice has one provider.
         addresses = {address for _, address, _ in storage(obj, index)}
-        pending: dict[tuple[str, int], list[int]] = {}
+        pending: dict[tuple[int, int], list[int]] = {}
         for at, kind, symbol in obj.relocations(text):
             if symbol["section"] != index:
                 continue
-            key = symbol["name"], symbol["value"]
+            key = symbol["table"], symbol["index"]
             if kind == 5:
                 pending.setdefault(key, []).append(at)
             elif kind == 6:

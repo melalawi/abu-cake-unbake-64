@@ -1,17 +1,87 @@
 """Disjoint private pools replace exactly one load selector per slice."""
 
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.decomp.support import assemble
+from tests.decomp.support import LINKER, assemble
 from unbake.project_tools.elf import Object
 from unbake.project_tools.extract import instruction_symbols, pool_rows, raw_storage, unit_ranges
 from unbake.project_tools.layout import transfer_private, transfer_selectors
 
 
 class PoolSliceTests(unittest.TestCase):
+    def test_two_published_units_link_with_local_pool_symbols_and_external_references(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            objects = []
+            selectors = []
+            for number, name in enumerate(("alpha", "beta")):
+                address = 0x80003000 + number * 0x100
+                text_address = 0x80002000 + number * 0x100
+                label = f"unbake_rodata_{address:08X}_4"
+                obj = Object(
+                    assemble(
+                        root,
+                        name,
+                        f".set noreorder\n.text\n.globl {name}\n{name}:\n"
+                        f"lui $at,%hi({label})\nlwc1 $f0,%lo({label})($at)\n"
+                        "lui $v0,%hi(external)\naddiu $v0,$v0,%lo(external)\njr $ra\nnop\n"
+                        f".section .rdata\n.globl {label}\n{label}: .word 0x3f800000\n"
+                        f".data\n.word {label},{name},external\n",
+                    )
+                )
+                image = bytearray(0x44)
+                image[0x20:0x38] = struct.pack(
+                    ">6I", 0x3C018000, 0xC4200000 | (address & 65535), 0x3C020000, 0x24420000, 0x03E00008, 0
+                )
+                image[0x40:0x44] = bytes.fromhex("3f800000")
+                slices = [dict(start=0x40, end=0x44, address=address, path=f"rodata/{name}/{address:08X}")]
+                sections = transfer_private(obj, dict(start=0x20, end=0x38, address=text_address), bytes(image), slices)
+                rebuilt = Object(obj.path)
+                for sym_index, symbols in rebuilt.symbols.items():
+                    first = rebuilt.sections[sym_index][7]
+                    self.assertTrue(all(s["info"] >> 4 == 0 for s in symbols[:first]))
+                    self.assertTrue(all(s["info"] >> 4 != 0 for s in symbols[first:]))
+                    section_symbols = [s for s in symbols if s["section"] == rebuilt.section(sections[0])]
+                    self.assertEqual({s["info"] for s in section_symbols}, {3, 16})
+                data = rebuilt.section(".data")
+                assert data is not None
+                self.assertEqual([s["name"] for _, _, s in rebuilt.relocations(data)], [label, name, "external"])
+                selectors.extend(
+                    [
+                        f".text_{name} 0x{text_address:X} : {{ {obj.path}(.text) }}",
+                        transfer_selectors(
+                            f".pool_{name} 0x{address:X} : {{ obj/asm/data/{slices[0]['path']}.rodata.o(.rodata) }}",
+                            str(obj.path),
+                            slices,
+                            sections,
+                        ),
+                    ]
+                )
+                objects.append(str(obj.path))
+            script = root / "link.ld"
+            script.write_text(
+                "external = 0x80004000;\nSECTIONS {\n" + "\n".join(selectors) + "\n.data : SUBALIGN(1) { *(.data) } }"
+            )
+            result = subprocess.run(
+                [LINKER, "-T", str(script), "-o", str(root / "linked.elf"), *objects], capture_output=True, text=True
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            linked = Object(root / "linked.elf")
+            data = linked.section(".data")
+            assert data is not None
+            self.assertEqual(
+                linked.content(data),
+                struct.pack(">6I", 0x80003000, 0x80002000, 0x80004000, 0x80003100, 0x80002100, 0x80004000),
+            )
+            for name in ("alpha", "beta"):
+                pool = linked.section(f".pool_{name}")
+                assert pool is not None
+                self.assertEqual(linked.content(pool), bytes.fromhex("3f800000"))
+
     def test_data_symbol_omitted_from_csv_uses_original_instruction_words(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

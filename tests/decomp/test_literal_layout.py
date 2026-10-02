@@ -13,6 +13,37 @@ from unbake.project_tools.rodata import placement, relocated
 
 
 class LiteralLayoutTests(unittest.TestCase):
+    def test_anonymous_same_value_symbols_keep_independent_hi_lo_pairs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            obj = Object(
+                assemble(
+                    Path(temporary),
+                    "anonymous",
+                    ".set noreorder\n.text\n"
+                    "lui $t0,%hi(first)\nlui $t1,%hi(second)\n"
+                    "lwc1 $f0,%lo(first)($t0)\nlwc1 $f2,%lo(second)($t1)\njr $ra\nnop\n"
+                    ".section .rdata\n.globl first,second\nfirst:\nsecond: .word 0x3f800000\n",
+                )
+            )
+            for index, symbols in obj.symbols.items():
+                data = bytearray(obj.content(index))
+                for number, symbol in enumerate(symbols):
+                    if symbol["name"] in ("first", "second"):
+                        struct.pack_into(">I", data, number * 16, 0)
+                from unbake.project_tools.literal_layout import replace
+
+                replace(obj, index, data)
+            obj.path.write_bytes(obj.data)
+            obj = Object(obj.path)
+            raw = bytes.fromhex("3f8000003f800000")
+
+            def read(address: int, size: int) -> bytes:
+                return raw[address - 0x80003000 : address - 0x80003000 + size]
+
+            target = {0: 0x3C088000, 4: 0x3C098000, 8: 0xC5003000, 12: 0xC5223004}
+            self.assertEqual(arrange(obj, ".rdata", target, 0x80002000, read), 0x80003000)
+            self.assertEqual(relocated(Object(obj.path), ".rdata", 0x80002000), raw)
+
     def anchored(self, values: list[tuple[int, bytes]], *, external: bool = True) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
