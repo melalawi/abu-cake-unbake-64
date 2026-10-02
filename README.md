@@ -28,7 +28,7 @@ Setup reads every ROM header.
 Each cross-version item gets one name.
 It shows compiler evidence and asks for one confirmation of the whole proposal.
 Clear regional winners and named tied candidate sets share one confirmation.
-Tied sets are pinned by separating evidence from the first `try`.
+The first `try` records separating or exact-equivalence evidence for tied sets.
 It proves every version before the project is ready.
 Setup prints the policy path and names any missing input.
 Machine paths go in `~/.config/unbake/policy.toml`.
@@ -95,9 +95,14 @@ referencing its name. Draft uses a temporary recipe carrier; this is not a pin.
 The first `unbake try` compiles every member against every containing version.
 A unique exact reproduction or strictly better measured rank pins the entire
 region, recording source and target hashes, compiler pins, flags, per-version
-scores and the selection reason under `compiler_selections`. Equal results or
-an incomplete comparison leave the set intact with a named refusal. Malformed
-sets refuse `compiler.tied_set`. C builds require a resolved pin. Pinning
+scores and the selection reason under `compiler_selections`. Multiple exact
+members are accepted as `equivalent` for that item. Non-reproducing members
+are excluded with their differing words retained. The build uses the region's
+decided compiler when it is a member, otherwise the first exact member in
+registry order; config records this rule and every member's exact proof.
+Later tries remeasure the remaining set, including after source edits.
+Non-exact equal ranks or an incomplete comparison remain named refusals.
+Malformed sets refuse `compiler.tied_set`. Recording the build choice
 updates the generated build recipe and its checksum entry together with config,
 with rollback if publication fails.
 

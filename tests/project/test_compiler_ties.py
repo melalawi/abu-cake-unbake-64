@@ -106,9 +106,120 @@ class CompilerTieTests(unittest.TestCase):
         )
         self.assertEqual(proof["reason"], "strictly better measured rank")
 
-    def test_equivalent_comparisons_do_not_pick_order(self):
+    def test_exact_equivalence_records_set_and_build_rule_per_item(self):
         def trial(project, *args, **kwargs):
-            return self.trial(compiler_ties.candidate(self.project, self.ref, "ido-7.1"))
+            result = self.trial(compiler_ties.candidate(self.project, self.ref, "ido-7.1"))
+            for comparison in result.compares.values():
+                comparison.target_words = (1, 2, 3, 4)
+                comparison.candidate_words = (1, 2, 3, 4)
+            return result
+
+        resolved = self.run_resolve(trial)
+        self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": self.ref})
+        data = toml.loads((self.root / "config.toml").read_text())
+        selection = data["compiler_selections"]["tie:unit:alpha"]
+        self.assertEqual(selection["status"], "equivalent")
+        self.assertEqual(selection["candidates"], ["ido-5.3", "ido-7.1"])
+        self.assertIn("region's decided compiler", selection["build_rule"])
+        proof = json.loads(selection["evidence_json"])
+        self.assertEqual(proof["reason"], "equivalent")
+        for row in proof["candidates"].values():
+            self.assertEqual(set(row["versions"]), set(self.pinned))
+            for version in row["versions"].values():
+                self.assertEqual(version["candidate_words"], version["target_words"])
+        self.project = resolved
+        self.ref = "tie:unit:alpha"
+        self.source.write_text("int alpha(void) { return 2; }\n")
+        self.run_resolve(trial)
+        selection = toml.loads((self.root / "config.toml").read_text())["compiler_selections"][self.ref]
+        self.assertEqual(
+            json.loads(selection["evidence_json"])["source_sha256"],
+            hashlib.sha256(self.source.read_bytes()).hexdigest(),
+        )
+
+    def test_exact_subset_drops_non_reproducing_member_with_words(self):
+        path = self.root / "config.toml"
+        data = toml.loads(path.read_text())
+        data["compilers"]["gcc-2.7.2-kmc"] = {"cflags": []}
+        data["compiler_ties"][self.ref].append("gcc-2.7.2-kmc")
+        path.write_text(toml.dumps(data))
+        self.project = config.load(self.root)
+        self.recipe.write_text(json.dumps(makefile.description(self.project)))
+        self.manifest.write_text(compiler_files.sha(self.recipe) + "  tools/build.json\n")
+
+        def trial(project, *args, **kwargs):
+            result = self.trial(project)
+            for comparison in result.compares.values():
+                comparison.target_words = (1, 2, 3, 4)
+                comparison.candidate_words = (
+                    (1, 9, 3, 8) if project.compiler_for(self.source).id == "ido-5.3" else (1, 2, 3, 4)
+                )
+                comparison.identical = 2 if project.compiler_for(self.source).id == "ido-5.3" else 4
+            return result
+
+        self.project = self.run_resolve(trial)
+        self.ref = "tie:unit:alpha"
+        for _ in range(2):
+            self.project = self.run_resolve(trial)
+            data = toml.loads(path.read_text())
+            selection = data["compiler_selections"][self.ref]
+            self.assertEqual(selection["status"], "equivalent")
+            self.assertEqual(set(data["compiler_ties"][self.ref]), {"gcc-2.7.2-kmc", "ido-7.1"})
+            proof = json.loads(selection["evidence_json"])
+            self.assertEqual(proof["excluded_candidates"], ["ido-5.3"])
+            excluded = proof["excluded_evidence"]["ido-5.3"]["comparison"]["versions"]
+            self.assertEqual(
+                excluded["us"]["candidate_words"], ["0x00000001", "0x00000009", "0x00000003", "0x00000008"]
+            )
+
+    def test_equivalence_falls_back_to_registry_order(self):
+        project = replace(self.project, default_compiler=self.ref)
+        ident, rule = compiler_ties.equivalent_choice(project, self.source, ["ido-5.3", "ido-7.1"])
+        self.assertEqual(ident, "ido-7.1")
+        self.assertEqual(rule, "first exact member in registry order")
+
+    def test_recorded_region_choice_precedes_registry_order(self):
+        project = replace(self.project, default_compiler=self.ref)
+        path = self.root / "docs/setup/compiler.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "candidate_rules": {"tie:unit:alpha": {"regions": ["us:ido"]}},
+                    "region_choices": {"us:ido": "ido-5.3"},
+                }
+            )
+        )
+        ident, rule = compiler_ties.equivalent_choice(project, self.source, ["ido-5.3", "ido-7.1"])
+        self.assertEqual(ident, "ido-5.3")
+        self.assertIn("region's decided compiler", rule)
+
+    def test_missing_candidate_version_is_incomplete_evidence(self):
+        def trial(project, *args, **kwargs):
+            result = self.trial(project)
+            result.compares.pop("us-rev1")
+            return result
+
+        with self.assertRaisesRegex(config.Held, "compiler.tie_incomplete"):
+            self.run_resolve(trial)
+        self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
+
+    def test_non_exact_tied_comparisons_remain_unresolved(self):
+        def trial(project, *args, **kwargs):
+            result = self.trial(compiler_ties.candidate(self.project, self.ref, "ido-7.1"))
+            for comparison in result.compares.values():
+                comparison.of = 5
+            return result
+
+        with self.assertRaisesRegex(config.Held, "compiler.tie_equivalent"):
+            self.run_resolve(trial)
+        self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
+
+    def test_one_non_exact_version_prevents_equivalence(self):
+        def trial(project, *args, **kwargs):
+            result = self.trial(compiler_ties.candidate(self.project, self.ref, "ido-7.1"))
+            result.compares["us-rev1"].identical = 3
+            return result
 
         with self.assertRaisesRegex(config.Held, "compiler.tie_equivalent"):
             self.run_resolve(trial)

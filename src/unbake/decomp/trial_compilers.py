@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import toml  # type: ignore[import-untyped]
+
 from unbake.decomp.candidate_ranking import measured_candidate_rank
 from unbake.project import compiler_ties, toolchain
 from unbake.project.config import Held, Policy, Project
@@ -23,7 +25,7 @@ def resolve(
     from unbake.decomp.trial import try_draft
     from unbake.decomp.trial_target import owning_versions
 
-    ref = compiler_ties.reference(project, source)
+    ref = compiler_ties.reference(project, source, equivalent=True)
     if ref is None:
         return project
     if set(pinned) != set(owning_versions(project, source.stem, None)):
@@ -36,6 +38,9 @@ def resolve(
         "targets": {v: hashlib.sha256(t.read_bytes()).hexdigest() for v, (_, t) in pinned.items()},
         "candidates": {},
     }
+    selection = toml.loads((project.root / "config.toml").read_text()).get("compiler_selections", {}).get(ref, {})
+    previous = json.loads(selection["evidence_json"]) if selection.get("status") == "equivalent" else {}
+    evidence["excluded_evidence"] = previous.get("excluded_evidence", {})
     results: dict[str, Trial] = {}
     for ident in project.compiler_ties[ref]:
         spec = toolchain.specification(ident)
@@ -43,7 +48,9 @@ def resolve(
         evidence["candidates"][ident] = row
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                result = try_draft(compiler_ties.candidate(project, ref, ident), policy, source, work, pinned=pinned)
+                result = try_draft(
+                    compiler_ties.candidate(project, ref, ident, source.stem), policy, source, work, pinned=pinned
+                )
         except Held as error:
             row["error"] = error.reason
             print(f"compiler candidate {ident}: compile refused: {error.reason}")
@@ -75,24 +82,41 @@ def resolve(
                     print("  " + line)
     receipt = work / "compiler-candidates.json"
     receipt.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
-    if len(results) != len(project.compiler_ties[ref]):
+    if len(results) != len(project.compiler_ties[ref]) or any(set(r.compares) != set(pinned) for r in results.values()):
         raise Held("try", f"compiler.tie_incomplete: {ref}: every candidate must compile; evidence {receipt}")
     if hashlib.sha256(source.read_bytes()).hexdigest() != evidence["source_sha256"] or any(
         hashlib.sha256(target.read_bytes()).hexdigest() != evidence["targets"][version]
         for version, (_, target) in pinned.items()
     ):
         raise Held("try", "compiler.tie_stale: source or target changed during candidate comparisons")
-    best = min(measured_candidate_rank(result.compares) for result in results.values())
-    winners = [ident for ident, result in results.items() if measured_candidate_rank(result.compares) == best]
-    if len(winners) != 1:
-        raise Held("try", f"compiler.tie_equivalent: {ref}: candidates still equivalent; evidence {receipt}")
-    winner = winners[0]
+    exact = [ident for ident, result in results.items() if result.identical_everywhere]
+    evidence["exact_candidates"] = exact
+    if exact:
+        for ident in results:
+            if ident not in exact:
+                evidence["excluded_evidence"][ident] = {
+                    "source_sha256": evidence["source_sha256"],
+                    "targets": evidence["targets"],
+                    "comparison": evidence["candidates"][ident],
+                }
+    evidence["excluded_candidates"] = sorted(evidence["excluded_evidence"])
+    if len(exact) > 1:
+        winner, rule = compiler_ties.equivalent_choice(project, source, exact)
+        evidence["reason"] = "equivalent"
+        evidence["build_rule"] = rule
+    else:
+        best = min(measured_candidate_rank(result.compares) for result in results.values())
+        winners = [ident for ident, result in results.items() if measured_candidate_rank(result.compares) == best]
+        if len(winners) != 1:
+            raise Held("try", f"compiler.tie_equivalent: {ref}: non-exact candidates still tied; evidence {receipt}")
+        winner = winners[0]
+        evidence["reason"] = "unique exact reproduction" if exact else "strictly better measured rank"
     evidence["selected"] = winner
-    evidence["reason"] = (
-        "unique exact reproduction" if results[winner].identical_everywhere else "strictly better measured rank"
-    )
     evidence["generations"] = {v: str(g) for v, (g, _) in pinned.items()}
     receipt.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     resolved = compiler_ties.pin(project, ref, winner, evidence, config_hash)
-    print(f"compiler pin {ref}: {winner}; {evidence['reason']}; config.toml records candidate evidence")
+    if evidence["reason"] == "equivalent":
+        print(f"compiler equivalent {source.stem}: {{{', '.join(exact)}}}; build {winner}; {rule}")
+    else:
+        print(f"compiler pin {ref}: {winner}; {evidence['reason']}; config.toml records candidate evidence")
     return resolved
