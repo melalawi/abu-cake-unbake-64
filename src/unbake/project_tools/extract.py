@@ -16,6 +16,8 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from unbake.project.cache import Cache
+from unbake.project_tools.compile import cache_root
 from unbake.project_tools.rodata import defer_bss
 
 
@@ -46,8 +48,13 @@ def automatic_symbols(text: str, committed: dict[str, int]) -> str:
     return pattern.sub(lambda match: "" if match[1] in committed else match[0], text)
 
 
+# Files one extraction wrote: content digest by path, for its cache record.
+_WRITTEN: dict[str, str] = {}
+
+
 def publish(path: Path, content: bytes) -> None:
     """Keep timestamps when extraction produced the same bytes."""
+    _WRITTEN[str(path)] = hashlib.sha256(content).hexdigest()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_bytes() != content:
         partial = path.with_name(path.name + ".partial")
@@ -397,12 +404,23 @@ def extract(args: argparse.Namespace) -> None:
         digest.update(content)
     digest.update(text.encode())
     digest.update(args.non_matching.encode())
+    for word in (str(args.asm), str(args.src), args.name, compiler):
+        digest.update(len(word).to_bytes(8, "big") + word.encode())
     receipt = build / ".extract-key"
     graph_path = build / ".split.mk"
     if receipt.exists() and receipt.read_text() == digest.hexdigest() and graph_path.exists():
         # Make needs a timestamp receipt when input mtimes changed but bytes did not.
         graph_path.touch()
         return
+    # A fresh generation reuses an identical extraction whose published
+    # assembly is still present byte for byte.
+    store = Cache(cache_root())
+    cached = store.get("extract", digest.hexdigest())
+    if cached is not None and _restore(json.loads(cached.read_bytes()), build):
+        receipt.write_text(digest.hexdigest())
+        return
+    _WRITTEN.clear()
+
     with tempfile.TemporaryDirectory(prefix=".extract-", dir=build) as temporary:
         staging = Path(temporary)
         options = {
@@ -495,7 +513,35 @@ def extract(args: argparse.Namespace) -> None:
         # This file is the successful extraction receipt; replace it last.
         destination = args.build / ".split.mk"
         destination.write_text("\n".join(graph) + "\n")
+        outputs, published = {".split.mk": destination.read_text()}, {}
+        for name, value in _WRITTEN.items():
+            path = Path(name).resolve()
+            if path.is_relative_to(build):
+                outputs[str(path.relative_to(build))] = path.read_text()
+            else:
+                published[name] = value
+        record = build / ".extract-record.json"
+        record.write_text(json.dumps({"outputs": outputs, "published": published}, sort_keys=True))
+        store.put("extract", digest.hexdigest(), record)
+        record.unlink()
         receipt.write_text(digest.hexdigest())
+
+
+def _restore(record: dict[str, Any], build: Path) -> bool:
+    """Write a cached extraction's build files when its published files are unchanged."""
+    for name, expected in record["published"].items():
+        path = Path(name)  # relative to the project root, the working directory
+        try:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                return False
+        except OSError:
+            return False
+    graph = record["outputs"].pop(".split.mk")
+    for name, content in record["outputs"].items():
+        publish(build / name, content.encode())
+    # The graph is the extraction receipt Make reads; write it last.
+    (build / ".split.mk").write_text(graph)
+    return True
 
 
 def main() -> None:
