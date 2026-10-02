@@ -79,10 +79,11 @@ def _counts(data: bytes) -> Counts:
 
 def idioms(rom: Rom, ranges: Iterable[tuple[int, int]]) -> dict[tuple[int, int], Counts]:
     result = {}
+    image = rom.image()
     for start, end in ranges:
-        if not 0 <= start < end <= len(rom.data) or start % 4 or end % 4:
+        if not 0 <= start < end <= len(image) or start % 4 or end % 4:
             raise Held("setup", f"idioms ROM range 0x{start:X}-0x{end:X}: invalid word range")
-        result[start, end] = _counts(rom.data[start:end])
+        result[start, end] = _counts(image[start:end])
     return result
 
 
@@ -102,6 +103,7 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
         elif total and count.or_ / total >= 0.8:
             family = "ido"
         families.append(family)
+    image = rom.image()
     groups: list[tuple[str | None, list[Function]]] = []
     for function, family in zip(ordered, families, strict=True):
         if groups and groups[-1][0] == family and groups[-1][1][-1].end == function.start:
@@ -114,7 +116,7 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
         base = "main" if family == "gcc" else family or "undecided"
         names[base] = names.get(base, 0) + 1
         name = base if names[base] == 1 else f"{base}_{members[0].address:08X}"
-        counts = [_counts(rom.data[function.start : function.end]) for function in members]
+        counts = [_counts(image[function.start : function.end]) for function in members]
         output.append(
             Region(
                 members[0].address,
@@ -131,7 +133,7 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
 def evidence(rom: Rom) -> list[str]:
     clues = [f"header libultra field: 0x{rom.header.libultra:08X} (evidence only)"]
     marker = re.compile(rb"(?i)(?:PSYQ\.H|\blibultra\b|\bKMC\b|\b(?:GCC|GNU)\b.{0,48}\d+\.\d+)")
-    for match in re.finditer(rb"[\x20-\x7e]{4,}", rom.data):
+    for match in re.finditer(rb"[\x20-\x7e]{4,}", rom.image()):
         if marker.search(match[0]):
             clues.append(f"ROM 0x{match.start():X}: {match[0][:160].decode('ascii')} (evidence only)")
     return clues
@@ -143,14 +145,15 @@ def confirm(
     """Map families by function shingles, refusing conflicting matching functions."""
     observed = regions(functions, rom)
     index: dict[frozenset[bytes], set[str | None]] = {}
+    reference_image, image = reference_rom.image(), rom.image()
     for region in reference:
         for function in region.functions:
-            key = shingles(reference_rom.data[function.start : function.end])
+            key = shingles(reference_image[function.start : function.end])
             if key:
                 index.setdefault(key, set()).add(region.family)
     for region in observed:
         for function in region.functions:
-            families = index.get(shingles(rom.data[function.start : function.end]))
+            families = index.get(shingles(image[function.start : function.end]))
             if families is not None and region.family not in families:
                 raise Held(
                     "init",
@@ -290,7 +293,7 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
         toolchain.verify(project.tools / candidate.id, candidate)
     project = replace(project, compilers=compilers)
     version = project.names_from
-    data = load(project.version(version).baserom).data
+    data = load(project.version(version).baserom).image()
     probes = sorted(
         (function for function in region.functions if probe(function, data)),
         key=lambda function: (function.end - function.start, function.start),

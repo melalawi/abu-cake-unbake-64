@@ -55,13 +55,16 @@ def exemplars(path: Path) -> list[compiler_profiles.Exemplar]:
 
 
 def reproduce(
-    project: PendingProject, policy: SetupPolicy, ids: list[str], units: list[dict[str, Any]]
+    project: PendingProject, policy: SetupPolicy, ids: list[str], units: list[dict[str, Any]], image: bytes
 ) -> dict[str, Any]:
     tables = toolchain._read(toolchain.REGISTRY_PATH)["fingerprints"]
     directory = project.build / "setup/probes"
     directory.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"attempted": 0, "successful_comparable": 0, "errors": [], "candidates": {}}
-    targets = {unit["name"]: tuple(int(item["word"], 16) for item in unit["probe_words"]) for unit in units}
+    targets = {
+        unit["name"]: tuple(word for (word,) in struct.iter_unpack(">I", image[unit["start"] : unit["end"]]))
+        for unit in units
+    }
     for ident in ids:
         spec = toolchain.specification(ident)
         row: dict[str, Any] = {"compiler_pins": spec.pins, "cflags": list(spec.cflags), "probes": [], "matches": []}

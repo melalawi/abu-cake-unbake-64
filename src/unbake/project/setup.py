@@ -8,8 +8,10 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -58,7 +60,7 @@ def restore_roms(project: Project, source: Path) -> None:
     missing = [project.version(name) for name in project.versions if not project.version(name).baserom.is_file()]
     if not missing:
         return
-    contents = compiler_files.directory_files(source, {version.baserom_sha1 for version in missing}, "sha1")
+    contents = compiler_files.directory_paths(source, {version.baserom_sha1 for version in missing}, "sha1")
     for version in missing:
         if version.baserom_sha1 not in contents:
             raise Held(
@@ -69,7 +71,7 @@ def restore_roms(project: Project, source: Path) -> None:
         target = project.root / version.baserom
         if target.is_symlink():
             raise Held("setup", f"{target}: baserom symlink target is missing")
-        compiler_files.atomic_bytes(target, contents[version.baserom_sha1])
+        compiler_files.atomic_copy(target, contents[version.baserom_sha1], mode=0o600)
 
 
 def run(project: Project, policy: Policy | SetupPolicy, *, supply: Path | None = None) -> list[str]:
@@ -192,7 +194,7 @@ def _inputs(project: PendingProject | Project) -> dict[str, str]:
             path = parent / name
             if path.is_symlink():
                 raise Held("setup", f"setup.publication: input symlink {path.relative_to(project.root)}")
-            result[path.relative_to(project.root).as_posix()] = hashlib.sha256(_read(path)).hexdigest()
+            result[path.relative_to(project.root).as_posix()] = compiler_files.sha(path)
     return result
 
 
@@ -365,7 +367,7 @@ def _publish(
     generations: dict[str, str | None],
 ) -> None:
     """Publish proved files and generations under the shared lock; config is last."""
-    writes: dict[Path, tuple[bytes, int, int]] = {}
+    writes: dict[Path, tuple[Path, int, int]] = {}
     staged_inputs = _inputs(staged)
     for relative in staged_inputs:
         path = staged.root / relative
@@ -389,20 +391,19 @@ def _publish(
         ):
             continue
         target = project.root / relative
-        if not target.exists() or target.read_bytes() != path.read_bytes():
-            writes[target] = (path.read_bytes(), path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
+        if not target.exists() or compiler_files.sha(target) != staged_inputs[relative]:
+            writes[target] = (path, path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
     # Extracted assembly is a generated, ignored input for standalone make.
     if staged.asm.is_dir():
         for path in staged.asm.rglob("*"):
             if path.is_file():
                 target = project.asm / path.relative_to(staged.asm)
-                content = path.read_bytes()
-                if not target.exists() or target.read_bytes() != content:
-                    writes[target] = (content, path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
+                if not target.exists() or compiler_files.sha(target) != compiler_files.sha(path):
+                    writes[target] = (path, path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
     config_path = project.root / "config.toml"
     if fresh:
         staged_config = staged.root / "config.toml"
-        writes[config_path] = (staged_config.read_bytes(), 0o644, staged_config.stat().st_mtime_ns)
+        writes[config_path] = (staged_config, 0o644, staged_config.stat().st_mtime_ns)
     obsolete = []
     manifest = project.tools / "compiler.sha256"
     if manifest.is_file():
@@ -419,11 +420,14 @@ def _publish(
                 ):
                     obsolete.append(project.root / obsolete_path)
     project.build.mkdir(parents=True, exist_ok=True)
-    before: dict[Path, tuple[bytes, int, int] | None] = {}
+    before: dict[Path, tuple[Path, int, int] | None] = {}
     previous_links: dict[Path, str | None] = {}
     moved: list[Path] = []
     directories: list[Path] = []
-    with build._lock(project.build / ".lock"):
+    with (
+        tempfile.TemporaryDirectory(prefix="rollback-", dir=staged.build) as rollback,
+        build._lock(project.build / ".lock"),
+    ):
         if _inputs(project) != fingerprint:
             raise Held("setup", "setup.publication: project inputs changed during proof")
         if _generations(project, staged.versions) != generations:
@@ -432,11 +436,12 @@ def _publish(
             for target in [*writes, *obsolete]:
                 if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
                     raise Held("setup", f"setup.publication: output symlink {target}")
-                before[target] = (
-                    (target.read_bytes(), target.stat().st_mode & 0o777, target.stat().st_mtime_ns)
-                    if target.exists()
-                    else None
-                )
+                if target.exists():
+                    backup = Path(rollback) / str(len(before))
+                    shutil.copy2(target, backup)
+                    before[target] = (backup, target.stat().st_mode & 0o777, target.stat().st_mtime_ns)
+                else:
+                    before[target] = None
                 parent = target.parent
                 while not parent.exists():
                     directories.append(parent)
@@ -457,17 +462,17 @@ def _publish(
                 # Extraction dependencies normally use project-relative paths.
                 # Relocate explicit temporary paths in generated text receipts.
                 _relocate_generation(destination, staged.root, project.root)
-            for target, (content, mode, mtime) in writes.items():
+            for target, (source, mode, mtime) in writes.items():
                 if target != config_path:
-                    compiler_files.atomic_bytes(target, content, mode=mode)
+                    compiler_files.atomic_copy(target, source, mode=mode)
                     os.utime(target, ns=(target.stat().st_atime_ns, mtime))
             for target in obsolete:
                 target.unlink()
             for version, generation in zip(staged.versions, moved, strict=True):
                 _swap(project.build / version, generation.name)
             if config_path in writes:
-                content, mode, mtime = writes[config_path]
-                compiler_files.atomic_bytes(config_path, content, mode=mode)
+                source, mode, mtime = writes[config_path]
+                compiler_files.atomic_bytes(config_path, source.read_bytes(), mode=mode)
                 os.utime(config_path, ns=(config_path.stat().st_atime_ns, mtime))
         except BaseException:
             for link, previous in previous_links.items():
@@ -479,8 +484,8 @@ def _publish(
                 if previous_file is None:
                     target.unlink(missing_ok=True)
                 else:
-                    content, mode, mtime = previous_file
-                    compiler_files.atomic_bytes(target, content, mode=mode)
+                    source, mode, mtime = previous_file
+                    compiler_files.atomic_copy(target, source, mode=mode)
                     os.utime(target, ns=(target.stat().st_atime_ns, mtime))
             for generation in moved:
                 shutil.rmtree(generation)
@@ -524,26 +529,39 @@ def _prove_publish(
     _sdk_headers(staged)
     if previous is not None:
         contributing.write_bytes(previous)
-    workers = min(policy.cores, len(staged.versions))
-    cores = max(1, policy.cores // workers)
+    workers = min(policy.setup_version_jobs, policy.cores, len(staged.versions))
+
+    def extract_version(version: str) -> None:
+        log = project.build / "setup/logs" / f"{version}.log"
+        setup_proof.extract(staged, version, policy.cores, log=log, slots=slots)
 
     def prove_version(version: str) -> str:
-        data = staged.version(version).baserom.read_bytes()
+        data = staged.version(version).baserom
         log = project.build / "setup/logs" / f"{version}.log"
-        setup_proof.proof(staged, version, data, cores, log=log)
-        digest = hashlib.sha1(data).hexdigest()
+        setup_proof.proof(staged, version, data, policy.cores, log=log, slots=slots, extracted=True)
+        with data.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha1").hexdigest()
         return f"{version}: SHA1 {digest}; every cartridge byte proved"
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(prove_version, version) for version in staged.versions]
-        receipts = [future.result() for future in futures]
+    with setup_proof.job_slots(policy.cores, workers) as slots, ThreadPoolExecutor(max_workers=workers) as executor:
+        # Start larger splits first to keep the last extraction from becoming
+        # a serial tail. Receipts and naming retain the declared version order.
+        order = sorted(staged.versions, key=lambda version: staged.version(version).split.stat().st_size, reverse=True)
+        extractions = {executor.submit(extract_version, version): version for version in order}
+        proofs = {}
+        for future in as_completed(extractions):
+            future.result()
+            version = extractions[future]
+            proofs[version] = executor.submit(prove_version, version)
+        receipts = [proofs[version].result() for version in staged.versions]
     if before_publish is not None:
         before_publish()
     _publish(project, staged, fingerprint, fresh=fresh, generations=generations)
     return [*receipts, "ready: confirmed configuration and proved generations published"]
 
 
-def complete_setup(
+@contextmanager
+def prepare_setup(
     project: PendingProject,
     census: Census,
     layout: LayoutManifest,
@@ -552,14 +570,17 @@ def complete_setup(
     *,
     confirm: str | None = None,
     supply: Path | None = None,
-) -> list[str]:
-    """Confirm exact evidence, stage full inputs, prove every ROM, publish readiness."""
+) -> Iterator[Callable[[], list[str]]]:
+    """Stage confirmed inputs, then release planning state before the proof."""
+    from unbake.project import compiler_proposal
     from unbake.project import fingerprint as compilers
 
     for line in compilers.receipt(proposal):
         print(f"OK(setup): {line}")
     compilers.confirm_proposal(project, census, layout, proposal, policy, confirm=confirm)
-    accepted = _read(project.build / "setup/proposal.json")
+    accepted_path = project.build / "setup/proposal.json"
+    accepted_sha256 = compiler_files.sha(accepted_path)
+    guard = compiler_proposal.confirmation_guard(project, proposal, policy)
     if proposal["default_compiler"] is None:
         raise Held("setup", "setup.compiler_candidate: explicit default compiler required")
     facts = setup_config.facts(project, census, name=None, title=None)
@@ -586,11 +607,13 @@ def complete_setup(
                 build=_build_options(layout, policy),
             ),
         )
-        _write(tree, "docs/setup/compiler.json", accepted.decode("utf-8"))
+        compiler_document = tree / "docs/setup/compiler.json"
+        compiler_document.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(accepted_path, compiler_document)
         _write(
             tree,
             "docs/setup/confirmation.json",
-            json.dumps({"proposal_sha256": hashlib.sha256(accepted).hexdigest()}) + "\n",
+            json.dumps({"proposal_sha256": accepted_sha256}) + "\n",
         )
         pending = config.load_pending(tree)
         pending.src.mkdir(parents=True, exist_ok=True)
@@ -606,17 +629,26 @@ def complete_setup(
                 "typedef signed long long s64;\ntypedef unsigned long long u64;\n"
                 "typedef float f32;\ntypedef double f64;\n#endif\n",
             )
-        return _prove_publish(
-            project,
-            tree,
-            policy,
-            fingerprint,
-            fresh=True,
-            supply=supply,
-            before_publish=lambda: compilers.confirm_proposal(
-                project, census, layout, proposal, policy, confirm=hashlib.sha256(accepted).hexdigest()
-            ),
+        del census, layout, proposal
+        yield partial(
+            _prove_publish, project, tree, policy, fingerprint, fresh=True, supply=supply, before_publish=guard
         )
+
+
+def complete_setup(
+    project: PendingProject,
+    census: Census,
+    layout: LayoutManifest,
+    proposal: CompilerProposal,
+    policy: SetupPolicy,
+    *,
+    confirm: str | None = None,
+    supply: Path | None = None,
+) -> list[str]:
+    """Stage and prove supplied setup facts in one transaction."""
+    with prepare_setup(project, census, layout, proposal, policy, confirm=confirm, supply=supply) as prove:
+        del census, layout, proposal
+        return prove()
 
 
 def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:
@@ -642,4 +674,5 @@ def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None
             layout_path = tree / "docs/setup/layout.json"
             if layout_path.is_file():
                 _ready_readme(project, measured, cast("LayoutManifest", json.loads(layout_path.read_bytes())), tree)
+            del measured
         return _prove_publish(project, tree, policy, fingerprint, fresh=False, supply=supply)

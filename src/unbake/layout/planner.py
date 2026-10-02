@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import asdict
 from itertools import combinations, pairwise
 from pathlib import Path
@@ -20,6 +21,7 @@ from unbake.layout.rodata_references import collect, words
 from unbake.project.census import Census
 from unbake.project.config import Held, PendingProject, SetupPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
+from unbake.project.rom import Rom
 
 
 def digest(value: Any) -> str:
@@ -159,7 +161,7 @@ def functions(
 
 
 def correspondence(
-    images: dict[str, bytes],
+    images: Mapping[str, bytes | Rom],
     inventories: dict[str, list[split.Function]],
     reference: str,
     *,
@@ -178,9 +180,11 @@ def correspondence(
     signatures: dict[tuple[str, int], str] = {}
     functions: dict[tuple[str, int], split.Function] = {}
     for version, ff in inventories.items():
+        cartridge_image = images[version]
+        image = cartridge_image if isinstance(cartridge_image, bytes) else cartridge_image.image()
         index: dict[str, list[split.Function]] = defaultdict(list)
         for f in ff:
-            code = words(images[version][f.start : f.end])
+            code = words(image[f.start : f.end])
             while len(code) > 2 and code[-1] == 0 and code[-2] != 0x03E00008:
                 code.pop()
             masks = _masks(code)
@@ -189,6 +193,7 @@ def correspondence(
             signatures[version, f.start] = signature
             functions[version, f.start] = f
         indexes[version] = index
+        del image
     parent = {key: key for key in functions}
 
     def root(key: tuple[str, int]) -> tuple[str, int]:
@@ -533,7 +538,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
     measured_by_version = {}
     templates = {}
     loaded_by_version = {}
-    images = {census.names[rom.path]: rom.data for rom in census.cartridges}
+    images = {census.names[rom.path]: rom for rom in census.cartridges}
     ranges_by_version = {census.names[rom.path]: census.inventories[rom.path] for rom in census.cartridges}
     with tempfile.TemporaryDirectory(prefix=".layout-", dir=project.build) as temporary:
         root = Path(temporary)
@@ -541,8 +546,9 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             version = census.names[cartridge.path]
             work = root / version
             work.mkdir()
+            image = cartridge.image()
             input_path = work / "source.z64"
-            input_path.write_bytes(cartridge.data)
+            input_path.write_bytes(image)
             template = split_create.create(
                 input_path,
                 "layout",
@@ -567,7 +573,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                     tuple(tuple(row) for row in saved["data"]),
                 )
             else:
-                measured = measure(cartridge.data, template, Path(executable), work, version)
+                measured = measure(image, template, Path(executable), work, version)
                 cache.parent.mkdir(parents=True, exist_ok=True)
                 cache.write_text(
                     json.dumps(
@@ -579,13 +585,14 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                 (offset, offset + 4)
                 for f in measured.functions
                 for offset in range(f.start, f.end, 4)
-                if not split_analysis.instruction(int.from_bytes(cartridge.data[offset : offset + 4], "big"))
+                if not split_analysis.instruction(int.from_bytes(image[offset : offset + 4], "big"))
             }
             measured = split.ExtractedText(measured.functions, tuple(sorted(set(measured.data) | invalid)))
             measured_by_version[version] = measured
             templates[version] = template
-            inventories[version] = functions(cartridge.data, version, ranges_by_version[version], measured)
-            loaded_by_version[version] = mappings(cartridge.data, ranges_by_version[version])
+            inventories[version] = functions(image, version, ranges_by_version[version], measured)
+            loaded_by_version[version] = mappings(image, ranges_by_version[version])
+            del image
     identity: dict[str, dict[int, str]] = {}
     names = correspondence(images, inventories, census.names_from, evidence=identity)
     holding: dict[str, list[str]] = defaultdict(list)
@@ -600,7 +607,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             )
             for f in original
         ]
-        image, ranges = images[version], ranges_by_version[version]
+        image, ranges = images[version].image(), ranges_by_version[version]
         loaded, loaded_spans = loaded_by_version[version]
         spans = constant_spans(image, loaded, ranges, measured_by_version[version])
         previous = None
@@ -664,6 +671,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                 "iterations": _iteration,
             },
         )
+        del image
     manifest = LayoutManifest(
         schema=1,
         project_id=project.id,

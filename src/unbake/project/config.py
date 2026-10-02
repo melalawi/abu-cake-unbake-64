@@ -139,6 +139,7 @@ class SetupPolicy(CensusPolicy):
     cppflags: tuple[str, ...]
     sn64_asflags: tuple[str, ...]
     probe_count: int
+    setup_version_jobs: int
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,7 @@ class Policy:
     sn64_asflags: tuple[str, ...]
     permuter_archive: Path
     permuter_sha256: str
+    setup_version_jobs: int
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -482,6 +484,7 @@ def policy_template(path: Path) -> None:
     """Create an incomplete template without inventing host facts."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = (
+        "setup_version_jobs",
         "splat",
         "mips_as",
         "mips_ld",
@@ -573,6 +576,7 @@ def _load_policy(path: Path | None, *, stage: str, create_template: bool) -> Pol
             flags("cppflags"),
             flags("sn64_asflags"),
             number("probe_count"),
+            number("setup_version_jobs"),
         )
     if stage != "all":
         raise Held("config", f"policy.stage: unknown stage {stage}")
@@ -600,4 +604,5 @@ def _load_policy(path: Path | None, *, stage: str, create_template: bool) -> Pol
         flags("sn64_asflags"),
         host_path("permuter_archive"),
         _digest(value("permuter_sha256"), 64, "policy.permuter_sha256"),
+        number("setup_version_jobs"),
     )
