@@ -242,21 +242,16 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         before = self.inputs()
         for source in self.sources:
             output = self.cli("try", source)
-            self.assertIn("compiler equivalent " + source.stem, output)
+            self.assertIn(f"OK(try): {source.stem}", output)
             self.assertEqual(self.inputs(), before)
         output = self.cli("submit", "--batch", *self.sources)
         self.assertIn("alpha matched", output)
         self.assertIn("beta matched", output)
+        # config.toml stays configuration only: measurements never become selections.
         data = toml.loads((self.root / "config.toml").read_text())
+        self.assertNotIn("compiler_selections", data)
+        self.assertEqual(data["units"], {source.stem: "ido-5.3" for source in self.sources})
         for source in self.sources:
-            selection = data["compiler_selections"]["tie:unit:" + source.stem]
-            self.assertEqual(selection["status"], "equivalent")
-            self.assertEqual(selection["candidates"], ["ido-5.3", "ido-7.1"])
-            evidence = json.loads(selection["evidence_json"])
-            self.assertNotIn(str(self.directory), selection["evidence_json"])
-            for candidate in evidence["candidates"].values():
-                for version in candidate["versions"].values():
-                    self.assertEqual(version["target_words"], version["candidate_words"])
             self.assertTrue((self.project.src / source.name).is_file())
         self.assertEqual(json.loads(self.manifest.read_bytes())["functions"], [])
         self.assertIn(": OK", self.make())
@@ -264,8 +259,12 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.assertIn("OK(check): no entries", self.cli("check", "--hygiene"))
         # The same cartridge remains exact under either measured compiler member.
         for member in ("ido-5.3", "ido-7.1"):
-            for source in self.sources:
-                data["units"][source.stem] = member
+            # [units] lists only exceptions; the default compiler needs no entry.
+            data["units"] = (
+                {} if member == data["project"]["default_compiler"] else {s.stem: member for s in self.sources}
+            )
+            if not data["units"]:
+                del data["units"]
             (self.root / "config.toml").write_text(toml.dumps(data))
             setup.run(config.load(self.root), self.policy)
             self.assertIn(": OK", self.make())
@@ -289,7 +288,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("submit.sha1", result.stdout)
+        self.assertIn("cartridge differs on", result.stdout)
         self.assertEqual(self.inputs(), before)
         self.assertFalse(list(self.project.src.glob("*.c")))
         self.policy = original

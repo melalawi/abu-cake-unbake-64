@@ -185,6 +185,21 @@ def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts
     accepted = []
     for candidate in candidates:
         try:
+            # Headers a trial staged in its overlay become part of this source's context.
+            from unbake.decomp import work
+
+            overlay = candidate.source.parent / "overlay"
+            staged_headers = [
+                split.Edit(
+                    staged.root / relative,
+                    headers.texts.get(staged.root / relative, ""),
+                    (overlay / relative).read_text(),
+                    tuple(staged.versions),
+                )
+                for relative in sorted(work.overlay_data(staged, candidate.source)["edits"])
+            ]
+            if staged_headers:
+                headers.apply(staged_headers)
             folded = declarations.fold_source(
                 staged,
                 policy,
