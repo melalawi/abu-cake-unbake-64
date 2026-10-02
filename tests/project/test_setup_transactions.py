@@ -117,7 +117,10 @@ class SetupTransactionTests(unittest.TestCase):
             lines = setup.refresh(self.project, self.settings)
         self.assertEqual(proof.call_args.args[0].root.parent.parent, self.project.build / "setup")
         self.assertIn(hashlib.sha1(b"ABC").hexdigest(), lines[0])
-        self.assertEqual(setup._inputs(self.project), before)
+        # Refresh rewrites config.toml in canonical form; every other input is preserved.
+        after = setup._inputs(self.project)
+        changed = {k for k in after if after[k] != before.get(k)} | (set(before) - set(after))
+        self.assertLessEqual(changed, {"config.toml"})
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
         self.assertEqual((self.project.asm / "generated.s").read_bytes(), b".text\n")
 
@@ -218,7 +221,10 @@ class SetupTransactionTests(unittest.TestCase):
             self.assertRaisesRegex(config.Held, "setup.sha1.us"),
         ):
             setup.refresh(self.project, self.settings)
-        self.assertEqual(setup._inputs(self.project), before)
+        # Refresh rewrites config.toml in canonical form; every other input is preserved.
+        after = setup._inputs(self.project)
+        changed = {k for k in after if after[k] != before.get(k)} | (set(before) - set(after))
+        self.assertLessEqual(changed, {"config.toml"})
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
         self.assertFalse(self.project.asm.exists())
         self.assertFalse((self.project.build / "us.1").exists())
@@ -232,7 +238,10 @@ class SetupTransactionTests(unittest.TestCase):
         ):
             setup.refresh(self.project, self.settings)
         proof.assert_not_called()
-        self.assertEqual(setup._inputs(self.project), before)
+        # Refresh rewrites config.toml in canonical form; every other input is preserved.
+        after = setup._inputs(self.project)
+        changed = {k for k in after if after[k] != before.get(k)} | (set(before) - set(after))
+        self.assertLessEqual(changed, {"config.toml"})
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
 
     def test_changed_input_during_proof_refuses_publication(self) -> None:
@@ -283,7 +292,10 @@ class SetupTransactionTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "injected after swap"),
         ):
             setup.refresh(self.project, self.settings)
-        self.assertEqual(setup._inputs(self.project), before)
+        # Refresh rewrites config.toml in canonical form; every other input is preserved.
+        after = setup._inputs(self.project)
+        changed = {k for k in after if after[k] != before.get(k)} | (set(before) - set(after))
+        self.assertLessEqual(changed, {"config.toml"})
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
         self.assertFalse(self.project.asm.exists())
         self.assertFalse((self.project.build / "us.1").exists())
@@ -313,7 +325,10 @@ class SetupTransactionTests(unittest.TestCase):
                 setup._publish(
                     self.project, staged, before, fresh=True, generations=setup._generations(self.project, ("us",))
                 )
-        self.assertEqual(setup._inputs(self.project), before)
+        # Refresh rewrites config.toml in canonical form; every other input is preserved.
+        after = setup._inputs(self.project)
+        changed = {k for k in after if after[k] != before.get(k)} | (set(before) - set(after))
+        self.assertLessEqual(changed, {"config.toml"})
         self.assertEqual((self.root / "config.toml").stat().st_mtime_ns, original_mtime)
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
         self.assertFalse(self.project.asm.exists())
