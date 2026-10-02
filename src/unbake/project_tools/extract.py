@@ -8,9 +8,11 @@ import ast
 import csv
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
 from itertools import pairwise
 from pathlib import Path
@@ -308,16 +310,15 @@ def inventory(script: str, staging: Path, asm: Path, src: Path, compiler: str) -
     seen = set()
     # Splat's legacy and current scripts both name an object followed by sections.
     pattern = re.compile(r'("?)([^\s"(){};]+\.(?:s|c|bin)\.o)\1(?=\s*\()')
+    base = str(staging.resolve())
 
     def replace(match: re.Match[str]) -> str:
         original = Path(match.group(2))
-        # Resolve from the isolated Splat base directory.
-        try:
-            source_path = original if original.is_absolute() else staging / original
-            relative = source_path.resolve().relative_to(staging.resolve())
-        except ValueError as error:
-            raise ValueError(f"linker object outside extraction: {original}") from error
-        spelling = str(relative)
+        # Resolve from the isolated Splat base directory; it holds no symbolic links.
+        spelling = os.path.relpath(os.path.normpath(os.path.join(base, match.group(2))), base)
+        if spelling.startswith(".."):
+            raise ValueError(f"linker object outside extraction: {original}")
+        relative = Path(spelling)
         if spelling.startswith("asm/") and spelling.endswith(".s.o"):
             group, obj = "ASM", Path("obj") / (spelling[:-4] + ".o")
             extracted_source = staging / spelling[:-2]
@@ -375,6 +376,72 @@ def partial_rows(text: str, src: Path) -> str:
         return match[1] + "c" + match[2] + json.dumps(name) + match[4]
 
     return pattern.sub(replace, text)
+
+
+_C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)c(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)
+# Splat outputs that do not depend on whether a code row is C or assembly.
+_SPLAT_OUTPUTS = ("asm", "assets", "include", "layout.ld", ".splat", "undefined_funcs_auto.txt", "undefined_syms_auto.txt")
+
+
+def disassemble(
+    args: argparse.Namespace, text: str, staging: Path, config: Path, overlay: Path, store: Cache, root: Path
+) -> None:
+    """Run splat with every C row disassembled, reusing an identical earlier run.
+
+    Switching a row between C and assembly changes only object spellings, so a
+    batch that publishes C reuses the disassembly of the unchanged boundaries.
+    """
+    names = [scalar(match[3]) for match in _C_ROW.finditer(text)]
+    assembly = _C_ROW.sub(lambda match: match[1] + "asm" + match[2] + match[3] + match[4], text)
+    digest = hashlib.sha256()
+    extensions = sorted((root / "tools" / "splat_ext").rglob("*")) if (root / "tools" / "splat_ext").is_dir() else []
+    for path in (args.baserom, args.symbols, args.recipe, Path(__file__), *extensions):
+        if path.is_file():
+            content = path.read_bytes()
+            label = str(path.relative_to(root)) if path.is_absolute() and path.is_relative_to(root) else path.name
+            digest.update(label.encode() + len(content).to_bytes(8, "big") + content)
+    # The staging and project directories differ per build tree; splat output does not name them.
+    options = overlay.read_text().replace(str(staging), "<staging>").replace(str(root), "<root>")
+    for word in (assembly, options, Path(args.splat).name):
+        digest.update(len(word).to_bytes(8, "big") + word.encode())
+    cached = store.get("splat", digest.hexdigest())
+    if cached is not None:
+        with tarfile.open(cached) as archive:
+            archive.extractall(staging, filter="tar")
+    else:
+        config.write_text(assembly)
+        result = subprocess.run(
+            [args.splat, "split", str(config), str(overlay)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if result.returncode:
+            sys.stderr.write(result.stdout.decode(errors="replace"))
+            raise subprocess.CalledProcessError(result.returncode, result.args)
+        bundle = staging / ".splat-outputs.tar"
+        with tarfile.open(bundle, "w") as archive:
+            for name in _SPLAT_OUTPUTS:
+                if (staging / name).exists():
+                    archive.add(staging / name, arcname=name)
+        store.put("splat", digest.hexdigest(), bundle)
+        bundle.unlink()
+    if not names:
+        return
+    # Name the C rows' objects as splat does for C, in the script and symbol dump.
+    script = staging / "layout.ld"
+    spelled = script.read_text()
+    for name in names:
+        spelled = re.sub(rf"(?<![\w/.])asm/{re.escape(name)}\.s\.o\b", f"src/{name}.c.o", spelled)
+        spelled = re.sub(rf"/asm/{re.escape(name)}\.s\.o\b", f"/src/{name}.c.o", spelled)
+    script.write_text(spelled)
+    dump = staging / ".splat" / "splat_symbols.csv"
+    owners = {Path(name).name for name in names}
+    lines = dump.read_text().splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        fields = line.rstrip("\n").split(",")
+        if len(fields) > 2 and fields[-1] == "asm" and fields[-2] in owners:
+            lines[index] = ",".join([*fields[:-1], "c"]) + "\n"
+    dump.write_text("".join(lines))
 
 
 def extract(args: argparse.Namespace) -> None:
@@ -444,17 +511,9 @@ def extract(args: argparse.Namespace) -> None:
         }
         overlay = staging / "outputs.yaml"
         config = staging / "input.yaml"
-        config.write_text(text)
         options["base_path"] = str(staging)
         overlay.write_text("options:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in options.items()))
-        result = subprocess.run(
-            [args.splat, "split", str(config), str(overlay)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        if result.returncode:
-            sys.stderr.write(result.stdout.decode(errors="replace"))
-            raise subprocess.CalledProcessError(result.returncode, result.args)
+        disassemble(args, text, staging, config, overlay, store, root)
         # Floating directives align relative to an object, while native rows
         # may start between alignment boundaries. Retain exact ROM bytes in
         # independent assembly storage; discovered addresses remain explicit
