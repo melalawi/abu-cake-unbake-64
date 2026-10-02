@@ -15,6 +15,6 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
     else:
         from unbake.cli.workflow import select
 
-        action, reason = select(config.load(project.root), config.load_policy())
+        action, reason = select(config.load(project.root), config.load_policy(), exclude=getattr(args, "exclude", None))
     suggest(action)
     return receipt("next", [reason])

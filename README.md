@@ -52,6 +52,13 @@ Passing fuzzy drafts publish under `NON_MATCHING`, retaining their assembly rows
 They require at least 90% exact words in every containing version, clean source,
 and only register, order or relocation differences.
 
+To reserve existing authored work for a later port, put `unbake-exclusions.json`
+in the project root: `{"schema": 1, "functions": ["function_name"]}`.
+`next` skips excluded items (including editable work and redrafts); `draft`
+refuses them by name. Aliases exclude the entire item. Both commands accept
+`--exclude FILE` to override the project manifest. Missing explicit files,
+malformed manifests, duplicate entries and unknown function names are refused.
+
 ## Dependencies
 
 - Python 3.11 or later

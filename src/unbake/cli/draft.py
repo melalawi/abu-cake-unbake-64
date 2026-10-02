@@ -4,11 +4,12 @@ import argparse
 import re
 import shlex
 import shutil
+from pathlib import Path
 from uuid import uuid4
 
 from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
-from unbake.decomp import m2c, type_context, work
+from unbake.decomp import exclusions, m2c, type_context, work
 from unbake.decomp.trial_target import inputs, owning_versions
 from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 
@@ -16,6 +17,7 @@ from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 def register(phases: Subparsers) -> None:
     parser = phases.add_parser("draft", phase="draft", help="Draft a function using the configured naming version.")
     parser.add_argument("function", nargs="?", metavar="FUNCTION")
+    parser.add_argument("--exclude", type=Path, metavar="FILE", help="Override the project exclusion manifest.")
     parser.add_argument("--without-type-db", action="store_true", help="Diagnostic baseline: omit solved type context.")
     parser.add_argument("--struct", metavar="ID", help="Draft an evidenced shared struct (implementation pending).")
 
@@ -30,6 +32,8 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         raise Held("draft", "draft.function: supply FUNCTION")
     if not re.fullmatch(r"[A-Za-z_]\w*", function):
         raise Held("draft", "draft.function: expected a C identifier")
+    if function in exclusions.load(project, getattr(args, "exclude", None)):
+        raise Held("draft", f"draft.excluded: {function}: excluded by explicit manifest")
     local = project.tools / "clone-policy.toml"
     if local.is_file():
         policy = load_policy(local)

@@ -2,16 +2,25 @@
 
 import json
 import shlex
+from pathlib import Path
 
 from unbake.cli.guidance import command
-from unbake.decomp import drafts, fuzzy_bar, plan, type_context, work
+from unbake.decomp import drafts, exclusions, fuzzy_bar, plan, type_context, work
 from unbake.decomp.assign import Ledger
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import split
 from unbake.project.config import Held, Policy, Project, load_policy
 
 
-def select(project: Project, policy: Policy) -> tuple[str, str]:
+def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> tuple[str, str]:
+    excluded = exclusions.load(project, exclude)
+
+    def draft_command(subject: str) -> str:
+        action = command(project.root, "draft") + " " + shlex.quote(subject)
+        if exclude is not None:
+            action += " --exclude " + shlex.quote(str(exclude.resolve()))
+        return action
+
     local = project.tools / "clone-policy.toml"
     if local.is_file():
         policy = load_policy(local)
@@ -43,7 +52,7 @@ def select(project: Project, policy: Policy) -> tuple[str, str]:
         ):
             continue
         subject = manifest.get("subject")
-        if not isinstance(subject, str) or subject in occupied:
+        if not isinstance(subject, str) or subject in occupied or subject in excluded:
             continue
         source = project.root / manifest["source"]
         if not source.resolve().is_relative_to(project.drafts.resolve()) or not source.is_file():
@@ -56,9 +65,7 @@ def select(project: Project, policy: Policy) -> tuple[str, str]:
         if not owners or all(row.kind == "c" for row in owners):
             continue
         if subject in redrafts:
-            return command(project.root, "draft") + " " + shlex.quote(
-                subject
-            ), f"{subject}: type solution changed; redraft required"
+            return draft_command(subject), f"{subject}: type solution changed; redraft required"
         history = store.rows(subject)
         verb = "try"
         reason = "editable draft has not been tried with its current inputs"
@@ -86,7 +93,7 @@ def select(project: Project, policy: Policy) -> tuple[str, str]:
     if actions:
         _, action, reason = min(actions)
         return action, reason
-    rows = plan.actionable(project, policy)
+    rows = [row for row in plan.actionable(project, policy) if not excluded.intersection(row.aliases)]
     if rows:
         row = rows[0]
         reason = f"{row.function}: supported compiler and complete function boundary on {', '.join(row.versions)}; "
@@ -95,7 +102,7 @@ def select(project: Project, policy: Policy) -> tuple[str, str]:
             if row.score is not None
             else f"smallest supported draft ({row.size} bytes)"
         )
-        return command(project.root, "draft") + " " + shlex.quote(row.function), reason
-    if plan.ranked(project, policy):
+        return draft_command(row.function), reason
+    if any(not excluded.intersection(row.aliases) for row in plan.ranked(project, policy)):
         raise Held("next", "next.project: remaining items need boundary, ownership or claim resolution")
-    return "No unfinished items.", "all supported functions are matched"
+    return "No unfinished items.", "all supported functions are matched or explicitly excluded"
