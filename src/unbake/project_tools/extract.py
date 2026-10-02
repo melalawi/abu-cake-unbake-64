@@ -380,7 +380,15 @@ def partial_rows(text: str, src: Path) -> str:
 
 _C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)c(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)
 # Splat outputs that do not depend on whether a code row is C or assembly.
-_SPLAT_OUTPUTS = ("asm", "assets", "include", "layout.ld", ".splat", "undefined_funcs_auto.txt", "undefined_syms_auto.txt")
+_SPLAT_OUTPUTS = (
+    "asm",
+    "assets",
+    "include",
+    "layout.ld",
+    ".splat",
+    "undefined_funcs_auto.txt",
+    "undefined_syms_auto.txt",
+)
 
 
 def disassemble(
