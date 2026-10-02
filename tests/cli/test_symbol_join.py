@@ -1,4 +1,4 @@
-"""Installed CLI assertions and refusals without partial symbol publication."""
+"""Installed CLI byte-pinned assertions, partial previews and named refusals."""
 
 import hashlib
 import json
@@ -115,7 +115,12 @@ class SymbolJoinTests(unittest.TestCase):
             request["placements"][0][field] = value
             self.refusal([request], "split.join.placement_stale")
         request = self.request("one", ("us", 1), ("us-rev1", 1))
-        self.refusal([request, dict(request, name="two")], "split.join.overlap")
+        before = self.snapshot()
+        output = self.join([request, dict(request, name="two")], expected=1)
+        self.assertIn("split.join.overlap", output)
+        self.assertIn("preview 1 passing joins; 1 refused requests", output)
+        self.assertEqual(before, self.snapshot())
+        self.assertIn("split join --map", output.split("Next: ", 1)[1])
 
     def test_unknown_transfers_are_recorded_without_claiming_graph_identity(self):
         a = [0x0080F809, 0, 0x03E00008, 0]
@@ -123,6 +128,47 @@ class SymbolJoinTests(unittest.TestCase):
         self.fixture.inventory([LEFT, a, RIGHT], [LEFT, b, RIGHT])
         self.share([0, 2])
         self.join([self.request("asserted", ("us", 1), ("us-rev1", 1))])
-        report = json.loads((self.project / "build/setup/join-proposal.json").read_bytes())
+        report = json.loads(next((self.project / "build/setup").glob("join-*/proposal.json")).read_bytes())
         self.assertEqual(set(report["assertions"][0]["unknown_transfers"].values()), {"symbol-graph-indirect"})
         self.assertNotIn("symbol_assertions", self.layout())
+
+    def test_refused_anchor_does_not_rename_or_anchor_the_passing_subset(self):
+        self.fixture.inventory([LEFT, leaf(100), RIGHT, leaf(500)], [LEFT, leaf(200), RIGHT, leaf(700)])
+        self.share([0, 2])
+        good = self.request("good", ("us", 1), ("us-rev1", 1))
+        wrong = self.request("wrong", ("us", 3), ("us-rev1", 0))
+        output = self.join([good, wrong], expected=1)
+        self.assertIn("preview 1 passing joins; 1 refused requests", output)
+        report = json.loads(next((self.project / "build/setup").glob("join-*/proposal.json")).read_bytes())
+        self.assertEqual([row["name"] for row in report["assertions"]], ["good"])
+        self.assertNotIn("wrong", report["replacements"].values())
+
+    def test_parallel_previews_have_separate_complete_receipts(self):
+        self.fixture.inventory([LEFT, leaf(100), RIGHT], [LEFT, leaf(500), RIGHT])
+        requests = [self.request("joined", ("us", 1), ("us-rev1", 1))]
+        path = self.fixture.directory / "parallel joins.json"
+        path.write_text(json.dumps(requests))
+        command = [
+            sys.executable,
+            str(self.fixture.launcher),
+            "--project",
+            str(self.project),
+            "split",
+            "join",
+            "--map",
+            str(path),
+        ]
+        callers = [
+            subprocess.Popen(
+                command, env=self.fixture.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            for _ in range(2)
+        ]
+        for caller in callers:
+            out, error = caller.communicate(timeout=90)
+            self.assertEqual(caller.returncode, 0, out + error)
+        artifacts = list((self.project / "build/setup").glob("join-*/proposal.json"))
+        self.assertEqual(len(artifacts), 2)
+        for artifact in artifacts:
+            self.assertEqual(json.loads(artifact.read_bytes())["assertions"][0]["name"], "joined")
+        self.assertFalse((self.project / "build/setup/join-proposal.json").exists())

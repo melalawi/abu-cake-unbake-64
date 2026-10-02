@@ -156,7 +156,9 @@ def main(argv: list[str] | None = None) -> int:
                 with suppress(Held):
                     if config.load_pending(root).state == "ready":
                         missing = "policy.path"
-            if missing is not None:
+            if invocation.next_on_refusal and invocation.next_action is not None:
+                action = invocation.next_action
+            elif missing is not None:
                 action = guidance.resolve(root, missing=missing, retry=retry)
             else:
                 action = invocation.next_action or guidance.resolve(root, retry=retry)

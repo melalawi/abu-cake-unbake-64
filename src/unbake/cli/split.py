@@ -26,7 +26,9 @@ def register(phases: Subparsers) -> None:
     boundary_map.add_argument("--apply", action="store_true")
     join = split_verbs.add_parser("join", phase="split", help="Assert byte-pinned per-version items share one symbol.")
     join.add_argument("--map", type=Path, required=True, help="JSON list of name/placements/evidence assertions.")
-    join.add_argument("--apply", action="store_true", help="Prove the entire batch once before publishing.")
+    join.add_argument(
+        "--apply", action="store_true", help="Publish passing requests together and report named refusals."
+    )
     classify = split_verbs.add_parser("classify", phase="split", help="Type measured in-text data runs.")
     classify.add_argument("--version", required=True, metavar="V")
     classify.add_argument("--apply", action="store_true")

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from unbake.project import build, makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, SetupPolicy
 
 
 def source_key(project: Project, policy: Policy, source: Path, version: str) -> str:
@@ -41,7 +41,14 @@ def inputs(
 
 
 def prove(
-    project: Project, policy: Policy, version: str, generation: Path, retained: dict[str, str]
+    project: Project,
+    policy: Policy | SetupPolicy,
+    version: str,
+    generation: Path,
+    retained: dict[str, str],
+    *,
+    extracted: bool = False,
+    placed: bool = False,
 ) -> build.BuildResult:
     """Extract, verify provenance, place, link, objcopy and compare; no compilation."""
     log = generation / "build.log"
@@ -61,8 +68,13 @@ def prove(
     ok = False
     sha1_line = ""
     try:
-        run(["make", "extract", f"VERSION={version}", f"BUILD={generation}"])
-        for source, digest in inputs(project, policy, [version])[version].items():
+        retained_inputs = {}
+        if not extracted:
+            if not isinstance(policy, Policy):
+                raise Held("match", "submit.relink: source verification requires the work policy")
+            run(["make", "extract", f"VERSION={version}", f"BUILD={generation}"])
+            retained_inputs = inputs(project, policy, [version])[version]
+        for source, digest in retained_inputs.items():
             if retained.get(source) != digest:
                 raise Held("match", f"submit.reuse_inputs: {source}: VERSION {version}: shared inputs changed")
         graph = (generation / ".split.mk").read_text()
@@ -75,28 +87,29 @@ def prove(
         for path in objects:
             if not (generation / path).is_file():
                 raise Held("match", f"submit.reuse_object: {path}: VERSION {version}: retained object missing")
-        run(
-            [
-                sys.executable,
-                str(project.tools / "layout.py"),
-                "--script",
-                str(generation / f"{project.name}.ld"),
-                "--output",
-                str(generation / f"{project.name}.link.ld"),
-                "--build",
-                str(generation),
-                "--ranges",
-                str(generation / "unit-ranges.json"),
-                "--recipe",
-                str(project.tools / "build.json"),
-                "--version",
-                version,
-                "--baserom",
-                str(project.version(version).baserom),
-                "--non-matching",
-                "0",
-            ]
-        )
+        if not placed:
+            run(
+                [
+                    sys.executable,
+                    str(project.tools / "layout.py"),
+                    "--script",
+                    str(generation / f"{project.name}.ld"),
+                    "--output",
+                    str(generation / f"{project.name}.link.ld"),
+                    "--build",
+                    str(generation),
+                    "--ranges",
+                    str(generation / "unit-ranges.json"),
+                    "--recipe",
+                    str(project.tools / "build.json"),
+                    "--version",
+                    version,
+                    "--baserom",
+                    str(project.version(version).baserom),
+                    "--non-matching",
+                    "0",
+                ]
+            )
         recipe = makefile.recipe(project)
         ld = makefile.host_executable(policy, recipe.ld, "mips_ld")
         objcopy = makefile.host_executable(policy, recipe.objcopy, "mips_objcopy")

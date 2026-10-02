@@ -13,7 +13,7 @@ from typing import Any, cast
 import toml  # type: ignore[import-untyped]
 
 from unbake.cli.common import suggest
-from unbake.layout import planner, port, split
+from unbake.layout import planner, port, split, symbol_proof
 from unbake.layout.symbol_identity import similarity_distribution
 from unbake.project import setup, toolchain
 from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
@@ -207,6 +207,7 @@ def publish(
         if selection.get("function", measured.get("function")) in affected:
             report.setdefault("prior_compiler_selections", {})[key] = selection
             del data["compiler_selections"][key]
+    fast = symbol_proof.available(project, replacements)
     with tempfile.TemporaryDirectory(prefix="symbol-proof-", dir=directory) as temporary:
         tree = Path(temporary) / "tree"
         setup._copy_inputs(project, tree, inputs)
@@ -218,6 +219,16 @@ def publish(
         for header in (tree / path.relative_to(project.root) for path in project.include):
             for path in header.rglob("*.h"):
                 path.write_text(rewrite(path.read_text(), replacements))
+        removed = []
+        if not fast:
+            for source in (tree / project.src.relative_to(project.root)).rglob("*.c"):
+                source.write_text(rewrite(source.read_text(), replacements))
+                if source.stem in replacements:
+                    target = source.with_name(replacements[source.stem] + ".c")
+                    if target.exists() and target.read_bytes() != source.read_bytes():
+                        raise Held("split", f"split.join.authored_source: {source.name}: joined C sources differ")
+                    removed.append(source.relative_to(tree).as_posix())
+                    source.replace(target)
         for version in report["layout"]["versions"].values():
             if "split_yaml" in version["evidence"]:
                 version["evidence"]["split_yaml"] = rewrite_layout(version["evidence"]["split_yaml"], replacements)
@@ -227,11 +238,46 @@ def publish(
                 provider["name"] = path_name(provider["name"], replacements)
                 provider["owners"] = [replacements.get(owner, owner) for owner in provider["owners"]]
         (tree / "config.toml").write_text(toml.dumps(data))
-        (tree / "docs/setup/layout.json").write_text(json.dumps(report["layout"], indent=2, sort_keys=True) + "\n")
-        (tree / "docs/setup/symbol-correspondence.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        (tree / "docs/setup/layout.json").write_text(
+            json.dumps(report["layout"], separators=(",", ":"), sort_keys=True) + "\n"
+        )
+        with (tree / "docs/setup/symbol-correspondence.json").open("w") as stream:
+            json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+        if fast:
+            from unbake.project import config
+
+            staged = config.load(tree)
+            setup.run(staged, policy)
+            # Header changes are identifier substitutions only. Authored C
+            # references and edited compiled headers force the full proof in
+            # available(); retained object bindings are checked and relinked
+            # below, without reparsing an unchanged SDK type context.
+            if replacements:
+                receipts, assembly, generations = symbol_proof.prove(project, staged, policy, replacements)
+            else:
+                receipts = [
+                    f"{v}: name-only proof; SHA1 OK; unchanged bindings and cached cartridge reused"
+                    for v in project.versions
+                ]
+                assembly = []
+                generations = setup._generations(project, project.versions)
+            setup._publish(
+                project,
+                staged,
+                inputs,
+                fresh=True,
+                generations=generations,
+                assembly_changes=assembly,
+                relocated_generations=True,
+                reuse_generations=not replacements,
+            )
+            return [*receipts, "ready: name-only symbol transaction published"]
         del report, data, groups
         # Symbol updates rebuild every object. Prove versions in turn so
         # simultaneous large linkers do not multiply resident cartridge work.
         # The per-version build still uses the configured core budget.
         proof_policy = replace(policy, setup_version_jobs=1)
-        return setup._prove_publish(project, tree, proof_policy, inputs, fresh=True, supply=None)
+        return setup._prove_publish(
+            project, tree, proof_policy, inputs, fresh=True, supply=None, removed_inputs=tuple(removed)
+        )

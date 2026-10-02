@@ -72,22 +72,29 @@ body SHA256, and nonempty correspondence evidence:
 ]
 ```
 
-Review `build/setup/join-proposal.json`, then run the same command with `--apply`.
+Review the per-invocation `build/setup/join-*/proposal.json` path printed in the
+receipt, then run the same command with `--apply`. Refused requests are named and
+dropped; the passing subset publishes together. A partial batch exits 1 while
+its receipt states what published. Name-only changes validate ROM pins,
+placements and generated bindings, rebind retained objects and relink without
+compiling. Changed compiled inputs require the full cartridge proof. Validation
+runs outside the publication lock; concurrent joins revalidate against the
+latest names before publishing.
 The batch joins whole existing items and refuses duplicate versions, overlapping
 requests, stale bytes/boundaries, name collisions, crossings of immediate shared
 bounding anchors, and conflicting edges to already corresponding callers or
 callees present in both versions. Unknown transfers are recorded explicitly;
 a user assertion supplies identity without claiming an indirect target was
-proved. A refusal prevents the entire batch. Submit a corrected batch containing
-only valid requests to apply those requests in one transaction.
+proved. Each receipt explains the refused placements or edges and prints a
+runnable command with the original map path.
 
 Accepted assertions and their byte pins, supplied evidence and validation are
 stored in `docs/setup/layout.json`. Setup refresh retains them and symbol
 replanning seeds them before proposing further joins. Changed assertion bytes
-or boundaries refuse by name. Publication uses one isolated proof of every ROM
-and occurs only after all versions succeed. Independent body hashes, boundaries
-and assembly state remain per placement; affected authored C refuses before
-publication. Compiler candidate sets combine and old selection evidence is
+or boundaries refuse by name. Publication proves every containing ROM using retained objects when names alone
+change, and occurs only after all versions succeed. Independent body hashes,
+boundaries and assembly state remain per placement. Affected compiled C uses
+the full proof; unpublished C requires review before its item can join. Compiler candidate sets combine and old selection evidence is
 archived for the changed item.
 
 ## Work
