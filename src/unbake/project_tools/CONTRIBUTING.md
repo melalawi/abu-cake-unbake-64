@@ -17,7 +17,8 @@ Put your own ROM dumps at these paths.
 unbake setup
 ```
 
-Setup shows compiler evidence and asks for confirmation.
+Setup shows compiler evidence and asks for one confirmation of the whole proposal.
+Clear regional winners need no compiler flags; ties need an explicit choice.
 It prints the policy path and names any missing input.
 It checks every ROM before the project is ready.
 
@@ -48,9 +49,12 @@ Use the file printed by `draft`.
 Draft states which containing version it uses.
 It uses the shared type context.
 Edit that file and run `try` again.
-Submit the exact file after it matches every holding version.
+Submit the tried file after it matches every holding version or passes the owner fuzzy bar.
+The fuzzy bar requires at least 90% exact words in every containing version,
+only register, order or relocation differences, and clean source.
+Passing drafts publish under `NON_MATCHING` while their assembly rows remain.
 Submit proves the ROMs before it publishes the C.
-It feeds proven facts back into solve.
+Exact matches feed proven facts back into solve.
 Affected neighbours are marked for another draft.
 
 Every command ends with the next command to run.

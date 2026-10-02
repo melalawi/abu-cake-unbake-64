@@ -106,6 +106,25 @@ class GateCliTests(MainCase):
         with self.assertRaisesRegex(Held, "split.rename.conflict.*carried"):
             rename_map.plan(self.project, {"alpha": "carried"})
 
+    def test_name_changes_invalidate_only_affected_proven_type_receipts(self):
+        path = self.project.build / "types/proven.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "records": {
+                        "alpha": {"source": "src/alpha.c", "source_sha256": "a" * 64},
+                        "beta": {"source": "src/beta.c", "source_sha256": "b" * 64},
+                    }
+                }
+            )
+        )
+        before = path.read_bytes()
+        changes = rename_map.plan(self.project, {"alpha": "carried"})
+        edit = next(change for change in changes if change.path == path)
+        self.assertEqual(set(json.loads(edit.after)["records"]), {"beta"})
+        self.assertEqual(path.read_bytes(), before)
+
 
 class GateAdmissionTests(MatchFixture):
     def fuzzy(self, exact=9, **differences):
@@ -309,3 +328,37 @@ class RelocationClassificationTests(MainCase):
         self.assertEqual(result.typed["relocation"], 1)
         self.assertEqual(result.typed["changed"], 1)
         self.assertFalse(fuzzy_bar.evaluate({"us": result}, ["us"]).passed)
+
+
+class GateBatchTests(MatchFixture):
+    def test_cli_batch_proves_two_sources_and_refreshes_types_once(self):
+        from unbake.cli.main import main
+        from unbake.decomp import type_context
+
+        alpha, beta = self.draft("alpha"), self.draft("beta")
+        # A separately queued source must not be published by this request.
+        self.queue("gamma")
+        self.prove(alpha)
+        self.prove(beta)
+        with (
+            patch("unbake.cli.main.config.load", return_value=self.project),
+            patch("unbake.cli.main.config.load_policy", return_value=self.policy),
+            patch.object(type_context, "feedback_many") as feedback,
+        ):
+            code = main(["--project", str(self.root), "submit", "--batch", str(alpha), str(beta)])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.calls, [("alpha", "beta")])
+        feedback.assert_called_once()
+        self.assertEqual({entry[0] for entry in feedback.call_args.args[1]}, {"alpha", "beta"})
+        self.assertEqual([row["function"] for row in self.queued()], ["gamma"])
+
+    def test_batch_refuses_changed_source_by_name_and_still_proves_other_source(self):
+        from unbake.match import queue
+
+        alpha, beta = self.draft("alpha"), self.draft("beta")
+        beta.write_text("int beta(void) { return 2; }\n")
+        lines = queue.publish_sources(self.project, self.policy, [alpha, beta])
+        self.assertTrue(any(line.startswith("HELD(submit): beta:") and "source_sha256" in line for line in lines))
+        self.assertTrue(any("alpha matched on VERSION" in line for line in lines))
+        self.assertTrue((self.src / "alpha.c").exists())
+        self.assertFalse((self.src / "beta.c").exists())

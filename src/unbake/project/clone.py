@@ -193,11 +193,17 @@ def _create(
             materialize_links(child)
     for name in filter(None, tracked):
         copy_regular(project.root / name, destination / name)
+    # Init and setup deliberately make no initial commit. Durable ready inputs
+    # must also be copied when the shell still has an empty Git index/history.
+    for name in ("config.toml", "Makefile", "README.md", "CONTRIBUTING.md", ".gitignore", "docs"):
+        path = project.root / name
+        if path.exists():
+            copy_regular(path, destination / name)
     for path in inputs:
         copy_regular(path, destination / project_relative(project, path))
     for name, generation in generations.items():
         version = project.version(name)
-        for path in (version.baserom, version.split, version.symbols, project.asm / name):
+        for path in (version.baserom, version.split.parent, version.symbols, project.asm / name):
             copy_regular(path, destination / project_relative(project, path))
         target = destination / project.build.relative_to(project.root) / generation.name
         copy_regular(generation, target)

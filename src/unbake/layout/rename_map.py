@@ -168,6 +168,23 @@ def plan(project: Project, mapping: dict[str, str]) -> list[Change]:
         add(path, None)
     for path, content in contents.items():
         add(path, content)
+    # A prior matched-C receipt pins the old source spelling and bytes. It is
+    # no longer an admissible type fact after that source is renamed. Invalidate
+    # the affected receipt inside the same all-ROM transaction; the next exact
+    # public submit supplies fresh feedback. Never silently re-pin old evidence.
+    proven = project.build / "types/proven.json"
+    if proven.is_file():
+        value = json.loads(proven.read_bytes())
+        records = value.get("records", {})
+        affected = set(mapping) | set(mapping.values())
+        retained = {
+            name: record
+            for name, record in records.items()
+            if name not in affected and Path(record.get("source", "")).stem not in affected
+        }
+        if retained != records:
+            value["records"] = retained
+            add(proven, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
     # Setup's live owner manifests follow canonical names. Exact historical
     # compiler evidence is retained unchanged; map/solve detect changed inputs.
     metadata = [project.build / "setup/layout.json", project.root / "docs/setup/layout.json"]

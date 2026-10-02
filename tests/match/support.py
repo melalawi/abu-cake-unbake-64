@@ -26,9 +26,10 @@ SCRATCH_ROOT = Path(tempfile.gettempdir())
 
 class MatchFixture(unittest.TestCase):
     def setUp(self) -> None:
-        feedback = patch("unbake.decomp.type_context.feedback")
-        feedback.start()
-        self.addCleanup(feedback.stop)
+        for name in ("feedback", "feedback_many"):
+            feedback = patch("unbake.decomp.type_context." + name)
+            feedback.start()
+            self.addCleanup(feedback.stop)
         (SCRATCH_ROOT).mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=SCRATCH_ROOT)
         self.addCleanup(self.temporary.cleanup)

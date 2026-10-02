@@ -26,7 +26,8 @@ unbake setup
 
 Setup reads every ROM header.
 Each cross-version item gets one name.
-It shows compiler evidence and asks for confirmation.
+It shows compiler evidence and asks for one confirmation of the whole proposal.
+Clear regional winners need no `--compiler` flags; a tied region needs an explicit choice.
 It proves every version before the project is ready.
 Setup prints the policy path and names any missing input.
 Machine paths go in `~/.config/unbake/policy.toml`.
@@ -46,7 +47,10 @@ Solve builds shared types from the measured facts.
 Every command ends with the next command to run.
 `unbake next` prints it again.
 Follow it through `draft` then `try` then `submit`.
-Each submit feeds proven facts back into solve.
+Exact submits feed proven facts back into solve.
+Passing fuzzy drafts publish under `NON_MATCHING`, retaining their assembly rows.
+They require at least 90% exact words in every containing version, clean source,
+and only register, order or relocation differences.
 
 ## Dependencies
 
@@ -64,3 +68,8 @@ Setup checks compiler downloads against pinned SHA-256 hashes.
 ## License
 
 Released under [GNU GPL version 3 or later](LICENSE).
+
+For authored batches, `unbake submit --batch FILE...` admits each explicitly named
+latest trial, proves exact candidates together, and reports held files by name.
+Only requested functions are published. Passing fuzzy candidates retain their
+assembly rows and require a fresh current-input trial after an exact batch.

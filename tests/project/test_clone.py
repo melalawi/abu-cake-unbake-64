@@ -104,6 +104,19 @@ class CloneTests(unittest.TestCase):
         checked = subprocess.run(["make", "-j4", "check"], cwd=self.destination, capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stderr)
 
+    def test_ready_shell_without_initial_commit_keeps_durable_inputs(self) -> None:
+        shutil.rmtree(self.live / ".git")
+        self.git("init")
+        evidence = self.live / "docs/setup/owner.json"
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text('{"owner": "alpha"}\n')
+        with patch.object(clone, "prepare", return_value=False):
+            result = clone.create(self.project, self.policy, self.destination, self.project.versions)
+        self.assertEqual(result.id, self.project.id)
+        self.assertNotEqual(result.workspace_id, self.project.workspace_id)
+        self.assertEqual((self.destination / "Makefile").read_bytes(), (self.live / "Makefile").read_bytes())
+        self.assertEqual((self.destination / "docs/setup/owner.json").read_bytes(), evidence.read_bytes())
+
     def test_cli_acquires_missing_and_stale_compiler_without_changing_source(self) -> None:
         content = b"pinned compiler"
         pin = hashlib.sha256(content).hexdigest()

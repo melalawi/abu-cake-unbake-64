@@ -161,7 +161,9 @@ class _Generations(dict[str, Path]):
         return generation
 
 
-def run(project: Project, policy: Policy, *, function: str | None = None) -> list[str]:
+def run(
+    project: Project, policy: Policy, *, function: str | None = None, functions: tuple[str, ...] | None = None
+) -> list[str]:
     """Build outside build/.lock, isolate failures, then publish verified files."""
     features.load()
     receipts: list[str] = []
@@ -169,6 +171,8 @@ def run(project: Project, policy: Policy, *, function: str | None = None) -> lis
         rows = queue(project)
     if function is not None:
         rows = [row for row in rows if row["function"] == function]
+    if functions is not None:
+        rows = [row for row in rows if row["function"] in functions]
     candidates = []
     for row in rows:
         try:
@@ -219,14 +223,30 @@ def run(project: Project, policy: Policy, *, function: str | None = None) -> lis
             f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}" for draft in candidates
         )
         receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
-        for draft in candidates:
-            source = project.src / (draft.function + ".c")
-            targets = dict(draft.row["work"]["target_sha256"])
+        if len(candidates) > 1:
+            entries = [
+                (
+                    draft.function,
+                    project.src / (draft.function + ".c"),
+                    draft.versions,
+                    dict(draft.row["work"]["target_sha256"]),
+                )
+                for draft in candidates
+            ]
             try:
-                type_context.feedback(project, draft.function, source, draft.versions, targets, policy=policy)
+                type_context.feedback_many(project, entries, policy=policy)
             except (Held, OSError, ValueError, RuntimeError) as error:
                 reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"
-                receipts.append(f"HELD(types): {reason}; {draft.function} was published")
+                receipts.append(f"HELD(types): {reason}; batch was published")
+        else:
+            for draft in candidates:
+                source = project.src / (draft.function + ".c")
+                targets = dict(draft.row["work"]["target_sha256"])
+                try:
+                    type_context.feedback(project, draft.function, source, draft.versions, targets, policy=policy)
+                except (Held, OSError, ValueError, RuntimeError) as error:
+                    reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"
+                    receipts.append(f"HELD(types): {reason}; {draft.function} was published")
         return receipts
     except Held as error:
         receipts.extend(f"HELD(match): {draft.function}: {error.reason}" for draft in candidates)
@@ -251,3 +271,36 @@ def publish_source(project: Project, policy: Policy, source: Path) -> list[str]:
         return nonmatching.publish_source(project, policy, source)
     submit(project, policy, source)
     return run(project, policy, function=source.stem)
+
+
+def publish_sources(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
+    """Admit each named file, prove exact candidates together, and isolate failures."""
+    names = [source.stem for source in sources]
+    if len(set(names)) != len(names):
+        held("submit.source: duplicate function names in --batch")
+    receipts, exact, fuzzy = [], [], []
+    for source in sources:
+        try:
+            rows = drafts.Store(policy, project).rows(source.stem)
+            if rows and not rows[-1]["identical_everywhere"]:
+                from unbake.match import nonmatching
+
+                nonmatching.admit(project, policy, source)
+                fuzzy.append(source)
+            else:
+                submit(project, policy, source)
+                exact.append(source.stem)
+        except Held as error:
+            receipts.append(f"HELD(submit): {source.stem}: {error.reason}")
+    if exact:
+        receipts.extend(run(project, policy, functions=tuple(exact)))
+    for source in fuzzy:
+        # Exact publication changes the proof context; refresh through the real trial.
+        from unbake.decomp import trial
+
+        try:
+            trial.retain_draft(project, policy, source, project.work, versions=None)
+            receipts.extend(publish_source(project, policy, source))
+        except Held as error:
+            receipts.append(f"HELD(submit): {source.stem}: {error.reason}")
+    return receipts

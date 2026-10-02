@@ -42,6 +42,9 @@ def apply(
         tree = Path(temporary) / "project"
         fingerprint = staging.fingerprint(project, project.root)
         staging.copy_tree(project, project.root, tree)
+        local_policy = project.tools / "clone-policy.toml"
+        if local_policy.is_file():
+            atomic(tree / local_policy.relative_to(project.root), local_policy.read_bytes())
         current = {}
         with build.lock(project):
             for version in project.versions:
@@ -97,6 +100,10 @@ def apply(
             with build.lock(project):
                 if staging.fingerprint(project, project.root) != fingerprint:
                     raise Held("split", "split.rename.stale: project inputs changed during proof")
+                for change in all_changes:
+                    before = change.path.read_bytes() if change.path.exists() else None
+                    if before != change.before:
+                        raise Held("split", f"split.rename.stale: {change.path}: changed during proof")
                 for version, generation in current.items():
                     if build.current_generation(project, version).resolve() != generation.resolve():
                         raise Held("split", f"split.rename.stale: {version}: generation changed during proof")
