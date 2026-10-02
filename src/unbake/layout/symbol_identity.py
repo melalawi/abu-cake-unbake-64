@@ -408,6 +408,9 @@ def join_symbols(
                 group = root(key)
                 return tentative.get(group, group)
 
+            mapped_versions: dict[Key, set[str]] = defaultdict(set)
+            for group, keys in members.items():
+                mapped_versions[mapped(group)].update(v for v, _ in keys)
             refused = {}
             for seed, rows in sorted(components.items()):
                 unknown = next((unresolved[key] for key in rows if key in unresolved), None)
@@ -418,10 +421,45 @@ def join_symbols(
                     (frozenset(mapped(k) for k in incoming[key]), frozenset(mapped(k) for k in outgoing[key]))
                     for key in rows
                 ]
+                caller_checks = []
+                caller_mismatch = False
+                caller_evidence = True
+                for i, j in combinations(range(len(rows)), 2):
+                    versions = {rows[i][0], rows[j][0]}
+                    comparable = {
+                        group for group in profiles[i][0] | profiles[j][0] if versions <= mapped_versions[group]
+                    }
+                    first_callers, second_callers = profiles[i][0] & comparable, profiles[j][0] & comparable
+                    caller_checks.append(
+                        {
+                            "positions": [list(rows[i]), list(rows[j])],
+                            "callers": [
+                                [list(k) for k in sorted(first_callers)],
+                                [list(k) for k in sorted(second_callers)],
+                            ],
+                        }
+                    )
+                    caller_mismatch |= first_callers != second_callers
+                    caller_evidence &= bool(first_callers)
+                graph_evidence = bool(profiles[0][1]) or caller_evidence
                 relevant = [proof for pair, proof in proofs.items() if set(pair) <= set(rows)]
-                if any(profile != profiles[0] for profile in profiles[1:]):
+                if caller_mismatch or any(profile[1] != profiles[0][1] for profile in profiles[1:]):
                     refused[seed] = "symbol-graph-mismatch"
-                elif not any(profiles[0]):
+                    refusal = {
+                        "round": iteration,
+                        "positions": [list(key) for key in rows],
+                        "comparable_callers": caller_checks,
+                        "profiles": [
+                            {
+                                "callers": [list(k) for k in sorted(profile[0])],
+                                "callees": [list(k) for k in sorted(profile[1])],
+                            }
+                            for profile in profiles
+                        ],
+                    }
+                    for key in rows:
+                        details.setdefault(key, {})["graph_refusal"] = refusal
+                elif not graph_evidence:
                     if iteration == 0:
                         refused[seed] = "symbol-graph-no-evidence"
                         continue
@@ -475,7 +513,10 @@ def join_symbols(
         detail["fixpoint_rounds"] = iteration - 1
         detail["callers"] = [list(root(k)) for k in sorted(incoming[key])]
         detail["callees"] = [list(root(k)) for k in sorted(outgoing[key])]
-        detail["graph_rule"] = "all resolved caller and callee items agree; no unresolved transfers"
+        detail["graph_rule"] = (
+            "all resolved callees agree; caller edges agree between versions containing that caller; "
+            "no unresolved transfers"
+        )
     return joined
 
 

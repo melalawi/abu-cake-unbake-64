@@ -209,3 +209,41 @@ class SymbolRuleTests(unittest.TestCase):
                 a, b = self.records(report, "us"), self.records(report, "us-rev1")
                 self.assertNotEqual(a[1]["name"], b[2]["name"])
                 self.assertIn("ambiguous", a[1]["evidence"]["correspondence"])
+
+    def test_unjoined_single_version_caller_does_not_veto_agreeing_callees(self):
+        last = [0x3C078020, 0x03E00008, 0]
+        target = 0x80001000 + 4 * (len(LEFT) + len(leaf(100)) + 2)
+        candidate = [0x0C000000 | (target >> 2 & 0x03FFFFFF), 0, *leaf(100)]
+        changed = [*candidate[:2], *leaf(700)]
+        entry = 0x80001000 + len(LEFT) * 4
+        extra = [0x0C000000 | (entry >> 2 & 0x03FFFFFF), 0, 0x24080007, 0x03E00008, 0]
+        self.inventory([LEFT, candidate, RIGHT, extra, last], [LEFT, changed, RIGHT, last])
+        report = self.preview()
+        a, b = (self.records(report, v)[1] for v in ("us", "us-rev1"))
+        self.assertEqual(a["name"], b["name"])
+        self.assertEqual(a["evidence"]["correspondence"], "anchor-call-graph")
+        self.assertLess(a["evidence"]["symbol_correspondence"]["joins"][0]["evidence"][0]["similarity"]["score"], 0.9)
+
+    def test_unjoined_callers_alone_do_not_supply_identity_evidence(self):
+        last = [0x3C078020, 0x03E00008, 0]
+        entry = 0x80001000 + len(LEFT) * 4
+        extra = [0x0C000000 | (entry >> 2 & 0x03FFFFFF), 0, 0x24080007, 0x03E00008, 0]
+        self.inventory([LEFT, leaf(100), RIGHT, extra, last], [LEFT, leaf(700), RIGHT, last])
+        report = self.preview()
+        a, b = (self.records(report, v)[1] for v in ("us", "us-rev1"))
+        self.assertNotEqual(a["name"], b["name"])
+        self.assertEqual(a["evidence"]["correspondence"], "symbol-leaf-similarity-low")
+
+    def test_proven_shared_caller_difference_still_vetoes_candidate(self):
+        last = [0x3C078020, 0x03E00008, 0]
+        target = 0x80001000 + 4 * (len(LEFT) + len(leaf(100)) + 2)
+        candidate = [0x0C000000 | (target >> 2 & 0x03FFFFFF), 0, *leaf(100)]
+        changed = [*candidate[:2], *leaf(700)]
+        entry = 0x80001000 + len(LEFT) * 4
+        first = [0x0C000000 | (entry >> 2 & 0x03FFFFFF), 0, 0x24080007, 0x03E00008, 0]
+        second = [0x0C000000 | (0x80001000 >> 2 & 0x03FFFFFF), *first[1:]]
+        self.inventory([LEFT, candidate, RIGHT, first, last], [LEFT, changed, RIGHT, second, last])
+        report = self.preview()
+        a, b = (self.records(report, v)[1] for v in ("us", "us-rev1"))
+        self.assertNotEqual(a["name"], b["name"])
+        self.assertEqual(a["evidence"]["correspondence"], "symbol-graph-mismatch")
