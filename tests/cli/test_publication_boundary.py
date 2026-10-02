@@ -23,6 +23,7 @@ from unbake.report import progress
 
 class PublicationBoundaryCliTests(unittest.TestCase):
     def setUp(self):
+        names = getattr(self, "names", ("alpha", "beta"))
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
@@ -42,9 +43,9 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         ):
             data["build"][key] = "policy:" + field
         data["compilers"]["ido-5.3"] = dict(data["compilers"]["ido-7.1"])
-        data["compiler_ties"] = {"tie:unit:" + name: ["ido-5.3", "ido-7.1"] for name in ("alpha", "beta")}
-        data["units"] = {name: "tie:unit:" + name for name in ("alpha", "beta")}
-        body = bytes.fromhex("03e0000824020001") * 2
+        data["compiler_ties"] = {"tie:unit:" + name: ["ido-5.3", "ido-7.1"] for name in names}
+        data["units"] = {name: "tie:unit:" + name for name in names}
+        body = bytes.fromhex("03e0000824020001") * len(names)
         image = bytes.fromhex("80371240") + bytes(60) + body
         for version in data["project"]["versions"]:
             cartridge = data["version"][version]
@@ -53,20 +54,28 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             path.write_bytes(image)
             cartridge["baserom_sha1"] = hashlib.sha1(image).hexdigest()
             path = self.root / cartridge["split"]
-            text = (
-                path.read_text()
-                .replace("[0x0, header, header]", "[0x0, bin, header]")
-                .replace("[0x4C, asm, beta]", "[0x48, asm, beta]")
+            text = path.read_text().split("    subsegments:", 1)[0]
+            text = text.replace("[0x0, header, header]", "[0x0, bin, header]")
+            text += (
+                "    subsegments:\n"
+                + "".join(f"      - [0x{0x40 + index * 8:X}, asm, {name}]\n" for index, name in enumerate(names))
+                + f"  - [0x{0x40 + len(names) * 8:X}]\n"
             )
-            text = text.replace("      - [0x58, asm, gamma]\n", "").replace("[0x64]", "[0x50]")
             path.write_text(text)
-            (self.root / cartridge["symbols"]).write_text("alpha = 0x80001000;\nbeta = 0x80001008;\n")
+            (self.root / cartridge["symbols"]).write_text(
+                "".join(f"{name} = 0x{0x80001000 + index * 8:08X};\n" for index, name in enumerate(names))
+            )
         (self.root / "config.toml").write_text(toml.dumps(data))
         self.project = config.load(self.root)
         reports = {
             version: {
                 "version": 2,
-                "measures": {"complete_code": 0, "total_code": 16, "complete_units": 0, "total_units": 2},
+                "measures": {
+                    "complete_code": 0,
+                    "total_code": 8 * len(names),
+                    "complete_units": 0,
+                    "total_units": len(names),
+                },
             }
             for version in self.project.versions
         }
@@ -81,13 +90,13 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         setup.run(self.project, self.policy)
         self.project = config.load(self.root)
         self.sources = []
-        for name in ("alpha", "beta"):
+        for name in names:
             source = self.project.drafts / name / (name + ".c")
             source.parent.mkdir(parents=True)
             source.write_text(f"int {name}(void) {{ return 1; }}\n")
             self.sources.append(source)
         self.manifest = self.root / "unbake-exclusions.json"
-        self.manifest.write_text(json.dumps({"schema": 1, "functions": ["alpha", "beta"]}) + "\n")
+        self.manifest.write_text(json.dumps({"schema": 1, "functions": list(names)}) + "\n")
         self.script = Path(sysconfig.get_path("scripts")) / "unbake"
         self.env = dict(os.environ, PYTHONNOUSERSITE="1")
         self.env.pop("PYTHONPATH", None)

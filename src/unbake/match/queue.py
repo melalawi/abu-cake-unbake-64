@@ -11,7 +11,7 @@ from typing import Any
 
 from unbake.decomp import checks, drafts, features, needs, type_context
 from unbake.layout import split
-from unbake.match import common, declarations, proof
+from unbake.match import common, declarations, proof, reporting
 from unbake.match import staging as stage
 from unbake.match.common import (
     Draft,
@@ -176,16 +176,21 @@ def run(
     project: Project, policy: Policy, *, function: str | None = None, functions: tuple[str, ...] | None = None
 ) -> list[str]:
     """Serialize admission, staging, cartridge proof and the final publication."""
-    with build.lock(project):
+    with reporting.session(project), build.lock(project):
         return _run(config.load(project.root), policy, function=function, functions=functions)
 
 
 def _run(
-    project: Project, policy: Policy, *, function: str | None = None, functions: tuple[str, ...] | None = None
+    project: Project,
+    policy: Policy,
+    *,
+    function: str | None = None,
+    functions: tuple[str, ...] | None = None,
+    validated: list[Draft] | None = None,
 ) -> list[str]:
     """Prove a staged batch and publish while the caller holds the publication lock."""
     features.load()
-    receipts: list[str] = []
+    receipts: list[str] = reporting.Receipts()
     with queue_lock(project):
         rows = queue(project)
     if function is not None:
@@ -193,9 +198,12 @@ def _run(
     if functions is not None:
         rows = [row for row in rows if row["function"] in functions]
     candidates = []
+    admitted = {draft.function: draft for draft in validated or []}
     for row in rows:
         try:
-            candidates.append(validate(project, policy, row))
+            candidates.append(
+                admitted[row["function"]] if row["function"] in admitted else validate(project, policy, row)
+            )
         except Held as error:
             receipts.append(f"HELD(match): {row['function']}: {error.reason}")
     if not candidates:
@@ -215,6 +223,10 @@ def _run(
                 copy_tree(project, project.root, base)
                 fingerprint = stage.fingerprint(project, base)
                 attempt = stage.attempt(project, policy, base, workspace, current, candidates)
+                receipts.extend(attempt.refused.values())
+                candidates = [draft for draft in candidates if draft.function not in attempt.refused]
+                if not candidates:
+                    return receipts
                 if attempt.failures:
                     attempt, candidates = stage.isolate(
                         project, policy, base, workspace, current, candidates, attempt, receipts
@@ -222,20 +234,20 @@ def _run(
                     if attempt is None:
                         return receipts
                 publish(project, policy, attempt, candidates, current, fingerprint)
-                receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
                 published = True
+                receipts.extend(f"OK(match): resolved need {name}" for name in attempt.resolved)
+                receipts.extend(
+                    f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}"
+                    if draft.matched
+                    else (
+                        f"OK(submit): {draft.function} published as NON_MATCHING; "
+                        f"asm rows retained on {', '.join(draft.versions)}"
+                    )
+                    for draft in candidates
+                )
+                receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
             project = config.load(project.root)
             collect(replace(project, versions=tuple(current)))
-        receipts.extend(
-            f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}"
-            if draft.matched
-            else (
-                f"OK(submit): {draft.function} published as NON_MATCHING; "
-                f"asm rows retained on {', '.join(draft.versions)}"
-            )
-            for draft in candidates
-        )
-        receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
         matched_candidates = [draft for draft in candidates if draft.matched]
         if len(matched_candidates) > 1:
             entries = [
@@ -277,12 +289,12 @@ def _run(
 
 
 def publish_source(project: Project, policy: Policy, source: Path) -> list[str]:
-    with build.lock(project):
+    with reporting.session(project), build.lock(project):
         return _publish_source(config.load(project.root), policy, source)
 
 
 def publish_sources(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
-    with build.lock(project):
+    with reporting.session(project), build.lock(project):
         return _publish_sources(config.load(project.root), policy, sources)
 
 
@@ -299,15 +311,32 @@ def _publish_sources(project: Project, policy: Policy, sources: list[Path]) -> l
     names = [source.stem for source in sources]
     if len(set(names)) != len(names):
         held("submit.source: duplicate function names in --batch")
-    receipts, admitted = [], []
+    features.load()
+    receipts, admitted = reporting.Receipts(), []
+    pending = []
+    validated = []
     for source in sources:
         try:
+            source = source.resolve()
             rows = drafts.Store(policy, project).rows(source.stem)
             matched = not rows or rows[-1]["identical_everywhere"]
-            submit(project, policy, source, matched=matched)
+            row = {
+                "function": common.function(source.stem),
+                "source": str(source),
+                "source_sha256": drafts.source_identity(read(source)),
+                "matched": matched,
+            }
+            validated.append(validate(project, policy, row))
+            reporting.record("admitted", source=source.stem, versions=list(validated[-1].versions))
+            # The combined private tree compiles every publication form. An
+            # independent tree and folded compilation per source is redundant.
+            pending.append(row)
             admitted.append(source.stem)
         except Held as error:
             receipts.append(f"HELD(submit): {source.stem}: {error.reason}")
     if admitted:
-        receipts.extend(run(project, policy, functions=tuple(admitted)))
+        with queue_lock(project):
+            existing = [row for row in queue(project) if row["function"] not in admitted]
+            write_queue(project, existing + pending)
+        receipts.extend(_run(project, policy, functions=tuple(admitted), validated=validated))
     return receipts

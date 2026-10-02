@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from unbake.decomp import checks, drafts
-from unbake.match import staging
+from unbake.match import reporting, staging
 from unbake.match.common import (
     Attempt,
     Draft,
@@ -107,6 +107,11 @@ def publish(
                         output.write(json.dumps(row, sort_keys=True) + "\n")
                 functions = {draft.function for draft in candidates}
                 write_queue(project, [row for row in rows if row["function"] not in functions])
+                reporting.record(
+                    "published",
+                    sources=[draft.function for draft in candidates],
+                    generations={version: str(generation) for version, generation in attempt.generations.items()},
+                )
             except BaseException:
                 for version in swapped:
                     swap(project.build_link(version), current[version])

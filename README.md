@@ -45,6 +45,11 @@ source-scoped receipts without changing project build inputs. Submit publishes
 compiler choices, equivalence evidence, shared declarations, layout and exclusion
 removals together, holding the publication lock through the cartridge proof.
 Use `submit --batch SOURCE...` to fold and prove several receipts together.
+A batch publishes its cartridge-proven passing subset and names refused sources.
+Proof failures use object bytes, symbol bytes and link diagnostics to identify
+faults; further isolation relinks retained objects. Refusals stream immediately,
+and proof evidence and receipts persist in `.unbake/state/publications/*.jsonl`
+even if the command stops. A partial publication returns a failing exit status.
 Unrelated compiler evidence and layout entries do not invalidate a receipt.
 Exact equivalents retain their proofs and a deterministic build choice.
 Submit proves the cartridge and feeds types back into solve.

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from unbake.decomp import checks, drafts, needs, work
 from unbake.layout import split, split_apply
-from unbake.match import data_symbols, declarations
+from unbake.match import attribution, data_symbols, declarations, relink, reporting
 from unbake.match.common import (
     QUEUE_PATH,
     Attempt,
@@ -192,8 +192,11 @@ def project_at(project: Project, tree: Path) -> Project:
     )
 
 
-def source_edits(project: Project, policy: Policy, draft: Draft) -> list[split.Edit]:
-    edits = declarations.folded_edits(project, policy, draft.function, draft.content.decode("utf-8"), draft.versions)
+def source_edits(project: Project, policy: Policy, draft: Draft, *, prove_headers: bool = True) -> list[split.Edit]:
+    options = {} if prove_headers else {"prove_headers": False}
+    edits = declarations.folded_edits(
+        project, policy, draft.function, draft.content.decode("utf-8"), draft.versions, **options
+    )
     source = next(edit for edit in edits if edit.path == project.src / (draft.function + ".c"))
     blockers = [finding for finding in checks.run(source.after) if finding.fakematch is None]
     if blockers:
@@ -206,6 +209,32 @@ def source_edits(project: Project, policy: Policy, draft: Draft) -> list[split.E
         *(edit for edit in edits if any(edit.path.is_relative_to(root) for root in project.include)),
         replace(source, after=guarded),
     ]
+
+
+def helper_edits(project: Project) -> list[split.Edit]:
+    """Stage current generated drivers with verified checksum replacements."""
+    edits = []
+    for relative_path, content in makefile.helpers(project).items():
+        path = project.root / relative_path
+        if path.suffix == ".py" and (before := path.read_text() if path.exists() else "") != content:
+            edits.append(split.Edit(path, before, content, project.versions))
+    if not edits:
+        return []
+    checksum = project.tools / "compiler.sha256"
+    before_checksum = checksum.read_text()
+    lines = before_checksum.splitlines(keepends=True)
+    for edit in edits:
+        name = edit.path.relative_to(project.root).as_posix()
+        entries = [i for i, line in enumerate(lines) if line.strip().split(maxsplit=1)[1:] == [name]]
+        if edit.path.exists():
+            if len(entries) != 1 or lines[entries[0]].split()[0] != sha(edit.before.encode()):
+                held(f"submit.helper_checksum: {name}: expected one verified generated helper entry")
+            lines[entries[0]] = f"{sha(edit.after.encode())}  {name}\n"
+        elif entries:
+            held(f"submit.helper_checksum: {name}: declared generated helper is missing")
+        else:
+            lines.append(f"{sha(edit.after.encode())}  {name}\n")
+    return [*edits, split.Edit(checksum, before_checksum, "".join(lines), project.versions)]
 
 
 def compiler_edits(project: Project, candidates: list[Draft]) -> tuple[Project, list[split.Edit]]:
@@ -240,11 +269,20 @@ def compiler_edits(project: Project, candidates: list[Draft]) -> tuple[Project, 
 
 
 def attempt(
-    project: Project, policy: Policy, base: Path, workspace: Path, current: Mapping[str, Path], candidates: list[Draft]
+    project: Project,
+    policy: Policy,
+    base: Path,
+    workspace: Path,
+    current: Mapping[str, Path],
+    candidates: list[Draft],
+    *,
+    reuse: Attempt | None = None,
 ) -> Attempt:
     tree = workspace / uuid4().hex
-    generations = {}
+    generations: dict[str, Path] = {}
     holds = ExitStack()
+    active: Draft | None = None
+    refused: dict[str, str] = {}
     try:
         shutil.copytree(base, tree, symlinks=True)
         # Clone Make graphs select this runtime configuration relative to their
@@ -253,48 +291,104 @@ def attempt(
         if local_policy.is_file():
             shutil.copy2(local_policy, tree / relative(project, local_policy))
         staged_project = project_at(project, tree)
+        drivers = helper_edits(staged_project)
+        write_staged(staged_project, drivers)
         staged_project, applied = compiler_edits(staged_project, candidates)
+        applied = drivers + applied
         from unbake.decomp import exclusions
 
-        excluded = exclusions.publication_edit(staged_project, {draft.function for draft in candidates})
-        write_staged(staged_project, excluded)
-        applied.extend(excluded)
+        compiler_changes = list(applied[len(drivers) :])
+        compiler_count = len(applied)
 
         def apply(staged: Project, policy: Policy, edits: Iterable[split.Edit]) -> None:
             edits = list(edits)
             write_staged(staged, edits)
             applied.extend(edits)
 
-        resolved = needs.resolve([need for draft in candidates for need in draft.needs], staged_project, policy, apply)
+        resolved: list[str] = []
+        accepted = []
         for draft in candidates:
-            manifest = draft.row["work"]
-            overlays = [
-                replace(edit, path=tree / relative(project, edit.path)) for edit in work.header_edits(project, manifest)
-            ]
-            apply(staged_project, policy, overlays)
-            apply(
-                staged_project,
-                policy,
-                source_edits(staged_project, policy, draft),
-            )
-            for version in draft.versions if draft.matched else ():
+            active = draft
+            checkpoint = len(applied)
+            needs_checkpoint = len(resolved)
+            try:
+                resolved.extend(needs.resolve(draft.needs, staged_project, policy, apply))
+                manifest = draft.row["work"]
+                overlays = [
+                    replace(edit, path=tree / relative(project, edit.path))
+                    for edit in work.header_edits(project, manifest)
+                ]
+                apply(staged_project, policy, overlays)
                 apply(
                     staged_project,
                     policy,
-                    data_symbols.prepare(
+                    source_edits(staged_project, policy, draft, prove_headers=reuse is None),
+                )
+                for version in draft.versions if draft.matched else ():
+                    apply(
                         staged_project,
                         policy,
-                        draft.function,
-                        version,
-                        tree / ".unbake" / f"{draft.function}.{version}.o",
-                    ),
-                )
+                        (
+                            data_symbols.edits(staged_project, policy, draft.function, version, cached)
+                            if reuse is not None
+                            and (cached := reuse.tree / ".unbake" / f"{draft.function}.{version}.o").is_file()
+                            else []
+                            if reuse is not None
+                            else data_symbols.prepare(
+                                staged_project,
+                                policy,
+                                draft.function,
+                                version,
+                                tree / ".unbake" / f"{draft.function}.{version}.o",
+                            )
+                        ),
+                    )
+                accepted.append(draft)
+            except Held as error:
+                detail = f"HELD(match): {draft.function}: submit.preparation: {error.reason}"
+                refused[draft.function] = detail
+                reporting.learn(detail)
+                for edit in reversed(applied[checkpoint:]):
+                    if edit.before:
+                        split_apply.write(edit.path, edit.before)
+                    else:
+                        edit.path.unlink(missing_ok=True)
+                del applied[checkpoint:]
+                del resolved[needs_checkpoint:]
+        candidates = accepted
+        active = None
+        if refused:
+            # Remove choices for refused sources before proving or publishing.
+            for edit in reversed(compiler_changes):
+                split_apply.write(edit.path, edit.before)
+            staged_project = project_at(project, tree)
+            staged_project, compiler_changes = compiler_edits(staged_project, candidates)
+            applied = drivers + compiler_changes + applied[compiler_count:]
+        excluded = exclusions.publication_edit(staged_project, {draft.function for draft in candidates})
+        write_staged(staged_project, excluded)
+        applied.extend(excluded)
+        if not candidates:
+            return Attempt(tree, generations, [], holds=holds, refused=refused)
+        active = None
         affected = {v for edit in applied for v in edit.versions}
         versions = [v for v in project.versions if v in affected]
         for version in versions:
             generations[version] = generation(project, version, current[version], holds)
-            chunk_stale_sources(generations[version], tree / relative(project, project.tools))
-        results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
+            if reuse is None:
+                chunk_stale_sources(generations[version], tree / relative(project, project.tools))
+        if reuse is None:
+            results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
+            object_inputs = relink.inputs(staged_project, policy, versions, generations)
+        else:
+            object_inputs = reuse.object_inputs
+            results = build.relink(
+                project,
+                policy,
+                versions,
+                tree=tree,
+                generation_for=generations.__getitem__,
+                object_inputs=object_inputs,
+            )
         failures = []
         diagnostics = {}
         for version in versions:
@@ -308,7 +402,14 @@ def attempt(
             if not result.ok:
                 failures.append(version)
                 diagnostics[version] = f"submit.sha1.{version}: " + compare_failure(staged_project, version, result)
-        return Attempt(
+        reporting.record(
+            "proof",
+            mode="relink" if reuse is not None else "build",
+            sources=[draft.function for draft in candidates],
+            failures=diagnostics,
+            generations={v: str(g) for v, g in generations.items()},
+        )
+        outcome = Attempt(
             tree,
             generations,
             failures,
@@ -317,9 +418,22 @@ def attempt(
             diagnostics,
             holds,
             {v: results[v].sha1_line for v in versions if results[v].ok},
+            object_inputs,
+            refused=refused,
         )
+        outcome.culprits = attribution.diagnose(staged_project, outcome, candidates)
+        reporting.record("attribution", culprits=outcome.culprits)
+        return outcome
     except Held as error:
-        return Attempt(tree, generations, ["preparation"], diagnostics={"preparation": error.reason}, holds=holds)
+        reporting.record("preparation", sources=[draft.function for draft in candidates], reason=error.reason)
+        return Attempt(
+            tree,
+            generations,
+            ["preparation"],
+            diagnostics={"preparation": error.reason},
+            holds=holds,
+            culprits={active.function: [error.reason]} if active is not None else {},
+        )
     except BaseException:
         Attempt(tree, generations, [], holds=holds).discard()
         raise
@@ -335,12 +449,8 @@ def isolate(
     result: Attempt,
     receipts: list[str],
 ) -> tuple[Attempt | None, list[Draft]]:
-    """Halve a failed set, then verify its remainder using the preceding build.
-
-    One failing item costs logarithmically many builds. A failed remainder starts
-    another isolation pass, preserving support for multiple failures/interactions.
-    Only the preceding build and latest passing subset stay pinned.
-    """
+    """Remove attributed faults together; unresolved interactions use retained objects."""
+    pool = result
     passing: Attempt | None = None
     passing_names: tuple[str, ...] = ()
 
@@ -348,54 +458,86 @@ def isolate(
         return tuple(draft.function for draft in group)
 
     def test(group: list[Draft]) -> Attempt:
-        nonlocal result, passing, passing_names
+        nonlocal result, passing, passing_names, pool, candidates
+        group = [draft for draft in group if draft in candidates]
         if passing is not None and names(group) == passing_names:
-            if result is not passing:
+            if result is not passing and result is not pool:
                 result.discard()
             result = passing
             return result
         previous = result
-        result = attempt(project, policy, base, workspace, ChainMap(previous.generations, current), group)
-        if previous is not passing:
+        result = attempt(
+            project,
+            policy,
+            base,
+            workspace,
+            ChainMap(pool.generations, current),
+            group,
+            reuse=pool if pool.generations else None,
+        )
+        if result.refused:
+            receipts.extend(result.refused.values())
+            candidates = [draft for draft in candidates if draft.function not in result.refused]
+            group = [draft for draft in group if draft.function not in result.refused]
+        if previous is not passing and previous is not pool:
             previous.discard()
+        # Preparation failed before any objects existed: the first actual build
+        # establishes the pool; later isolation must never compile again.
+        if not pool.generations and result.generations:
+            pool.discard()
+            pool = result
         if not result.failures:
-            if passing is not None and passing is not result:
+            if passing is not None and passing is not result and passing is not pool:
                 passing.discard()
             passing, passing_names = result, names(group)
         return result
 
     try:
         while result.failures and candidates:
-            suspect = list(candidates)
-            accepted: list[Draft] = []
-            detail = "; ".join(result.diagnostics.values())
-            while len(suspect) > 1:
-                middle = len(suspect) // 2
-                left, right = suspect[:middle], suspect[middle:]
-                tested = test(accepted + left)
-                if tested.failures:
-                    detail = "; ".join(tested.diagnostics.values())
-                    suspect = left
+            faults = {name: detail for name, detail in result.culprits.items() if name in names(candidates)}
+            if faults:
+                for draft in candidates:
+                    if draft.function in faults:
+                        receipts.append(
+                            f"HELD(match): {draft.function}: build compare failed on "
+                            + "; ".join(faults[draft.function])
+                        )
+                candidates = [draft for draft in candidates if draft.function not in faults]
+            else:
+                suspect = list(candidates)
+                accepted: list[Draft] = []
+                detail = "; ".join(result.diagnostics.values())
+                if not pool.generations:
+                    for draft in candidates:
+                        receipts.append(f"HELD(match): {draft.function}: {detail}")
+                    candidates = []
                 else:
-                    accepted += left
-                    suspect = right
-            bad = suspect[0]
-            receipts.append(f"HELD(match): {bad.function}: build compare failed on {detail}")
-            candidates = [draft for draft in candidates if draft is not bad]
+                    while len(suspect) > 1:
+                        middle = len(suspect) // 2
+                        left, right = suspect[:middle], suspect[middle:]
+                        tested = test(accepted + left)
+                        if tested.failures:
+                            detail = "; ".join(tested.diagnostics.values())
+                            suspect = left
+                        else:
+                            accepted += left
+                            suspect = right
+                    bad = suspect[0]
+                    receipts.append(f"HELD(match): {bad.function}: build compare failed on {detail}")
+                    candidates = [draft for draft in candidates if draft is not bad]
             if not candidates:
-                result.discard()
-                if passing is not None and passing is not result:
-                    passing.discard()
                 return None, []
             test(candidates)
-        if passing is not None and passing is not result:
-            passing.discard()
-        return result, candidates
+        return (result, candidates) if candidates else (None, [])
     except BaseException:
         result.discard()
-        if passing is not None and passing is not result:
-            passing.discard()
         raise
+    finally:
+        for abandoned in (pool, passing):
+            if abandoned is not None and abandoned is not result:
+                abandoned.discard()
+        if not candidates:
+            result.discard()
 
 
 def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
@@ -440,6 +582,8 @@ def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
             for version in project.versions
             for p in (project.version(version).split, project.version(version).symbols)
         ),
+        *(project.tools / name.name for name in makefile.TEMPLATES.glob("*.py")),
+        project.tools / "cache.py",
     }
     for edit in edits:
         relative(project, edit.path)

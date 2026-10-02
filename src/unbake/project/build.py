@@ -140,6 +140,23 @@ def build(
     return results
 
 
+def relink(
+    project: Project,
+    policy: Policy,
+    versions: Sequence[str],
+    *,
+    tree: Path,
+    generation_for: Callable[[str], Path],
+    object_inputs: dict[str, dict[str, str]],
+) -> dict[str, BuildResult]:
+    """Reuse compiled objects for a subset; extraction and linking own the proof."""
+    from unbake.match import relink as reuse
+    from unbake.project import config
+
+    staged = config.load(tree)
+    return {v: reuse.prove(staged, policy, v, generation_for(v), object_inputs.get(v, {})) for v in versions}
+
+
 def _run(command: list[str], root: Path) -> bytes:
     try:
         completed = subprocess.run(command, cwd=root, capture_output=True)

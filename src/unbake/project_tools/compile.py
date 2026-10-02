@@ -326,6 +326,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
 def compile_batch(args: argparse.Namespace) -> None:
     """Compile a cold graph chunk in one interpreter, sequentially per Make job."""
     data = read_recipe(args.recipe)
+    failures = []
     for source in args.batch:
         relative = source.relative_to(args.source)
         output = args.output / relative.with_suffix(".o")
@@ -337,8 +338,13 @@ def compile_batch(args: argparse.Namespace) -> None:
         item.dep_target = (
             "$(BUILD)/obj/" + ("asm/" if args.kind == "as" else "src/") + str(relative.with_suffix(".built"))
         )
-        compile_object(item, data)
-        output.with_suffix(".built").touch()
+        try:
+            compile_object(item, data)
+            output.with_suffix(".built").touch()
+        except (OSError, ValueError, KeyError) as error:
+            failures.append(f"{source}: {error}")
+    if failures:
+        raise ValueError("batch objects failed:\n" + "\n".join(failures))
 
 
 def main() -> None:

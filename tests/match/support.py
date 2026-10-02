@@ -140,8 +140,10 @@ class MatchFixture(unittest.TestCase):
         patch.object(progress, "write", return_value=[]).start()
         patch.object(progress, "measure", return_value={}).start()
         patch("unbake.match.data_symbols.prepare", return_value=[]).start()
+        patch("unbake.match.staging.helper_edits", return_value=[]).start()
         patch.object(build, "compile_object", return_value=Path("unused.o")).start()
         patch.object(build, "build", self.build, create=True).start()
+        patch.object(build, "relink", self.build, create=True).start()
         patch.object(build, "current_generation", self.current, create=True).start()
 
     def current(self, project: Project, version: str) -> Path:
@@ -158,6 +160,7 @@ class MatchFixture(unittest.TestCase):
         *,
         tree: Path,
         generation_for: Callable[[str], Path],
+        object_inputs: object = None,
     ) -> dict[str, SimpleNamespace]:
         functions = sorted(path.stem for path in (tree / "src").glob("*.c") if not drafts.is_partial(path.read_text()))
         self.calls.append(tuple(functions))

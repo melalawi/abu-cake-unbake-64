@@ -315,21 +315,24 @@ def functions(project: Project, v: str) -> list[Function]:
     version = project.version(v)
     _, _, segments = layout(version.split)
     _, symbol_rows = symbols(version.symbols)
+    aliases_by_address: dict[int, list[str]] = {}
+    for name, entry in symbol_rows.items():
+        aliases_by_address.setdefault(entry[0], []).append(name)
     result = []
     for segment in segments:
-        for row in segment.rows:
+        for index, row in enumerate(segment.rows):
             if row.kind not in ("asm", "c"):
                 continue
             vram_address = address(row, version.split)
             stem = Path(row.path).name
-            aliases = tuple(name for name, entry in symbol_rows.items() if entry[0] == vram_address)
+            aliases = tuple(aliases_by_address.get(vram_address, ()))
             name = stem if stem in aliases or not aliases else aliases[0]
             result.append(
                 Function(
                     v,
                     name,
                     row.start,
-                    end(row),
+                    segment.rows[index + 1].start if index + 1 < len(segment.rows) else end(row),
                     vram_address,
                     row.path,
                     row.kind,
