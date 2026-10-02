@@ -132,3 +132,26 @@ class DataRenameTests(unittest.TestCase):
             target.baserom.write_bytes(image)
             with self.assertRaisesRegex(Held, "no unambiguous aligned reference in VERSION de"):
                 data_symbols.addresses(project, name)
+
+    def test_indexed_relocation_in_the_locator_preserves_aligned_data_references(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = DataProjectFixture(Path(temporary))
+            project = cast(Project, fixture)
+            for version, array_low, value_low in (("us", 0x100, 0x300), ("eu", 0x200, 0x400)):
+                fixture.layout(version, [(0x10, "asm", "alpha" if version == "us" else "peer"), (0x2C, "data", "pool")])
+                code = [
+                    0x3C018000,
+                    0x00220821,
+                    0x8C220000 | array_low,
+                    0x3C048000,
+                    0x8C830000 | value_low,
+                    0x03E00008,
+                    0,
+                ]
+                image = bytearray(128)
+                image[:4] = bytes.fromhex("80371240")
+                image[0x10:0x2C] = struct.pack(">7I", *code)
+                project.version(version).baserom.write_bytes(image)
+            source = project.version("us").symbols
+            source.write_text(source.read_text() + "value = 0x80000300;\n")
+            self.assertEqual(data_symbols.addresses(project, "value"), {"us": 0x80000300, "eu": 0x80000400})

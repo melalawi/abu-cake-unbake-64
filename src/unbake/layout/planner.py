@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from collections import Counter, defaultdict
 from dataclasses import asdict
-from itertools import pairwise
+from itertools import combinations, pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -159,12 +159,24 @@ def functions(
 
 
 def correspondence(
-    images: dict[str, bytes], inventories: dict[str, list[split.Function]], reference: str
+    images: dict[str, bytes],
+    inventories: dict[str, list[split.Function]],
+    reference: str,
+    *,
+    evidence: dict[str, dict[int, str]] | None = None,
 ) -> dict[str, dict[int, str]]:
-    """Only unique relocation-normalized bodies establish cross-version identity."""
+    """Join unique bodies and identical sequences bounded by shared anchors.
+
+    Inventory order names items; ROM order establishes positional identity.
+    No alignment crosses an unmatched sequence or an inverted anchor pair.
+    Conflicting pairwise proposals are rejected together, rather than letting
+    version iteration order choose which repeated occurrence wins.
+    """
     from unbake.layout.xver import _masks
 
     indexes: dict[str, dict[str, list[split.Function]]] = {}
+    signatures: dict[tuple[str, int], str] = {}
+    functions: dict[tuple[str, int], split.Function] = {}
     for version, ff in inventories.items():
         index: dict[str, list[split.Function]] = defaultdict(list)
         for f in ff:
@@ -172,35 +184,113 @@ def correspondence(
             while len(code) > 2 and code[-1] == 0 and code[-2] != 0x03E00008:
                 code.pop()
             masks = _masks(code)
-            signature = digest([word & ~mask for word, mask in zip(code, masks, strict=True)])
+            signature = digest([(word & ~mask, mask) for word, mask in zip(code, masks, strict=True)])
             index[signature].append(f)
+            signatures[version, f.start] = signature
+            functions[version, f.start] = f
         indexes[version] = index
-    names: dict[str, dict[int, str]] = {version: {} for version in inventories}
-    # Inventory order is the declared project order. A naming version is never
-    # required to contain an item; unique bodies among any subset form one item.
-    canonical: dict[str, tuple[str, split.Function]] = {}
+    parent = {key: key for key in functions}
+
+    def root(key: tuple[str, int]) -> tuple[str, int]:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    def join(a: tuple[str, int], b: tuple[str, int]) -> None:
+        parent[root(b)] = root(a)
+
+    canonical: dict[str, tuple[str, int]] = {}
     for version, index in indexes.items():
         for signature, ff in index.items():
             if len(ff) == 1:
-                canonical.setdefault(signature, (version, ff[0]))
-    used: dict[str, tuple[str, int]] = {}
-    item_names: dict[str, str] = {}
-    for signature, (version, f) in canonical.items():
+                key = (version, ff[0].start)
+                join(canonical.setdefault(signature, key), key)
+    reasons = dict.fromkeys(functions, "repeated-body-unbounded")
+    proposals: dict[tuple[str, int], set[tuple[str, int]]] = defaultdict(set)
+    ordered = {v: sorted(ff, key=lambda f: f.start) for v, ff in inventories.items()}
+    for a, b in combinations(inventories, 2):
+        common = {sig for sig, ff in indexes[a].items() if len(ff) == 1 and len(indexes[b].get(sig, [])) == 1}
+        anchors = {
+            v: [(i, signatures[v, f.start]) for i, f in enumerate(ordered[v]) if signatures[v, f.start] in common]
+            for v in (a, b)
+        }
+        target_pairs = {(left[1], right[1]): (left[0], right[0]) for left, right in pairwise(anchors[b])}
+        for (lo, left), (hi, right) in pairwise(anchors[a]):
+            source = [(a, f.start) for f in ordered[a][lo + 1 : hi]]
+            if (left, right) not in target_pairs:
+                for key in source:
+                    reasons[key] = "repeated-body-anchor-order"
+                continue
+            start, end = target_pairs[left, right]
+            target = [(b, f.start) for f in ordered[b][start + 1 : end]]
+            if [signatures[key] for key in source] != [signatures[key] for key in target]:
+                for key in source + target:
+                    reasons[key] = "repeated-body-sequence-mismatch"
+                continue
+            for first, second in zip(source, target, strict=True):
+                x, y = root(first), root(second)
+                if x != y:
+                    proposals[x].add(y)
+                    proposals[y].add(x)
+    members: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
+    for key in functions:
+        members[root(key)].append(key)
+    seen = set()
+    positional = set()
+    for seed in proposals:
+        if seed in seen:
+            continue
+        component, pending = set(), [seed]
+        while pending:
+            key = pending.pop()
+            if key in component:
+                continue
+            component.add(key)
+            pending.extend(proposals[key] - component)
+        seen.update(component)
+        rows = [key for group in component for key in members[group]]
+        if len({v for v, _ in rows}) != len(rows):
+            for key in rows:
+                reasons[key] = "repeated-body-alignment-conflict"
+            continue
+        # Every edge was checked against the complete masked sequence.
+        assert len({signatures[key] for key in rows}) == 1
+        for key in rows:
+            join(seed, key)
+            positional.add(key)
+    groups: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
+    for key in functions:
+        groups[root(key)].append(key)
+    names: dict[str, dict[int, str]] = {version: {} for version in inventories}
+    used: set[str] = set()
+    # Preserve existing naming precedence, including single-ROM repeated bodies.
+    precedence = list(dict.fromkeys(root(key) for key in canonical.values()))
+    reserved = set(precedence)
+    precedence.extend(group for group in groups if group not in reserved)
+    for group in precedence:
+        rows = groups[group]
+        version, start = rows[0]
+        f = functions[version, start]
+        repeated = len(indexes[version][signatures[version, start]]) > 1
         name = f.name
-        if re.fullmatch(r"func_[0-9A-Fa-f]+", name) or name in used:
+        if (len(rows) == 1 and repeated) or re.fullmatch(r"func_[0-9A-Fa-f]+", name) or name in used:
             name += "_" + version.replace("-", "_")
         if name in used:
-            name += f"_{f.start:X}"
-        used[name] = (version, f.start)
-        item_names[signature] = name
-    for version, index in indexes.items():
-        for signature, ff in index.items():
-            for f in ff:
-                name = item_names[signature] if len(ff) == 1 else f.name + "_" + version.replace("-", "_")
-                if len(ff) != 1 and name in used:
-                    name += f"_{f.start:X}"
-                used.setdefault(name, (version, f.start))
-                names[version][f.start] = name
+            name += f"_{start:X}"
+        used.add(name)
+        for v, at in rows:
+            names[v][at] = name
+            if evidence is not None:
+                evidence.setdefault(v, {})[at] = (
+                    "anchor-sequence"
+                    if (v, at) in positional
+                    else "unique-body"
+                    if len(rows) > 1
+                    else reasons[v, at]
+                    if len(indexes[v][signatures[v, at]]) > 1
+                    else "body-not-shared"
+                )
     return names
 
 
@@ -487,7 +577,8 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             templates[version] = template
             inventories[version] = functions(cartridge.data, version, ranges_by_version[version], measured)
             loaded_by_version[version] = mappings(cartridge.data, ranges_by_version[version])
-    names = correspondence(images, inventories, census.names_from)
+    identity: dict[str, dict[int, str]] = {}
+    names = correspondence(images, inventories, census.names_from, evidence=identity)
     holding: dict[str, list[str]] = defaultdict(list)
     for version, placements in names.items():
         for name in placements.values():
@@ -542,7 +633,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                         "boundary": asdict(evidence),
                         "source": "pinned disassembler",
                         "assembly": True,
-                        "correspondence": "unique-body" if len(holding[f.name]) > 1 else "single-version",
+                        "correspondence": identity[version][f.start],
                         "holding_versions": holding[f.name],
                         "name_source": holding[f.name][0],
                     },
