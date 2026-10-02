@@ -30,7 +30,7 @@ int alpha(void) {
             source = ".set noreorder\n.text\n.globl alpha\nalpha:\nlui $8,%hi(table+4)\naddiu $8,$8,%lo(table+4)\n"
             obj = assemble(root, "alpha", source)
             words = [0x3C08800F, 0x25088194]
-            project, policy, _ = fixture(root, words, ("us", "eu"))
+            project, _policy, _ = fixture(root, words, ("us", "eu"))
             for version in project.versions:
                 found = data_symbols.needs(project, "alpha", version, obj)
                 self.assertEqual(
