@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 import uuid
 from collections import defaultdict
+from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
 from typing import Any, cast
@@ -72,7 +74,11 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
     symbol_names = {v: split.symbols(project.version(v).symbols)[1] for v in project.versions}
     authored = {source.stem: source for source in project.src.rglob("*.c")}
     pending_sources = set(authored) - {f.name for f in functions.values() if f.kind == "c"}
+    data_assertions = []
     for request in assertions:
+        if request.get("kind") == "data":
+            data_assertions.append(request)
+            continue
         name = request.get("name", "<unnamed>")
         try:
             split.name(name, "split.join.name")
@@ -279,9 +285,71 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
         for (v, at), name in final.items()
         if name != functions[v, at].name
     ]
+    data_tables = symbol_replan.project_data_tables(project)
+    # Discover generated D labels through the same relocation boundary before
+    # checking assertions; they need not already be explicit symbol declarations.
+    named_functions = {v: [replace(f, name=final[v, f.start]) for f in rows] for v, rows in ff.items()}
+    symbol_identity.data_identity(images, named_functions, data_tables, lambda f: port.object_path(project, f))
+    validated_data: list[dict[str, Any]] = []
+    for request in data_assertions:
+        name = request.get("name", "<unnamed>")
+        try:
+            split.name(name, "split.join.name")
+            if not request.get("evidence") or not isinstance(request["evidence"], (str, dict)):
+                raise Held("split", "split.join.evidence: supply correspondence evidence")
+            if any(function.name == name for function in functions.values()):
+                raise Held("split", f"split.join.name_conflict: function symbol {name} already exists")
+            rows = request.get("placements")
+            if not isinstance(rows, list) or len(rows) < 2:
+                raise Held("split", "split.join.placements: supply at least two ROM-pinned data placements")
+            versions = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise Held("split", "split.join.placements: expected placement object")
+                v, symbol = row.get("version"), row.get("symbol")
+                if not isinstance(v, str) or v not in data_tables or not isinstance(symbol, str):
+                    raise Held("split", "split.join.data_placement_stale: unknown version or data symbol")
+                entry = data_tables[v].get(symbol)
+                if entry is None and type(row.get("address")) is int:
+                    encoded = re.fullmatch(r"D_([0-9A-Fa-f]{8})", symbol)
+                    if encoded and int(encoded[1], 16) == row["address"]:
+                        entry = symbol_identity.DataSymbol(row["address"])
+                        data_tables[v][symbol] = entry
+                if entry is None or type(row.get("address")) is not int or entry.address != row["address"]:
+                    raise Held("split", "split.join.data_placement_stale: data address differs")
+                if row.get("rom_sha1") != pins[v]:
+                    raise Held("split", "split.join.data_placement_stale: ROM SHA1 differs")
+                if v in versions:
+                    raise Held("split", "split.join.duplicate_version: repeated data version")
+                versions.add(v)
+                if row.get("size", entry.size) != entry.size:
+                    raise Held("split", "data.size_conflict: declared size differs")
+                if row.get("type", entry.kind) != entry.kind:
+                    raise Held("split", "data.kind_conflict: declared kind differs")
+            if name in groups or any(name == old["name"] for old in validated_data):
+                raise Held("split", "split.join.overlap: repeated asserted name")
+            validated_data.append(request)
+        except Held as error:
+            refusals.append({"name": name, "reason": error.reason})
+    existing_data = layout.get("data_assertions", [])
+    data = symbol_identity.data_identity(
+        images,
+        named_functions,
+        data_tables,
+        lambda f: port.object_path(project, f),
+        existing_data + validated_data,
+        symbol_replan.header_data_types(project),
+    )
+    requested = {(p["version"], p["symbol"]) for row in validated_data for p in row["placements"]}
+    for refusal in data["refusals"]:
+        if any(tuple(member) in requested for member in refusal["members"]):
+            refusals.append({"name": "data", "reason": ", ".join(refusal["reasons"])})
+    layout["data_assertions"] = existing_data + validated_data
+    layout["data_symbols"] = data
     report = {
+        "data_symbols": data,
         "schema": 1,
-        "assertions": accepted,
+        "assertions": accepted + validated_data,
         "refusals": refusals,
         "replacements": replacements,
         "placements": placements_changed,

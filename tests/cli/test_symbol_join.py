@@ -172,3 +172,22 @@ class SymbolJoinTests(unittest.TestCase):
         for artifact in artifacts:
             self.assertEqual(json.loads(artifact.read_bytes())["assertions"][0]["name"], "joined")
         self.assertFalse((self.project / "build/setup/join-proposal.json").exists())
+
+    def test_data_assertions_pin_addresses_and_share_transaction_refusals(self):
+        self.fixture.inventory([LEFT, leaf(100), RIGHT], [LEFT, leaf(500), RIGHT])
+        layout = self.layout()
+        placements = []
+        for version, address in (("us", 0x80008000), ("us-rev1", 0x80009000)):
+            placements.append(
+                dict(version=version, symbol=f"D_{address:08X}", address=address, rom_sha1=layout["rom_sha1"][version])
+            )
+        request = dict(
+            kind="data", name="shared_data", placements=placements, evidence="reviewed per-version data layout"
+        )
+        before = self.snapshot()
+        self.join([request])
+        report = json.loads(next((self.project / "build/setup").glob("join-*/proposal.json")).read_bytes())
+        self.assertEqual(report["data_symbols"]["objects"][0]["name"], "shared_data")
+        self.assertEqual(before, self.snapshot())
+        request["placements"][0]["rom_sha1"] = "0" * 40
+        self.refusal([request], "split.join.data_placement_stale")

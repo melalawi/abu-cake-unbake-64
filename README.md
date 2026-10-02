@@ -54,6 +54,15 @@ For a ready project, `unbake setup --replan-symbols` reviews correspondence on
 its retained boundaries. Confirm the printed digest to prove every ROM before
 publishing the name changes. Affected authored C requires review first.
 
+Shared function items also establish data correspondence: the same relocation
+position and kind with the same addend pairs their targets. Data names follow
+the declared version order, independently of addresses. Each version binds the
+canonical name to its own address. Whole components with multiple targets in a
+version or incompatible known sizes/types remain local, with named reasons in
+`data_symbols` in the layout and symbol proposal. Unknown sizes stay unknown.
+Address-shaped labels that collide with unrelated objects receive a version
+suffix. No bytes or executable boundaries change.
+
 When automatic evidence is insufficient, `unbake split join --map joins.json`
 previews explicit correspondence assertions. Each entry supplies one symbol
 name, at least two placements pinned by version, integer ROM start/end and raw
@@ -71,6 +80,26 @@ body SHA256, and nonempty correspondence evidence:
   }
 ]
 ```
+
+Data entries use `"kind": "data"`, a name, evidence, and at least two
+placements with `version`, `symbol`, integer `address`, and the version's
+`rom_sha1`. Optional `size` and `type` must agree with known symbol metadata.
+For an undeclared generated label, `symbol` may be `D_XXXXXXXX` matching the
+asserted address; the ROM pin and supplied evidence make this an explicit
+assertion, not an inferred address correspondence. For example:
+
+```json
+[{"kind": "data", "name": "menu_state", "evidence": "Reviewed aligned references",
+  "placements": [
+    {"version": "de", "symbol": "D_800DF540", "address": 2148398400, "rom_sha1": "<40 hexadecimal digits>"},
+    {"version": "eu", "symbol": "D_800EFBB0", "address": 2148465584, "rom_sha1": "<40 hexadecimal digits>"}
+  ]}]
+```
+
+Data assertions join the same relocation components, retain their evidence in
+the layout, and survive replan. Automatic contradictions cannot be overridden
+by an assertion. Function and data entries can share one transaction.
+
 
 Review the per-invocation `build/setup/join-*/proposal.json` path printed in the
 receipt, then run the same command with `--apply`. Refused requests are named and
