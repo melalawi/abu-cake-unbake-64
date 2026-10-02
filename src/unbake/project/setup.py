@@ -365,6 +365,10 @@ def _publish(
     *,
     fresh: bool,
     generations: dict[str, str | None],
+    assembly_changes: list[Path] | None = None,
+    removed_inputs: tuple[str, ...] = (),
+    relocated_generations: bool = False,
+    reuse_generations: bool = False,
 ) -> None:
     """Publish proved files and generations under the shared lock; config is last."""
     writes: dict[Path, tuple[Path, int, int]] = {}
@@ -385,7 +389,7 @@ def _publish(
                     and (project.root / relative).exists()
                 )
                 or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
-                or relative in {"README.md", "CONTRIBUTING.md", "config.toml", ".gitignore"}
+                or relative in {"README.md", "CONTRIBUTING.md", ".gitignore"}
                 or relative.startswith("docs/")
             )
         ):
@@ -395,7 +399,7 @@ def _publish(
             writes[target] = (path, path.stat().st_mode & 0o777, path.stat().st_mtime_ns)
     # Extracted assembly is a generated, ignored input for standalone make.
     if staged.asm.is_dir():
-        for path in staged.asm.rglob("*"):
+        for path in staged.asm.rglob("*") if assembly_changes is None else assembly_changes:
             if path.is_file():
                 target = project.asm / path.relative_to(staged.asm)
                 if not target.exists() or compiler_files.sha(target) != compiler_files.sha(path):
@@ -404,7 +408,7 @@ def _publish(
     if fresh:
         staged_config = staged.root / "config.toml"
         writes[config_path] = (staged_config, 0o644, staged_config.stat().st_mtime_ns)
-    obsolete = []
+    obsolete = [project.root / relative for relative in removed_inputs]
     manifest = project.tools / "compiler.sha256"
     if manifest.is_file():
         for row in manifest.read_text().splitlines():
@@ -446,7 +450,7 @@ def _publish(
                 while not parent.exists():
                     directories.append(parent)
                     parent = parent.parent
-            for version in staged.versions:
+            for version in () if reuse_generations else staged.versions:
                 link = project.build / version
                 if link.exists() and not link.is_symlink():
                     raise Held("setup", f"setup.publication: generation link {link}: expected symlink")
@@ -461,14 +465,15 @@ def _publish(
                 moved.append(destination)
                 # Extraction dependencies normally use project-relative paths.
                 # Relocate explicit temporary paths in generated text receipts.
-                _relocate_generation(destination, staged.root, project.root)
+                if not relocated_generations:
+                    _relocate_generation(destination, staged.root, project.root)
             for target, (source, mode, mtime) in writes.items():
                 if target != config_path:
                     compiler_files.atomic_copy(target, source, mode=mode)
                     os.utime(target, ns=(target.stat().st_atime_ns, mtime))
             for target in obsolete:
                 target.unlink()
-            for version, generation in zip(staged.versions, moved, strict=True):
+            for version, generation in zip(() if reuse_generations else staged.versions, moved, strict=True):
                 _swap(project.build / version, generation.name)
             if config_path in writes:
                 source, mode, mtime = writes[config_path]
@@ -520,6 +525,7 @@ def _prove_publish(
     fresh: bool,
     supply: Path | None,
     before_publish: Callable[[], None] | None = None,
+    removed_inputs: tuple[str, ...] = (),
 ) -> list[str]:
     staged = config.load(tree)
     generations = _generations(project, staged.versions)
@@ -556,7 +562,7 @@ def _prove_publish(
         receipts = [proofs[version].result() for version in staged.versions]
     if before_publish is not None:
         before_publish()
-    _publish(project, staged, fingerprint, fresh=fresh, generations=generations)
+    _publish(project, staged, fingerprint, fresh=fresh, generations=generations, removed_inputs=removed_inputs)
     return [*receipts, "ready: confirmed configuration and proved generations published"]
 
 
@@ -602,7 +608,6 @@ def prepare_setup(
                 title=facts["project"]["title"],
                 default_compiler=proposal["default_compiler"],
                 assignments=proposal["assignments"],
-                compiler_ties=proposal.get("compiler_ties", {}),
                 cflags={ident: tuple(flags) for ident, flags in proposal["cflags"].items()},
                 build=_build_options(layout, policy),
             ),
@@ -651,16 +656,19 @@ def complete_setup(
         return prove()
 
 
-def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:
-    """Prove existing authored inputs and refresh only generated files."""
+def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:
+    """Prove existing authored inputs, refresh generated files and keep config.toml configuration only."""
     from unbake.project import census
 
+    configured = setup_config.canonical(_read(pending.root / "config.toml").decode())
+    project = config.load(pending.root, text=configured)
     fingerprint = _inputs(project)
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="proof-", dir=directory) as temporary:
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
+        (tree / "config.toml").write_text(configured)
         staged = config.load(tree)
         _seed_generations(project, staged)
         if supply is not None:

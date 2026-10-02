@@ -10,7 +10,7 @@ from typing import cast
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.project import build, census, compiler_files, compiler_proposal, config, setup
+from unbake.project import build, census, compiler_files, compiler_proposal, config, setup, setup_config
 from unbake.project.config import Held, PendingProject, SetupPolicy
 from unbake.project.flow import LayoutManifest
 
@@ -23,17 +23,12 @@ def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> li
     except (OSError, ValueError) as error:
         raise Held("setup", f"setup.compiler_layout: {error}") from error
     measured = census.run(pending, policy, names_from=project.names_from)
-    # Keep published C and byte-backed prior pins on their proved recipe.
+    # Keep published C and measured exception units on their proved recipe.
     retained = {source.stem: project.compiler_reference(source) for source in project.src.rglob("*.c")}
-    selected_functions = {row.get("function") for row in _selections(project)}
-    for name, ident in project.units.items():
-        if name in selected_functions:
-            retained[name] = ident
-    if any(ident in project.compiler_ties for ident in retained.values()):
-        raise Held("setup", "setup.compiler_retained: published C must have a decided recipe")
+    retained.update(project.units)
     proposal = compiler_proposal.propose_compilers(pending, measured, layout, policy, choices=retained)
     proposal["retained_assignments"] = {  # type: ignore[typeddict-unknown-key]
-        "rule": "preserve published C and prior byte-backed pins on their proved compiler",
+        "rule": "preserve published C and measured exception units on their proved compiler",
         "assignments": retained,
         "sources": {str(p.relative_to(project.root)): compiler_files.sha(p) for p in project.src.rglob("*.c")},
     }
@@ -44,9 +39,14 @@ def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> li
     fingerprint = setup._inputs(project)
     original = (project.root / "config.toml").read_bytes()
     data = toml.loads(original.decode())
-    data["units"] = proposal["assignments"]
-    data["compiler_ties"] = proposal.get("compiler_ties", {})
-    data["project"]["default_compiler"] = proposal["default_compiler"]
+    default = proposal["default_compiler"]
+    if default is None:
+        raise Held("setup", "setup.compiler_candidate: explicit default compiler required")
+    data["project"]["default_compiler"] = default
+    data.pop("units", None)
+    units = setup_config.exception_units(default, proposal["assignments"])
+    if units:
+        data["units"] = units
     data["compilers"] = {ident: {"cflags": flags} for ident, flags in proposal["cflags"].items()}
     with tempfile.TemporaryDirectory(prefix="compiler-refresh-", dir=project.build / "setup") as temporary:
         tree = Path(temporary) / "tree"
@@ -87,8 +87,3 @@ def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> li
                         compiler_files.atomic_bytes(path, old_content)
                 raise
     return ["compiler proposal accepted; recipes updated; layout and map retained", "run unbake solve"]
-
-
-def _selections(project: config.Project) -> list[dict[str, object]]:
-    data = toml.loads((project.root / "config.toml").read_text())
-    return [json.loads(row["evidence_json"]) for row in data.get("compiler_selections", {}).values()]

@@ -92,7 +92,8 @@ class SymbolJoinProofTests(unittest.TestCase):
             affected.write_text("int affected(void) { return 0; }\n")
             output = command("--project", str(project), "split", "join", "--map", str(mapping), "--apply", expected=1)
             self.assertIn("split.join.authored_source", output)
-            self.assertEqual(before, path.read_bytes())
+            self.assertIn("published 1 passing joins; 1 refused requests", output)
+            before = path.read_bytes()
             affected.unlink()
             # Real mismatching C in an unrelated item must stop the cartridge
             # proof without publishing any join or replacing a generation.
@@ -122,8 +123,14 @@ class SymbolJoinProofTests(unittest.TestCase):
             bad_source.unlink()
             for split_path, text in changed_splits.items():
                 split_path.write_text(text)
-            output = command("--project", str(project), "split", "join", "--map", str(mapping), "--apply")
-            self.assertEqual(output.count("every cartridge byte proved"), 2)
+            refused = dict(joins[0], name="refused_duplicate")
+            mapping.write_text(json.dumps([*joins, refused]))
+            output = command("--project", str(project), "split", "join", "--map", str(mapping), "--apply", expected=1)
+            self.assertEqual(output.count("name-only proof"), 2)
+            self.assertIn("published 2 passing joins; 1 refused requests", output)
+            self.assertIn("refused_duplicate: split.join.overlap", output)
+            self.assertIn("split join --map", output.split("Next: ", 1)[1])
+            mapping.write_text(json.dumps(joins))
             joined = json.loads(path.read_bytes())
             self.assertEqual(len(joined["items"]), len(layout["items"]) - 2)
             self.assertEqual(len(joined["symbol_assertions"]), 2)

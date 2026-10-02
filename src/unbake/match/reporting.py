@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 from unbake.project.config import Project
@@ -78,3 +79,14 @@ class Receipts(list[str]):
     def extend(self, lines: Iterable[str]) -> None:
         for line in lines:
             self.append(line)
+
+
+@contextmanager
+def phase(name: str, **evidence: object) -> Iterator[None]:
+    """Journal a publication phase with its wall time, even when it stops early."""
+    start = monotonic()
+    record("phase_started", phase=name, **evidence)
+    try:
+        yield
+    finally:
+        record("phase_finished", phase=name, seconds=round(monotonic() - start, 3), **evidence)

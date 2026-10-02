@@ -14,6 +14,7 @@ from unbake.project.config import Held
 class Invocation:
     refused: bool = False
     next_action: str | None = None
+    next_on_refusal: bool = False
     missing_input: str | None = None
 
 
@@ -26,11 +27,12 @@ def begin() -> Invocation:
     return invocation
 
 
-def suggest(action: str) -> None:
+def suggest(action: str, *, on_refusal: bool = False) -> None:
     """Commands hand their next action to the single terminal receipt owner."""
     invocation = _invocation.get()
     if invocation is not None:
         invocation.next_action = action.removeprefix("Next: ")
+        invocation.next_on_refusal = on_refusal
 
 
 def finish(action: str, *, json_output: bool = False) -> None:

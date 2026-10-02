@@ -33,6 +33,37 @@ def headers(
         for path in sorted(root.rglob("*.h"))
         if not storage.generated(project, path)
     }
+    if extra is None:
+        from unbake.project.cache import remembered
+
+        selection = (
+            project.root,
+            version,
+            line_markers,
+            None if policy is None else (str(policy.cpp), tuple(policy.cppflags)),
+            project.compilers[project.default_compiler].cflags,
+            project.include,
+            project.version(version).macros,
+            tuple(sorted(contents.items())),
+        )
+        return remembered(
+            "typemap.headers",
+            selection,
+            lambda: _headers(project, policy, version, contents, None, line_markers=line_markers),
+            keep=8,
+        )
+    return _headers(project, policy, version, contents, extra, line_markers=line_markers)
+
+
+def _headers(
+    project: Project,
+    policy: Policy | None,
+    version: str,
+    contents: dict[Path, str],
+    extra: Path | None,
+    *,
+    line_markers: bool,
+) -> str:
     ordered = ordered_headers(contents)
     if policy is None:
         # Raw guarded headers are useful to in-memory callers; other conditionals need cpp.
@@ -55,7 +86,7 @@ def headers(
             source += f'#include "{generated_types}"\n'
         source += f'#include "{extra}"\n'
     flags: list[str] = []
-    pending = iter(project.compilers[project.compiler_id(project.default_compiler)].cflags)
+    pending = iter(project.compilers[project.default_compiler].cflags)
     for flag in pending:
         if flag in ("-D", "-U", "-include", "-isystem"):
             value = next(pending, None)

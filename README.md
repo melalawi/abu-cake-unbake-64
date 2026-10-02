@@ -54,6 +54,15 @@ For a ready project, `unbake setup --replan-symbols` reviews correspondence on
 its retained boundaries. Confirm the printed digest to prove every ROM before
 publishing the name changes. Affected authored C requires review first.
 
+Shared function items also establish data correspondence: the same relocation
+position and kind with the same addend pairs their targets. Data names follow
+the declared version order, independently of addresses. Each version binds the
+canonical name to its own address. Whole components with multiple targets in a
+version or incompatible known sizes/types remain local, with named reasons in
+`data_symbols` in the layout and symbol proposal. Unknown sizes stay unknown.
+Address-shaped labels that collide with unrelated objects receive a version
+suffix. No bytes or executable boundaries change.
+
 When automatic evidence is insufficient, `unbake split join --map joins.json`
 previews explicit correspondence assertions. Each entry supplies one symbol
 name, at least two placements pinned by version, integer ROM start/end and raw
@@ -72,22 +81,49 @@ body SHA256, and nonempty correspondence evidence:
 ]
 ```
 
-Review `build/setup/join-proposal.json`, then run the same command with `--apply`.
+Data entries use `"kind": "data"`, a name, evidence, and at least two
+placements with `version`, `symbol`, integer `address`, and the version's
+`rom_sha1`. Optional `size` and `type` must agree with known symbol metadata.
+For an undeclared generated label, `symbol` may be `D_XXXXXXXX` matching the
+asserted address; the ROM pin and supplied evidence make this an explicit
+assertion, not an inferred address correspondence. For example:
+
+```json
+[{"kind": "data", "name": "menu_state", "evidence": "Reviewed aligned references",
+  "placements": [
+    {"version": "de", "symbol": "D_800DF540", "address": 2148398400, "rom_sha1": "<40 hexadecimal digits>"},
+    {"version": "eu", "symbol": "D_800EFBB0", "address": 2148465584, "rom_sha1": "<40 hexadecimal digits>"}
+  ]}]
+```
+
+Data assertions join the same relocation components, retain their evidence in
+the layout, and survive replan. Automatic contradictions cannot be overridden
+by an assertion. Function and data entries can share one transaction.
+
+
+Review the per-invocation `build/setup/join-*/proposal.json` path printed in the
+receipt, then run the same command with `--apply`. Refused requests are named and
+dropped; the passing subset publishes together. A partial batch exits 1 while
+its receipt states what published. Name-only changes validate ROM pins,
+placements and generated bindings, rebind retained objects and relink without
+compiling. Changed compiled inputs require the full cartridge proof. Validation
+runs outside the publication lock; concurrent joins revalidate against the
+latest names before publishing.
 The batch joins whole existing items and refuses duplicate versions, overlapping
 requests, stale bytes/boundaries, name collisions, crossings of immediate shared
 bounding anchors, and conflicting edges to already corresponding callers or
 callees present in both versions. Unknown transfers are recorded explicitly;
 a user assertion supplies identity without claiming an indirect target was
-proved. A refusal prevents the entire batch. Submit a corrected batch containing
-only valid requests to apply those requests in one transaction.
+proved. Each receipt explains the refused placements or edges and prints a
+runnable command with the original map path.
 
 Accepted assertions and their byte pins, supplied evidence and validation are
 stored in `docs/setup/layout.json`. Setup refresh retains them and symbol
 replanning seeds them before proposing further joins. Changed assertion bytes
-or boundaries refuse by name. Publication uses one isolated proof of every ROM
-and occurs only after all versions succeed. Independent body hashes, boundaries
-and assembly state remain per placement; affected authored C refuses before
-publication. Compiler candidate sets combine and old selection evidence is
+or boundaries refuse by name. Publication proves every containing ROM using retained objects when names alone
+change, and occurs only after all versions succeed. Independent body hashes,
+boundaries and assembly state remain per placement. Affected compiled C uses
+the full proof; unpublished C requires review before its item can join. Compiler candidate sets combine and old selection evidence is
 archived for the changed item.
 
 ## Work

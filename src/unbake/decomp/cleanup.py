@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 
 from unbake.decomp import checks, gbi, type_context, work
-from unbake.layout import split_apply
-from unbake.match import declarations, queue
+from unbake.layout import split, split_apply
+from unbake.match import declarations
 from unbake.match.common import atomic
 from unbake.project.config import Held, Policy, Project
 
@@ -18,7 +18,7 @@ def prepare(project: Project, policy: Policy, source: Path) -> Path:
     if source.suffix != ".c" or not source.is_file() or not source.is_relative_to(project.drafts.resolve()):
         raise Held("cleanup", "cleanup.source: required editable .c file under paths.drafts")
     type_context.required(project)
-    versions = queue.holding_versions(project, source.stem)
+    versions = split.holding_versions(project, source.stem)
     project.work.mkdir(parents=True, exist_ok=True)
     original = source.read_bytes()
     with tempfile.TemporaryDirectory(prefix=source.stem + ".cleanup.", dir=project.work) as temporary:

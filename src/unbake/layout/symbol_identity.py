@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from itertools import combinations, pairwise
+from pathlib import Path
 from typing import Any
 
 from unbake.layout import split
@@ -562,4 +565,291 @@ def similarity_distribution(details: dict[str, dict[int, dict[str, Any]]]) -> di
         "accepted_bins": dict(
             sorted(Counter(bucket(score) for key, score in comparisons.items() if key in accepted).items())
         ),
+    }
+
+
+@dataclass(frozen=True)
+class DataSymbol:
+    address: int
+    size: int = 0
+    kind: str = ""
+
+
+def data_table(text: str) -> dict[str, DataSymbol]:
+    """Read explicit data metadata without mistaking function labels for objects."""
+    result = {}
+    for line in text.splitlines():
+        match = split.SYMBOL.match(line)
+        if match is None:
+            continue
+        kind = re.search(r"\btype\s*:\s*(\w+)", line)
+        size = re.search(r"\bsize\s*:\s*(0[xX][0-9a-fA-F]+|[0-9]+)", line)
+        if kind and kind[1] == "func":
+            continue
+        result[match["name"]] = DataSymbol(
+            int(match["address"], 0), int(size[1], 0) if size else 0, kind[1] if kind else ""
+        )
+    return result
+
+
+def data_slots(
+    image: bytes,
+    function: split.Function,
+    table: dict[str, DataSymbol],
+    executable: list[tuple[int, int]],
+    object_path: Path | None = None,
+    addresses: dict[int, list[str]] | None = None,
+) -> dict[tuple[int, ...], str]:
+    """Use ELF REL slots when available, otherwise proved absolute MIPS operands.
+
+    REL addends belong to the object, never to its version's linked address.
+    Raw operands require an exact label or a declared containing object; there
+    is no nearest-label or surrounding-address inference.
+    """
+    from unbake.families.mips import Relocation
+    from unbake.project_tools.elf import Object
+    from unbake.project_tools.literal_layout import signed
+
+    if object_path is not None and object_path.is_file():
+        obj = Object(object_path)
+        section = obj.section(".text")
+        if section is None:
+            return {}
+        code = words(obj.content(section))
+        golden = words(image[function.start : function.end])
+        relocations = obj.relocations(section)
+        slots: dict[tuple[int, ...], str] = {}
+        pending: dict[str, list[Relocation]] = defaultdict(list)
+        pairs: list[tuple[Relocation | None, Relocation]] = []
+        for at, kind, symbol in relocations:
+            relocation = Relocation(at, kind, symbol["name"] or f"@{symbol['section']}")
+            if kind == 5:
+                pending[relocation.name].append(relocation)
+            elif kind == 6:
+                highs = pending.pop(relocation.name, [])
+                pairs.extend((high, relocation) for high in highs)
+                if not highs:
+                    pairs.append((None, relocation))
+            else:
+                pairs.append((None, relocation))
+        for high, low in pairs:
+            if low.offset >= function.end - function.start:
+                continue
+            if low.kind == 6 and high is not None:
+                addend = ((code[high.offset // 4] & 65535) << 16) + signed(code[low.offset // 4])
+                addend = (addend + 0x80000000) % 0x100000000 - 0x80000000
+            elif low.kind == 2:
+                addend = code[low.offset // 4]
+            elif low.kind in (6, 7):
+                addend = signed(code[low.offset // 4])
+            else:
+                continue
+            if low.name not in table:
+                if not re.fullmatch(r"D_[0-9A-Fa-f]{8}", low.name):
+                    continue
+                if high is not None:
+                    target = (((golden[high.offset // 4] & 65535) << 16) + signed(golden[low.offset // 4])) & 0xFFFFFFFF
+                elif low.kind == 2:
+                    target = golden[low.offset // 4]
+                elif low.kind == 6:
+                    target = (int(low.name[2:], 16) + addend) & 0xFFFFFFFF
+                    if target & 65535 != golden[low.offset // 4] & 65535:
+                        continue
+                elif low.kind == 7 and "_gp" in table:
+                    target = (table["_gp"].address + signed(golden[low.offset // 4])) & 0xFFFFFFFF
+                else:
+                    continue
+                address = (target - addend) & 0xFFFFFFFF
+                if any(start <= address < end for start, end in executable):
+                    continue
+                table[low.name] = DataSymbol(address)
+            if any(start <= table[low.name].address < end for start, end in executable):
+                continue
+            # A HI16 alone is shared by many unrelated RAM operands. Its
+            # paired LO16 position and both instruction shapes must agree.
+            shape = (high.offset, code[high.offset // 4] & 0xFFFF0000) if high is not None else (-1, 0)
+            operand = code[low.offset // 4] & 0xFFFF0000 if low.kind != 2 else 0
+            slots[low.offset, low.kind, addend, *shape, operand] = low.name
+        return slots
+    material = image[function.start : function.end]
+    code = words(material)
+    refs, _ = collect(function.name, material, None, table.get("_gp", DataSymbol(0)).address or None)
+    slots = {}
+    starts = [start for start, _ in executable]
+    by_address = addresses if addresses is not None else {}
+    if addresses is None:
+        for name, binding in table.items():
+            by_address.setdefault(binding.address, []).append(name)
+    sized = [(name, symbol) for name, symbol in table.items() if symbol.size]
+    for ref in refs:
+        at = bisect_right(starts, ref.address) - 1
+        if at >= 0 and ref.address < executable[at][1]:
+            continue
+        matches = [name for name in by_address.get(ref.address, []) if not name.startswith("_")]
+        if not matches:
+            matches = [name for name, symbol in sized if symbol.address <= ref.address < symbol.address + symbol.size]
+        if not matches:
+            name = f"D_{ref.address:08X}"
+            table[name] = DataSymbol(ref.address)
+            by_address.setdefault(ref.address, []).append(name)
+            matches = [name]
+        if len(matches) == 1:
+            name = matches[0]
+            slots[
+                ref.offset,
+                0x100 + ref.opcode,
+                ref.address - table[name].address,
+                code[ref.offset // 4] & 0xFFFF0000,
+            ] = name
+    return slots
+
+
+def data_identity(
+    images: Mapping[str, bytes | Rom],
+    inventories: dict[str, list[split.Function]],
+    tables: dict[str, dict[str, DataSymbol]],
+    object_paths: Callable[[split.Function], Path] | None = None,
+    assertions: list[dict[str, Any]] | None = None,
+    declarations: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """One data identity boundary for setup, replan and evidence-backed joins.
+
+    Reject whole contradictory components, rather than accepting the first
+    pair and allowing iteration order to choose an object's identity.
+    """
+    edges: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
+    slots_by_item: dict[str, dict[str, dict[tuple[int, ...], str]]] = defaultdict(dict)
+    proofs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    holdings: dict[str, set[str]] = defaultdict(set)
+    for version, functions in inventories.items():
+        for function in functions:
+            holdings[function.name].add(version)
+    for version, functions in inventories.items():
+        cartridge = images[version]
+        image = cartridge if isinstance(cartridge, bytes) else cartridge.image()
+        executable = sorted((f.address, f.address + f.end - f.start) for f in functions)
+        addresses: dict[int, list[str]] = defaultdict(list)
+        for name, symbol in tables[version].items():
+            addresses[symbol.address].append(name)
+        for function in functions:
+            if len(holdings[function.name]) < 2:
+                continue
+            slots_by_item[function.name][version] = data_slots(
+                image,
+                function,
+                tables[version],
+                executable,
+                object_paths(function) if object_paths else None,
+                addresses,
+            )
+        del image
+    for item, placements in slots_by_item.items():
+        for a, b in combinations(placements, 2):
+            for slot in placements[a].keys() & placements[b].keys():
+                x, y = (a, placements[a][slot]), (b, placements[b][slot])
+                edges[x].add(y)
+                edges[y].add(x)
+                proof = {"item": item, "slot": list(slot), "targets": [list(x), list(y)]}
+                proofs[x].append(proof)
+    forced = {}
+    for assertion in assertions or []:
+        keys = [
+            (
+                p["version"],
+                assertion["name"]
+                if assertion["name"] in tables.get(p["version"], {})
+                and tables[p["version"]][assertion["name"]].address == p["address"]
+                else p["symbol"],
+            )
+            for p in assertion["placements"]
+        ]
+        for placement, key in zip(assertion["placements"], keys, strict=True):
+            if key[0] in tables and key[1] not in tables[key[0]]:
+                encoded = re.fullmatch(r"D_([0-9A-Fa-f]{8})", key[1])
+                if encoded and int(encoded[1], 16) == placement["address"]:
+                    tables[key[0]][key[1]] = DataSymbol(placement["address"])
+            if (
+                key[0] not in tables
+                or key[1] not in tables[key[0]]
+                or tables[key[0]][key[1]].address != placement["address"]
+            ):
+                from unbake.project.config import Held
+
+                raise Held("setup", f"data.assertion_stale: {assertion['name']}: {key}")
+            forced[key] = assertion["name"]
+            edges[key].update(keys)
+            proofs[key].append({"assertion": assertion})
+    seen: set[tuple[str, str]] = set()
+    accepted: list[dict[str, Any]] = []
+    refused: list[dict[str, Any]] = []
+    renames: dict[str, dict[str, str]] = {v: {} for v in inventories}
+    order = {version: index for index, version in enumerate(inventories)}
+    components = []
+    for seed in sorted(edges):
+        if seed in seen:
+            continue
+        component, pending = set(), [seed]
+        while pending:
+            key = pending.pop()
+            if key not in component:
+                component.add(key)
+                pending.extend(edges[key] - component)
+        seen.update(component)
+        components.append(sorted(component, key=lambda k: (order[k[0]], k[1])))
+    used: set[str] = set()
+    for members in sorted(components, key=lambda rows: (order[rows[0][0]], rows[0][1])):
+        symbols = [tables[v][name] for v, name in members]
+        reasons = []
+        if len({v for v, _ in members}) != len(members):
+            reasons.append("data.symbol_multiple_objects")
+        if len({symbol.size for symbol in symbols if symbol.size}) > 1:
+            reasons.append("data.size_conflict")
+        if len({symbol.kind for symbol in symbols if symbol.kind not in ("", "address")}) > 1:
+            reasons.append("data.kind_conflict")
+        declared_types = {declarations[name] for _, name in members if declarations and name in declarations}
+        if len(declared_types) > 1 and "data.kind_conflict" not in reasons:
+            reasons.append("data.kind_conflict")
+        names = {forced[key] for key in members if key in forced}
+        if len(names) > 1:
+            reasons.append("data.assertion_conflict")
+        if reasons:
+            refused.append(
+                {"members": [list(k) for k in members], "reasons": reasons, "declarations": sorted(declared_types)}
+            )
+            continue
+        canonical = next(iter(names)) if names else members[0][1]
+
+        def occupied(name: str, members: list[tuple[str, str]] = members) -> bool:
+            return name in used or any(name in tables[v] and (v, name) not in members for v in inventories)
+
+        if occupied(canonical):
+            if names:
+                refused.append({"members": [list(k) for k in members], "reasons": ["data.name_conflict"]})
+                continue
+            canonical += "_" + members[0][0].replace("-", "_")
+            while occupied(canonical):
+                canonical += "_data"
+        used.add(canonical)
+        data_placements = []
+        for v, name in members:
+            symbol = tables[v][name]
+            data_placements.append(
+                {"version": v, "symbol": name, "address": symbol.address, "size": symbol.size, "kind": symbol.kind}
+            )
+            if name != canonical:
+                renames[v][name] = canonical
+        accepted.append(
+            {
+                "name": canonical,
+                "placements": data_placements,
+                "evidence": [proof for key in members for proof in proofs[key]],
+            }
+        )
+    return {
+        "objects": accepted,
+        "refusals": refused,
+        "renames": renames,
+        "unified": len(accepted),
+        "rename_count": sum(len(rows) for rows in renames.values()),
+        "contradictions_by_reason": dict(Counter(reason for row in refused for reason in row["reasons"])),
     }

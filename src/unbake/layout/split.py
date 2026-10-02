@@ -163,7 +163,10 @@ def plain(value: str) -> str:
 
 
 def layout(path: Path) -> tuple[str, list[str], list[Segment]]:
-    return parse_layout(path, read(path))
+    from unbake.project.cache import parsed
+
+    text, lines, segments = parsed("split.layout", path, lambda: parse_layout(path, read(path)))
+    return text, list(lines), segments
 
 
 def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
@@ -263,6 +266,13 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
 
 
 def symbols(path: Path) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]]:
+    from unbake.project.cache import parsed
+
+    text, result = parsed("split.symbols", path, lambda: _symbols(path))
+    return text, dict(result)
+
+
+def _symbols(path: Path) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]]:
     text = read(path)
     result = {}
     for index, line in enumerate(text.splitlines(keepends=True)):
@@ -314,6 +324,41 @@ def bss_end(project: Project, version: str, segment: str) -> int:
 
 def functions(project: Project, v: str) -> list[Function]:
     """List named function rows with explicit ROM and VRAM boundaries."""
+    from unbake.project.cache import parsed
+
+    version = project.version(v)
+    return list(parsed("split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v))
+
+
+def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
+    """Function rows keyed by every row stem and symbol alias, shared read-only."""
+    from unbake.project.cache import parsed
+
+    version = project.version(v)
+
+    def build() -> dict[str, list[Function]]:
+        index: dict[str, list[Function]] = {}
+        for row in _functions(project, v):
+            for alias in row.aliases:
+                index.setdefault(alias, []).append(row)
+        return index
+
+    return parsed("split.aliases", (version.split, version.symbols), build, extra=v)
+
+
+def holding_versions(project: Project, function: str) -> tuple[str, ...]:
+    """Versions whose split has a code row named for function, in project order."""
+    versions = tuple(
+        v
+        for v in project.versions
+        if any(Path(row.path).name == function for row in owners_by_alias(project, v).get(function, ()))
+    )
+    if not versions:
+        raise Held("match", f"{function}: split row missing in every VERSION")
+    return versions
+
+
+def _functions(project: Project, v: str) -> list[Function]:
     version = project.version(v)
     _, _, segments = layout(version.split)
     _, symbol_rows = symbols(version.symbols)
@@ -333,12 +378,13 @@ def functions(project: Project, v: str) -> list[Function]:
             stem = Path(row.path).name
             aliases = tuple(by_address.get(vram_address, ()))
             name = stem if stem in aliases or not aliases else aliases[0]
+            stop = segment.rows[index + 1].start if index + 1 < len(segment.rows) else end(row)
             result.append(
                 Function(
                     v,
                     name,
                     row.start,
-                    segment.rows[index + 1].start if index + 1 < len(segment.rows) else end(row),
+                    stop,
                     vram_address,
                     row.path,
                     row.kind,
@@ -348,7 +394,7 @@ def functions(project: Project, v: str) -> list[Function]:
                         (entry_name, entry_address - vram_address)
                         for entry_address, entry_name in function_symbols[
                             bisect_left(function_addresses, vram_address + 1) : bisect_left(
-                                function_addresses, vram_address + end(row) - row.start
+                                function_addresses, vram_address + stop - row.start
                             )
                         ]
                     ),

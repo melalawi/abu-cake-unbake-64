@@ -12,9 +12,10 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import unbake.match.queue as match
+
 import unbake.decomp.drafts as drafts
 import unbake.decomp.needs as needs
-import unbake.match.queue as match
 from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
 from unbake.project import build

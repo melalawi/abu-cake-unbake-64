@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from unbake.decomp import drafts, needs
-from unbake.layout import entries, split, structs, structs_identity
-from unbake.layout.header_context import context
+from unbake.layout import entries, split, structs
+from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import fold, scalar_edits
 from unbake.layout.structs_parser import Parser
-from unbake.match import reporting, source_views, type_rewrite
+from unbake.match import pool_literals, reporting, source_views, type_rewrite
+from unbake.match.common import held
 from unbake.project.config import Policy, Project
 
 
@@ -26,34 +27,27 @@ def preflight(project: Project, policy: Policy, pending: list[needs.Need]) -> li
     return structs.resolve([need for need in pending if isinstance(need, needs.LayoutNeed)], project, policy)
 
 
-def final_source(project: Project, text: str, parsers: list[Parser], edits: list[Edit]) -> str:
+def final_source(
+    project: Project, text: str, parsers: list[Parser], edits: list[Edit], headers: Headers, destination: Path
+) -> str:
     """Move local aggregate definitions to their shared homes and remove draft markers."""
-    records = [record for parser in parsers for record in parser.parse()]
+    records = [record for parser in parsers for record in _records(parser)]
     includes: set[str] = set()
     replacements: list[tuple[int, int, str]] = []
     for parser in parsers:
-        selected, removed = scalar_edits(project, parser)
+        selected, removed = scalar_edits(project, parser, headers)
         includes.update(selected)
         replacements.extend(removed)
     if records:
-        headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
-        headers.update({edit.path: edit.after for edit in edits})
-        destinations: dict[str, Path] = {}
-        headers, _, parsed = context(headers, root=project.root)
-        cursor = 0
-        for path, content in headers.items():
-            for record in parsed:
-                if cursor <= record.start < cursor + len(content):
-                    for name in (record.name, *record.aliases):
-                        destinations[name] = path
-            cursor += len(content) + 1
+        added = {edit.path for edit in edits if edit.path not in headers.texts}
         spans: list[tuple[int, int]] = []
         for record in records:
-            destination = destinations[record.name]
-            include = next(
-                destination.relative_to(root).as_posix() for root in project.include if destination.is_relative_to(root)
+            home = headers.homes.get(record.name) or (destination if destination in added else None)
+            if home is None:
+                held(f"{record.name}: shared declaration home missing after fold")
+            includes.add(
+                next(home.relative_to(root).as_posix() for root in project.include if home.is_relative_to(root))
             )
-            includes.add(include)
         names = {name for record in records for name in (record.name, *record.aliases)}
         for declaration in (item for parser in parsers for item in parser.declarations):
             base = declaration.base
@@ -69,60 +63,87 @@ def final_source(project: Project, text: str, parsers: list[Parser], edits: list
     return re.sub(r"^[ \t]*/\*\s*NON_MATCHING:\s*draft\b[^\n]*\*/[ \t]*\n?", "", text, flags=re.M)
 
 
-def folded_edits(
-    project: Project, policy: Policy, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
-) -> list[Edit]:
-    """Plan aggregate promotion and source removal as one publication unit."""
-    parsers = source_views.parsers(project, policy, text, versions)
-    text, tag_only = _layout_names(project, policy, function, text, parsers, versions)
-    parsers = source_views.parsers(project, policy, text, versions)
-    records = [record for parser in parsers for record in parser.parse()]
+def _records(parser: Parser) -> list[structs.Layout]:
+    """Layouts of an already parsed source view, without parsing it again."""
+    return [parser.layout(item) for item in parser.aggregates if item.name]
+
+
+@dataclass(frozen=True)
+class Folded:
+    """One source after its local layouts moved into shared headers."""
+
+    function: str
+    source: str
+    headers: list[Edit]
+    removed_rows: dict[str, tuple[str, ...]]
+
+
+def fold_source(
+    project: Project,
+    policy: Policy,
+    headers: Headers,
+    function: str,
+    text: str,
+    versions: tuple[str, ...],
+    *,
+    prove_headers: bool = True,
+) -> Folded:
+    """Plan aggregate promotion against a shared header context; the context is not changed."""
+    text = pool_literals.lower(project, function, text, versions)
+    parsers = source_views.parsers(project, policy, text, versions, headers)
+    text, tag_only = _layout_names(project, policy, function, text, parsers, versions, headers)
+    parsers = source_views.parsers(project, policy, text, versions, headers)
+    records = [record for parser in parsers for record in _records(parser)]
     records = [replace(record, aliases=()) if record.name in tag_only else record for record in records]
     destination = project.include[0] / "shared" / f"{function.lower()}.h"
-    headers = fold(records, project, destination=destination, prove_headers=prove_headers)
-    final = final_source(project, text, parsers, headers)
-    edits = match_edits(project, function, final, versions)
+    edits = fold(records, project, destination=destination, prove_headers=prove_headers, context=headers)
+    final = final_source(project, text, parsers, edits, headers, destination)
+    removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
         group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)
         if len(group) < 2:
             continue
-        configured = project.version(version)
-        _, lines, segments = split.layout(configured.split)
+        _, lines, segments = split.layout(project.version(version).split)
         paths = {row.path for row in group[1:]}
-        removed = [lines[row.line] for segment in segments for row in segment.rows if row.path in paths]
-        edits = [
-            replace(edit, after=_remove_rows(edit.after, removed)) if edit.path == configured.split else edit
-            for edit in edits
-        ]
-    return [*headers, *edits]
+        removed[version] = tuple(lines[row.line] for segment in segments for row in segment.rows if row.path in paths)
+    return Folded(function, final, edits, removed)
 
 
-def _remove_rows(text: str, removed: list[str]) -> str:
+def folded_edits(
+    project: Project, policy: Policy, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
+) -> list[Edit]:
+    """Plan aggregate promotion and source removal as one publication unit."""
+    folded = fold_source(project, policy, Headers.read(project), function, text, versions, prove_headers=prove_headers)
+    edits = match_edits(project, function, folded.source, versions)
+    edits = [
+        replace(edit, after=_remove_rows(edit.after, folded.removed_rows[version]))
+        if (version := next((v for v in versions if project.version(v).split == edit.path), None))
+        and version in folded.removed_rows
+        else edit
+        for edit in edits
+    ]
+    return [*folded.headers, *edits]
+
+
+def _remove_rows(text: str, removed: Iterable[str]) -> str:
     for line in removed:
         text = text.replace(line, "", 1)
     return text
 
 
 def _layout_names(
-    project: Project, policy: Policy, function: str, text: str, parsers: list[Parser], versions: tuple[str, ...]
+    project: Project,
+    policy: Policy,
+    function: str,
+    text: str,
+    parsers: list[Parser],
+    versions: tuple[str, ...],
+    headers: Headers,
 ) -> tuple[str, set[str]]:
     """Rewrite active type tokens using complete layout evidence, before merging fields."""
-    paths = sorted({path for root in project.include for path in root.rglob("*.h")})
-    contents = {path: path.read_text() for path in paths}
-    contents, _, existing = context(contents, root=project.root)
-    tag_only = {record.name for record in existing if record.name not in record.aliases}
+    tag_only = headers.tag_only
     resolved_tags: set[str] = set()
-    sdk: set[str] = set()
-    cursor = 0
-    for path, content in contents.items():
-        if path.name == "n64sdk.h":
-            sdk.update(
-                name
-                for record in existing
-                if cursor <= record.start < cursor + len(content)
-                for name in (record.name, *record.aliases)
-            )
-        cursor += len(content) + 1
+    sdk = headers.sdk
     replacements: dict[tuple[int, int], str] = {}
     redundant: dict[tuple[int, int], str] = {}
     renames: set[tuple[str, str]] = set()
@@ -135,34 +156,39 @@ def _layout_names(
                 member_renames.add((before, after))
             renamed_members(field.fields, target.fields, before, after)
 
-    from unbake.typemap.declarations import headers
+    from unbake.typemap.declarations import headers as typed_headers
 
     for index, parser in enumerate(parsers):
         # Validate canonical scalar names before rewriting any aggregate alias.
-        scalar_edits(project, parser)
-        records = parser.parse()
-        resolution = structs_identity.resolve([record for record in records if record.name not in sdk], existing)
+        scalar_edits(project, parser, headers)
+        records = _records(parser)
+        resolution = headers.index.resolve([record for record in records if record.name not in sdk])
         resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
         if not resolution:
             continue
-        planned = type_rewrite.edits(parser, headers(project, policy, versions[index]), resolution, tag_only)
+        planned = type_rewrite.edits(parser, typed_headers(project, policy, versions[index]), resolution, tag_only)
         for span, target in planned.items():
             if span in replacements and replacements[span] != target:
                 structs.held(function, "version-dependent layout rename at the same source token")
             replacements[span] = target
+        # A layout that keeps its name may absorb a same-source duplicate,
+        # whose forward typedef and definition are then both dropped.
+        local = {record.name for record in records if resolution.get(record.name, (record.name,))[0] == record.name}
         defined: set[str] = set()
         for record in records:
             if record.name not in resolution:
                 continue
             target, _ = resolution[record.name]
             if target in defined:
-                declaration = next(
-                    (item for item in parser.declarations if getattr(item.base, "start", None) == record.start), None
-                )
-                if declaration is not None:
-                    redundant[(declaration.start, declaration.end)] = (
-                        f"typedef {record.kind} {target} {target};" if record.aliases else ""
-                    )
+                # A forward typedef and its definition both name this record.
+                spans = [
+                    (item.start, item.end)
+                    for item in parser.declarations
+                    if getattr(item.base, "start", None) == record.start
+                ]
+                for number, span in enumerate(spans):
+                    keep = record.aliases and number == 0 and target not in local
+                    redundant[span] = f"typedef {record.kind} {target} {target};" if keep else ""
             defined.add(target)
         for name, (target, _) in resolution.items():
             if name != target:

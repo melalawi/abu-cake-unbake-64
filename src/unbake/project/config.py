@@ -4,7 +4,7 @@ import math
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast, overload
 
@@ -66,49 +66,15 @@ class Project:
     build: Path
     work: Path
     drafts: Path
-    compiler_ties: dict[str, tuple[str, ...]] = field(default_factory=dict)
-
-    def compiler_id(self, ident: str) -> str:
-        """A carrier for draft/assembly recipes, never a regional pin."""
-        return self.compiler_ties[ident][0] if ident in self.compiler_ties else ident
 
     def compiler_reference(self, unit: str | Path) -> str:
-        """Return the configured ID or explicit candidate-set reference."""
-        path = Path(unit)
-        if path.is_absolute():
-            try:
-                path = path.relative_to(self.root)
-            except ValueError:
-                path = self.src.relative_to(self.root) / (path.stem + ".c")
-        spelling = path.as_posix()
-        direct = self.units.get(spelling)
-        stem = self.units.get(path.stem)
-        if direct and stem and direct != stem:
-            raise Held("config", f"[units].{spelling}: conflicts with [units].{path.stem}")
-        regions = set()
-        if not direct and not stem and self.units:
-            for version in self.version_map.values():
-                segment = None
-                try:
-                    lines = version.split.read_text().splitlines()
-                except OSError as error:
-                    raise Held("config", f"{version.split}: {error}") from error
-                for line in lines:
-                    entry = re.match(r"^\s*-\s+name:\s*([^#]+?)\s*$", line)
-                    if entry:
-                        segment = entry[1].strip("\"'")
-                    row = re.match(r"^\s*-\s*\[[^,]+,\s*(?:asm|c),\s*([^\]]+)\]", line)
-                    if row and Path(row[1].strip().strip("\"'")).stem == path.stem and segment in self.units:
-                        regions.add(self.units[segment])
-            if len(regions) > 1:
-                raise Held("config", f"[units].{path.stem}: conflicting segment compilers across VERSIONs")
-        ident = direct or stem or next(iter(regions), self.default_compiler)
-        return ident
+        """An exception unit names its compiler; every other unit uses the default."""
+        return self.units.get(Path(unit).stem, self.default_compiler)
 
     def compiler_for(self, unit: str | Path) -> Compiler:
-        ident = self.compiler_id(self.compiler_reference(unit))
+        ident = self.compiler_reference(unit)
         if ident not in self.compilers:
-            raise Held("config", f"[units].{unit}: unknown compiler {ident}")
+            raise Held("config", f"[units].{Path(unit).stem}: unknown compiler {ident}")
         return self.compilers[ident]
 
     def version(self, v: str) -> Version:
@@ -179,11 +145,17 @@ class Policy:
 
 
 def _read(path: Path) -> dict[str, Any]:
-    try:
-        with path.open("rb") as source:
-            return tomllib.load(source)
-    except (OSError, tomllib.TOMLDecodeError) as error:
-        raise Held("config", f"{path}: {error}") from error
+    """Parse TOML once per content; callers must not mutate the shared result."""
+    from unbake.project.cache import parsed
+
+    def parse() -> dict[str, Any]:
+        try:
+            with path.open("rb") as source:
+                return tomllib.load(source)
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            raise Held("config", f"{path}: {error}") from error
+
+    return parsed("toml", path, parse)
 
 
 def _label(path: Path, table: str, name: str) -> str:
@@ -259,6 +231,7 @@ def _positive(value: object, label: str, *, integer: bool) -> int | float:
 
 
 SCHEMA_VERSION = 1
+CONFIG_SECTIONS = frozenset({"schema", "project", "workspace", "paths", "compilers", "units", "version", "build"})
 
 
 @dataclass(frozen=True)
@@ -365,17 +338,29 @@ def load_pending(root: Path) -> PendingProject:
     )
 
 
-def load(root: Path) -> Project:
+def load(root: Path, *, text: str | None = None) -> Project:
+    """Load ready configuration; text supplies staged config.toml content for this root."""
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
     pending = load_pending(root)
     if pending.state != "ready":
         raise Held("config", "project.state: awaiting-roms; run unbake setup")
-    data = _read(path)
+    if text is None:
+        data = _read(path)
+    else:
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as error:
+            raise Held("config", f"{path}: {error}") from error
     project = _table(data, "project", f"{path} [project]")
     paths = _table(data, "paths", f"{path} [paths]")
     compiler_tables = _table(data, "compilers", f"{path} [compilers]")
-    units_table = _table(data, "units", f"{path} [units]")
+    retired = sorted(set(data) - CONFIG_SECTIONS)
+    if retired:
+        raise Held("config", f"{path} [{retired[0]}]: not configuration; run unbake setup to refresh config.toml")
+    units_table = data.get("units", {})
+    if not isinstance(units_table, dict):
+        raise Held("config", f"{path} [units]: expected table")
     version_tables = _table(data, "version", f"{path} [version]")
 
     def value(table: dict[str, Any], section: str, field: str) -> Any:
@@ -423,22 +408,18 @@ def load(root: Path) -> Project:
             cflags,
             tools / "compiler.sha256",
         )
-    from unbake.project.compiler_ties import read as read_ties
-
-    ties = read_ties(data.get("compiler_ties", {}), compilers)
     default_compiler = _text(value(project, "project", "default_compiler"), _label(path, "project", "default_compiler"))
-    if default_compiler not in compilers and default_compiler not in ties:
-        key = "compiler.tied_set" if default_compiler.startswith("tie:") else "unknown compiler"
-        raise Held("config", f"{path} [project].default_compiler: {key}: {default_compiler}")
+    if default_compiler not in compilers:
+        raise Held("config", f"{path} [project].default_compiler: unknown compiler {default_compiler}")
     units = {}
     for unit, ident in units_table.items():
         ident = _text(ident, f"{path} [units].{unit}")
-        if ident not in compilers and ident not in ties:
-            key = "compiler.tied_set" if ident.startswith("tie:") else "unknown compiler"
-            raise Held("config", f"{path} [units].{unit}: {key}: {ident}")
-        unit_path = Path(unit)
-        if unit_path.is_absolute() or ".." in unit_path.parts:
-            raise Held("config", f"{path} [units].{unit}: expected project-relative unit")
+        if not re.fullmatch(r"[A-Za-z_]\w*", unit):
+            raise Held("config", f"{path} [units].{unit}: expected a function name")
+        if ident not in compilers:
+            raise Held("config", f"{path} [units].{unit}: unknown compiler {ident}")
+        if ident == default_compiler:
+            raise Held("config", f"{path} [units].{unit}: equals default_compiler; list only exception units")
         units[unit] = ident
     version_map = {}
     for v in versions:
@@ -476,7 +457,6 @@ def load(root: Path) -> Project:
         pending.build,
         pending.work,
         pending.drafts,
-        ties,
     )
 
 

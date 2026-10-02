@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -203,6 +204,19 @@ def compiler_identity(project: Project, policy: Policy, ident: str) -> str:
     for path in (*paths, compiler.sha256):
         if not path.is_file():
             raise Held("try", f"trial.compiler.{ident}: missing {path}")
+    from unbake.project.cache import remembered
+
+    # Installed compilers and drivers are replaced, never edited in place:
+    # file identity and size select the content digest within one process.
+    signature = tuple((path, (stat := path.stat()).st_ino, stat.st_size, stat.st_mtime_ns) for path in sorted(paths))
+    return remembered(
+        "compiler.identity",
+        (project.root, json.dumps(settings, sort_keys=True), signature),
+        lambda: _identity(project, paths, settings),
+    )
+
+
+def _identity(project: Project, paths: set[Path], settings: dict[str, Any]) -> str:
     # The manifest includes build.json, which changes with unrelated unit choices.
     # Bind the selected compiler, drivers and effective compilation settings instead.
     return digest(
@@ -224,27 +238,15 @@ def current_trial(
     project: Project, policy: Policy, source: Path, versions: list[str], recorded: dict[str, Any]
 ) -> WorkManifest:
     """Validate source-scoped inputs and reconstruct its measured compiler view."""
-    from unbake.project import compiler_ties
+    from unbake.project import compiler_choice
 
     if "compiler_evidence" not in recorded:
         raise Held("submit", "trial.receipt: current source-scoped receipt required; run unbake try")
     evidence = recorded["compiler_evidence"]
     if evidence:
-        ref = compiler_ties.reference(project, source, equivalent=True)
-        if ref is None or ref != evidence["reference"] or list(project.compiler_ties[ref]) != evidence["candidate_set"]:
-            raise Held("submit", "submit.compiler_candidates: changed since latest try")
-        for ident, row in evidence["candidates"].items():
-            if row["inputs"] != compiler_identity(project, policy, ident) or row["cflags"] != list(
-                project.compilers[ident].cflags
-            ):
-                raise Held("submit", "submit.compiler_sha256: candidate inputs changed since latest try")
-            measured = compiler_ties.candidate(project, ref, ident, source.stem)
-            inputs = identity(measured, source, versions, policy=policy)
-            if inputs != row["build_inputs"]:
-                raise Held(
-                    "submit", "submit.compiler_candidates: candidate source build inputs changed since latest try"
-                )
-        project = compiler_ties.selected(project, evidence)
+        if evidence.get("configured") != project.compiler_reference(source.stem):
+            raise Held("submit", "submit.compiler_candidates: configured compiler changed since latest try")
+        project = compiler_choice.selected(project, source.stem, evidence["selected"])
     current = identity(project, source, versions, policy=policy)
     for key in (
         "schema",
@@ -298,8 +300,10 @@ def identity(
         }
         providers = project.root / "docs/setup" / (version + ".json")
         if providers.is_file():
-            rows = json.loads(providers.read_bytes()).get("providers", [])
-            layouts[version]["providers"] = [r for r in rows if source.stem in r.get("owners", [])]
+            from unbake.project.cache import parsed
+
+            provided = parsed("setup.providers", providers, partial(_providers, providers))
+            layouts[version]["providers"] = [r for r in provided if source.stem in r.get("owners", [])]
         flags[version] = list(makefile.flags(project, version, project.src / source.name))
         if pinned is not None:
             generation, target = pinned[version]
@@ -360,6 +364,11 @@ def identity(
             },
         },
     )
+
+
+def _providers(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = json.loads(path.read_bytes()).get("providers", [])
+    return rows
 
 
 def persist(project: Project, manifest: WorkManifest) -> None:

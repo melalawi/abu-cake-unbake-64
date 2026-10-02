@@ -15,7 +15,7 @@ def edits(
     parser: Parser, context: str, resolution: dict[str, tuple[str, Layout]], tag_only: set[str] | None = None
 ) -> dict[tuple[int, int], str]:
     """Use C namespaces and expression types; preserve comments, strings and value identifiers."""
-    records = {record.name: record for record in parser.parse()}
+    records = {record.name: record for record in (parser.layout(item) for item in parser.aggregates if item.name)}
     bare_tags = tag_only or set()
     changed = any(
         name != target

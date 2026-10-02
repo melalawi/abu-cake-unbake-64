@@ -54,6 +54,8 @@ class VersionLayout(TypedDict):
 
 
 class LayoutManifest(Identity):
+    data_symbols: NotRequired[dict[str, Any]]
+    data_assertions: NotRequired[list[dict[str, Any]]]
     symbol_assertions: NotRequired[list[dict[str, Any]]]
     names_from: str
     versions: dict[str, VersionLayout]
@@ -69,7 +71,6 @@ class CompilerCandidate(TypedDict):
 
 
 class CompilerProposal(Identity):
-    compiler_ties: NotRequired[dict[str, list[str]]]
     choices: NotRequired[dict[str, str]]
     layout_sha256: str
     inputs_sha256: dict[str, str]

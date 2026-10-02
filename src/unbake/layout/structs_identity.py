@@ -5,14 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections import ChainMap
+from collections.abc import Mapping, Sequence
 
 from unbake.layout.structs import Field, Layout, held
 
 
-def identity(record: Layout, records: Sequence[Layout]) -> str:
+def identity(record: Layout, index: Mapping[str, Layout]) -> str:
     """Include pointee evidence and recursive edges, excluding aggregate tag spelling."""
-    index = {name: item for item in records for name in (item.name, *item.aliases)}
 
     def shape(item: Layout, active: tuple[str, ...]) -> object:
         if item.name in active:
@@ -55,38 +55,47 @@ def identity(record: Layout, records: Sequence[Layout]) -> str:
     return json.dumps(shape(record, ()), separators=(",", ":"))
 
 
-def resolve(records: list[Layout], existing: list[Layout]) -> dict[str, tuple[str, Layout]]:
-    """Reuse an equal shared layout; reserve conflicting names by a stable layout digest."""
-    available: dict[str, list[Layout]] = {}
-    occupied = {name for item in existing for name in (item.name, *item.aliases)}
-    for item in existing:
-        available.setdefault(identity(item, existing), []).append(item)
-    result: dict[str, tuple[str, Layout]] = {}
-    requested: dict[str, tuple[str, Layout]] = {}
-    for item in records:
-        key = identity(item, [*existing, *records])
-        candidates = available.get(key, [])
-        if candidates:
-            evidence = min(candidates, key=lambda candidate: (candidate.name != item.name, candidate.name))
-            target = evidence.name
-        elif key in requested:
-            target, evidence = requested[key]
-        elif item.name not in occupied:
-            target = item.name
-            evidence = item
-        else:
-            target = "Shape_" + hashlib.sha256(key.encode()).hexdigest()[:16]
-            evidence = item
-            if target in occupied:
-                held(target, "layout digest name conflicts with a different shared declaration")
-        occupied.add(target)
-        requested[key] = target, evidence
-        for name in (item.name, *item.aliases):
-            if name in result and result[name][0] != target:
-                held(name, "different layouts in one source view")
-            result[name] = target, evidence
-    return result
+class Index:
+    """Shared layouts by name and by layout identity, extended as declarations are added."""
 
+    def __init__(self, existing: Sequence[Layout]) -> None:
+        self.names: dict[str, Layout] = {}
+        self.available: dict[str, list[Layout]] = {}
+        self.add(existing)
 
-def names(records: list[Layout], existing: list[Layout]) -> dict[str, str]:
-    return {name: target for name, (target, _) in resolve(records, existing).items()}
+    def add(self, records: Sequence[Layout]) -> None:
+        for item in records:
+            for name in (item.name, *item.aliases):
+                self.names.setdefault(name, item)
+        for item in records:
+            self.available.setdefault(identity(item, self.names), []).append(item)
+
+    def resolve(self, records: list[Layout]) -> dict[str, tuple[str, Layout]]:
+        """Reuse an equal shared layout; reserve conflicting names by a stable layout digest."""
+        names = ChainMap({name: item for item in records for name in (item.name, *item.aliases)}, self.names)
+        occupied = set(self.names)
+        result: dict[str, tuple[str, Layout]] = {}
+        requested: dict[str, tuple[str, Layout]] = {}
+        for item in records:
+            key = identity(item, names)
+            candidates = self.available.get(key, [])
+            if candidates:
+                evidence = min(candidates, key=lambda candidate: (candidate.name != item.name, candidate.name))
+                target = evidence.name
+            elif key in requested:
+                target, evidence = requested[key]
+            elif item.name not in occupied:
+                target = item.name
+                evidence = item
+            else:
+                target = "Shape_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+                evidence = item
+                if target in occupied:
+                    held(target, "layout digest name conflicts with a different shared declaration")
+            occupied.add(target)
+            requested[key] = target, evidence
+            for name in (item.name, *item.aliases):
+                if name in result and result[name][0] != target:
+                    held(name, "different layouts in one source view")
+                result[name] = target, evidence
+        return result

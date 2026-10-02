@@ -181,6 +181,11 @@ class Store:
 
     def history(self) -> list[TrialRecord]:
         """Read every validated trial record in append order."""
+        from unbake.project.cache import parsed
+
+        return list(parsed("trials", self.root / "trials.jsonl", self._history))
+
+    def _history(self) -> list[TrialRecord]:
         path = self.root / "trials.jsonl"
         try:
             stream = path.open(encoding="utf-8")
@@ -257,10 +262,10 @@ class Store:
         return path
 
     def publish_all(self) -> list[Path]:
-        """Submit current tried drafts through the same admission/proof boundary."""
-        from unbake.match import queue
+        """Submit current tried drafts as one batch through the same admission/proof boundary."""
+        from unbake.match import batch
 
-        paths = []
+        sources: dict[str, Path] = {}
         for function in sorted({row["function"] for row in self.history()}):
             destination = self.project.src / f"{function}.c"
             if destination.exists() and not is_partial(destination.read_text()):
@@ -274,13 +279,17 @@ class Store:
             source = self.project.root / value
             if not source.is_file():
                 raise Held("drafts", f"drafts.work.source: {function}: {source} missing")
-            lines = queue.publish_source(self.project, self.policy, source)
-            refusals = [line for line in lines if line.startswith("HELD(")]
-            if refusals:
-                raise Held("drafts", "; ".join(refusals))
-            if not destination.is_file():
-                raise Held("drafts", f"drafts.publication: {function}: submit did not publish source")
-            paths.append(destination)
+            sources[function] = source
+        if not sources:
+            return []
+        lines = batch.publish(self.project, self.policy, list(sources.values()))
+        refusals = [line for line in lines if line.startswith("HELD(")]
+        if refusals:
+            raise Held("drafts", "; ".join(refusals))
+        paths = [self.project.src / f"{function}.c" for function in sources]
+        missing = [path.stem for path in paths if not path.is_file()]
+        if missing:
+            raise Held("drafts", f"drafts.publication: {', '.join(missing)}: submit did not publish source")
         return paths
 
 

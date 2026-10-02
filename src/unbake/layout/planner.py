@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from itertools import combinations, pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -606,6 +606,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                     "split.py",
                     "xver.py",
                     "symbol_identity.py",
+                    "symbol_replan.py",
                 )
             )
         },
@@ -778,7 +779,17 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             },
         )
         del image
+    from unbake.layout import symbol_identity, symbol_replan
+
+    data = symbol_identity.data_identity(
+        images,
+        {v: [replace(f, name=names[v][f.start]) for f in rows] for v, rows in inventories.items()},
+        {v: {} for v in inventories},
+    )
+    for v, row in versions.items():
+        row["evidence"]["symbols_text"] = symbol_replan.data_symbols_text(row["evidence"]["symbols_text"], v, {}, data)
     manifest = LayoutManifest(
+        data_symbols=data,
         schema=1,
         project_id=project.id,
         workspace_id=project.workspace_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from pathlib import Path
 from typing import Any
 
 import toml  # type: ignore[import-untyped]
@@ -59,6 +60,11 @@ def write_facts(project: PendingProject, census: Census, *, name: str | None = N
     )
 
 
+def exception_units(default_compiler: str, assignments: dict[str, str]) -> dict[str, str]:
+    """A unit absent from [units] uses the default; list only the others."""
+    return {name: ident for name, ident in sorted(assignments.items()) if ident != default_compiler}
+
+
 def render_ready(
     project: PendingProject,
     census: Census,
@@ -69,21 +75,48 @@ def render_ready(
     assignments: dict[str, str],
     cflags: dict[str, tuple[str, ...]],
     build: dict[str, Any],
-    compiler_ties: dict[str, list[str]] | None = None,
 ) -> str:
     """Caller must confirm the proposal, then prove and atomically publish this text."""
-    from unbake.project.compiler_ties import read as read_ties
-
-    ties = read_ties(compiler_ties or {}, cflags)
-    if not cflags or (default_compiler not in cflags and default_compiler not in ties):
+    if not cflags or default_compiler not in cflags:
         raise Held("setup", "project.default_compiler: explicit confirmed compiler required")
-    if not assignments or set(assignments.values()) - (cflags.keys() | ties.keys()):
+    if not assignments or set(assignments.values()) - cflags.keys():
         raise Held("setup", "units: complete confirmed compiler assignments required")
     data = facts(project, census, name=name, title=title)
     data["project"].update(state="ready", default_compiler=default_compiler)
     data["compilers"] = {ident: {"cflags": list(flags)} for ident, flags in cflags.items()}
-    data["units"] = assignments
-    if ties:
-        data["compiler_ties"] = {ref: list(ids) for ref, ids in ties.items()}
+    units = exception_units(default_compiler, assignments)
+    if units:
+        data["units"] = units
     data["build"] = build
+    return str(toml.dumps(data))
+
+
+def canonical(text: str) -> str:
+    """Rewrite a ready config.toml as configuration only.
+
+    Measurements are not configuration: tool state and the build own them. A
+    unit whose value is not a configured compiler, or equals the default, is
+    not an exception. A default that is not a configured compiler becomes the
+    compiler most units already use, the same rule the compiler proposal applies.
+    """
+    from collections import Counter
+
+    from unbake.project.config import CONFIG_SECTIONS
+
+    data = {key: value for key, value in tomllib.loads(text).items() if key in CONFIG_SECTIONS}
+    compilers = data.get("compilers", {})
+    concrete = {name: ident for name, ident in data.get("units", {}).items() if ident in compilers}
+    default = data["project"].get("default_compiler")
+    if default not in compilers:
+        counts = Counter(concrete.values())
+        if not counts:
+            raise Held(
+                "setup", "project.default_compiler: no configured compiler; run unbake setup --repropose-compilers"
+            )
+        default = min(counts, key=lambda ident: (-counts[ident], ident))
+        data["project"]["default_compiler"] = default
+    data.pop("units", None)
+    units = exception_units(default, {Path(name).stem: ident for name, ident in concrete.items()})
+    if units:
+        data["units"] = units
     return str(toml.dumps(data))

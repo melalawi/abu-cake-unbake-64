@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from unbake.project import build, makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, SetupPolicy
 
 
 def source_key(project: Project, policy: Policy, source: Path, version: str) -> str:
@@ -41,9 +41,19 @@ def inputs(
 
 
 def prove(
-    project: Project, policy: Policy, version: str, generation: Path, retained: dict[str, str]
+    project: Project,
+    policy: Policy | SetupPolicy,
+    version: str,
+    generation: Path,
+    retained: dict[str, str] | None,
+    *,
+    extracted: bool = False,
+    placed: bool = False,
 ) -> build.BuildResult:
-    """Extract, verify provenance, place, link, objcopy and compare; no compilation."""
+    """Extract, verify provenance, place, link, objcopy and compare; no compilation.
+
+    retained None means this transaction built every object from these staged sources.
+    """
     log = generation / "build.log"
     image = generation / f"{project.name}.{version}.z64"
     elf = generation / f"{project.name}.elf"
@@ -61,9 +71,15 @@ def prove(
     ok = False
     sha1_line = ""
     try:
-        run(["make", "extract", f"VERSION={version}", f"BUILD={generation}"])
-        for source, digest in inputs(project, policy, [version])[version].items():
-            if retained.get(source) != digest:
+        retained_inputs = {}
+        if not extracted:
+            if not isinstance(policy, Policy):
+                raise Held("match", "submit.relink: source verification requires the work policy")
+            run(["make", "extract", f"VERSION={version}", f"BUILD={generation}"])
+            if retained is not None:
+                retained_inputs = inputs(project, policy, [version])[version]
+        for source, digest in retained_inputs.items():
+            if retained is not None and retained.get(source) != digest:
                 raise Held("match", f"submit.reuse_inputs: {source}: VERSION {version}: shared inputs changed")
         graph = (generation / ".split.mk").read_text()
         objects: list[str] = []
@@ -75,28 +91,29 @@ def prove(
         for path in objects:
             if not (generation / path).is_file():
                 raise Held("match", f"submit.reuse_object: {path}: VERSION {version}: retained object missing")
-        run(
-            [
-                sys.executable,
-                str(project.tools / "layout.py"),
-                "--script",
-                str(generation / f"{project.name}.ld"),
-                "--output",
-                str(generation / f"{project.name}.link.ld"),
-                "--build",
-                str(generation),
-                "--ranges",
-                str(generation / "unit-ranges.json"),
-                "--recipe",
-                str(project.tools / "build.json"),
-                "--version",
-                version,
-                "--baserom",
-                str(project.version(version).baserom),
-                "--non-matching",
-                "0",
-            ]
-        )
+        if not placed:
+            run(
+                [
+                    sys.executable,
+                    str(project.tools / "layout.py"),
+                    "--script",
+                    str(generation / f"{project.name}.ld"),
+                    "--output",
+                    str(generation / f"{project.name}.link.ld"),
+                    "--build",
+                    str(generation),
+                    "--ranges",
+                    str(generation / "unit-ranges.json"),
+                    "--recipe",
+                    str(project.tools / "build.json"),
+                    "--version",
+                    version,
+                    "--baserom",
+                    str(project.version(version).baserom),
+                    "--non-matching",
+                    "0",
+                ]
+            )
         recipe = makefile.recipe(project)
         ld = makefile.host_executable(policy, recipe.ld, "mips_ld")
         objcopy = makefile.host_executable(policy, recipe.objcopy, "mips_objcopy")
@@ -141,3 +158,56 @@ def prove(
         log.write_text("".join(output))
         (generation / "build.exit").write_text("0\n" if ok else "1\n")
     return build.BuildResult(version, ok, sha1_line, log, generation)
+
+
+def revert_rows(project: Project, generation: Path, before: str, after: str) -> bool:
+    """Rewrite extracted link inputs when the split only returned C rows to assembly.
+
+    Splat's output for such a split differs only in each unit's object path, the
+    object inventory, its unit range and the symbol dump's row kind, so the
+    retained objects relink without a second extraction. Anything else is False.
+    """
+    from unbake.layout import split
+
+    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
+    if len(old) != len(new):
+        return False
+    units: dict[str, str] = {}
+    for left, right in zip(old, new, strict=True):
+        if left == right:
+            continue
+        was, now = split.ROW.fullmatch(left), split.ROW.fullmatch(right)
+        if was is None or now is None or (was["kind"], now["kind"]) != ("c", "asm") or was["start"] != now["start"]:
+            return False
+        name = Path(split.plain(was["path"])).name
+        if Path(split.plain(now["path"])).name != name:
+            return False
+        units[name] = split.plain(now["path"])
+    if not units or not all((generation / "obj/asm" / f"{path}.o").is_file() for path in units.values()):
+        return False
+    script = generation / f"{project.name}.ld"
+    graph = generation / ".split.mk"
+    ranges = generation / "unit-ranges.json"
+    dump = generation / "splat_symbols.csv"
+    text, inventory, table = script.read_text(), graph.read_text(), json.loads(ranges.read_text())
+    rows = dump.read_text().splitlines(keepends=True)
+    for name, path in units.items():
+        text, count = re.subn(rf"\bobj/src/{re.escape(name)}\.o\(", f"obj/asm/{path}.o(", text)
+        source, target = f"$(BUILD)/obj/src/{name}.o", f"$(BUILD)/obj/asm/{path}.o"
+        lines = inventory.split("\n")
+        c = next(i for i, line in enumerate(lines) if line.startswith("C_OBJECTS := "))
+        a = next(i for i, line in enumerate(lines) if line.startswith("ASM_OBJECTS := "))
+        words = lines[c].split(" ")
+        if not count or source not in words or name not in table:
+            return False
+        lines[c] = " ".join(word for word in words if word != source)
+        lines[a] += f" {target}"
+        inventory = "\n".join(lines)
+        del table[name]
+        suffix = f",{name},c\n"
+        rows = [row[: -len(suffix)] + f",{name},asm\n" if row.endswith(suffix) else row for row in rows]
+    script.write_text(text)
+    graph.write_text(inventory)
+    ranges.write_text(json.dumps(table, sort_keys=True))
+    dump.write_text("".join(rows))
+    return True

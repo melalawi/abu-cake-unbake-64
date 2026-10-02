@@ -68,7 +68,7 @@ def _inputs(
                     "compiler_profiles.py",
                     "compiler_probes.py",
                     "fingerprint.py",
-                    "compiler_ties.py",
+                    "proposal_accept.py",
                 )
             }
         ),
@@ -240,7 +240,7 @@ def propose_compilers(
     candidates: dict[str, list[CompilerCandidate]] = {}
     winners: dict[str, str | None] = {}
     reasons: dict[str, str] = {}
-    ties: dict[str, list[str]] = {}
+    first_try: dict[str, list[str]] = {}
     probes: dict[str, Any] = {}
     cartridges = {census.names[rom.path]: rom for rom in census.cartridges}
     for region, units in sorted(regions.items()):
@@ -289,7 +289,7 @@ def propose_compilers(
                 if row["id"] in scores:
                     row["evidence"]["reproduction"] = probe["candidates"][row["id"]]
         # The regional rank is the displayed proposal. A clear winner is
-        # accepted as part of the whole digest; release ties stay explicit.
+        # accepted as part of the whole digest.
         mixed = region.endswith(":mixed")
         choice = selected.get(region)
         if choice:
@@ -298,46 +298,38 @@ def propose_compilers(
             any(best[:3]) or any(probes.get(region, {}).get("candidates", {}).get(tied[0], {}).get("score", []))
         ):
             winners[region] = tied[0]
-        elif len(tied) > 1:
-            ref = "tie:" + region
-            ties[ref] = sorted(tied)
-            winners[region] = ref
+        elif len(tied) > 1 and not mixed and not region.endswith(":undecided"):
+            # Bytes cannot separate these candidates at region level. The first
+            # tied member in registry order is compiled first; try ranks the rest.
+            first_try[region] = [ident for ident in specs if ident in tied]
+            winners[region] = first_try[region][0]
         else:
             winners[region] = None
             reasons[region] = "mixed" if mixed else "tie" if len(tied) > 1 else "no evidence"
     from unbake.project.proposal_accept import assignments as accept_assignments
 
     assignments, unresolved, default = accept_assignments(unit_regions, winners, selected)
-    candidate_rules = {}
-    for name, containing in unit_regions.items():
-        weak = any(region.endswith((":undecided", ":mixed")) for region in containing)
-        conflicting = len({winners[region] for region in containing}) > 1
-        if name not in selected and (weak or conflicting):
-            unit_ref = "tie:unit:" + name
-            ties[unit_ref] = sorted(profiles)
-            assignments[name] = unit_ref
-            candidate_rules[unit_ref] = {
-                "rule": "undecided item; independent first try compares every supported compiler by bytes",
-                "unit": name,
-                "regions": unit_regions[name],
-                "body_sha256": [row["body_sha256"] for row in unit_measurements[name]],
-                "features": [row["features"] for row in unit_measurements[name]],
-                "candidates": ties[unit_ref],
-            }
+    # Weak or contradictory regional evidence never pins a unit: it builds with
+    # the default first, and try measures every other compiler when not exact.
+    weak = [
+        name
+        for name, containing in unit_regions.items()
+        if name not in selected
+        and (
+            any(region.endswith((":undecided", ":mixed")) for region in containing)
+            or len({winners[region] for region in containing}) > 1
+        )
+    ]
     unresolved = [
         reason
         for reason in unresolved
-        if not (reason.startswith("unit:") and reason.split(":")[1] in assignments)
-        and not (reason in regions and all(row["name"] in assignments for row in regions[reason]))
+        if not (reason.startswith("unit:") and reason.split(":")[1] in weak)
+        and not (reason in regions and all(row["name"] in weak for row in regions[reason]))
     ]
-    if default is None and assignments:
-        default = next(iter(assignments.values()))
-        unresolved = [reason for reason in unresolved if reason != "default:missing"]
-    used_refs = set(assignments.values()) | ({default} if default else set())
-    ties = {ref: ids for ref, ids in ties.items() if ref in used_refs}
-    used = {ident for ref in assignments.values() for ident in ties.get(ref, [ref])}
-    if default:
-        used.update(ties.get(default, [default]))
+    if default is not None:
+        for name in weak:
+            assignments[name] = default
+    used = set(assignments.values()) | ({default} if default else set())
     document: dict[str, Any] = {
         "schema": 1,
         "project_id": project.id,
@@ -359,8 +351,8 @@ def propose_compilers(
         unresolved_reasons=reasons,
         clues=clues,
         ranking_policy=rules,
-        compiler_ties=ties,
-        candidate_rules=candidate_rules,
+        first_try=first_try,
+        default_units=sorted(weak),
         source_reproduction_probes={
             "attempted": sum(p["attempted"] for p in probes.values()),
             "successful_comparable": sum(p["successful_comparable"] for p in probes.values()),
@@ -374,7 +366,6 @@ def propose_compilers(
 
 def receipt(proposal: CompilerProposal) -> list[str]:
     lines = []
-    ties = proposal.get("compiler_ties", {})
     winners = cast(dict[str, str | None], proposal.get("region_choices", {}))
     for region, candidates in proposal["candidates"].items():
         lines.append(f"compiler region {region}: selection={winners.get(region) or 'unresolved'}")
@@ -390,21 +381,12 @@ def receipt(proposal: CompilerProposal) -> list[str]:
     counts: dict[str, int] = defaultdict(int)
     for ident in proposal["assignments"].values():
         counts[ident] += 1
-    independent = [ref for ref in counts if ref.startswith("tie:unit:")]
-    if independent:
-        lines.append(
-            f"compiler independent candidate sets: {len(independent)} units; "
-            "try measures each item; submit publishes its choice"
-        )
+    for region, ids in cast(dict[str, list[str]], proposal.get("first_try", {})).items():
+        lines.append(f"compiler region {region}: bytes tie {{{', '.join(ids)}}}; {ids[0]} compiles first")
+    weak = cast(list[str], proposal.get("default_units", []))
+    if weak:
+        lines.append(f"compiler default first: {len(weak)} units with weak evidence; try ranks others when not exact")
     for ident, count in sorted(counts.items()):
-        if ident.startswith("tie:unit:"):
-            continue
-        if ident in ties:
-            lines.append(
-                f"compiler tied set {ident}: {{{', '.join(ties[ident])}}}; {count} units; "
-                "first try measures all candidates"
-            )
-            continue
         lines.append(f"compiler {ident}: {count} unit assignments; flags={' '.join(proposal['cflags'][ident])}")
     lines.append("exact per-unit assignments and prologue/codegen evidence: build/setup/proposal.json")
     if proposal["unresolved"]:
@@ -461,9 +443,6 @@ def confirm_proposal(
                 raise Held("setup", f"setup.proposal_stale: ROM {version}: sha1 changed")
     if confirm is not None and confirm != token:
         raise Held("setup", f"setup.proposal_stale: confirmation digest differs; review setup --confirm {token}")
-    from unbake.project.compiler_ties import read as read_ties
-
-    read_ties(proposal.get("compiler_ties", {}), proposal["cflags"])
     if proposal["unresolved"]:
         mixed = any("mixed" in value for value in proposal["unresolved"])
         key = "setup.compiler_mixed" if mixed else "setup.compiler_candidate"
@@ -474,12 +453,7 @@ def confirm_proposal(
         if not sys.stdin.isatty():
             raise Held("setup", f"setup.compiler_confirmation: review and run setup --confirm {token}")
         try:
-            tied_text = "; ".join(
-                f"{ref}={{{', '.join(ids)}}}" for ref, ids in proposal.get("compiler_ties", {}).items()
-            )
-            answer = input(
-                f"Accept displayed compiler assignments, flags and tied sets [{tied_text}] ({token})? [yes/no]: "
-            ).strip()
+            answer = input(f"Accept displayed compiler assignments and flags ({token})? [yes/no]: ").strip()
         except (EOFError, KeyboardInterrupt) as error:
             raise Held("setup", "setup.compiler_confirmation: EOF or interrupted acceptance") from error
         if answer.lower() != "yes":
