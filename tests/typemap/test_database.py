@@ -171,6 +171,23 @@ class DatabaseTests(unittest.TestCase):
             solve(self.project)
         self.assertEqual(before, {path: path.read_bytes() for path in paths})
 
+    def test_compiler_recipe_rebinding_retains_instruction_shard_and_refuses_layout_changes(self) -> None:
+        from unbake.typemap.mapping import compiler_inputs
+
+        mapped = map_program(self.project)
+        content = (self.project.root / "config.toml").read_bytes() + b"\n"
+        rebound = compiler_inputs(self.project, content)
+        self.assertIsNotNone(rebound)
+        import json
+
+        result = json.loads(rebound[1])
+        self.assertEqual(result["shard_sha256"], mapped["shard_sha256"])
+        self.assertEqual(result["inputs_sha256"]["config.toml"], storage.digest(content))
+        split = self.project.version("us").split
+        split.write_text(split.read_text() + "\n")
+        with self.assertRaisesRegex(Held, "map.inputs_stale"):
+            compiler_inputs(self.project, content)
+
     def test_invalid_rendered_header_keeps_previous_revision_and_marks(self) -> None:
         from unbake.typemap.solver import infer
 

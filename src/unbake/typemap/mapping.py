@@ -267,3 +267,21 @@ def refresh_map(project: Project) -> dict[str, Any]:
     storage.write(path, storage.encoded(result))
     result["functions"] = shards.Functions(shard_path, metadata)
     return result
+
+
+def compiler_inputs(project: Project, config_content: bytes) -> tuple[Path, bytes] | None:
+    """Rebind unchanged instruction facts to a compiler-only config publication."""
+    path = project.build / "map/facts.json"
+    if not path.is_file():
+        return None
+    result = storage.read(path, "map.facts")
+    storage.validate_identity(project, result, "map.facts")
+    pinned = storage.inputs(project)
+    previous_inputs = result.get("inputs_sha256", {})
+    changed = {key for key in set(previous_inputs) | set(pinned) if previous_inputs.get(key) != pinned.get(key)}
+    if changed - {"config.toml"}:
+        raise Held("setup", "map.inputs_stale: compiler update requires unchanged ROM, layout and symbol inputs")
+    pinned["config.toml"] = storage.digest(config_content)
+    result["inputs_sha256"] = pinned
+    result["compiler_update"] = {"config_sha256": pinned["config.toml"], "instruction_shard_retained": True}
+    return path, storage.encoded(result)

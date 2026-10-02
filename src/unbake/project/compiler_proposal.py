@@ -266,7 +266,10 @@ def propose_compilers(
         supported = [row for row in rows if row["evidence"]["supported"]]
         best = supported[0]["rank"] if supported else [0, 0, 0, 0]
         tied = [row["id"] for row in supported if row["rank"] == best]
-        if len(tied) > 1 and region not in selected:
+        if region.endswith(":undecided"):
+            # Weak move evidence cannot decide a family by aggregate rank.
+            tied = sorted(profiles)
+        if len(tied) > 1 and region not in selected and not region.endswith(":undecided"):
             probe = compiler_probes.reproduce(project, policy, tied, units)
             probes[region] = probe
             scores = {ident: row["score"] for ident, row in probe["candidates"].items()}
@@ -280,7 +283,7 @@ def propose_compilers(
         # The regional rank is the displayed proposal. A clear winner is
         # accepted as part of the whole digest; release ties stay explicit.
         mixed = region.endswith(":mixed")
-        choice = selected.get(region) or (selected.get("default") if region.endswith(":undecided") else None)
+        choice = selected.get(region)
         if choice:
             winners[region] = choice
         elif len(tied) == 1 and (
@@ -297,6 +300,33 @@ def propose_compilers(
     from unbake.project.proposal_accept import assignments as accept_assignments
 
     assignments, unresolved, default = accept_assignments(unit_regions, winners, selected)
+    candidate_rules = {}
+    for name, containing in unit_regions.items():
+        weak = any(region.endswith((":undecided", ":mixed")) for region in containing)
+        conflicting = len({winners[region] for region in containing}) > 1
+        if name not in selected and (weak or conflicting):
+            unit_ref = "tie:unit:" + name
+            ties[unit_ref] = sorted(profiles)
+            assignments[name] = unit_ref
+            candidate_rules[unit_ref] = {
+                "rule": "undecided item; independent first try compares every supported compiler by bytes",
+                "unit": name,
+                "regions": unit_regions[name],
+                "body_sha256": [row["body_sha256"] for row in unit_measurements[name]],
+                "features": [row["features"] for row in unit_measurements[name]],
+                "candidates": ties[unit_ref],
+            }
+    unresolved = [
+        reason
+        for reason in unresolved
+        if not (reason.startswith("unit:") and reason.split(":")[1] in assignments)
+        and not (reason in regions and all(row["name"] in assignments for row in regions[reason]))
+    ]
+    if default is None and assignments:
+        default = next(iter(assignments.values()))
+        unresolved = [reason for reason in unresolved if reason != "default:missing"]
+    used_refs = set(assignments.values()) | ({default} if default else set())
+    ties = {ref: ids for ref, ids in ties.items() if ref in used_refs}
     used = {ident for ref in assignments.values() for ident in ties.get(ref, [ref])}
     if default:
         used.update(ties.get(default, [default]))
@@ -322,6 +352,7 @@ def propose_compilers(
         clues=clues,
         ranking_policy=rules,
         compiler_ties=ties,
+        candidate_rules=candidate_rules,
         source_reproduction_probes={
             "attempted": sum(p["attempted"] for p in probes.values()),
             "successful_comparable": sum(p["successful_comparable"] for p in probes.values()),
@@ -351,7 +382,14 @@ def receipt(proposal: CompilerProposal) -> list[str]:
     counts: dict[str, int] = defaultdict(int)
     for ident in proposal["assignments"].values():
         counts[ident] += 1
+    independent = [ref for ref in counts if ref.startswith("tie:unit:")]
+    if independent:
+        lines.append(
+            f"compiler independent candidate sets: {len(independent)} units; each first try pins only its item"
+        )
     for ident, count in sorted(counts.items()):
+        if ident.startswith("tie:unit:"):
+            continue
         if ident in ties:
             lines.append(
                 f"compiler tied set {ident}: {{{', '.join(ties[ident])}}}; {count} units; "

@@ -88,13 +88,22 @@ def pin(project: Project, ref: str, ident: str, evidence: dict[str, Any], config
             json.dumps(makefile.description(candidate(project, ref, ident)), sort_keys=True, indent=2) + "\n"
         ).encode()
         lines[entries[0]] = f"{hashlib.sha256(rendered).hexdigest()}  {relative}\n"
+        from unbake.typemap.mapping import compiler_inputs
+
+        config_content = toml.dumps(data).encode()
+        mapped = compiler_inputs(project, config_content)
+        previous_map = mapped[0].read_bytes() if mapped else None
         try:
             compiler_files.atomic_bytes(recipe, rendered)
             compiler_files.atomic_bytes(manifest, "".join(lines).encode())
-            compiler_files.atomic_bytes(path, toml.dumps(data).encode())
+            if mapped is not None:
+                compiler_files.atomic_bytes(mapped[0], mapped[1])
+            compiler_files.atomic_bytes(path, config_content)
         except BaseException:
             compiler_files.atomic_bytes(recipe, previous_recipe)
             compiler_files.atomic_bytes(manifest, previous_manifest)
             compiler_files.atomic_bytes(path, content)
+            if mapped is not None and previous_map is not None:
+                compiler_files.atomic_bytes(mapped[0], previous_map)
             raise
     return config.load(project.root)

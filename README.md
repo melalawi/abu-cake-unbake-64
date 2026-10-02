@@ -100,3 +100,10 @@ an incomplete comparison leave the set intact with a named refusal. Malformed
 sets refuse `compiler.tied_set`. C builds require a resolved pin. Pinning
 updates the generated build recipe and its checksum entry together with config,
 with rollback if publication fails.
+
+For an existing ready project, `unbake setup --repropose-compilers` reviews new
+compiler evidence against the saved layout. Accept its exact digest with
+`unbake setup --repropose-compilers --confirm SHA256`, then run `unbake solve`.
+This updates compiler configuration and generated recipes without changing
+layout boundaries or running map. Published C and prior measured pins retain
+their proved recipes; undecided items receive independent candidate sets.

@@ -26,7 +26,8 @@ def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unba
         if path.is_file():
             proposal = path.read_bytes()
             if not json.loads(proposal).get("unresolved"):
-                return retry + " --confirm " + hashlib.sha256(proposal).hexdigest()
+                refresh = " --repropose-compilers" if config.load_pending(root).state == "ready" else ""
+                return retry + refresh + " --confirm " + hashlib.sha256(proposal).hexdigest()
     if root is not None and missing in {
         "trial.source_sha256",
         "submit.source_sha256",

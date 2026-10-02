@@ -77,6 +77,22 @@ class CompilerTieTests(unittest.TestCase):
         self.assertEqual(set(proof["candidates"]), {"ido-5.3", "ido-7.1"})
         self.assertEqual(proof["source_sha256"], hashlib.sha256(self.source.read_bytes()).hexdigest())
 
+    def test_independent_candidate_pin_does_not_change_other_items(self):
+        path = self.root / "config.toml"
+        data = toml.loads(path.read_text())
+        data["compiler_ties"] = {
+            "tie:unit:alpha": ["ido-5.3", "ido-7.1"],
+            "tie:unit:beta": ["ido-5.3", "ido-7.1"],
+        }
+        data["units"] = {"alpha": "tie:unit:alpha", "beta": "tie:unit:beta"}
+        path.write_text(toml.dumps(data))
+        self.project = config.load(self.root)
+        self.ref = "tie:unit:alpha"
+        self.recipe.write_text(json.dumps(makefile.description(self.project)))
+        self.manifest.write_text(compiler_files.sha(self.recipe) + "  tools/build.json\n")
+        resolved = self.run_resolve()
+        self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": "tie:unit:beta"})
+
     def test_strictly_better_nonmatch_pins(self):
         def trial(project, *args, **kwargs):
             result = self.trial(project)

@@ -15,6 +15,9 @@ def register(phases: Subparsers) -> None:
     parser.add_argument("--version-order", metavar="V1,V2,...")
     parser.add_argument("--name", metavar="STEM")
     parser.add_argument("--title", metavar="TITLE")
+    parser.add_argument(
+        "--repropose-compilers", action="store_true", help="Review compiler sets on the retained ready layout."
+    )
     parser.add_argument("--compilers", action="store_true", help="Inspect compiler registry pins.")
     parser.add_argument("--supply", type=Path, metavar="DIR")
     parser.add_argument("--compiler", action="append", default=[], metavar="REGION=ID")
@@ -51,6 +54,15 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
             else:
                 lines.append(f"{ident}: installed; pins verified")
         return receipt("setup", lines)
+    if args.repropose_compilers:
+        if project.state != "ready":
+            raise Held("setup", "setup.compiler_refresh: ready project required")
+        if args.compiler or args.name or args.title or args.names_from or args.version_name or args.version_order:
+            raise Held("setup", "setup.compiler_refresh: cannot change game facts or force a compiler")
+        from unbake.project import compiler_refresh
+
+        policy = config.load_policy(args.policy, stage="setup")
+        return receipt("setup", compiler_refresh.run(project, policy, args.confirm))
     if project.state == "ready":
         if args.compiler or args.name or args.title or args.names_from or args.version_name or args.version_order:
             raise Held("setup", "setup.rom_set_changed: ready setup retains confirmed facts and human layout")

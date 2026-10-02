@@ -44,6 +44,8 @@ class Compare:
     match_percent: float
     register_changes: tuple[tuple[int, int, int, int], ...]
     naming: int = 0
+    target_words: tuple[int, ...] = ()
+    candidate_words: tuple[int, ...] = ()
 
 
 def words(data: bytes) -> list[int]:

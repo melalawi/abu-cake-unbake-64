@@ -51,10 +51,28 @@ def resolve(
         results[ident] = result
         row["rank"] = list(measured_candidate_rank(result.compares))
         row["versions"] = {
-            v: {"identical": c.identical, "of": c.of, "typed": c.typed, "match_percent": c.match_percent}
+            v: {
+                "identical": c.identical,
+                "of": c.of,
+                "typed": c.typed,
+                "match_percent": c.match_percent,
+                "target_words": [f"0x{word:08X}" for word in c.target_words],
+                "candidate_words": [f"0x{word:08X}" for word in c.candidate_words],
+                "differences": c.lines,
+            }
             for v, c in result.compares.items()
         }
-        print(f"compiler candidate {ident}: rank={row['rank']}")
+        print(
+            f"compiler candidate {ident}: rank={row['rank']}; "
+            + ("exact reproduction" if result.identical_everywhere else "refused as exact compiler reproduction")
+        )
+        for version, comparison in result.compares.items():
+            if comparison.target_words or comparison.candidate_words:
+                print(f"  {version} target words: " + " ".join(f"0x{w:08X}" for w in comparison.target_words))
+                print(f"  {version} candidate words: " + " ".join(f"0x{w:08X}" for w in comparison.candidate_words))
+            if not result.identical_everywhere:
+                for line in comparison.lines:
+                    print("  " + line)
     receipt = work / "compiler-candidates.json"
     receipt.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     if len(results) != len(project.compiler_ties[ref]):

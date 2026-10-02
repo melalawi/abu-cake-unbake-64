@@ -108,7 +108,7 @@ class ProposalTests(unittest.TestCase):
         self.accept(census, layout, proposal, self.token())
         choices = {"us:ido": "ido-7.1", "default": "gcc-2.7.2-kmc"}
         proposal = self.propose(census, layout, choices)
-        self.assertEqual(proposal["assignments"], {"f0": "gcc-2.7.2-kmc", "f1": "ido-7.1", "f2": "gcc-2.7.2-kmc"})
+        self.assertEqual(proposal["assignments"], {"f0": "gcc-2.7.2-kmc", "f1": "ido-7.1", "f2": "tie:unit:f2"})
         self.assertEqual(proposal["unresolved"], [])
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
@@ -116,10 +116,18 @@ class ProposalTests(unittest.TestCase):
     def test_uninformative_unit_does_not_inherit_a_ranked_region(self) -> None:
         census, layout = self.layout(SN64, LEAF)
         proposal = self.propose(census, layout)
-        self.assertEqual(proposal["assignments"]["f1"], "tie:us:undecided")
-        self.assertEqual(len(proposal["compiler_ties"]["tie:us:undecided"]), 4)
+        self.assertEqual(proposal["assignments"]["f1"], "tie:unit:f1")
+        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f1"]), 4)
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
+
+    def test_weak_nonzero_evidence_gets_independent_all_family_sets(self) -> None:
+        census, layout = self.layout(instructions(0x00801021, 0x03E00008, 0), LEAF)
+        proposal = self.propose(census, layout, {"default": "gcc-2.7.2-kmc"})
+        self.assertEqual(proposal["assignments"], {"f0": "tie:unit:f0", "f1": "tie:unit:f1"})
+        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f0"]), 4)
+        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f1"]), 4)
+        self.assertIn("body_sha256", proposal["candidate_rules"]["tie:unit:f0"])
 
     def test_tie_accepts_explicit_candidate_set_without_selecting_registry_order(self) -> None:
         census, layout = self.layout(IDO)
@@ -206,14 +214,14 @@ class ProposalTests(unittest.TestCase):
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
-    def test_conflicting_holding_versions_need_an_explicit_unit_choice(self) -> None:
+    def test_conflicting_holding_versions_defer_to_measured_candidates(self) -> None:
         census, layout = self.layout(SN64)
         census = self.add_version(census, layout, GCC, "f0")
         proposal = self.propose(census, layout)
-        self.assertIn("unit:f0:mixed", proposal["unresolved"])
-        self.assertNotIn("f0", proposal["assignments"])
-        with self.assertRaisesRegex(config.Held, "setup.compiler_mixed:"):
-            self.accept(census, layout, proposal, self.token())
+        self.assertEqual(proposal["unresolved"], [])
+        self.assertEqual(proposal["assignments"]["f0"], "tie:unit:f0")
+        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f0"]), 4)
+        self.accept(census, layout, proposal, self.token())
         reviewed = self.propose(census, layout, {"f0": "gcc-2.8.1-sn64"})
         self.accept(census, layout, reviewed, self.token())
         self.unchanged()

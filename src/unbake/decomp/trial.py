@@ -13,7 +13,7 @@ from unbake.decomp import checks, drafts
 from unbake.decomp import work as draft_work
 from unbake.decomp.commands import prefix
 from unbake.decomp.score import diff
-from unbake.decomp.trial_compare import Compare, compare_object
+from unbake.decomp.trial_compare import Compare, compare_object, words
 from unbake.decomp.trial_compile import compile_draft, run_tool, scratch_directory
 from unbake.decomp.trial_flags import FlagResult, compiler_variants, ranking, variant_project
 from unbake.decomp.trial_source import annotate_divergence
@@ -184,6 +184,8 @@ def try_draft(
                 diff(policy, name, function, target, candidate, variant_work / "objdiff.json", generation=generation),
                 function,
             )
+            comparison.target_words = _function_words(target, function)
+            comparison.candidate_words = _function_words(candidate, function)
             result.compares[name] = comparison
             if index == 0:
                 if not flags:
@@ -203,3 +205,10 @@ def try_draft(
     (work / "report.txt").write_text(render(trial) + "\n", encoding="utf-8")
     print(render(trial))
     return trial
+
+
+def _function_words(path: Path, function: str) -> tuple[int, ...]:
+    obj = Object(path)
+    symbol = next(s for table in obj.symbols.values() for s in table if s["name"] == function and s["section"])
+    data = obj.content(symbol["section"])
+    return tuple(words(data[symbol["value"] : symbol["value"] + symbol["size"]]))
