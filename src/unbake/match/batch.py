@@ -113,7 +113,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 staging.chunk_stale_sources(generations[version], staged.tools)
             with reporting.phase("proof", sources=len(candidates)):
                 results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
-                candidates, sha1 = _isolate(staged, base, policy, candidates, generations, results, receipts)
+                candidates, sha1 = _isolate(project, staged, base, policy, candidates, generations, results, receipts)
             if not candidates:
                 return receipts
             with reporting.phase("publication", sources=len(candidates)):
@@ -327,28 +327,53 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
             (candidate, version) for version in candidate.versions if declared - known[version] - {candidate.function}
         )
 
-    def place(job: tuple[Candidate, str]) -> tuple[Candidate, list[SymbolNeed] | str]:
-        candidate, version = job
-        output = work / version / f"{candidate.function}.o"
-        try:
-            needs = data_symbols.prepare(staged, policy, candidate.function, version, output)
-        except Held as error:
-            return candidate, f"submit.data_symbols: VERSION {version}: {error.reason}"
-        for need in needs:
-            # An address-shaped name is that address; elsewhere it would hide the generated label.
-            shaped = re.fullmatch(r"D_([0-9A-Fa-f]{8})", need.name)
-            if shaped and int(shaped[1], 16) != need.address:
-                return candidate, (
-                    f"submit.data_symbols: VERSION {version}: {need.name}: address-shaped name placed at "
-                    f"0x{need.address:08X}; use this version's name or a cross-version identity"
+    # One interpreter per chunk compiles through the content cache the proof build reuses.
+    chunks: list[tuple[str, list[Candidate]]] = []
+    for version in staged.versions:
+        members = [candidate for candidate, v in jobs if v == version]
+        size = max(1, -(-len(members) // policy.cores))
+        chunks.extend((version, members[i : i + size]) for i in range(0, len(members), size))
+
+    def compile_chunk(chunk: tuple[str, list[Candidate]]) -> list[tuple[Candidate, list[SymbolNeed] | str]]:
+        version, members = chunk
+        output = work / version
+        failures = build.compile_objects(
+            staged, policy, [staged.src / f"{c.function}.c" for c in members], version, output
+        )
+        outcomes: list[tuple[Candidate, list[SymbolNeed] | str]] = []
+        for candidate in members:
+            if candidate.function in failures:
+                reason = failures[candidate.function].splitlines()[0][:300]
+                outcomes.append((candidate, f"submit.data_symbols: VERSION {version}: compile: {reason}"))
+                continue
+            try:
+                needs = data_symbols.needs(staged, candidate.function, version, output / f"{candidate.function}.o")
+            except Held as error:
+                outcomes.append((candidate, f"submit.data_symbols: VERSION {version}: {error.reason}"))
+                continue
+            shaped = [
+                need
+                for need in needs
+                if (m := re.fullmatch(r"D_([0-9A-Fa-f]{8})", need.name)) and int(m[1], 16) != need.address
+            ]
+            if shaped:
+                # An address-shaped name is that address; elsewhere it would hide the generated label.
+                outcomes.append(
+                    (
+                        candidate,
+                        f"submit.data_symbols: VERSION {version}: {shaped[0].name}: address-shaped name placed at "
+                        f"0x{shaped[0].address:08X}; use this version's name or a cross-version identity",
+                    )
                 )
-        return candidate, needs
+                continue
+            outcomes.append((candidate, needs))
+        return outcomes
 
     refused: dict[str, str] = {}
     proposed: dict[tuple[str, str], dict[int, set[str]]] = {}
     found: dict[str, list[SymbolNeed]] = {}
     with ThreadPoolExecutor(max_workers=policy.cores) as pool:
-        for candidate, outcome in pool.map(place, jobs):
+        for candidate, outcome in (item for chunk in pool.map(compile_chunk, chunks) for item in chunk):
             if isinstance(outcome, str):
                 refused.setdefault(candidate.function, outcome)
                 continue
@@ -390,6 +415,7 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
 
 
 def _isolate(
+    project: Project,
     staged: Project,
     base: _Base,
     policy: Policy,
@@ -425,6 +451,13 @@ def _isolate(
         if not candidates:
             return [], {}
         _materialize(staged, base, candidates)
+        if any(not (generations[v] / "obj/src" / f"{c.function}.o").is_file() for c in candidates for v in c.versions):
+            # A failed compile chunk discards its siblings; make rebuilds only those, from the cache.
+            results = build.build(
+                project, policy, list(generations), tree=staged.root, generation_for=generations.__getitem__
+            )
+            extracted.update({v: staged.version(v).split.read_text() for v in generations})
+            continue
         results = _relink(staged, policy, generations, extracted)
 
 

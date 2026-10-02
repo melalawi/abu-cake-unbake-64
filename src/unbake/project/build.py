@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -166,6 +167,67 @@ def preprocess_object(project: Project, policy: Policy, source: Path, v: str) ->
         cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
         return _run([cpp, *recipe.cppflags, *preprocess, str(source)], project.root)
     return _run([str(compiler.cc), *[flag for flag in flags if flag != "-c"], "-E", str(source)], project.root)
+
+
+def compile_objects(project: Project, policy: Policy, sources: Sequence[Path], v: str, out: Path) -> dict[str, str]:
+    """Compile project sources in one interpreter through the content cache; name each failure.
+
+    Objects land at out/<stem>.o. The result maps each failed source stem to its diagnostic.
+    """
+    from unbake.project import toolchain
+
+    project.version(v)
+    for ident in {project.compiler_for(source).id for source in sources}:
+        toolchain.verify(project.tools / ident, toolchain.specification(ident))
+    out = Path(out).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    relative = [Path(source).resolve().relative_to(project.src) for source in sources]
+    with tempfile.TemporaryDirectory(prefix=".compile-", dir=out) as temporary:
+        work = Path(temporary)
+        for name, content in makefile.helpers(project).items():
+            (work / Path(name).name).write_text(content)
+        shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
+        root = project.src.relative_to(project.root)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(work / "compile.py"),
+                "--kind",
+                "cc",
+                "--recipe",
+                str(work / "build.json"),
+                "--version",
+                v,
+                "--unit",
+                "batch",
+                "--source",
+                str(root),
+                "--output",
+                str(out),
+                "--non-matching",
+                "0",
+                "--cache-root",
+                str(policy.cache_root),
+                "--batch",
+                *(str(root / path) for path in relative),
+            ],
+            cwd=project.root,
+            capture_output=True,
+            text=True,
+        )
+    failures: dict[str, str] = {}
+    current = None
+    for line in (completed.stdout + completed.stderr).splitlines():
+        match = re.match(rf"^{re.escape(str(root))}/([A-Za-z_]\w*)\.c: (.*)$", line)
+        if match:
+            current = match[1]
+            failures[current] = match[2]
+        elif current is not None and not line.startswith("HELD("):
+            failures[current] += "\n" + line
+    for path in relative:
+        if path.stem not in failures and not (out / path.with_suffix(".o")).is_file():
+            failures[path.stem] = (completed.stderr or completed.stdout).strip()[-400:] or "no object produced"
+    return failures
 
 
 def compile_object(

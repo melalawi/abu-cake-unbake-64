@@ -38,7 +38,7 @@ def diagnose(
         context: list[str] = []
         for line in log.splitlines():
             # A batch compile reports each failed source on its own line.
-            failed = re.match(r"^\S*/src/([A-Za-z_]\w*)\.c: (.*)$", line)
+            failed = re.match(r"^(?:\S*/)?src/([A-Za-z_]\w*)\.c: (.*)$", line)
             if failed:
                 blame(failed[1], f"{version}: compile diagnostic: {failed[2][:400]}")
                 continue
