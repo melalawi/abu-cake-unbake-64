@@ -139,6 +139,21 @@ class AbiTests(unittest.TestCase):
                 self.assertFalse(result["caller"]["return_known"])
                 self.assertNotIn("r2", result["caller"]["defined_returns"])
 
+    def test_word_transport_does_not_promise_initialized_forwarded_value(self):
+        result = solve(
+            {
+                "caller": (0x80001000, [0x00808021, 0x0C000800, 0, 0x00501021, 0x03E00008, 0]),
+                "leaf": (0x80002000, [0x10800004, 0, 0x24020001, 0x03E00008, 0, 0x03E00008, 0]),
+            },
+            "",
+        )
+        record = result["functions"]["caller"]
+        self.assertNotEqual(record["state"], "known")
+        self.assertIsNone(record["prototype"])
+        carrier = record["abi_declaration"]
+        self.assertEqual(carrier["prototype"], "int caller(int);")
+        self.assertTrue(any("types.abi.result_value_unknown:" in reason for reason in carrier["reasons"]))
+
     def test_array_carriers_use_valid_unnamed_c_declarators(self):
         from unbake.typemap.declarations import extract
 

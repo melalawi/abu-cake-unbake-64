@@ -291,6 +291,14 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
             "call_sites": len(calls.get(name, [])),
             "used_returns": sorted(consumed),
             "defined_returns": [reg for reg in ("r2", "f0") if reg in available[name]],
+            "word_return_written": bool(item["versions"])
+            and all(
+                body["returns"]
+                and "r2" in body["register_outputs"]
+                and all(exit_["values"]["r2"].get("defined", False) for exit_ in body["returns"])
+                and not any(call.get("tail") for call in body["calls"])
+                for body in item["versions"].values()
+            ),
             "caller_return_uses": {
                 caller: sorted(
                     {

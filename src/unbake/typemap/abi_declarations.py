@@ -85,7 +85,13 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
         reasons.append("types.abi.unused_return: no mapped direct caller consumes a result; semantic return unknown")
     elif abi["void"]:
         returned = "void"
-    elif abi["return_register"] == "r2" and abi.get("machine_return_known", abi["return_known"]):
+    elif (abi["return_register"] in (None, "r2")) and (
+        abi.get("machine_return_known", abi["return_known"]) or abi.get("word_return_written")
+    ):
+        if not abi.get("machine_return_known", abi["return_known"]):
+            reasons.append(
+                "types.abi.result_value_unknown: callee writes v0 at its exits; forwarded value remains unproven"
+            )
         if returned is None or returned in ("float", "double") or declarations.unknown(returned):
             returned = "int"
             reasons.append("types.abi.word_return: v0 carries one O32 word; semantic return unknown or conflicting")
