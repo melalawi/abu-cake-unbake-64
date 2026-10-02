@@ -1,20 +1,54 @@
 """Run bootstrap tools and prove cartridge bytes before publishing."""
 
 import io
+import os
 import subprocess
-from collections.abc import Mapping
-from contextlib import ExitStack
+from collections.abc import Iterator, Mapping
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.project.config import Held, Project
 
 
+@dataclass(frozen=True)
+class JobSlots:
+    descriptors: tuple[int, int]
+    environment: dict[str, str]
+
+
+@contextmanager
+def job_slots(cores: int, workers: int) -> Iterator[JobSlots]:
+    """Share make slots across versions, reserving one implicit slot per worker."""
+    read, write = os.pipe()
+    try:
+        os.write(write, b"+" * (cores - workers))
+        environment = dict(os.environ, MAKEFLAGS=f"--jobserver-auth={read},{write} -j")
+        environment.pop("MFLAGS", None)
+        environment.pop("GNUMAKEFLAGS", None)
+        yield JobSlots((read, write), environment)
+    finally:
+        os.close(read)
+        os.close(write)
+
+
 def run(
-    command: list[str], directory: Path, log: Path | None = None, *, environment: Mapping[str, str] | None = None
+    command: list[str],
+    directory: Path,
+    log: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+    descriptors: tuple[int, ...] = (),
 ) -> str:
     try:
         result = subprocess.run(
-            command, cwd=directory, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            command,
+            cwd=directory,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            pass_fds=descriptors,
         )
     except OSError as error:
         raise Held("setup", f"{command[0]}: {error}") from error
@@ -26,20 +60,43 @@ def run(
     return result.stdout.strip()
 
 
-def proof(project: Project, version: str, data: bytes | Path, cores: int, *, log: Path | None = None) -> None:
+def proof(
+    project: Project,
+    version: str,
+    data: bytes | Path,
+    cores: int,
+    *,
+    log: Path | None = None,
+    slots: JobSlots | None = None,
+) -> None:
     root = project.root
     project.version(version)
     built = project.build_link(version) / f"{project.name}.{version}.z64"
     log = log or project.build / "setup" / f"{version}.log"
+    options = [] if slots is not None else [f"-j{cores}"]
+    environment = slots.environment if slots is not None else None
+    descriptors = slots.descriptors if slots is not None else ()
     try:
-        run(["make", f"-j{cores}", "extract", f"VERSION={version}"], root, log.with_suffix(".extract.log"))
+        run(
+            ["make", *options, "extract", f"VERSION={version}"],
+            root,
+            log.with_suffix(".extract.log"),
+            environment=environment,
+            descriptors=descriptors,
+        )
     except Held as error:
         raise Held(
             "setup", f"setup.sha1.{version}: extraction failed; log {log.with_suffix('.extract.log')}; {error.reason}"
         ) from error
     failure = None
     try:
-        run(["make", f"-j{cores}", "check", f"VERSION={version}", "COMPARE=1"], root, log)
+        run(
+            ["make", *options, "check", f"VERSION={version}", "COMPARE=1"],
+            root,
+            log,
+            environment=environment,
+            descriptors=descriptors,
+        )
     except Held as error:
         failure = error
     if not built.is_file():

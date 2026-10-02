@@ -124,7 +124,7 @@ def archive_files(path: Path, wanted: set[str]) -> dict[str, bytes]:
     return found
 
 
-def directory_files(source: Path, wanted: set[str], algorithm: str) -> dict[str, bytes]:
+def directory_paths(source: Path, wanted: set[str], algorithm: str) -> dict[str, Path]:
     """Find supplied inputs by content digest, independently of their filenames."""
     if not source.is_dir():
         raise Held("setup", f"supply {source}: missing directory")
@@ -135,12 +135,17 @@ def directory_files(source: Path, wanted: set[str], algorithm: str) -> dict[str,
                 with candidate.open("rb") as stream:
                     digest = hashlib.file_digest(stream, algorithm).hexdigest()
                 if digest in wanted:
-                    found[digest] = candidate.read_bytes()
+                    found[digest] = candidate
                     if found.keys() >= wanted:
                         break
             except OSError as error:
                 raise Held("setup", f"supply {candidate}: {error}") from error
     return found
+
+
+def directory_files(source: Path, wanted: set[str], algorithm: str) -> dict[str, bytes]:
+    """Read supplied compiler files after finding their digest-pinned paths."""
+    return {digest: path.read_bytes() for digest, path in directory_paths(source, wanted, algorithm).items()}
 
 
 def supplied_files(source: Path, wanted: set[str]) -> dict[str, bytes]:

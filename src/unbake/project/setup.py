@@ -58,7 +58,7 @@ def restore_roms(project: Project, source: Path) -> None:
     missing = [project.version(name) for name in project.versions if not project.version(name).baserom.is_file()]
     if not missing:
         return
-    contents = compiler_files.directory_files(source, {version.baserom_sha1 for version in missing}, "sha1")
+    contents = compiler_files.directory_paths(source, {version.baserom_sha1 for version in missing}, "sha1")
     for version in missing:
         if version.baserom_sha1 not in contents:
             raise Held(
@@ -69,7 +69,7 @@ def restore_roms(project: Project, source: Path) -> None:
         target = project.root / version.baserom
         if target.is_symlink():
             raise Held("setup", f"{target}: baserom symlink target is missing")
-        compiler_files.atomic_bytes(target, contents[version.baserom_sha1])
+        compiler_files.atomic_copy(target, contents[version.baserom_sha1], mode=0o600)
 
 
 def run(project: Project, policy: Policy | SetupPolicy, *, supply: Path | None = None) -> list[str]:
@@ -526,17 +526,16 @@ def _prove_publish(
     if previous is not None:
         contributing.write_bytes(previous)
     workers = min(policy.setup_version_jobs, policy.cores, len(staged.versions))
-    cores = max(1, policy.cores // workers)
 
     def prove_version(version: str) -> str:
         data = staged.version(version).baserom
         log = project.build / "setup/logs" / f"{version}.log"
-        setup_proof.proof(staged, version, data, cores, log=log)
+        setup_proof.proof(staged, version, data, policy.cores, log=log, slots=slots)
         with data.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha1").hexdigest()
         return f"{version}: SHA1 {digest}; every cartridge byte proved"
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    with setup_proof.job_slots(policy.cores, workers) as slots, ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(prove_version, version) for version in staged.versions]
         receipts = [future.result() for future in futures]
     if before_publish is not None:

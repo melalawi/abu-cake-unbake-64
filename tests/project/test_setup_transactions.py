@@ -82,7 +82,15 @@ class SetupTransactionTests(unittest.TestCase):
         self.project.build_link("us").symlink_to(generation.name)
 
     @staticmethod
-    def proof(project: config.Project, version: str, data: bytes | Path, cores: int, *, log: Path) -> None:
+    def proof(
+        project: config.Project,
+        version: str,
+        data: bytes | Path,
+        cores: int,
+        *,
+        log: Path,
+        slots: setup_proof.JobSlots | None = None,
+    ) -> None:
         generation = project.build / f"{version}.0"
         generation.mkdir(parents=True)
         project.build_link(version).symlink_to(generation.name)
@@ -400,7 +408,15 @@ class SetupTransactionTests(unittest.TestCase):
         before = setup._inputs(project)
         completed = []
 
-        def proof(selected: config.Project, version: str, raw: bytes, cores: int, *, log: Path) -> None:
+        def proof(
+            selected: config.Project,
+            version: str,
+            raw: bytes,
+            cores: int,
+            *,
+            log: Path,
+            slots: setup_proof.JobSlots | None = None,
+        ) -> None:
             if version == "eu":
                 raise config.Held("setup", "setup.sha1.eu: injected second-version failure")
             self.proof(selected, version, raw, cores, log=log)
