@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-import re
 import shlex
-import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,10 +31,12 @@ class Recipe:
 
 
 def recipe(project: Project) -> Recipe:
+    from unbake.project.config import _read
+
     path = project.root / "config.toml"
     try:
-        table = tomllib.loads(path.read_text())["build"]
-    except (OSError, ValueError, KeyError) as error:
+        table = _read(path)["build"]
+    except KeyError as error:
         raise Held("config", f"{path} [build]: {error}") from error
 
     @overload
@@ -160,12 +160,7 @@ def shell_words(words: Iterable[str | Path]) -> str:
     return " ".join(shlex.quote(str(word)).replace("$", "$$") for word in words)
 
 
-def description(project: Project, *, unit: Path | None = None) -> dict[str, Any]:
-    from unbake.project.compiler_ties import reference
-
-    for source in project.src.rglob("*.c") if unit is None else (unit,):
-        if ref := reference(project, source):
-            raise Held("build", f"compiler.tied_set: {ref}: run try then submit before building C {source.stem}")
+def description(project: Project) -> dict[str, Any]:
     build = recipe(project)
     compilers = {}
     for ident, compiler in project.compilers.items():
@@ -175,30 +170,10 @@ def description(project: Project, *, unit: Path | None = None) -> dict[str, Any]
             "as": str(compiler.as_) if str(compiler.as_).startswith("policy:") else relative(project, compiler.as_),
             "cflags": list(compiler.cflags),
         }
-    units = {name: project.compiler_id(ident) for name, ident in project.units.items()}
-    memberships: dict[str, set[str]] = {}
-    for version in project.version_map.values():
-        segment = None
-        for line in version.split.read_text().splitlines():
-            entry = re.match(r"^\s*-\s+name:\s*([^#]+?)\s*$", line)
-            if entry:
-                segment = entry[1].strip("\"'")
-            row = re.match(r"^\s*-\s*\[[^,]+,\s*(?:asm|c),\s*([^\]]+)\]", line)
-            if row and segment in project.units:
-                name = Path(row[1].strip().strip("\"'")).stem
-                memberships.setdefault(name, set()).add(project.units[segment])
-    for name, choices in memberships.items():
-        source = project.src / (name + ".c")
-        if str(source.relative_to(project.root)) in project.units or name in project.units:
-            units[name] = project.compiler_for(source).id
-        elif len(choices) == 1:
-            units[name] = project.compiler_id(next(iter(choices)))
-        else:
-            raise Held("config", f"[units].{name}: conflicting segment compilers across VERSIONs")
     return {
         "compilers": compilers,
-        "default_compiler": project.compiler_id(project.default_compiler),
-        "units": units,
+        "default_compiler": project.default_compiler,
+        "units": dict(project.units),
         "src": relative(project, project.src),
         "include": [relative(project, p) for p in project.include],
         "asm": relative(project, project.asm),
@@ -224,7 +199,7 @@ def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
         raise Held("build", str(error)) from error
 
 
-def helpers(project: Project, *, unit: Path | None = None) -> dict[str, str]:
+def helpers(project: Project) -> dict[str, str]:
     tools = relative(project, project.tools)
     names = [
         "extract.py",
@@ -258,7 +233,7 @@ def helpers(project: Project, *, unit: Path | None = None) -> dict[str, str]:
         super().__init__(f"HELD({phase}): {reason}")""",
     )
     files[tools + "/cache.py"] = cache_source
-    files[tools + "/build.json"] = json.dumps(description(project, unit=unit), sort_keys=True, indent=2) + "\n"
+    files[tools + "/build.json"] = json.dumps(description(project), sort_keys=True, indent=2) + "\n"
     return files
 
 

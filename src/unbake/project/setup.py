@@ -389,7 +389,7 @@ def _publish(
                     and (project.root / relative).exists()
                 )
                 or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
-                or relative in {"README.md", "CONTRIBUTING.md", "config.toml", ".gitignore"}
+                or relative in {"README.md", "CONTRIBUTING.md", ".gitignore"}
                 or relative.startswith("docs/")
             )
         ):
@@ -608,7 +608,6 @@ def prepare_setup(
                 title=facts["project"]["title"],
                 default_compiler=proposal["default_compiler"],
                 assignments=proposal["assignments"],
-                compiler_ties=proposal.get("compiler_ties", {}),
                 cflags={ident: tuple(flags) for ident, flags in proposal["cflags"].items()},
                 build=_build_options(layout, policy),
             ),
@@ -657,16 +656,19 @@ def complete_setup(
         return prove()
 
 
-def refresh(project: Project, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:
-    """Prove existing authored inputs and refresh only generated files."""
+def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:
+    """Prove existing authored inputs, refresh generated files and keep config.toml configuration only."""
     from unbake.project import census
 
+    configured = setup_config.canonical(_read(pending.root / "config.toml").decode())
+    project = config.load(pending.root, text=configured)
     fingerprint = _inputs(project)
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="proof-", dir=directory) as temporary:
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
+        (tree / "config.toml").write_text(configured)
         staged = config.load(tree)
         _seed_generations(project, staged)
         if supply is not None:

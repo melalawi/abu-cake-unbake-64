@@ -15,7 +15,7 @@ import toml  # type: ignore[import-untyped]
 from unbake.cli.common import suggest
 from unbake.layout import planner, port, split, symbol_proof
 from unbake.layout.symbol_identity import similarity_distribution
-from unbake.project import setup, toolchain
+from unbake.project import setup
 from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import load
@@ -96,7 +96,7 @@ def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[st
                     "correspondence": evidence[v][f.start],
                     "symbol_correspondence": details[v][f.start],
                     "assembly": f.kind == "asm",
-                    "compiler_reference": project.compiler_reference(f.path),
+                    "compiler_reference": project.compiler_reference(f.name),
                 },
             )
             records.append(record)
@@ -187,26 +187,16 @@ def publish(
     groups: dict[str, set[str]] = defaultdict(set)
     for v in project.versions:
         for f in port.functions(project, v):
-            groups[replacements.get(f.name, f.name)].update(
-                project.compiler_ties.get(project.compiler_reference(f.path), (project.compiler_reference(f.path),))
-            )
+            groups[replacements.get(f.name, f.name)].add(project.compiler_reference(f.name))
     affected = set(replacements) | set(replacements.values())
-    for old in affected:
-        data["units"].pop(old, None)
-    registry = list(toolchain.registry())
+    units = {name: ident for name, ident in data.get("units", {}).items() if name not in affected}
     for name in set(replacements.values()):
-        candidates = sorted(groups[name], key=registry.index)
-        if len(candidates) == 1:
-            data["units"][name] = candidates[0]
-        else:
-            reference = "tie:symbol:" + name
-            data.setdefault("compiler_ties", {})[reference] = candidates
-            data["units"][name] = reference
-    for key, selection in list(data.get("compiler_selections", {}).items()):
-        measured = json.loads(selection.get("evidence_json", "{}"))
-        if selection.get("function", measured.get("function")) in affected:
-            report.setdefault("prior_compiler_selections", {})[key] = selection
-            del data["compiler_selections"][key]
+        # Joined placements that disagree build with the default first; try ranks the rest.
+        if len(groups[name]) == 1 and (ident := next(iter(groups[name]))) != project.default_compiler:
+            units[name] = ident
+    data.pop("units", None)
+    if units:
+        data["units"] = dict(sorted(units.items()))
     fast = symbol_proof.available(project, replacements)
     with tempfile.TemporaryDirectory(prefix="symbol-proof-", dir=directory) as temporary:
         tree = Path(temporary) / "tree"

@@ -140,23 +140,6 @@ def build(
     return results
 
 
-def relink(
-    project: Project,
-    policy: Policy,
-    versions: Sequence[str],
-    *,
-    tree: Path,
-    generation_for: Callable[[str], Path],
-    object_inputs: dict[str, dict[str, str]],
-) -> dict[str, BuildResult]:
-    """Reuse compiled objects for a subset; extraction and linking own the proof."""
-    from unbake.match import relink as reuse
-    from unbake.project import config
-
-    staged = config.load(tree)
-    return {v: reuse.prove(staged, policy, v, generation_for(v), object_inputs.get(v, {})) for v in versions}
-
-
 def _run(command: list[str], root: Path) -> bytes:
     try:
         completed = subprocess.run(command, cwd=root, capture_output=True)
@@ -193,10 +176,7 @@ def compile_object(
     if not source.is_file():
         raise Held("compile", f"source {source} is missing")
     from unbake.project import toolchain
-    from unbake.project.compiler_ties import reference
 
-    if ref := reference(project, source):
-        raise Held("compile", f"compiler.tied_set: {ref}: compare every candidate with try before compiling C")
     compiler = project.compiler_for(source)
     toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +187,7 @@ def compile_object(
     )
     with tempfile.TemporaryDirectory(prefix=".compile-", dir=out.parent) as temporary:
         work = Path(temporary)
-        for name, content in makefile.helpers(project, unit=source).items():
+        for name, content in makefile.helpers(project).items():
             (work / Path(name).name).write_text(content)
         shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
         _run(

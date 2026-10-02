@@ -51,11 +51,7 @@ def run(command: list[str]) -> bytes:
 
 
 def compiler_for(data: Recipe, unit: str) -> str:
-    direct = data["units"].get(unit)
-    stem = data["units"].get(Path(unit).stem)
-    if direct and stem and direct != stem:
-        raise ValueError(f"[units].{unit}: conflicts with [units].{Path(unit).stem}")
-    ident = direct or stem or data["default_compiler"]
+    ident = data["units"].get(Path(unit).stem, data["default_compiler"])
     if ident not in data["compilers"]:
         raise ValueError(f"[units].{unit}: unknown compiler {ident}")
     return ident

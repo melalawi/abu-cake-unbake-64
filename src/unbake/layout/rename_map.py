@@ -133,11 +133,7 @@ def plan(project: Project, mapping: dict[str, str]) -> list[Change]:
     data = tomllib.loads(config_text)
     units: dict[str, str] = {}
     for key, compiler in data.get("units", {}).items():
-        path = Path(key)
-        if path.suffix == ".c":
-            renamed = str(path.with_name(mapping.get(path.stem, path.stem) + ".c"))
-        else:
-            renamed = path_name(key, mapping)
+        renamed = mapping.get(key, key)
         if renamed in units and units[renamed] != compiler:
             raise Held("split", f"split.rename.conflict: compiler unit {renamed}")
         units[renamed] = compiler

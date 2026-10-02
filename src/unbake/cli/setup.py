@@ -87,7 +87,7 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
         if args.compiler or args.name or args.title or args.names_from or args.version_name or args.version_order:
             raise Held("setup", "setup.rom_set_changed: ready setup retains confirmed facts and human layout")
         policy = config.load_policy(args.policy, stage="setup")
-        return receipt("setup", setup.refresh(config.load(project.root), policy, supply=args.supply))
+        return receipt("setup", setup.refresh(project, policy, supply=args.supply))
     # Empty ROM refusal precedes policy requirements and template creation.
     census.candidates(project)
     print(f"OK(setup): ROM folder: {project.roms}")
