@@ -19,8 +19,15 @@ def command(root: Path | None, phase: str) -> str:
 def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
     if missing == "headers.declaration":
         return f"Repair the SDK/shared header prerequisite identified above. Then run {retry}."
+    if missing is not None and missing.startswith("split."):
+        if missing == "split.data_to_code":
+            return command(root, "split") + " code FUNCTION --version V --start ROM --end ROM"
+        if missing.startswith("split.code."):
+            return command(root, "split") + " code --help"
+        if missing.startswith("split.cut."):
+            return "Correct the selected interval and owner with " + command(root, "split") + " cut --help."
     if root is not None and missing is not None and missing.startswith(("types.", "map.")):
-        phase = "map" if missing.startswith("map.") else "solve"
+        phase = "map" if missing.startswith("map.") and missing != "map.inputs_stale" else "solve"
         tokens = shlex.split(retry)
         return shlex.join([*tokens[:-1], phase])
     if missing == "setup.compiler_confirmation" and root is not None:

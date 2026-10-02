@@ -34,8 +34,7 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "types.inputs_stale"):
             load(self.project)
         self.project.version("us").symbols.write_text("alpha = 0x80001000;\n")
-        with self.assertRaisesRegex(Held, "map.inputs_stale"):
-            solve(self.project)
+        solve(self.project)
 
     def test_rom_digest_and_missing_symbol_input_are_named(self) -> None:
         self.project.version("eu").baserom.write_bytes(b"changed")
@@ -50,8 +49,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(mapped["globals"]["unused_data"]["accesses"], [])
         self.assertIn("build/us/splat_symbols.csv", mapped["inputs_sha256"])
         catalog.write_text("vram_start,name,type\n80004000,unused_data,None\n")
-        with self.assertRaisesRegex(Held, "map.inputs_stale"):
-            solve(self.project)
+        solve(self.project)
         self.project.version("eu").symbols.unlink()
         with self.assertRaisesRegex(Held, "map.symbols.eu"):
             map_program(self.project)
@@ -225,27 +223,121 @@ class DatabaseTests(unittest.TestCase):
             feedback(self.project, "alpha", source, versions=["us", "eu"], proof=proof)
         self.assertFalse((self.project.build / "types/proven.json").exists())
 
-    def test_feedback_map_refuses_new_data_names_without_repinning_facts(self) -> None:
+    def test_symbol_refresh_retains_unaffected_shard_and_adds_unaccessed_names(self) -> None:
         from unbake.typemap.mapping import refresh_map
 
-        map_program(self.project)
-        manifest = self.project.build / "map/facts.json"
-        before = manifest.read_bytes()
+        before = map_program(self.project)
         symbols = self.project.version("us").symbols
         symbols.write_text(symbols.read_text() + "new_data = 0x80003000;\n")
-        with self.assertRaisesRegex(Held, "map.symbols_changed"):
-            refresh_map(self.project)
-        self.assertEqual(manifest.read_bytes(), before)
+        with (
+            patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("unexpected rescan")),
+            patch("unbake.typemap.mapping.indexed_references", side_effect=AssertionError("unchanged index decoded")),
+            patch("unbake.typemap.shards.Functions.__getitem__", side_effect=AssertionError("sibling bodies read")),
+        ):
+            result = refresh_map(self.project)
+        self.assertEqual(result["shard_sha256"], before["shard_sha256"])
+        self.assertEqual(result["globals"]["new_data"]["versions"], {"us": {"address": 0x80003000}})
+        self.assertEqual(result["refresh"]["reused"], 6)
+        self.assertEqual(result["refresh"]["rescanned"], 0)
+        self.assertFalse(result["refresh"]["abi_upgrade"])
+        self.assertEqual(result["refresh"]["previous_shard_sha256"], before["shard_sha256"])
 
-    def test_feedback_map_rescans_when_function_boundaries_change(self) -> None:
+    def test_incremental_refresh_materializes_an_old_abi_supplement_only_once(self) -> None:
+        from unbake.typemap.mapping import Analysis, refresh_map
+
+        map_program(self.project)
+        path = self.project.build / "map/facts.json"
+        manifest = storage.read(path, "map.facts")
+        manifest.pop("abi_analysis_sha256")
+        storage.write(path, storage.encoded(manifest))
+        symbols = self.project.version("us").symbols
+        symbols.write_text(symbols.read_text() + "new_data = 0x80003000;\n")
+        with patch("unbake.typemap.abi_facts.Analysis.run", autospec=True, side_effect=Analysis.run) as upgraded:
+            first = refresh_map(self.project)
+        self.assertEqual(upgraded.call_count, 6)
+        self.assertTrue(first["refresh"]["abi_upgrade"])
+        self.assertEqual(first["refresh"]["rescanned"], 0)
+        symbols.write_text(symbols.read_text() + "more_data = 0x80004000;\n")
+        with patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("ABI upgraded again")):
+            second = refresh_map(self.project)
+        self.assertFalse(second["refresh"]["abi_upgrade"])
+        self.assertEqual(second["shard_sha256"], first["shard_sha256"])
+
+    def test_boundary_refresh_rescans_only_changed_intervals_and_matches_full_map(self) -> None:
+        from unbake.typemap.mapping import Analysis, refresh_map
+
+        map_program(self.project)
+        path = self.project.version("us").split
+        path.write_text(path.read_text().replace("[0x4C, asm, beta]", "[0x50, asm, beta]"))
+        calls = []
+        run = Analysis.run
+
+        def tracked(analysis):
+            calls.append((analysis.function, analysis.version))
+            return run(analysis)
+
+        with patch("unbake.typemap.mapping.Analysis.run", tracked):
+            refreshed = refresh_map(self.project)
+        self.assertEqual(set(calls), {("alpha", "us"), ("beta", "us")})
+        expected = map_program(self.project)
+        self.assertEqual(dict(refreshed["functions"]), dict(expected["functions"]))
+        self.assertEqual(refreshed["globals"], expected["globals"])
+
+    def test_symbol_origins_refresh_downstream_accesses_on_add_move_and_remove(self) -> None:
+        from unbake.typemap.mapping import refresh_map
+
+        directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
+        self.addCleanup(directory.cleanup)
+        project, _, _ = fixture(Path(directory.name), words=[0x3C088000, 0x8D083000, 0x8D020004, 0x03E00008, 0])
+        original = map_program(project)
+        symbols = project.version("us").symbols
+        initial = symbols.read_text()
+        for placement in ("source = 0x80003000;\n", "renamed = 0x80003000;\n", "renamed = 0x80004000;\n", ""):
+            symbols.write_text(initial + placement)
+            refreshed = refresh_map(project)
+            expected = map_program(project)
+            self.assertEqual(dict(refreshed["functions"]), dict(expected["functions"]))
+            self.assertEqual(refreshed["globals"], expected["globals"])
+            self.assertLess(refreshed["refresh"]["rescanned"], 3)
+        self.assertEqual(original["globals"], expected["globals"])
+        with patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("unchanged")):
+            refresh_map(project)
+
+    def test_boundary_refresh_updates_constant_indirect_tail_targets(self) -> None:
+        from unbake.typemap.mapping import refresh_map
+
+        directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
+        self.addCleanup(directory.cleanup)
+        project, _, _ = fixture(Path(directory.name), words=[0x3C088000, 0x35081018, 0x01000008, 0, 0x03E00008, 0])
+        before = map_program(project)
+        self.assertEqual(before["functions"]["alpha"]["versions"]["us"]["calls"][0]["callee"], "beta")
+        version = project.version("us")
+        version.split.write_text(version.split.read_text().replace(", asm, beta]", ", asm, renamed]"))
+        version.symbols.write_text(version.symbols.read_text().replace("beta =", "renamed ="))
+        refreshed = refresh_map(project)
+        self.assertEqual(refreshed["functions"]["alpha"]["versions"]["us"]["calls"][0]["callee"], "renamed")
+        expected = map_program(project)
+        self.assertEqual(dict(refreshed["functions"]), dict(expected["functions"]))
+
+    def test_failed_incremental_map_keeps_manifest_and_rom_changes_require_bootstrap(self) -> None:
         from unbake.typemap.mapping import refresh_map
 
         map_program(self.project)
-        split = self.project.version("us").split
-        split.write_text(split.read_text().replace("[0x4C, asm, beta]", "[0x50, asm, beta]"))
-        with patch("unbake.typemap.mapping.map_program", wraps=map_program) as rescanned:
+        path = self.project.build / "map/facts.json"
+        before = path.read_bytes()
+        layout = self.project.version("us").split
+        layout.write_text(layout.read_text().replace("[0x4C, asm, beta]", "[0x50, asm, beta]"))
+        with (
+            patch("unbake.typemap.mapping.Analysis.run", side_effect=ValueError("bad item")),
+            self.assertRaisesRegex(ValueError, "bad item"),
+        ):
             refresh_map(self.project)
-        self.assertEqual(rescanned.call_count, 1)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(list(path.parent.glob(".facts-*")))
+        self.project.version("us").baserom.write_bytes(b"changed")
+        with self.assertRaisesRegex(Held, "map.rom_sha1.us"):
+            refresh_map(self.project)
+        self.assertEqual(path.read_bytes(), before)
 
     def test_feedback_preserves_a_proven_shared_shape_without_rescanning(self) -> None:
         import hashlib

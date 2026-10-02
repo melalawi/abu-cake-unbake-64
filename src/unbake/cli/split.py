@@ -10,8 +10,12 @@ from unbake.project.config import Policy, Project
 def register(phases: Subparsers) -> None:
     split = phases.add_parser("split", phase="split", help="Preview or apply split and symbol edits.")
     split_verbs = split.add_subparsers(dest="verb", required=True)
-    for name in ("cut", "data-cut"):
-        verb = split_verbs.add_parser(name, phase="split")
+    for name in ("cut", "data-cut", "code"):
+        verb = split_verbs.add_parser(
+            name,
+            phase="split",
+            help=("Carve referenced, control-flow-proved code from a data interval." if name == "code" else None),
+        )
         verb.add_argument("function")
         verb.add_argument("--version", required=True, metavar="V")
         verb.add_argument("--start", type=integer, required=True, help="Inclusive ROM offset.")
@@ -108,6 +112,13 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             edits = data_symbol(project, policy, args.version, args.name, args.address, args.rename_from)
     elif args.verb == "classify":
         edits = split_partition.classify(project, args.version)
+    elif args.verb == "code":
+        import json
+
+        from unbake.layout.code_interval import prove
+
+        edits = split_edits.code(project, args.version, args.function, args.start, args.end, policy=policy)
+        print("Proved code: " + json.dumps(prove(project, args.version, args.start, args.end, policy), sort_keys=True))
     elif args.verb in ("cut", "data-cut"):
         operation = split_edits.cut if args.verb == "cut" else split_edits.data_cut
         edits = operation(project, args.version, args.function, args.start, args.end)

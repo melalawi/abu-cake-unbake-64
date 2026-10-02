@@ -72,6 +72,12 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
     names: set[tuple[str, str]] = set()
     for change in changes:
         project.version(change.version)
+        if change.action == "code" and not split.NAME.fullmatch(change.function):
+            raise Held(
+                "boundary-map",
+                "split.data_to_code: numeric data stems need a named interval correction; "
+                "use unbake split code FUNCTION --version V --start ROM --end ROM",
+            )
         split.name(change.function)
         key = (change.version, change.function)
         if key in names:

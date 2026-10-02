@@ -41,7 +41,15 @@ unbake next
 ```
 
 Map measures the whole program across every version.
-Solve publishes shared types from those facts.
+Solve incrementally refreshes map facts affected by symbol placements or layout
+boundaries, then publishes shared types. Unchanged instructions retain their facts;
+changed ROMs require a new whole-program map.
+
+To recover a referenced function hidden in a generated data row, preview
+`unbake split code FUNCTION --version V --start ROM_OFFSET --end ROM_OFFSET`.
+It requires a direct code reference or a referenced code-pointer table and a
+closed, gapless instruction body. Add `--apply` to prove the cartridge and publish
+the layout and entry symbol together. Prefix and suffix data keep their bytes.
 Next ranks cross-version items and prints the command to run.
 Follow it through draft then try then submit.
 Try measures each containing version with its compiler candidates and retains

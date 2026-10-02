@@ -42,6 +42,22 @@ class Functions(Mapping[str, dict[str, Any]]):
             body.update(item["versions"][version])
         return {"aliases": item["aliases"], "versions": versions}
 
+    def version(self, name: str, version: str) -> dict[str, Any]:
+        """Read one containing body without decompressing its other versions."""
+        try:
+            with closing(sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
+                connection.execute("PRAGMA cache_size=-2048")
+                row = connection.execute(
+                    "SELECT body FROM functions WHERE name=? AND version=?", (name, version)
+                ).fetchone()
+                if row is None:
+                    raise Held("solve", f"map.shards: missing containing version for {name}: {version}")
+                body: dict[str, Any] = json.loads(zlib.decompress(row[0]))
+        except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
+            raise Held("solve", f"map.shards: {self.path}: {error}") from error
+        body.update(self.inventory[name]["versions"][version])
+        return body
+
 
 class Writer:
     """Keep the last complete map intact if any item cannot be mapped."""
