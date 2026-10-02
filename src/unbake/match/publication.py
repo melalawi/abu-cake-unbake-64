@@ -50,9 +50,7 @@ def publish(
         )
         for v in project.versions
     }
-    lock_path = project.build / ".lock"
-    with lock_path.open("a+b") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with build.lock(project):
         for version, generation in current.items():
             if build.current_generation(project, version).resolve() != generation:
                 held(f"VERSION {version}: current generation changed during match build")
@@ -65,7 +63,12 @@ def publish(
         from unbake.match import proof
 
         for draft in candidates:
-            proof.ensure(project, policy, Path(draft.row["source"]), draft.versions)
+            if draft.matched:
+                proof.ensure(project, policy, Path(draft.row["source"]), draft.versions)
+            else:
+                from unbake.match.nonmatching import admit
+
+                admit(project, policy, Path(draft.row["source"]))
         with queue_lock(project):
             rows = queue(project)
             for draft in candidates:
@@ -92,6 +95,8 @@ def publish(
                 ledger.parent.mkdir(parents=True, exist_ok=True)
                 with ledger.open("a", encoding="utf-8") as output:
                     for draft in candidates:
+                        if not draft.matched:
+                            continue
                         row = {
                             "function": draft.function,
                             "versions": list(draft.versions),

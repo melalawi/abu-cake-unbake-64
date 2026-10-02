@@ -1,11 +1,10 @@
-"""Refresh reserved item names from their measured ROM and RAM anchors."""
+"""Resolve reserved item names from their measured ROM and RAM anchors."""
 
 import json
-from pathlib import Path
 from typing import Any
 
 from unbake.layout.split import Function
-from unbake.project.config import Held, Project
+from unbake.project.config import Project
 
 
 def canonical(project: Project, names: list[str], rows: list[Function]) -> list[str]:
@@ -49,13 +48,3 @@ def canonical(project: Project, names: list[str], rows: list[Function]) -> list[
         return list(dict.fromkeys(resolved.get(name, name) for name in names))
     except (KeyError, TypeError, ValueError, OSError):
         return names
-
-
-def publish(project: Project, path: Path, before: bytes, names: list[str]) -> None:
-    from unbake.match.common import atomic
-    from unbake.project.build import lock
-
-    with lock(project):
-        if path.is_symlink() or path.read_bytes() != before:
-            raise Held("exclusions", f"exclusions.stale: {path}: changed during item refresh")
-        atomic(path, (json.dumps({"schema": 1, "functions": names}, indent=2) + "\n").encode())

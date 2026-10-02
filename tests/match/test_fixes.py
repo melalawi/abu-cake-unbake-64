@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tests.match.support import MatchFixture
 from unbake.cli import submit as cli_submit
 from unbake.decomp import drafts, trial
-from unbake.match import common, free, proof
+from unbake.match import common, free
 from unbake.match import queue as match
 from unbake.project.clone import isolated_policy
 from unbake.project.config import Held
@@ -47,7 +47,7 @@ class MatchFixTests(MatchFixture):
         for name, identical in (("alpha", True), ("beta", True), ("gamma", False)):
             source = self.src / f"{name}.c"
             source.write_text(f"#ifdef NON_MATCHING\nint {name}(void) {{ return 0; }}\n#endif\n")
-            retained = proof.source(self.project, source)
+            retained = source
             self.prove(retained, identical=identical)
         receipts = free.land(self.project, self.policy, "us")
         self.assertEqual({row["function"] for row in self.matched()}, {"alpha", "beta"})
@@ -95,7 +95,7 @@ class MatchFixTests(MatchFixture):
         before = {path.relative_to(shared): path.read_bytes() for path in shared.rglob("*") if path.is_file()}
 
         clone_policy = replace(self.policy, state_root=self.root / ".unbake" / "state")
-        retained = proof.source(self.project, source)
+        retained = source
         with patch.object(self, "store", drafts.Store(clone_policy, self.project)):
             self.prove(retained)
         with patch.object(trial, "retain_draft") as tried:

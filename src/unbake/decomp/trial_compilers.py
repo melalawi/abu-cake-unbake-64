@@ -1,4 +1,4 @@
-"""Measure every candidate before pinning an explicitly tied region."""
+"""Measure compiler candidates into the source's private trial receipt."""
 
 from __future__ import annotations
 
@@ -21,20 +21,21 @@ if TYPE_CHECKING:
 
 def resolve(
     project: Project, policy: Policy, source: Path, work: Path, pinned: dict[str, tuple[Path, Path]]
-) -> Project:
+) -> tuple[Project, dict[str, Any]]:
     from unbake.decomp.trial import try_draft
     from unbake.decomp.trial_target import owning_versions
+    from unbake.decomp.work import compiler_identity, identity
 
     ref = compiler_ties.reference(project, source, equivalent=True)
     if ref is None:
-        return project
+        return project, {}
     if set(pinned) != set(owning_versions(project, source.stem, None)):
         raise Held("try", f"compiler.tie_versions: {ref}: first try must compare every containing version")
-    config_hash = hashlib.sha256((project.root / "config.toml").read_bytes()).hexdigest()
     evidence: dict[str, Any] = {
         "function": source.stem,
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-        "config_sha256": config_hash,
+        "reference": ref,
+        "candidate_set": list(project.compiler_ties[ref]),
         "targets": {v: hashlib.sha256(t.read_bytes()).hexdigest() for v, (_, t) in pinned.items()},
         "candidates": {},
     }
@@ -44,17 +45,24 @@ def resolve(
     results: dict[str, Trial] = {}
     for ident in project.compiler_ties[ref]:
         spec = toolchain.specification(ident)
-        row: dict[str, Any] = {"compiler_pins": spec.pins, "cflags": list(project.compilers[ident].cflags)}
+        row: dict[str, Any] = {
+            "compiler_pins": spec.pins,
+            "cflags": list(project.compilers[ident].cflags),
+            "inputs": compiler_identity(project, policy, ident),
+        }
+        measured = compiler_ties.candidate(project, ref, ident, source.stem)
+        before = identity(measured, source, list(pinned), pinned=pinned, policy=policy)
+        row["build_inputs"] = before
         evidence["candidates"][ident] = row
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                result = try_draft(
-                    compiler_ties.candidate(project, ref, ident, source.stem), policy, source, work, pinned=pinned
-                )
+                result = try_draft(measured, policy, source, work, pinned=pinned)
         except Held as error:
-            row["error"] = error.reason
+            row["error"] = "candidate compilation refused"
             print(f"compiler candidate {ident}: compile refused: {error.reason}")
             continue
+        if before != identity(measured, source, list(pinned), pinned=pinned, policy=policy):
+            raise Held("try", "trial.inputs_changed: source build inputs changed during candidate compilation")
         results[ident] = result
         row["rank"] = list(measured_candidate_rank(result.compares))
         row["versions"] = {
@@ -65,7 +73,6 @@ def resolve(
                 "match_percent": c.match_percent,
                 "target_words": [f"0x{word:08X}" for word in c.target_words],
                 "candidate_words": [f"0x{word:08X}" for word in c.candidate_words],
-                "differences": c.lines,
             }
             for v, c in result.compares.items()
         }
@@ -112,11 +119,11 @@ def resolve(
         winner = winners[0]
         evidence["reason"] = "unique exact reproduction" if exact else "strictly better measured rank"
     evidence["selected"] = winner
-    evidence["generations"] = {v: str(g) for v, (g, _) in pinned.items()}
+    evidence["generations"] = {v: g.relative_to(project.root).as_posix() for v, (g, _) in pinned.items()}
     receipt.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
-    resolved = compiler_ties.pin(project, ref, winner, evidence, config_hash)
+    resolved = compiler_ties.selected(project, evidence)
     if evidence["reason"] == "equivalent":
         print(f"compiler equivalent {source.stem}: {{{', '.join(exact)}}}; build {winner}; {rule}")
     else:
-        print(f"compiler pin {ref}: {winner}; {evidence['reason']}; config.toml records candidate evidence")
-    return resolved
+        print(f"compiler pin {ref}: {winner}; {evidence['reason']}; trial receipt records candidate evidence")
+    return resolved, evidence

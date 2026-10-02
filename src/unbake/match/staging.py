@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
-from unbake.decomp import needs, work
+from unbake.decomp import checks, drafts, needs, work
 from unbake.layout import split, split_apply
 from unbake.match import data_symbols, declarations
 from unbake.match.common import (
@@ -24,7 +25,7 @@ from unbake.match.common import (
     relative,
     sha,
 )
-from unbake.project import build
+from unbake.project import build, compiler_ties, config, makefile
 from unbake.project.config import Held, Policy, Project
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
@@ -191,6 +192,53 @@ def project_at(project: Project, tree: Path) -> Project:
     )
 
 
+def source_edits(project: Project, policy: Policy, draft: Draft) -> list[split.Edit]:
+    edits = declarations.folded_edits(project, policy, draft.function, draft.content.decode("utf-8"), draft.versions)
+    source = next(edit for edit in edits if edit.path == project.src / (draft.function + ".c"))
+    blockers = [finding for finding in checks.run(source.after) if finding.fakematch is None]
+    if blockers:
+        held("submit.source_rules: " + "; ".join(checks.message(finding) for finding in blockers))
+    if draft.matched:
+        return edits
+    final = drafts.canonical_source(source.after.encode()).decode()
+    guarded = "#ifdef NON_MATCHING\n" + final.rstrip("\n") + "\n#endif\n"
+    return [
+        *(edit for edit in edits if any(edit.path.is_relative_to(root) for root in project.include)),
+        replace(source, after=guarded),
+    ]
+
+
+def compiler_edits(project: Project, candidates: list[Draft]) -> tuple[Project, list[split.Edit]]:
+    """Render all requested compiler decisions into the private proof tree once."""
+    import toml  # type: ignore[import-untyped]
+
+    receipts = [
+        draft.row["work"]["compiler_evidence"] for draft in candidates if draft.row["work"]["compiler_evidence"]
+    ]
+    if not receipts:
+        return project, []
+    path = project.root / "config.toml"
+    before = path.read_text()
+    after = toml.dumps(compiler_ties.fold(project, receipts))
+    config_edit = split.Edit(path, before, after, project.versions)
+    write_staged(project, [config_edit])
+    project = config.load(project.root)
+    recipe = project.tools / "build.json"
+    rendered = json.dumps(makefile.description(project), sort_keys=True, indent=2) + "\n"
+    recipe_edit = split.Edit(recipe, recipe.read_text(), rendered, project.versions)
+    checksum = project.tools / "compiler.sha256"
+    relative_recipe = recipe.relative_to(project.root).as_posix()
+    lines = checksum.read_text().splitlines(keepends=True)
+    entries = [i for i, line in enumerate(lines) if line.strip().split(maxsplit=1)[1:] == [relative_recipe]]
+    if len(entries) != 1 or lines[entries[0]].split()[0] != sha(recipe.read_bytes()):
+        held("submit.compiler_recipe: expected one verified build recipe manifest entry")
+    lines[entries[0]] = f"{sha(rendered.encode())}  {relative_recipe}\n"
+    checksum_edit = split.Edit(checksum, checksum.read_text(), "".join(lines), project.versions)
+    edits = [config_edit, recipe_edit, checksum_edit]
+    write_staged(project, edits[1:])
+    return project, edits
+
+
 def attempt(
     project: Project, policy: Policy, base: Path, workspace: Path, current: Mapping[str, Path], candidates: list[Draft]
 ) -> Attempt:
@@ -205,7 +253,12 @@ def attempt(
         if local_policy.is_file():
             shutil.copy2(local_policy, tree / relative(project, local_policy))
         staged_project = project_at(project, tree)
-        applied: list[split.Edit] = []
+        staged_project, applied = compiler_edits(staged_project, candidates)
+        from unbake.decomp import exclusions
+
+        excluded = exclusions.publication_edit(staged_project, {draft.function for draft in candidates})
+        write_staged(staged_project, excluded)
+        applied.extend(excluded)
 
         def apply(staged: Project, policy: Policy, edits: Iterable[split.Edit]) -> None:
             edits = list(edits)
@@ -222,11 +275,9 @@ def attempt(
             apply(
                 staged_project,
                 policy,
-                declarations.folded_edits(
-                    staged_project, policy, draft.function, draft.content.decode("utf-8"), draft.versions
-                ),
+                source_edits(staged_project, policy, draft),
             )
-            for version in draft.versions:
+            for version in draft.versions if draft.matched else ():
                 apply(
                     staged_project,
                     policy,
@@ -355,22 +406,61 @@ def compile_fold(project: Project, policy: Policy, draft: Draft) -> None:
         tree = workspace / "tree"
         copy_tree(project, project.root, tree)
         staged = project_at(project, tree)
+        staged, _ = compiler_edits(staged, [draft])
         overlays = [
             replace(edit, path=tree / relative(project, edit.path))
             for edit in work.header_edits(project, draft.row["work"])
         ]
         write_staged(staged, overlays)
-        edits = declarations.folded_edits(staged, policy, draft.function, draft.content.decode("utf-8"), draft.versions)
+        edits = source_edits(staged, policy, draft)
         write_staged(staged, edits)
         for version in draft.versions:
             try:
-                data_symbols.prepare(
-                    staged, policy, draft.function, version, workspace / version / f"{draft.function}.o"
-                )
+                output = workspace / version / f"{draft.function}.o"
+                if draft.matched:
+                    data_symbols.prepare(staged, policy, draft.function, version, output)
+                else:
+                    build.compile_object(
+                        staged, policy, staged.src / (draft.function + ".c"), version, output, non_matching=True
+                    )
             except (Held, OSError) as error:
                 held(f"{draft.function}: folded source compile failed on VERSION {version}: {error}")
 
 
 def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
-    """Apply pre-proof edits only inside a private tree, with rollback on error."""
-    split_apply._write_staging(project, edits)
+    """Apply the complete publication edits only inside its private proof tree."""
+    edits = split_apply.coalesce(edits)
+    configured = {
+        project.root / "config.toml",
+        project.root / "unbake-exclusions.json",
+        project.tools / "build.json",
+        project.tools / "compiler.sha256",
+        *(
+            p
+            for version in project.versions
+            for p in (project.version(version).split, project.version(version).symbols)
+        ),
+    }
+    for edit in edits:
+        relative(project, edit.path)
+        if edit.path not in configured and not any(
+            edit.path.is_relative_to(root) for root in (project.src, *project.include)
+        ):
+            held(f"{edit.path}: outside publication inputs")
+        if (edit.path.read_text() if edit.path.exists() else "") != edit.before:
+            held(f"{edit.path}: changed since publication preview")
+        for version in edit.versions:
+            project.version(version)
+    written = []
+    try:
+        for edit in edits:
+            exists = edit.path.exists()
+            split_apply.write(edit.path, edit.after)
+            written.append((edit, exists))
+    except BaseException:
+        for edit, exists in reversed(written):
+            if exists:
+                split_apply.write(edit.path, edit.before)
+            else:
+                edit.path.unlink(missing_ok=True)
+        raise

@@ -282,7 +282,7 @@ class DeclarationTests(MatchFixture):
         self.prove(source)
         match.submit(self.project, self.policy, source)
         header.write_text("struct Record { int value; };\n")
-        self.assertTrue(any("submit.overlay_sha256" in line for line in match.run(self.project, self.policy)))
+        self.assertTrue(any("Record.value" in line for line in match.run(self.project, self.policy)))
         self.assertEqual(self.calls, [])
         self.assertFalse(list((self.root / "build" / "match").glob("run-*")))
 

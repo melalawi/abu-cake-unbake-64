@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import fcntl
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -33,14 +35,26 @@ def lock(project: Project) -> Iterator[None]:
         yield
 
 
+_held_locks = threading.local()
+
+
 @contextmanager
 def _lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise Held("build", f"{path}: build lock must not be a symlink")
+    key = (os.getpid(), path.resolve())
+    held: set[tuple[int, Path]] = getattr(_held_locks, "paths", set())
+    if key in held:
+        yield
+        return
     with path.open("a+b") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
-        yield
+        _held_locks.paths = held | {key}
+        try:
+            yield
+        finally:
+            _held_locks.paths = held
 
 
 def current_generation(project: Project, v: str) -> Path:
@@ -176,7 +190,7 @@ def compile_object(
     )
     with tempfile.TemporaryDirectory(prefix=".compile-", dir=out.parent) as temporary:
         work = Path(temporary)
-        for name, content in makefile.helpers(project).items():
+        for name, content in makefile.helpers(project, unit=source).items():
             (work / Path(name).name).write_text(content)
         shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
         _run(

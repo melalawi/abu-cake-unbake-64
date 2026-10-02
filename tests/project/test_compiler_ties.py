@@ -57,22 +57,29 @@ class CompilerTieTests(unittest.TestCase):
         return Trial("alpha", "hash", {v: Compare(v, count, 4, {}, [], count * 25, ()) for v in self.pinned}, [], "")
 
     def run_resolve(self, trial=None):
+        for compiler in self.project.compilers.values():
+            for path in (compiler.cc, compiler.as_):
+                if not str(path).startswith("policy:") and not path.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"fixture compiler")
         with (
             patch("unbake.decomp.trial.try_draft", side_effect=trial or self.trial),
             patch("unbake.decomp.trial_target.owning_versions", return_value=list(self.pinned)),
         ):
-            return resolve(self.project, self.policy, self.source, self.root, self.pinned)
+            resolved, self.evidence = resolve(self.project, self.policy, self.source, self.root, self.pinned)
+        self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
+        self.assertEqual(self.recipe.read_bytes(), self.recipe_before)
+        self.assertEqual(self.manifest.read_bytes(), self.manifest_before)
+        return resolved
 
-    def test_unique_match_pins_entire_region_with_evidence(self):
+    def folded(self):
+        return compiler_ties.fold(self.project, [self.evidence])
+
+    def test_unique_match_is_a_source_scoped_receipt(self):
         resolved = self.run_resolve()
-        self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": "ido-7.1"})
-        self.assertEqual(json.loads(self.recipe.read_bytes())["units"], resolved.units)
-        self.assertIn(
-            hashlib.sha256(self.recipe.read_bytes()).hexdigest() + "  tools/build.json", self.manifest.read_text()
-        )
-        self.assertIn("0" * 64 + "  tools/unchanged", self.manifest.read_text())
-        data = toml.loads((self.root / "config.toml").read_text())
-        proof = json.loads(data["compiler_selections"][self.ref]["evidence_json"])
+        self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": self.ref})
+        data = self.folded()
+        proof = json.loads(data["compiler_selections"]["tie:unit:alpha"]["evidence_json"])
         self.assertEqual(proof["reason"], "unique exact reproduction")
         self.assertEqual(set(proof["candidates"]), {"ido-5.3", "ido-7.1"})
         self.assertEqual(proof["source_sha256"], hashlib.sha256(self.source.read_bytes()).hexdigest())
@@ -90,6 +97,9 @@ class CompilerTieTests(unittest.TestCase):
         self.ref = "tie:unit:alpha"
         self.recipe.write_text(json.dumps(makefile.description(self.project)))
         self.manifest.write_text(compiler_files.sha(self.recipe) + "  tools/build.json\n")
+        self.before = path.read_bytes()
+        self.recipe_before = self.recipe.read_bytes()
+        self.manifest_before = self.manifest.read_bytes()
         resolved = self.run_resolve()
         self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": "tie:unit:beta"})
 
@@ -101,9 +111,7 @@ class CompilerTieTests(unittest.TestCase):
             return result
 
         self.run_resolve(trial)
-        proof = json.loads(
-            toml.loads((self.root / "config.toml").read_text())["compiler_selections"][self.ref]["evidence_json"]
-        )
+        proof = self.evidence
         self.assertEqual(proof["reason"], "strictly better measured rank")
 
     def test_exact_equivalence_records_set_and_build_rule_per_item(self):
@@ -116,7 +124,7 @@ class CompilerTieTests(unittest.TestCase):
 
         resolved = self.run_resolve(trial)
         self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": self.ref})
-        data = toml.loads((self.root / "config.toml").read_text())
+        data = self.folded()
         selection = data["compiler_selections"]["tie:unit:alpha"]
         self.assertEqual(selection["status"], "equivalent")
         self.assertEqual(selection["candidates"], ["ido-5.3", "ido-7.1"])
@@ -127,11 +135,13 @@ class CompilerTieTests(unittest.TestCase):
             self.assertEqual(set(row["versions"]), set(self.pinned))
             for version in row["versions"].values():
                 self.assertEqual(version["candidate_words"], version["target_words"])
-        self.project = resolved
+        (self.root / "config.toml").write_text(toml.dumps(data))
+        self.before = (self.root / "config.toml").read_bytes()
+        self.project = config.load(self.root)
         self.ref = "tie:unit:alpha"
         self.source.write_text("int alpha(void) { return 2; }\n")
         self.run_resolve(trial)
-        selection = toml.loads((self.root / "config.toml").read_text())["compiler_selections"][self.ref]
+        selection = self.folded()["compiler_selections"][self.ref]
         self.assertEqual(
             json.loads(selection["evidence_json"])["source_sha256"],
             hashlib.sha256(self.source.read_bytes()).hexdigest(),
@@ -146,6 +156,9 @@ class CompilerTieTests(unittest.TestCase):
         self.project = config.load(self.root)
         self.recipe.write_text(json.dumps(makefile.description(self.project)))
         self.manifest.write_text(compiler_files.sha(self.recipe) + "  tools/build.json\n")
+        self.before = path.read_bytes()
+        self.recipe_before = self.recipe.read_bytes()
+        self.manifest_before = self.manifest.read_bytes()
 
         def trial(project, *args, **kwargs):
             result = self.trial(project)
@@ -157,11 +170,15 @@ class CompilerTieTests(unittest.TestCase):
                 comparison.identical = 2 if project.compiler_for(self.source).id == "ido-5.3" else 4
             return result
 
-        self.project = self.run_resolve(trial)
+        self.run_resolve(trial)
+        data = self.folded()
+        path.write_text(toml.dumps(data))
+        self.before = path.read_bytes()
+        self.project = config.load(self.root)
         self.ref = "tie:unit:alpha"
         for _ in range(2):
             self.project = self.run_resolve(trial)
-            data = toml.loads(path.read_text())
+            data = self.folded()
             selection = data["compiler_selections"][self.ref]
             self.assertEqual(selection["status"], "equivalent")
             self.assertEqual(set(data["compiler_ties"][self.ref]), {"gcc-2.7.2-kmc", "ido-7.1"})
@@ -235,35 +252,12 @@ class CompilerTieTests(unittest.TestCase):
             self.run_resolve(trial)
         self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
 
-    def test_missing_version_and_config_race_refuse_without_pin(self):
+    def test_missing_version_refuses_without_shared_writes(self):
         with (
             patch("unbake.decomp.trial_target.owning_versions", return_value=["us", "us-rev1", "eu"]),
             self.assertRaisesRegex(config.Held, "compiler.tie_versions"),
         ):
             resolve(self.project, self.policy, self.source, self.root, self.pinned)
-        with self.assertRaisesRegex(config.Held, "compiler.tie_stale"):
-            compiler_ties.pin(self.project, self.ref, "ido-7.1", {}, "changed")
-        self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
-
-    def test_pin_recipe_and_config_roll_back_together_on_write_failure(self):
-        atomic = compiler_files.atomic_bytes
-        calls = 0
-
-        def write(path, content):
-            nonlocal calls
-            calls += 1
-            if calls == 3:
-                raise OSError("write failed")
-            atomic(path, content)
-
-        with (
-            patch.object(compiler_files, "atomic_bytes", side_effect=write),
-            self.assertRaisesRegex(OSError, "write failed"),
-        ):
-            self.run_resolve()
-        self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
-        self.assertEqual(self.recipe.read_bytes(), self.recipe_before)
-        self.assertEqual(self.manifest.read_bytes(), self.manifest_before)
 
     def test_malformed_sets_are_named(self):
         for ids in ([], ["ido-7.1"], ["ido-7.1", "ido-7.1"], ["ido-7.1", "missing"], "ido-7.1"):

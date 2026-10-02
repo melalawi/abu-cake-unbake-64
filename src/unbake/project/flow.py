@@ -85,10 +85,10 @@ class WorkManifest(Identity):
     compiler_sha256: dict[str, str]
     flags: dict[str, list[str]]
     target_sha256: dict[str, str]
-    generation_sha256: dict[str, str]
     layout_sha256: str
     needs: dict[str, Any]
     evidence: dict[str, Any]
+    compiler_evidence: dict[str, Any]
 
 
 def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) -> LayoutManifest:

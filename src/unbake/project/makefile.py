@@ -160,12 +160,12 @@ def shell_words(words: Iterable[str | Path]) -> str:
     return " ".join(shlex.quote(str(word)).replace("$", "$$") for word in words)
 
 
-def description(project: Project) -> dict[str, Any]:
+def description(project: Project, *, unit: Path | None = None) -> dict[str, Any]:
     from unbake.project.compiler_ties import reference
 
-    for source in project.src.rglob("*.c"):
+    for source in project.src.rglob("*.c") if unit is None else (unit,):
         if ref := reference(project, source):
-            raise Held("build", f"compiler.tied_set: {ref}: run try to pin before building C {source.stem}")
+            raise Held("build", f"compiler.tied_set: {ref}: run try then submit before building C {source.stem}")
     build = recipe(project)
     compilers = {}
     for ident, compiler in project.compilers.items():
@@ -224,7 +224,7 @@ def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
         raise Held("build", str(error)) from error
 
 
-def helpers(project: Project) -> dict[str, str]:
+def helpers(project: Project, *, unit: Path | None = None) -> dict[str, str]:
     tools = relative(project, project.tools)
     names = [
         "extract.py",
@@ -258,7 +258,7 @@ def helpers(project: Project) -> dict[str, str]:
         super().__init__(f"HELD({phase}): {reason}")""",
     )
     files[tools + "/cache.py"] = cache_source
-    files[tools + "/build.json"] = json.dumps(description(project), sort_keys=True, indent=2) + "\n"
+    files[tools + "/build.json"] = json.dumps(description(project, unit=unit), sort_keys=True, indent=2) + "\n"
     return files
 
 

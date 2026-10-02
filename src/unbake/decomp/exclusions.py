@@ -35,12 +35,9 @@ def load(project: Project, path: Path | None = None) -> set[str]:
     rows = [row for version in project.versions for row in split.functions(project, version)]
     available = {name for row in rows for name in (row.name, *row.aliases)}
     if not explicit:
-        from unbake.decomp.exclusion_identity import canonical, publish
+        from unbake.decomp.exclusion_identity import canonical
 
-        refreshed = canonical(project, names, rows)
-        if refreshed != names:
-            publish(project, path, original, refreshed)
-            names = refreshed
+        names = canonical(project, names, rows)
     unknown = set(names) - available
     if unknown:
         raise Held("exclusions", f"exclusions.function: {path}: unknown {', '.join(sorted(unknown))}")
@@ -54,3 +51,23 @@ def load(project: Project, path: Path | None = None) -> set[str]:
                 excluded.update(aliases)
         if len(excluded) == before:
             return excluded
+
+
+def publication_edit(project: Project, functions: set[str]) -> list[split.Edit]:
+    """Release published items in the same transaction as their sources."""
+    path = project.root / MANIFEST
+    if not path.exists():
+        return []
+    load(project)
+    rows = [row for version in project.versions for row in split.functions(project, version)]
+    published = set(functions)
+    for row in rows:
+        if row.name in functions or functions.intersection(row.aliases):
+            published.update((row.name, *row.aliases))
+    before = path.read_text()
+    value = json.loads(before)
+    from unbake.decomp.exclusion_identity import canonical
+
+    value["functions"] = [name for name in canonical(project, value["functions"], rows) if name not in published]
+    after = json.dumps(value, indent=2) + "\n"
+    return [split.Edit(path, before, after, project.versions)] if before != after else []

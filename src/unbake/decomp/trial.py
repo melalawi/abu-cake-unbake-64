@@ -100,7 +100,7 @@ def retain_draft(
     with inputs as pinned:
         from unbake.decomp.trial_compilers import resolve
 
-        project = resolve(project, policy, source, work, pinned)
+        project, compiler_evidence = resolve(project, policy, source, work, pinned)
         before = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         result = (
             try_draft(project, policy, source, work, versions=versions, flags=True, pinned=pinned)
@@ -110,6 +110,7 @@ def retain_draft(
         after = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         if before != after:
             raise Held("try", "trial.inputs_changed: inputs changed during compilation; try again")
+        after["compiler_evidence"] = compiler_evidence
         result.work_identity = dict(after)
         draft_work.persist(project, after)
         store_trial(project, policy, source, result)
