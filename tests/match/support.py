@@ -12,12 +12,11 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from unbake.layout import split as layout_split
-
 import unbake.decomp.drafts as drafts
 import unbake.decomp.needs as needs
 from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
+from unbake.layout import split as layout_split
 from unbake.project import build
 from unbake.project.config import Compiler, Held, Policy, Project, Version
 from unbake.report import progress

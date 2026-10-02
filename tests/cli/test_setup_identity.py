@@ -69,7 +69,7 @@ class SetupIdentityTests(unittest.TestCase):
                 # Remove the call to the array's interior at 0x1110.
                 struct.pack_into(">2I", code, 0x28, 0, 0)
                 (project / "roms" / region).write_bytes(cartridge(region=region, seed=0x3C, instructions=bytes(code)))
-            result = command("--project", str(project), "setup", "--names-from", "us")
+            result = command("--project", str(project), "setup", "--names-from", "us", "--compiler", "default=ido-7.1")
             output = result.stdout + result.stderr
             self.assertNotIn("Traceback", output)
             self.assertIn("setup.compiler_confirm", output)
@@ -160,7 +160,10 @@ class SetupIdentityTests(unittest.TestCase):
             symbol_path = project / "versions/us/symbol_addrs.txt"
             symbol_path.write_text(symbol_path.read_text().replace(callee + " = ", other + " = "))
             configuration = toml.loads((project / "config.toml").read_text())
-            configuration["units"][other] = configuration["units"][callee]
+            # [units] lists only exception units; carry the callee's entry when it has one.
+            units = configuration.get("units", {})
+            if callee in units:
+                units[other] = units[callee]
             (project / "config.toml").write_text(toml.dumps(configuration))
             output = command("--project", str(project), "setup", "--replan-symbols")
             token = output.split("setup --replan-symbols --confirm ", 1)[1].split()[0]

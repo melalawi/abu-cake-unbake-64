@@ -101,7 +101,9 @@ class SetupMemoryTests(unittest.TestCase):
                     with path.open("wb") as stream:
                         stream.write(data)
                         stream.truncate(16 * 1024 * 1024)
-                status, output, proposal_peak, _, _ = command("--project", str(project), "setup", "--names-from", "us")
+                status, output, proposal_peak, _, _ = command(
+                    "--project", str(project), "setup", "--names-from", "us", "--compiler", "default=ido-7.1"
+                )
                 self.assertEqual(status, 1, output)
                 self.assertIn("setup.compiler_confirmation", output)
                 proposal = project / "build/setup/proposal.json"

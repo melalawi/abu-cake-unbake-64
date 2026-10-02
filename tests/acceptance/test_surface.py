@@ -91,13 +91,16 @@ class CutoverSurfaceTests(unittest.TestCase):
             "unbake.layout.rodata_bulk",
             "unbake.layout.rodata_switch",
             "unbake.decomp.ledger",
+            "unbake.match.free",
+            "unbake.match.queue",
+            "unbake.match.proof",
+            "unbake.project.compiler_ties",
         ):
             with self.subTest(module=module):
                 self.assertIsNone(importlib.util.find_spec(module))
         from unbake.cli import rodata
         from unbake.decomp import declarations, similar
-        from unbake.match import free
 
-        for module in (rodata, declarations, similar, free):
+        for module in (rodata, declarations, similar):
             with self.subTest(module=module.__name__):
                 self.assertFalse(hasattr(module, "main"))

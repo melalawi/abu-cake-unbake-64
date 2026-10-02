@@ -26,7 +26,7 @@ class EntrypointTests(MainCase):
             ("config", ["setup", "--new"], "--new"),
             ("split", ["split"], "verb"),
             ("decomp", ["decomp"], "verb"),
-            ("match", ["match"], "verb"),
+            ("config", ["match"], "invalid choice: 'match'"),
             ("config", ["report", "--unexpected"], "--unexpected"),
             ("config", ["check", "--unexpected"], "--unexpected"),
             ("config", ["init", "new", "--rompath", str(self.directory / "missing")], "--rompath"),
