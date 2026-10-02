@@ -195,13 +195,18 @@ def run(
                 base = workspace / "base"
                 copy_tree(project, project.root, base)
                 fingerprint = stage.fingerprint(project, base)
-                attempt = stage.attempt(project, policy, base, workspace, current, candidates)
-                if attempt.failures:
+                preparation = None
+                try:
+                    attempt = stage.attempt(project, policy, base, workspace, current, candidates)
+                except Held as error:
+                    preparation = error.reason
+                if attempt is None or attempt.failures:
                     if len(candidates) == 1:
-                        detail = "; ".join(attempt.diagnostics.values())
+                        detail = preparation if attempt is None else "; ".join(attempt.diagnostics.values())
                         receipts.append(f"HELD(match): {candidates[0].function}: build compare failed on {detail}")
                         return receipts
-                    attempt.discard()
+                    if attempt is not None:
+                        attempt.discard()
                     attempt = None
                     middle = max(1, len(candidates) // 2)
                     accepted = bisect(project, policy, base, workspace, current, candidates[:middle], [], receipts)

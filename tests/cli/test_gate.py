@@ -376,3 +376,22 @@ class GateBatchTests(MatchFixture):
         self.assertTrue(any("alpha matched on VERSION" in line for line in lines))
         self.assertTrue((self.src / "alpha.c").exists())
         self.assertFalse((self.src / "beta.c").exists())
+
+    def test_batch_isolates_shared_header_conflict_before_build(self):
+        from unbake.match import queue
+
+        sources = [self.draft(name) for name in ("alpha", "beta", "gamma")]
+        actual = staging.attempt
+
+        def conflict(project, policy, base, workspace, current, candidates):
+            names = {draft.function for draft in candidates}
+            if {"alpha", "beta"} <= names:
+                raise Held("structs", "struct L: duplicate definition")
+            return actual(project, policy, base, workspace, current, candidates)
+
+        with patch.object(staging, "attempt", side_effect=conflict):
+            lines = queue.publish_sources(self.project, self.policy, sources)
+        self.assertTrue(any("HELD(match): beta:" in line and "struct L" in line for line in lines))
+        self.assertTrue(any("alpha matched on VERSION" in line for line in lines))
+        self.assertTrue(any("gamma matched on VERSION" in line for line in lines))
+        self.assertFalse((self.src / "beta.c").exists())

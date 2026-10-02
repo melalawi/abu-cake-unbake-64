@@ -269,10 +269,15 @@ def bisect(
     accepted: list[Draft],
     receipts: list[str],
 ) -> list[Draft]:
-    result = attempt(project, policy, base, workspace, current, accepted + group)
-    failures = result.failures
-    detail = "; ".join(result.diagnostics.get(v, f"VERSION {v}") for v in failures)
-    result.discard()
+    try:
+        result = attempt(project, policy, base, workspace, current, accepted + group)
+    except Held as error:
+        failures = True
+        detail = error.reason
+    else:
+        failures = bool(result.failures)
+        detail = "; ".join(result.diagnostics.get(v, f"VERSION {v}") for v in result.failures)
+        result.discard()
     if not failures:
         return accepted + group
     if len(group) == 1:
