@@ -268,25 +268,23 @@ class DeclarationTests(MatchFixture):
             for version in self.versions
         ]
 
-    def test_conflict_is_refused_before_staging_or_build(self) -> None:
+    def test_complete_authored_collision_is_separate_from_partial_field_conflict(self) -> None:
         header = self.root / "include" / "structs.h"
         header.write_text("struct Record { int value; };\n")
         text = "struct Record { short value; };\nint alpha(void) { return 0; }\n"
         source = self.draft("alpha", text, pending=self.pending(text))
         self.prove(source)
         with self.assertRaisesRegex(Held, "Record.value"):
-            match.submit(self.project, self.policy, source)
-        with self.assertRaisesRegex(Held, "Record.value"):
             declarations.preflight(self.project, self.policy, self.pending(text))
-        header.write_text("struct Record { short value; };\n")
-        self.prove(source)
         match.submit(self.project, self.policy, source)
-        header.write_text("struct Record { int value; };\n")
-        self.assertTrue(any("Record.value" in line for line in match.run(self.project, self.policy)))
-        self.assertEqual(self.calls, [])
-        self.assertFalse(list((self.root / "build" / "match").glob("run-*")))
+        self.assertTrue(any("alpha matched" in line for line in match.run(self.project, self.policy)))
+        self.assertEqual(header.read_text(), "struct Record { int value; };\n")
+        generated = (self.root / "include/shared/alpha.h").read_text()
+        self.assertIn("struct Shape_", generated)
+        self.assertIn("short value;", generated)
+        self.assertNotIn("struct Record {", (self.src / "alpha.c").read_text())
 
-    def test_landing_creates_and_extends_one_shared_home(self) -> None:
+    def test_equal_layouts_reuse_one_shared_home(self) -> None:
         for function, name in (("alpha", "Record"), ("beta", "Other")):
             text = (
                 f"typedef struct {name} {{ char pad[4]; int value; }} {name};\nint {function}(void) {{ return 0; }}\n"
@@ -295,11 +293,12 @@ class DeclarationTests(MatchFixture):
             match.submit(self.project, self.policy, source)
             self.assertTrue(any(f"{function} matched" in line for line in match.run(self.project, self.policy)))
             landed = (self.src / source.name).read_text()
-            self.assertIn(f'#include "shared/{function}.h"', landed)
+            self.assertIn('#include "shared/alpha.h"', landed)
             self.assertNotIn("typedef struct", landed)
         header = "\n".join(path.read_text() for path in (self.root / "include" / "shared").glob("*.h"))
         self.assertIn("struct Record", header)
-        self.assertIn("struct Other", header)
+        self.assertNotIn("struct Other", header)
+        self.assertFalse((self.root / "include/shared/beta.h").exists())
         self.assertFalse((self.root / "include" / "alpha.h").exists())
 
     def test_header_promotion_keeps_queued_source_hash_through_retry(self) -> None:
@@ -315,7 +314,8 @@ class DeclarationTests(MatchFixture):
         def inspect(tree: Path, generation_for: Callable[[str], Path]) -> None:
             self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)
             self.assertEqual(self.queued()[0]["source_sha256"], digest)
-            self.assertIn("int value;", (tree / "include" / "structs.h").read_text())
+            self.assertEqual((tree / "include" / "structs.h").read_text(), header.read_text())
+            self.assertIn("int value;", (tree / "include/shared/alpha.h").read_text())
             self.assertNotIn("struct Record", (tree / "src" / "alpha.c").read_text())
 
         self.on_build = inspect

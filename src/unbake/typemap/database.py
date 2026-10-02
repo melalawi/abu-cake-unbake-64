@@ -97,6 +97,8 @@ def _semantic(value: Any) -> Any:
 
 
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
+    from unbake.layout import shared_context
+
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
     root = project.include[0]
@@ -107,25 +109,31 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         if not storage.generated(project, path)
     ]
     # Refer to existing homes. No scalar typedef or SDK aggregate is copied.
-    includes = []
+    components = {path: path.read_text() for path in authored}
+    rendered = {}
     for path in authored:
         relative = next(
             path.relative_to(include).as_posix() for include in project.include if path.is_relative_to(include)
         )
-        includes.append(f'#include "{relative}"')
-    type_lines = ["#ifndef UNBAKE_TYPEMAP_H", "#define UNBAKE_TYPEMAP_H", *includes]
+        rendered[path] = f'#include "{relative}"'
     for name, record in sorted(value["structs"].items()):
         if (
             record["state"] == "known"
             and (record.get("partial") or record.get("generated"))
             and record.get("declaration")
         ):
-            type_lines.append(record["declaration"])
+            path = root / "shared" / (".layout-" + name + ".h")
+            components[path] = record["declaration"]
+            rendered[path] = record["declaration"]
         elif record["state"] == "unknown":
             reason = record.get("reason", "layout evidence is incomplete").replace("*/", "* /")
-            type_lines.append(
+            path = root / "shared" / (".layout-" + name + ".h")
+            components[path] = ""
+            rendered[path] = (
                 f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown; {reason} */"
             )
+    type_lines = ["#ifndef UNBAKE_TYPEMAP_H", "#define UNBAKE_TYPEMAP_H"]
+    type_lines.extend(rendered[path] for path in shared_context.order(components))
     type_lines.extend(("#endif", ""))
     prototypes = ["#ifndef UNBAKE_PROTOTYPES_H", "#define UNBAKE_PROTOTYPES_H", '#include "typemap.h"']
     for _name, record in sorted(value["functions"].items()):

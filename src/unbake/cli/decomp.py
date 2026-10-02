@@ -98,8 +98,10 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
         print(json.dumps(gbi.rewrite(project, policy, args.files, all_files=args.all_files), indent=2))
     elif args.verb == "cleanup":
         from unbake.decomp.cleanup import prepare
+        from unbake.match import reporting
 
-        source = prepare(project, policy, args.source)
+        with reporting.stream(lambda line: print(line, flush=True)):
+            source = prepare(project, policy, args.source)
         suggest(shlex.join([*prefix(project), "try", str(source)]))
         receipt("decomp", [f"editable source prepared: {source}; headers remain staged"])
     elif args.verb == "search":
