@@ -83,8 +83,17 @@ def pin(generation: Path) -> Iterator[Path]:
 @contextmanager
 def pin_current(project: Project, v: str) -> Iterator[Path]:
     """Pin a published generation without taking the build writer lock."""
+    project.version(v)
+    link = project.build_link(v)
     while True:
-        generation = current_generation(project, v)
+        try:
+            generation = current_generation(project, v)
+        except Held:
+            # Publication can replace a generation while strict resolution runs.
+            # Retry a valid published link; preserve refusals for invalid builds.
+            if link.is_symlink() and link.is_dir():
+                continue
+            raise
         with ExitStack() as holds:
             try:
                 holds.enter_context(pin(generation))

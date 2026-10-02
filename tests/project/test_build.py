@@ -32,6 +32,28 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(config.Held):
             build.current_generation(self.project, "us")
 
+    def test_pin_current_retries_collection_during_resolution(self) -> None:
+        old = self.root / "build/us.0"
+        new = self.root / "build/us.1"
+        old.mkdir(parents=True)
+        new.mkdir()
+        publication.swap(self.project.build_link("us"), old)
+        publication.swap(self.project.build_link("us"), new)
+        publication.collect(self.project)
+        self.assertFalse(old.exists())
+        with (
+            patch.object(build, "current_generation", side_effect=[config.Held("build", "collected"), new]),
+            build.pin_current(self.project, "us") as pinned,
+        ):
+            self.assertEqual(pinned, new)
+        self.project.build_link("us").unlink()
+        with (
+            patch.object(build, "current_generation", side_effect=config.Held("build", "invalid")),
+            self.assertRaisesRegex(config.Held, "invalid"),
+            build.pin_current(self.project, "us"),
+        ):
+            self.fail("missing published generation was accepted")
+
     def test_pin_current_retries_publication_before_and_after_pin(self) -> None:
         for collected in (False, True):
             with self.subTest(collected=collected):
