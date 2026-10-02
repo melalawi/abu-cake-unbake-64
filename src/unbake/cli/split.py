@@ -24,6 +24,9 @@ def register(phases: Subparsers) -> None:
     boundary_map = split_verbs.add_parser("boundary-map", phase="split", help="Apply a byte-pinned bulk boundary map.")
     boundary_map.add_argument("map", type=Path, help="JSON list of version/function/action/sha256/evidence records.")
     boundary_map.add_argument("--apply", action="store_true")
+    join = split_verbs.add_parser("join", phase="split", help="Assert byte-pinned per-version items share one symbol.")
+    join.add_argument("--map", type=Path, required=True, help="JSON list of name/placements/evidence assertions.")
+    join.add_argument("--apply", action="store_true", help="Prove the entire batch once before publishing.")
     classify = split_verbs.add_parser("classify", phase="split", help="Type measured in-text data runs.")
     classify.add_argument("--version", required=True, metavar="V")
     classify.add_argument("--apply", action="store_true")
@@ -59,6 +62,14 @@ def register(phases: Subparsers) -> None:
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     from unbake.layout import split_apply, split_edits, split_partition
+
+    if args.verb == "join":
+        from unbake.layout import symbol_join
+        from unbake.project.config import load_policy
+
+        return receipt(
+            "split", symbol_join.run(project, load_policy(args.policy, stage="setup"), args.map, apply=args.apply)
+        )
 
     if args.verb == "rename" and args.map is None and (args.function is None or args.new_name is None):
         from unbake.project.config import Held

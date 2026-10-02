@@ -18,6 +18,9 @@ def register(phases: Subparsers) -> None:
     parser.add_argument(
         "--repropose-compilers", action="store_true", help="Review compiler sets on the retained ready layout."
     )
+    parser.add_argument(
+        "--replan-symbols", action="store_true", help="Review anchored symbol correspondence on retained boundaries."
+    )
     parser.add_argument("--compilers", action="store_true", help="Inspect compiler registry pins.")
     parser.add_argument("--supply", type=Path, metavar="DIR")
     parser.add_argument("--compiler", action="append", default=[], metavar="REGION=ID")
@@ -54,6 +57,23 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
             else:
                 lines.append(f"{ident}: installed; pins verified")
         return receipt("setup", lines)
+    if args.replan_symbols:
+        if project.state != "ready":
+            raise Held("setup", "setup.symbol_layout: ready project required")
+        if (
+            args.repropose_compilers
+            or args.compiler
+            or args.name
+            or args.title
+            or args.names_from
+            or args.version_name
+            or args.version_order
+        ):
+            raise Held("setup", "setup.symbol_layout: replan symbols separately from game facts and compiler proposals")
+        from unbake.layout import symbol_replan
+
+        policy = config.load_policy(args.policy, stage="setup")
+        return receipt("setup", symbol_replan.run(config.load(project.root), policy, args.confirm))
     if args.repropose_compilers:
         if project.state != "ready":
             raise Held("setup", "setup.compiler_refresh: ready project required")

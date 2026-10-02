@@ -19,13 +19,45 @@ from typing import Any
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
 from unbake.project.census import Census
-from unbake.project.config import Held, PendingProject, SetupPolicy
-from unbake.project.flow import FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
+from unbake.project.config import Held, PendingProject, SetupPolicy, SymbolPolicy
+from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
 
 
 def digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+
+def body_identity(image: bytes, start: int, end: int) -> dict[str, str]:
+    """Raw body bytes and relocation-normalized body are independent of names."""
+    from unbake.layout.xver import _masks
+
+    code = words(image[start:end])
+    while len(code) > 2 and code[-1] == 0 and code[-2] != 0x03E00008:
+        code.pop()
+    return {
+        "body_sha256": hashlib.sha256(image[start:end]).hexdigest(),
+        "normalized_body_sha256": digest([(word & ~mask, mask) for word, mask in zip(code, _masks(code), strict=True)]),
+    }
+
+
+def symbol_items(versions: dict[str, VersionLayout]) -> dict[str, CrossVersionItem]:
+    """Group placements by proved symbol, retaining every independent body."""
+    items: dict[str, CrossVersionItem] = {}
+    for version, layout in versions.items():
+        for f in layout["functions"]:
+            item = items.setdefault(
+                f["name"],
+                CrossVersionItem(
+                    name=f["name"], versions=[], placements={}, body_groups={}, evidence={"name_source": version}
+                ),
+            )
+            item["versions"].append(version)
+            item["placements"][version] = f
+            body = f.get("normalized_body_sha256")
+            if body is not None:
+                item["body_groups"].setdefault(body, []).append(version)
+    return items
 
 
 def measure(image: bytes, yaml: str, executable: Path, work: Path, version: str) -> split.ExtractedText:
@@ -165,12 +197,17 @@ def correspondence(
     inventories: dict[str, list[split.Function]],
     reference: str,
     *,
+    symbol_policy: SymbolPolicy,
     evidence: dict[str, dict[int, str]] | None = None,
+    symbol_evidence: dict[str, dict[int, dict[str, Any]]] | None = None,
+    preserve_names: bool = False,
+    loaded_spans: Mapping[str, list[Span]] | None = None,
+    assertions: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[int, str]]:
-    """Join unique bodies and identical sequences bounded by shared anchors.
+    """Establish body matches, then independent anchored symbol identity.
 
     Inventory order names items; ROM order establishes positional identity.
-    No alignment crosses an unmatched sequence or an inverted anchor pair.
+    Different bodies require unambiguous positions and mapped graph agreement.
     Conflicting pairwise proposals are rejected together, rather than letting
     version iteration order choose which repeated occurrence wins.
     """
@@ -183,7 +220,7 @@ def correspondence(
         cartridge_image = images[version]
         image = cartridge_image if isinstance(cartridge_image, bytes) else cartridge_image.image()
         index: dict[str, list[split.Function]] = defaultdict(list)
-        for f in ff:
+        for f in sorted(ff, key=lambda f: f.start):
             code = words(image[f.start : f.end])
             while len(code) > 2 and code[-1] == 0 and code[-2] != 0x03E00008:
                 code.pop()
@@ -203,7 +240,8 @@ def correspondence(
         return key
 
     def join(a: tuple[str, int], b: tuple[str, int]) -> None:
-        parent[root(b)] = root(a)
+        first, second = sorted((root(a), root(b)))
+        parent[second] = first
 
     canonical: dict[str, tuple[str, int]] = {}
     for version, index in indexes.items():
@@ -214,7 +252,7 @@ def correspondence(
     reasons = dict.fromkeys(functions, "repeated-body-unbounded")
     proposals: dict[tuple[str, int], set[tuple[str, int]]] = defaultdict(set)
     ordered = {v: sorted(ff, key=lambda f: f.start) for v, ff in inventories.items()}
-    for a, b in combinations(inventories, 2):
+    for a, b in combinations(sorted(inventories), 2):
         common = {sig for sig, ff in indexes[a].items() if len(ff) == 1 and len(indexes[b].get(sig, [])) == 1}
         anchors = {
             v: [(i, signatures[v, f.start]) for i, f in enumerate(ordered[v]) if signatures[v, f.start] in common]
@@ -254,7 +292,7 @@ def correspondence(
             component.add(key)
             pending.extend(proposals[key] - component)
         seen.update(component)
-        rows = [key for group in component for key in members[group]]
+        rows = [key for group in sorted(component) for key in members[group]]
         if len({v for v, _ in rows}) != len(rows):
             for key in rows:
                 reasons[key] = "repeated-body-alignment-conflict"
@@ -264,6 +302,40 @@ def correspondence(
         for key in rows:
             join(seed, key)
             positional.add(key)
+    asserted: dict[tuple[str, int], dict[str, Any]] = {}
+    for assertion in assertions or []:
+        keys = []
+        for placement in assertion["placements"]:
+            key = (placement["version"], placement["start"])
+            asserted_function = functions.get(key)
+            if asserted_function is None or asserted_function.end != placement["end"]:
+                raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed")
+            cartridge = images[key[0]]
+            image = cartridge if isinstance(cartridge, bytes) else cartridge.image()
+            if (
+                hashlib.sha256(image[asserted_function.start : asserted_function.end]).hexdigest()
+                != placement["body_sha256"]
+            ):
+                raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: bytes changed")
+            del image
+            keys.append(key)
+        roots = {root(key) for key in keys}
+        asserted_component = [key for key in functions if root(key) in roots]
+        if len({v for v, _ in asserted_component}) != len(asserted_component):
+            raise Held("setup", f"setup.symbol_assertion_conflict: {assertion['name']}: automatic evidence conflicts")
+        for key in keys:
+            if key in asserted and asserted[key]["name"] != assertion["name"]:
+                raise Held("setup", f"setup.symbol_assertion_conflict: {assertion['name']}: overlapping assertions")
+            join(keys[0], key)
+            asserted[key] = assertion
+    from unbake.layout.symbol_identity import join_symbols
+
+    details: dict[tuple[str, int], dict[str, Any]] = {}
+    symbolic = (
+        join_symbols(images, inventories, root, join, reasons, details, symbol_policy, loaded_spans)
+        if len(inventories) > 1
+        else set()
+    )
     groups: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
     for key in functions:
         groups[root(key)].append(key)
@@ -278,24 +350,44 @@ def correspondence(
         version, start = rows[0]
         f = functions[version, start]
         repeated = len(indexes[version][signatures[version, start]]) > 1
-        name = f.name
-        if (len(rows) == 1 and repeated) or re.fullmatch(r"func_[0-9A-Fa-f]+", name) or name in used:
+        forced = {asserted[key]["name"] for key in rows if key in asserted}
+        if len(forced) > 1:
+            raise Held("setup", "setup.symbol_assertion_conflict: automatic evidence combines asserted names")
+        name = next(iter(forced)) if forced else f.name
+        if (
+            not preserve_names and ((len(rows) == 1 and repeated) or re.fullmatch(r"func_[0-9A-Fa-f]+", name))
+        ) or name in used:
             name += "_" + version.replace("-", "_")
         if name in used:
             name += f"_{start:X}"
         used.add(name)
         for v, at in rows:
             names[v][at] = name
+            reason = (
+                "user-assertion"
+                if (v, at) in asserted
+                else details[v, at]["reason"]
+                if (v, at) in symbolic
+                else "anchor-sequence"
+                if (v, at) in positional
+                else "unique-body"
+                if len(rows) > 1
+                else reasons[v, at]
+                if len(indexes[v][signatures[v, at]]) > 1 or reasons[v, at].startswith("symbol-")
+                else "body-not-shared"
+            )
             if evidence is not None:
-                evidence.setdefault(v, {})[at] = (
-                    "anchor-sequence"
-                    if (v, at) in positional
-                    else "unique-body"
-                    if len(rows) > 1
-                    else reasons[v, at]
-                    if len(indexes[v][signatures[v, at]]) > 1
-                    else "body-not-shared"
-                )
+                evidence.setdefault(v, {})[at] = reason
+            if symbol_evidence is not None:
+                detail = details.get((v, at), {})
+                if (v, at) in asserted:
+                    detail["assertion"] = asserted[v, at]
+                    detail["reason"] = reason
+                if (v, at) in symbolic or not reasons[v, at].startswith("symbol-"):
+                    detail["reason"] = reason
+                else:
+                    detail.setdefault("reason", reasons[v, at])
+                symbol_evidence.setdefault(v, {})[at] = detail
     return names
 
 
@@ -513,6 +605,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                     "split_create.py",
                     "split.py",
                     "xver.py",
+                    "symbol_identity.py",
                 )
             )
         },
@@ -594,7 +687,16 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             loaded_by_version[version] = mappings(image, ranges_by_version[version])
             del image
     identity: dict[str, dict[int, str]] = {}
-    names = correspondence(images, inventories, census.names_from, evidence=identity)
+    symbol_evidence: dict[str, dict[int, dict[str, Any]]] = {}
+    names = correspondence(
+        images,
+        inventories,
+        census.names_from,
+        symbol_policy=SymbolPolicy(policy.symbol_similarity_threshold, policy.symbol_similarity_margin),
+        evidence=identity,
+        symbol_evidence=symbol_evidence,
+        loaded_spans={v: spans for v, (_, spans) in loaded_by_version.items()},
+    )
     holding: dict[str, list[str]] = defaultdict(list)
     for version, placements in names.items():
         for name in placements.values():
@@ -628,6 +730,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             seeds.update(boundary.entries(image, f.start, f.end, f.address - f.start, signatures))
         records: list[FunctionRecord] = []
         for f in ff:
+            body = body_identity(image, f.start, f.end)
             code = {offset: int.from_bytes(image[offset : offset + 4], "big") for offset in range(f.start, f.end, 4)}
             evidence = boundary.evidence(
                 code,
@@ -645,11 +748,14 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
                     end=f.end,
                     address=f.address,
                     name=f.name,
+                    body_sha256=body["body_sha256"],
+                    normalized_body_sha256=body["normalized_body_sha256"],
                     evidence={
                         "boundary": asdict(evidence),
                         "source": "pinned disassembler",
                         "assembly": True,
                         "correspondence": identity[version][f.start],
+                        "symbol_correspondence": symbol_evidence[version][f.start],
                         "holding_versions": holding[f.name],
                         "name_source": holding[f.name][0],
                     },
@@ -679,6 +785,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
         rom_sha1={census.names[rom.path]: rom.sha1 for rom in census.cartridges},
         names_from=census.names_from,
         versions=versions,
+        items=symbol_items(versions),
         inputs_sha256=inputs,
     )
     path = project.build / "setup/layout.json"

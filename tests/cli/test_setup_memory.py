@@ -33,7 +33,9 @@ class SetupMemoryTests(unittest.TestCase):
             )
             with Path(os.environ["UNBAKE_POLICY"]).open("rb") as stream:
                 settings = tomllib.load(stream)
-            settings.update(cores=12, setup_version_jobs=4)
+            settings.update(
+                cores=12, setup_version_jobs=4, symbol_similarity_threshold=0.9, symbol_similarity_margin=0.1
+            )
             policy = directory / "policy.toml"
             policy.write_text("".join(f"{key} = {json.dumps(value)}\n" for key, value in settings.items()))
             environment = dict(os.environ, UNBAKE_POLICY=str(policy), PYTHONNOUSERSITE="1")

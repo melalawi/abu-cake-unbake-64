@@ -26,6 +26,8 @@ def write_policy(root: Path) -> Path:
         output.writestr("permuter/README", "Configuration test archive\n")
     values.update(
         same_game_similarity=0.1,
+        symbol_similarity_threshold=0.9,
+        symbol_similarity_margin=0.1,
         probe_count=20,
         cache_root=str(root / "cache"),
         state_root=str(root / "state"),
