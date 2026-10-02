@@ -358,6 +358,9 @@ def project_data_tables(project: Project) -> dict[str, dict[str, symbol_identity
                         table.setdefault(name, symbol_identity.DataSymbol(int(row["vram_start"], 16)))
         addresses = project.build_link(version) / "symbol-addresses.txt"
         if addresses.is_file():
-            for name, (address, _, _) in split.symbols(addresses)[1].items():
-                table.setdefault(name, symbol_identity.DataSymbol(address))
+            # Extraction writes one "name address" pair per line.
+            for line in addresses.read_text().splitlines():
+                words = line.split()
+                if len(words) == 2 and split.NAME.fullmatch(words[0]):
+                    table.setdefault(words[0], symbol_identity.DataSymbol(int(words[1], 0)))
     return tables
