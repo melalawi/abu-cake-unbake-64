@@ -122,7 +122,10 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         ):
             type_lines.append(record["declaration"])
         elif record["state"] == "unknown":
-            type_lines.append(f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown */")
+            reason = record.get("reason", "layout evidence is incomplete").replace("*/", "* /")
+            type_lines.append(
+                f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown; {reason} */"
+            )
     type_lines.extend(("#endif", ""))
     prototypes = ["#ifndef UNBAKE_PROTOTYPES_H", "#define UNBAKE_PROTOTYPES_H", '#include "typemap.h"']
     for _name, record in sorted(value["functions"].items()):

@@ -278,6 +278,11 @@ class DatabaseTests(unittest.TestCase):
             result = feedback(project, "beta", source, versions=["us"], proof=proof, policy=policy)
         self.assertEqual(result["structs"][shape]["state"], "known")
         self.assertTrue(result["structs"][shape]["generated"])
+        self.assertEqual(result["structs"][shape]["common_base"], first["structs"][shape]["common_base"])
+        self.assertIsNone(result["structs"][shape]["size"])
+        repeated = solve(project, policy)
+        self.assertEqual(repeated["structs"][shape]["base_nodes"], result["structs"][shape]["base_nodes"])
+        self.assertIsNone(repeated["structs"][shape]["size"])
         self.assertIn(f"struct {shape} {{", (project.include[0] / "shared/typemap.h").read_text())
 
     def test_batch_feedback_maps_and_solves_once_for_all_exact_receipts(self) -> None:

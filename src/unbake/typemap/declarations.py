@@ -220,7 +220,10 @@ def extract(
                 "alignment": layout.alignment,
                 "aliases": list(layout.aliases),
                 "declaration": layout_source[layout.start : layout.end] + ";",
-                "fields": [{"name": f.name, "type": f.type, "offset": f.offset, "size": f.size} for f in layout.fields],
+                "fields": [
+                    {"name": f.name, "type": f.type, "offset": f.offset, "size": f.size, "extent": list(f.extent)}
+                    for f in layout.fields
+                ],
                 "provenance": provenance,
             }
     except Held as error:
