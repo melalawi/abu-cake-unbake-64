@@ -19,10 +19,7 @@ from tests.project.makefile_fixture import fixture
 from tests.support import test_policy, tool
 from unbake.cli import check
 from unbake.decomp import score
-from unbake.project import init
 from unbake.project.config import Held, Policy, Project
-from unbake.project.header import Header
-from unbake.project.rom import Rom
 from unbake.report import progress as report
 from unbake.report import units as report_units
 
@@ -455,19 +452,6 @@ class ReportTest(unittest.TestCase):
         after = {path.relative_to(state): path.read_bytes() for path in state.rglob("*") if path.is_file()}
         self.assertEqual(after, before)
         self.assertEqual(list(state.iterdir()), [sentinel])
-
-    def test_native_report_accepts_readme_created_by_init(self) -> None:
-        cartridge = Rom(
-            self.project.version("us").baserom,
-            b"",
-            Header(0x80371240, 0, 0x80000000, 0, 0, "", 0, 0, "Example", "N", "EX", "E", 0, "6102/7101"),
-            "0" * 40,
-        )
-        init.readme(self.project, "Example", [cartridge], {cartridge.path: "us"})
-        self.assertIn("0 of 36", self.readme.read_text())
-        report.write(self.project, self.policy)
-        self.assertIn("| us (us, revision 0) |", self.readme.read_text())
-        self.assertIn("12 of 36", self.readme.read_text())
 
     def test_target_wrapper_scores_same_code_and_names_bad_input(self) -> None:
         target = self.root / "target.o"

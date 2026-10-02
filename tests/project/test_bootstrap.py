@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 from unbake.decomp import m2c
 from unbake.layout import split
-from unbake.project import build, config, fingerprint, header, init, init_config, rom, toolchain
+from unbake.project import build, config, fingerprint, header, rom, toolchain
+from unbake.project.census import naming_version
 from unbake.project.config import Held
 from unbake.report import progress as report
 from unbake.report import units as report_units
@@ -35,9 +36,8 @@ def policy(root: Path) -> Any:
         mips_ld=executable,
         mips_objdump=executable,
         mips_readelf=executable,
-        init_same_game_similarity=0.1,
-        init_split="functions",
-        init_probe_count=4,
+        same_game_similarity=0.1,
+        probe_count=4,
         mips_as=executable,
         mips_objcopy=executable,
         cpp=executable,
@@ -59,21 +59,6 @@ def function(name: str, start: int, end: int, address: int) -> Any:
 
 
 class BootstrapTests(unittest.TestCase):
-    def test_version_order_requires_complete_explicit_input_and_preserves_assignment_order(self) -> None:
-        names = {Path(version): version for version in ("de", "eu-x", "eu", "us-rev1", "us")}
-        explicit = {version: version for version in ("us", "us-rev1", "eu", "eu-x", "de")}
-        for supplied, missing in (({}, "de, eu-x, eu, us-rev1, us"), ({"us": "us"}, "de, eu-x, eu, us-rev1")):
-            with self.subTest(supplied=supplied), self.assertRaisesRegex(Held, "project.versions order.*" + missing):
-                init_config.ordered_versions(names, supplied)
-        for inputs in (names, dict(reversed(list(names.items())))):
-            with self.subTest(inputs=inputs):
-                self.assertEqual(list(init_config.ordered_versions(inputs, explicit).values()), list(explicit.values()))
-        renamed = {Path("pal"): "pal", Path("usa"): "usa"}
-        self.assertEqual(
-            list(init_config.ordered_versions(renamed, {"us": "usa", "eu": "pal"}).values()), ["usa", "pal"]
-        )
-        self.assertEqual(init_config.ordered_versions({Path("us"): "us"}, {}), {Path("us"): "us"})
-
     def test_function_family_boundaries_and_ambiguous_copies(self) -> None:
         addresses = (0x80110480, 0x80110490, 0x80124340, 0x80124350)
         for mixed in (False, True):
@@ -104,22 +89,22 @@ class BootstrapTests(unittest.TestCase):
                 b = cartridge(Path("b"), other_code + asset)
                 inventories = {item.path: [function("f", 0, 32, 0x80000000)] for item in (a, b)}
                 if accepted:
-                    matrix = rom.same_game([a, b], inventories, 0.9)
+                    matrix = rom.same_game([a, b], inventories, 0.9, reference=a)
                     self.assertEqual((matrix[a, b], matrix[b, a], matrix[a, a]), (1.0, 1.0, 1.0))
                 else:
                     with self.assertRaisesRegex(Held, "code similarity"):
-                        rom.same_game([a, b], inventories, 0.9)
+                        rom.same_game([a, b], inventories, 0.9, reference=a)
         for inventories, threshold, name in (
             ({}, 0.5, "detected code ranges"),
             ({a.path: []}, 0.5, "detected code ranges"),
-            ({}, False, "init_same_game_similarity"),
+            ({}, False, "same_game_similarity"),
         ):
             with self.subTest(name=name), self.assertRaisesRegex(Held, name):
-                rom.same_game([a], inventories, threshold)
+                rom.same_game([a], inventories, threshold, reference=a)
 
     def test_naming_version_refusals(self) -> None:
         cases = (
-            (("us",), None, "us"),
+            (("us",), "us", "us"),
             (("us", "eu"), "eu", "eu"),
             (("us", "eu"), None, "--names-from"),
             (("us",), "jp", "unknown VERSION"),
@@ -128,16 +113,17 @@ class BootstrapTests(unittest.TestCase):
         for versions, selected, expected in cases:
             with self.subTest(versions=versions, selected=selected):
                 if expected in versions:
-                    self.assertEqual(init.naming_version(versions, selected), expected)
+                    self.assertEqual(naming_version(versions, selected), expected)
                 else:
                     with self.assertRaisesRegex(Held, expected):
-                        init.naming_version(versions, selected)
+                        naming_version(versions, selected)
 
     def test_probe_preserves_project_flags_and_header_context(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "project"
             shutil.copytree(Path(__file__).parents[1] / "fixture", root)
             project = config.load(root)
+            project.roms.mkdir(exist_ok=True)
             original = project.compilers[project.default_compiler]
             compilers = {
                 name: replace(original, id=name, cflags=("-O1", "-G0")) for name in ("gcc-2.7.2-kmc", "gcc-2.8.1-sn64")
@@ -187,6 +173,7 @@ class BootstrapTests(unittest.TestCase):
             root = Path(temporary) / "project"
             shutil.copytree(Path(__file__).parents[1] / "fixture", root)
             project = config.load(root)
+            project.roms.mkdir(exist_ok=True)
             source = project.src / "alpha.c"
             project.version("us").baserom.write_bytes(bytes.fromhex("2402000103e0000800000000"))
             project.version("us").split.write_text(

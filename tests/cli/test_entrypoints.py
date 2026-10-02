@@ -21,15 +21,15 @@ class EntrypointTests(MainCase):
         self.source.write_text('void alpha(void) { asm("nop"); }\n')
         cases: tuple[tuple[str, list[str], str], ...] = (
             ("config", [], "phase"),
-            ("config", ["setup"], "--project"),
-            ("init", ["init"], "DIR"),
-            ("setup", ["setup", "--new"], "--new"),
+            ("config", ["setup"], "project.root"),
+            ("init", ["init"], "init.target"),
+            ("config", ["setup", "--new"], "--new"),
             ("split", ["split"], "verb"),
             ("decomp", ["decomp"], "verb"),
             ("match", ["match"], "verb"),
             ("config", ["report", "--unexpected"], "--unexpected"),
             ("config", ["check", "--unexpected"], "--unexpected"),
-            ("init", ["init", "new", "--rompath", str(self.directory / "missing")], "missing directory"),
+            ("config", ["init", "new", "--rompath", str(self.directory / "missing")], "--rompath"),
             ("config", ["--project", str(self.directory / "missing"), "setup"], "config.toml"),
             ("check", self.args("check"), "inline-asm"),
         )

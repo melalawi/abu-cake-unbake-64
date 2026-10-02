@@ -29,6 +29,19 @@ class NamingConfigTests(unittest.TestCase):
                 'b9ff8cfa"\nsplit = "versions/eu-x/game.yaml"\nsymbols = "versions/e'
                 'u-x/symbol_addrs.txt"\nmacros = []\n'
             )
+            original = "schema = 1\n" + original.replace(
+                "[project]", '[project]\nid = "00000000-0000-4000-8000-000000000001"\nstate = "ready"'
+            )
+            original = original.replace(
+                "[paths]",
+                '[workspace]\nid = "00000000-0000-4000-8000-000000000002"\n[paths]\n'
+                'roms = "roms"\nbuild = "build"\nwork = "build/work"\ndrafts = "build/drafts"',
+            )
+            for version in ("us", "eu-x"):
+                original = original.replace(
+                    "[version." + version + "]",
+                    "[version." + version + ']\nbaserom = "roms/baserom.' + version + '.z64"',
+                )
             path.write_text(original)
             self.assertEqual(config.load(root).names_from, "us")
             self.assertFalse(hasattr(config.load(root), "default_version"))

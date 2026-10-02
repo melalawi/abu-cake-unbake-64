@@ -85,7 +85,7 @@ class MakefileTests(unittest.TestCase):
             "--ranges",
             str(ranges),
             "--baserom",
-            str(self.root / "baserom.us.z64"),
+            str(self.root / "roms/baserom.us.z64"),
         ]
         for partial, expected in (("0", False), ("1", True)):
             with self.subTest(partial=partial):

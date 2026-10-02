@@ -37,7 +37,8 @@ class NativePoolTests(unittest.TestCase):
             image = bytearray(0x118)
             image[0x40:0x60] = struct.pack(">8I", *native)
             image[0x100:0x118] = struct.pack(">6I", 0, 0x3F800000, 0x12345678, 0x3F800000, 0x80002018, 0x80002018)
-            (root / "baserom.us.z64").write_bytes(image)
+            (root / "roms").mkdir(exist_ok=True)
+            (root / "roms/baserom.us.z64").write_bytes(image)
             generation = root / "build/us.0"
             generation.mkdir(parents=True)
             body = (

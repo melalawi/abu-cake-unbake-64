@@ -113,6 +113,12 @@ class UnitsTests(unittest.TestCase):
                 default_compiler="fixture",
                 units={},
                 version_map={"us": version},
+                id="00000000-0000-4000-8000-000000000001",
+                workspace_id="00000000-0000-4000-8000-000000000002",
+                roms=root / "roms",
+                build=root / "build",
+                work=root / "build/work",
+                drafts=root / "build/drafts",
             )
             project.src.mkdir()
             policy = test_policy(root)

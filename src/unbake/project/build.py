@@ -28,7 +28,7 @@ class BuildResult:
 @contextmanager
 def lock(project: Project) -> Iterator[None]:
     """Serialize project build writes with generation publication."""
-    path = project.root / "build" / ".lock"
+    path = project.build / ".lock"
     with _lock(path):
         yield
 

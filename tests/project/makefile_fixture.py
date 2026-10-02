@@ -37,9 +37,9 @@ def fixture(root: Path, kind: str = "ido") -> Any:
     root.mkdir(parents=True, exist_ok=True)
     policy_path = write_policy(root)
     patch.dict(os.environ, UNBAKE_POLICY=str(policy_path)).start()
-    for directory in ("tools", "include", "src", "versions/us"):
+    for directory in ("tools", "include", "src", "versions/us", "roms"):
         (root / directory).mkdir(parents=True, exist_ok=True)
-    (root / "baserom.us.z64").write_bytes(b"ABC")
+    (root / "roms/baserom.us.z64").write_bytes(b"ABC")
     (root / "include/value.h").write_text("#define VALUE 1\n")
     (root / "src/middle.c").write_text("B")
     split = root / "versions/us/game.yaml"
@@ -162,7 +162,7 @@ def fixture(root: Path, kind: str = "ido") -> Any:
     )
     version = config.Version(
         "us",
-        root / "baserom.us.z64",
+        root / "roms/baserom.us.z64",
         hashlib.sha1(b"ABC").hexdigest(),
         split,
         root / "versions/us/symbol_addrs.txt",
@@ -182,6 +182,12 @@ def fixture(root: Path, kind: str = "ido") -> Any:
         "fixture",
         {},
         {"us": version},
+        id="00000000-0000-4000-8000-000000000001",
+        workspace_id="00000000-0000-4000-8000-000000000002",
+        roms=root / "roms",
+        build=root / "build",
+        work=root / "build/work",
+        drafts=root / "build/drafts",
     )
     facts = {
         "ld": str(root / "tools/ld"),
@@ -213,4 +219,4 @@ def write_rendered(project: Any) -> None:
         path.write_text(content)
     digest = project.version("us").baserom_sha1
     (project.root / "versions/us/game.sha1").write_text(digest + "  build/us/game.us.z64\n")
-    (project.root / "versions/us/baserom.sha1").write_text(digest + "  baserom.us.z64\n")
+    (project.root / "versions/us/baserom.sha1").write_text(digest + "  roms/baserom.us.z64\n")
