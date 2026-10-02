@@ -119,6 +119,16 @@ class SolvedLayoutCliTests(unittest.TestCase):
             self.assertNotIn("typedef", draft)
             self.assertFalse([finding for finding in source_rules(draft) if finding.rule == "raw-offset"])
             self.assertEqual(header.read_bytes(), before)
+            # Original SDK callback contracts (with unnamed scalar parameters)
+            # must pass the installed solver's header publication parser.
+            from unbake.project import setup
+
+            scalar = project.include[0] / "types.h"
+            scalar.write_text(scalar.read_text() + "typedef unsigned int u32; typedef unsigned long long u64;\n")
+            setup._sdk_headers(project)
+            cli("solve")
+            callbacks = project.include[0] / "shared/audio_callbacks.h"
+            self.assertEqual(callbacks.read_bytes(), (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes())
             protected = [project.build / "types" / path for path in ("database.json", "summary.json", "redraft.json")]
             protected.extend(project.include[0] / "shared" / path for path in ("typemap.h", "prototypes.h"))
             previous = {path: path.read_bytes() for path in protected}

@@ -17,6 +17,8 @@ from unbake.project import build, compiler_files, config, hygiene, makefile, set
 from unbake.project.config import Held, PendingProject, Policy, Project, SetupPolicy
 from unbake.project_tools.host import resolve_tool
 
+_AUDIO_CALLBACKS = "shared/audio_callbacks.h"
+
 if TYPE_CHECKING:
     from unbake.project.census import Census
     from unbake.project.flow import CompilerProposal, LayoutManifest
@@ -338,18 +340,19 @@ def _sdk_headers(project: Project) -> None:
         "gbi.h": (makefile.TEMPLATES / "gbi.h").read_text(),
         "shared/acmd.h": (makefile.TEMPLATES / "acmd.h").read_text(),
         "shared/abi.h": (makefile.TEMPLATES / "abi.h").read_text(),
-        "shared/audio_callbacks.h": (makefile.TEMPLATES / "audio_callbacks.h").read_text(),
+        _AUDIO_CALLBACKS: (makefile.TEMPLATES / "audio_callbacks.h").read_text(),
     }
     for name, content in files.items():
         target = root / name
-        if target.exists() and target.read_bytes() != content.encode():
+        if name != _AUDIO_CALLBACKS and target.exists() and target.read_bytes() != content.encode():
             key = "setup.gbi_header" if name == "gbi.h" else "setup.gfx_type"
             raise Held(
                 "setup", f"{key}: {target.relative_to(project.root)}: existing header differs; preserve human input"
             )
     for name, content in files.items():
         target = root / name
-        if not target.exists():
+        # Callback contracts are tool-owned and restored during the staged proof.
+        if not target.exists() or (name == _AUDIO_CALLBACKS and target.read_bytes() != content.encode()):
             _write(project.root, target.relative_to(project.root).as_posix(), content)
 
 
@@ -376,6 +379,7 @@ def _publish(
                 path.is_relative_to(staged.src)
                 or (
                     any(path.is_relative_to(directory) for directory in staged.include)
+                    and path != staged.include[0] / _AUDIO_CALLBACKS
                     and (project.root / relative).exists()
                 )
                 or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})

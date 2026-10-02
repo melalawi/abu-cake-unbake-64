@@ -2,6 +2,10 @@
 
 import hashlib
 import os
+import shutil
+import subprocess
+import sys
+import sysconfig
 import tempfile
 import tomllib
 import unittest
@@ -101,6 +105,83 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(setup._inputs(self.project), before)
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
         self.assertEqual((self.project.asm / "generated.s").read_bytes(), b".text\n")
+
+    def test_installed_refresh_restores_owned_callbacks_after_proving_template(self) -> None:
+        callback = self.project.include[0] / "shared/audio_callbacks.h"
+        template = (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes()
+        repaired = template.replace(
+            b"void *, short *, int, int, Acmd *", b"void *driver, short *samples, int count, int stride, Acmd *commands"
+        )
+        callback.write_bytes(repaired)
+        # Fixture executables trace their calls. Put that trace in build so
+        # the real concurrent-input guard does not mistake it for an edit.
+        from unbake.project import toolchain
+
+        registry = toolchain.REGISTRY_PATH
+        manifest = self.project.tools / "compiler.sha256"
+        for path in self.project.tools.rglob("*"):
+            if not path.is_file() or not path.read_bytes().startswith(b"#!"):
+                continue
+            before = path.read_bytes()
+            changed = before.replace(str(self.root / "calls").encode(), str(self.project.build / "calls").encode())
+            if changed == before:
+                continue
+            path.write_bytes(changed)
+            old, new = hashlib.sha256(before).hexdigest(), hashlib.sha256(changed).hexdigest()
+            for pins in (registry, manifest):
+                pins.write_text(pins.read_text().replace(old, new))
+        for name in ("cc", "as"):
+            shutil.copy2(self.project.tools / "fixture" / name, self.root / "cache/compilers/fixture" / name)
+        cache = self.project.build / "cache"
+        shutil.copytree(self.root / "cache", cache)
+        local_policy = self.project.build / "installed-policy.toml"
+        policy_file = config.policy_path(None)
+        local_policy.write_text(policy_file.read_text().replace(str(self.root / "cache"), str(cache)))
+        inputs = setup._inputs(self.project)
+        script = Path(sysconfig.get_path("scripts")) / "unbake"
+        launcher = self.root / "installed-setup.py"
+        # Substitute only the compiler registry with the fixture's byte-pinned
+        # tools. Staging, make extraction/check and publication run normally.
+        launcher.write_text(
+            "import runpy, sys\nfrom pathlib import Path\nfrom unbake.project import toolchain\n"
+            f"toolchain.REGISTRY_PATH = Path({str(toolchain.REGISTRY_PATH)!r})\n"
+            f"sys.argv[0] = {str(script)!r}\nrunpy.run_path({str(script)!r}, run_name='__main__')\n"
+        )
+        environment = dict(os.environ, PYTHONNOUSERSITE="1")
+        environment.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, str(launcher), "--project", str(self.root), "--policy", str(local_policy), "setup"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(callback.read_bytes(), template)
+        self.assertEqual((self.project.build_link("us") / "game.us.z64").read_bytes(), b"ABC")
+        after = setup._inputs(self.project)
+        for name in ("README.md", "CONTRIBUTING.md", "include/custom.h", "src/middle.c"):
+            self.assertEqual(after[name], inputs[name])
+
+    def test_failed_refresh_preserves_repaired_callbacks(self) -> None:
+        callback = self.project.include[0] / "shared/audio_callbacks.h"
+        repaired = callback.read_bytes().replace(b"void *, int, void *", b"void *driver, int param, void *value")
+        callback.write_bytes(repaired)
+
+        def refuse(project: config.Project, *args: object, **kwargs: object) -> None:
+            self.assertEqual(
+                (project.include[0] / "shared/audio_callbacks.h").read_bytes(),
+                (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes(),
+            )
+            raise config.Held("setup", "setup.sha1.us: injected failure")
+
+        with (
+            patch.object(setup_proof, "proof", side_effect=refuse),
+            self.assertRaisesRegex(config.Held, "setup.sha1.us"),
+        ):
+            setup.refresh(self.project, self.settings)
+        self.assertEqual(callback.read_bytes(), repaired)
 
     def test_publication_preserves_proved_assembly_mtime(self) -> None:
         timestamp = 1_600_000_000_123_456_789
