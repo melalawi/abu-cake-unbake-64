@@ -33,6 +33,8 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
     try:
         type_context.required(project)
     except Held as error:
+        if error.reason.startswith("map.inputs_stale"):
+            return command(project.root, "solve"), error.reason
         if error.reason.startswith("map."):
             return command(project.root, "map"), error.reason
         if error.reason.startswith("types."):

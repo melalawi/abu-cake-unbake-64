@@ -8,7 +8,7 @@ from typing import Any
 
 from unbake.project.config import Held, Policy, Project
 from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
-from unbake.typemap.mapping import load_map
+from unbake.typemap.mapping import refresh_map
 
 
 class Constraints:
@@ -853,7 +853,7 @@ def infer(
 def solve(project: Project, policy: Policy | None = None) -> dict[str, Any]:
     from unbake.typemap.abi_facts import refine
 
-    facts = refine(project, load_map(project))
+    facts = refine(project, refresh_map(project))
     pinned = storage.inputs(project, headers=True)
     log = storage.FactLog(project.build / "types")
     try:

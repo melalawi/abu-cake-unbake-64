@@ -10,7 +10,7 @@ from unbake.layout import split, split_apply
 from unbake.project.config import Held
 
 if TYPE_CHECKING:
-    from unbake.project.config import Project
+    from unbake.project.config import Policy, Project
 
 
 class MatchedRow(TypedDict):
@@ -64,7 +64,9 @@ def place(project: Project, v: str, function: str, address: object) -> list[spli
     return [split.Edit(version.symbols, before, after, (v,))] if before != after else []
 
 
-def _cut(project: Project, v: str, function: str, start: object, end: object, kind: str) -> list[split.Edit]:
+def _cut(
+    project: Project, v: str, function: str, start: object, end: object, kind: str, *, data_owner: bool = False
+) -> list[split.Edit]:
     function = split.name(function)
     begin, stop_at = split.number(start, "start"), split.number(end, "end")
     if begin >= stop_at or begin % 4 or stop_at % 4:
@@ -73,13 +75,19 @@ def _cut(project: Project, v: str, function: str, start: object, end: object, ki
     before, lines, segments = split.layout(version.split)
     selected = [row for segment in segments for row in segment.rows if row.start <= begin < split.end(row)]
     if len(selected) != 1:
-        raise Held("split", f"{version.split}: start {begin:#x} must select one row")
+        raise Held("split", f"split.cut.selection: start {begin:#x} must select one row")
     row = selected[0]
     stop = split.end(row)
-    if row.kind != "asm" or stop_at > stop:
-        raise Held("split", f"{version.split}: start/end must lie within one asm row")
+    if row.kind != "asm" and not (data_owner and row.kind in ("data", "rodata", "rdata")):
+        if row.kind in ("data", "rodata", "rdata"):
+            raise Held("split", "split.data_to_code: use unbake split code FUNCTION --version V --start ROM --end ROM")
+        raise Held(
+            "split", "split.cut.owner: start/end require an asm row; C needs an explicit text boundary correction"
+        )
+    if stop_at > stop:
+        raise Held("split", "split.cut.interval: start/end must lie within one row")
     paths = {item.path for segment in segments for item in segment.rows if item is not row}
-    directory = str(Path(row.path).parent)
+    directory = "." if data_owner else str(Path(row.path).parent)
     target = function if directory == "." else f"{directory}/{function}"
     if target in paths or (begin > row.start and target == row.path):
         raise Held("split", f"{version.split}: function {function} already has a row")
@@ -107,6 +115,16 @@ def _cut(project: Project, v: str, function: str, start: object, end: object, ki
 
 def cut(project: Project, v: str, function: str, start: object, end: object) -> list[split.Edit]:
     return _cut(project, v, function, start, end, "asm")
+
+
+def code(
+    project: Project, v: str, function: str, start: object, end: object, *, policy: Policy | None = None
+) -> list[split.Edit]:
+    from unbake.layout.code_interval import prove
+
+    split.name(function)
+    prove(project, v, split.number(start, "start"), split.number(end, "end"), policy)
+    return _cut(project, v, function, start, end, "asm", data_owner=True)
 
 
 def data_cut(project: Project, v: str, function: str, start: object, end: object) -> list[split.Edit]:

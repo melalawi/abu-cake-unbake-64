@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import time
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +16,15 @@ from unbake.layout import split
 from unbake.project.config import Held, Project
 from unbake.project_tools.extract import discovered_symbols, symbols_from
 from unbake.typemap import shards, storage
-from unbake.typemap.mips import Analysis
+from unbake.typemap.mips import Analysis, control
 
 
 def map_program(project: Project) -> dict[str, Any]:
+    return _map(project)
+
+
+def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    started = time.monotonic()
     pinned = storage.inputs(project)
     images = {}
     inventory = []
@@ -72,6 +79,54 @@ def map_program(project: Project) -> dict[str, Any]:
             if row.address in targets[row.version]:
                 raise Held("map", f"map.functions.{row.version}: duplicate runtime address 0x{row.address:X}")
             targets[row.version][row.address] = canonical
+    old_functions: Mapping[str, dict[str, Any]] | None = None
+    analyzer = storage.file_digest(Path(__file__).with_name("mips.py"))
+    old_rows: dict[tuple[str, int, int, int], tuple[str, str]] = {}
+    old_symbols: dict[str, dict[int, list[str]]] = {v: {} for v in project.versions}
+    old_targets: dict[str, dict[int, str]] = {v: {} for v in project.versions}
+    if previous is not None:
+        from unbake.typemap.abi_facts import refine
+
+        source = shards.Functions(project.build / "map" / previous["shard"], previous["functions"])
+        # An older analyzer's ABI supplement is materialized once. Its verified
+        # facts then travel with reused bodies instead of being recomputed after
+        # every symbol placement under a different instruction shard digest.
+        old_functions = refine(project, {**previous, "functions": source})["functions"]
+        metadata = previous["functions"]
+        complete = all(
+            {"start", "end", "address"} <= body.keys()
+            for item in metadata.values()
+            for body in item["versions"].values()
+        )
+        for name, item in metadata.items() if complete else old_functions.items():
+            for version, record in item["versions"].items():
+                interval_key = version, record["start"], record["end"], record["address"]
+                old_rows[interval_key] = name, record["target_sha256"]
+                old_targets[version][record["address"]] = name
+        if "symbols" in previous:
+            old_symbols = {
+                v: {int(at): names for at, names in table.items()} for v, table in previous["symbols"].items()
+            }
+        for name, record in () if "symbols" in previous else previous["globals"].items():
+            if record.get("name", name) is not None:
+                for version, placement in record["versions"].items():
+                    old_symbols[version].setdefault(placement["address"], []).append(name)
+    changed_symbols = {
+        v: {
+            address
+            for address in set(old_symbols[v]) | set(symbols[v])
+            if sorted(old_symbols[v].get(address, [])) != sorted(symbols[v].get(address, []))
+        }
+        for v in project.versions
+    }
+    changed_targets = {
+        v: {
+            address
+            for address in set(old_targets[v]) | set(targets[v])
+            if old_targets[v].get(address) != targets[v].get(address)
+        }
+        for v in project.versions
+    }
     functions: dict[str, Any] = {}
     globals_: dict[str, Any] = {}
     for version in project.versions:
@@ -84,15 +139,43 @@ def map_program(project: Project) -> dict[str, Any]:
     directory = project.build / "map"
     directory.mkdir(parents=True, exist_ok=True)
     writer = shards.Writer(directory)
+    reused = rescanned = 0
     try:
         for row in inventory:
             canonical = names[row.version, row.name]
             body = bodies[row.version, row.name]
-            words = [word for (word,) in struct.iter_unpack(">I", body)]
-            analysis = Analysis(
-                canonical, row.version, row.address, row.start, words, targets[row.version], symbols[row.version]
-            ).run()
-            indexed = {ref.offset: ref for ref in indexed_references(words)}
+            words = []
+            prior = old_rows.get((row.version, row.start, row.end, row.address))
+            analysis = None
+            retained = False
+            if old_functions is not None and prior == (canonical, storage.digest(body)):
+                candidate = (
+                    old_functions.version(canonical, row.version)
+                    if isinstance(old_functions, shards.Functions)
+                    else old_functions[canonical]["versions"][row.version]
+                )
+                accesses = {memory.get("address") for memory in candidate["memory"]}
+                branches = set()
+                indirect = False
+                if changed_targets[row.version]:
+                    words = [word for (word,) in struct.iter_unpack(">I", body)]
+                    for index, word in enumerate(words):
+                        branch = control(word, row.address + index * 4)
+                        if branch is not None:
+                            branches.add(branch[1])
+                            indirect |= branch[0] in ("call", "jump") and branch[1] is None
+                if not (accesses & changed_symbols[row.version] or branches & changed_targets[row.version] or indirect):
+                    analysis = candidate
+                    retained = True
+            if analysis is None:
+                words = [word for (word,) in struct.iter_unpack(">I", body)]
+                analysis = Analysis(
+                    canonical, row.version, row.address, row.start, words, targets[row.version], symbols[row.version]
+                ).run()
+                rescanned += 1
+            else:
+                reused += 1
+            indexed = {ref.offset: ref for ref in indexed_references(words)} if not retained else {}
             for memory in analysis["memory"]:
                 relative = memory["instruction"] - row.address
                 ref = indexed.get(relative)
@@ -120,16 +203,18 @@ def map_program(project: Project) -> dict[str, Any]:
             function = functions.setdefault(canonical, {"versions": {}, "aliases": []})
             function["aliases"] = sorted(set(function["aliases"] + [row.name, *row.aliases]))
             record = {
+                **analysis,
                 "name": row.name,
                 "start": row.start,
                 "end": row.end,
                 "address": row.address,
                 "kind": row.kind,
                 "target_sha256": storage.digest(body),
-                **analysis,
             }
             writer.add(canonical, row.version, record)
-            function["versions"][row.version] = {"name": row.name, "target_sha256": record["target_sha256"]}
+            function["versions"][row.version] = {
+                key: record[key] for key in ("name", "start", "end", "address", "kind", "target_sha256")
+            }
         shard_path = writer.finish()
     finally:
         writer.close()
@@ -144,14 +229,29 @@ def map_program(project: Project) -> dict[str, Any]:
         **storage.identity(project),
         "inputs_sha256": pinned,
         "format": "sqlite-zlib-v1",
-        "abi_analysis_sha256": storage.file_digest(Path(__file__).with_name("mips.py")),
+        "abi_analysis_sha256": analyzer,
         "shard": shard_path.name,
         "shard_sha256": storage.file_digest(shard_path),
         "functions": functions,
+        "symbols": symbols,
         "globals": globals_,
         "pools": pools,
         "unknown": [] if pools else ["map.pools: layout provider evidence is absent"],
     }
+    if previous is not None:
+        result["refresh"] = {
+            "reused": reused,
+            "rescanned": rescanned,
+            "previous_shard_sha256": previous["shard_sha256"],
+            "seconds": round(time.monotonic() - started, 3),
+            "abi_upgrade": previous.get("abi_analysis_sha256") != analyzer,
+        }
+        if not rescanned and previous.get("abi_analysis_sha256") == analyzer:
+            # Metadata-only publication retains the exact instruction shard.
+            if shard_path.name != previous["shard"]:
+                shard_path.unlink(missing_ok=True)
+            shard_path = directory / previous["shard"]
+            result.update(shard=shard_path.name, shard_sha256=previous["shard_sha256"])
     if pinned != storage.inputs(project):
         raise Held("map", "map.inputs_stale: inputs changed during map")
     storage.write(project.build / "map/facts.json", storage.encoded(result))
@@ -159,7 +259,7 @@ def map_program(project: Project) -> dict[str, Any]:
     return result
 
 
-def load_map(project: Project) -> dict[str, Any]:
+def _read_map(project: Project) -> dict[str, Any]:
     path = project.build / "map/facts.json"
     if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
         raise Held("solve", "map.facts: compact sharded map required; run unbake map")
@@ -173,101 +273,30 @@ def load_map(project: Project) -> dict[str, Any]:
     if not shard_path.is_file() or storage.file_digest(shard_path) != result.get("shard_sha256"):
         raise Held("solve", "map.shards: missing or changed facts; run unbake map")
     storage.validate_identity(project, result, "map.facts")
+    return result
+
+
+def load_map(project: Project) -> dict[str, Any]:
+    result = _read_map(project)
     if result.get("inputs_sha256") != storage.inputs(project):
-        raise Held("solve", "map.inputs_stale: run unbake map")
-    result["functions"] = shards.Functions(shard_path, result["functions"])
+        raise Held("solve", "map.inputs_stale: run unbake solve to refresh affected map facts")
+    result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
     return result
 
 
 def refresh_map(project: Project) -> dict[str, Any]:
-    """Reuse instruction facts after publication; rescan only changed boundaries."""
-    path = project.build / "map/facts.json"
-    if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
-        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
-    result = storage.read(path, "map.facts")
-    storage.validate_identity(project, result, "map.facts")
-    if result.get("format") != "sqlite-zlib-v1":
-        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
-    shard = result.get("shard", "")
-    if not isinstance(shard, str) or Path(shard).name != shard:
-        raise Held("solve", "map.shards: invalid shard name")
-    shard_path = path.parent / shard
-    storage.verify_file(shard_path, result["shard_sha256"], "map.shards")
+    """Refresh symbol and boundary dependencies, retaining unaffected instruction facts."""
+    result = _read_map(project)
     pinned = storage.inputs(project)
     old_inputs = result["inputs_sha256"]
     for version in project.versions:
         relative = str(project.version(version).baserom.relative_to(project.root))
         if pinned.get(relative) != old_inputs.get(relative):
             raise Held("solve", f"map.rom_sha1.{version}: ROM changed; bootstrap map required")
-    functions = shards.Functions(shard_path, result["functions"])
-    current = {
-        (version, row.start, row.end, row.address): row
-        for version in project.versions
-        for row in split.functions(project, version)
-    }
-    observed = set()
-    metadata = {}
-    for name, item in functions.items():
-        versions = {}
-        for version, body in item["versions"].items():
-            key = version, body["start"], body["end"], body["address"]
-            row = current.get(key)
-            if row is None:
-                return map_program(project)
-            observed.add(key)
-            if row.name not in item["aliases"]:
-                raise Held("solve", f"map.names_changed: {name}: renamed identity needs an explicit map")
-            versions[version] = {key: body[key] for key in ("start", "end", "address", "target_sha256")}
-            versions[version].update(name=row.name, kind=row.kind)
-        metadata[name] = {"aliases": item["aliases"], "versions": versions}
-    if observed != set(current):
-        return map_program(project)
-    # Publication can add canonical function labels to the generated catalog.
-    # New data naming requires a deliberate remap rather than retaining stale
-    # symbolic origins under a newly pinned input digest.
-    changed = {key for key in set(pinned) | set(old_inputs) if pinned.get(key) != old_inputs.get(key)}
-    symbol_paths = {str(project.version(v).symbols.relative_to(project.root)) for v in project.versions} | {
-        str((project.build_link(v) / filename).relative_to(project.root))
-        for v in project.versions
-        for filename in ("splat_symbols.csv", "symbol-addresses.txt")
-    }
-    if changed & symbol_paths:
-        for version in project.versions:
-            _, native = split.symbols(project.version(version).symbols)
-            named = {name: address for name, (address, _, _) in native.items()}
-            generated = project.build_link(version)
-            table = generated / "splat_symbols.csv"
-            if table.is_file():
-                named = discovered_symbols(table, named)
-            placements = generated / "symbol-addresses.txt"
-            if placements.is_file():
-                named.update(symbols_from([placements]))
-            function_addresses = {key[3] for key in current if key[0] == version}
-            actual = {name: address for name, address in named.items() if address not in function_addresses}
-            expected = {
-                name: row["versions"][version]["address"]
-                for name, row in result["globals"].items()
-                if row.get("name", name) is not None and version in row["versions"]
-            }
-            if actual != expected:
-                raise Held("solve", f"map.symbols_changed: {version}: data names need an explicit map")
-    pools = {}
-    for layout_path in (project.build / "setup/layout.json", project.root / "docs/setup/layout.json"):
-        if layout_path.is_file():
-            layout = storage.read(layout_path, "map.layout")
-            for version, record in layout.get("versions", {}).items():
-                pools[version] = record.get("providers", [])
-    result.update(
-        inputs_sha256=pinned,
-        functions=metadata,
-        pools=pools,
-        unknown=[] if pools else ["map.pools: layout provider evidence is absent"],
-    )
-    if pinned != storage.inputs(project):
-        raise Held("solve", "map.inputs_stale: inputs changed during metadata refresh")
-    storage.write(path, storage.encoded(result))
-    result["functions"] = shards.Functions(shard_path, metadata)
-    return result
+    if pinned == old_inputs:
+        result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
+        return result
+    return _map(project, result)
 
 
 def compiler_inputs(project: Project, config_content: bytes) -> tuple[Path, bytes] | None:
