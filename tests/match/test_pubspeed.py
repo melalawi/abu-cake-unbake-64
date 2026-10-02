@@ -52,7 +52,7 @@ class PublicationSpeedTests(MatchFixture):
         for version in self.versions:
             path = self.project.version(version).split
             path.write_text(
-                "segments:\n  - name: main\n    type: code\n    start: 0x1000\n    subsegments:\n"
+                "segments:\n  - name: main\n    type: code\n    start: 0x1000\n    vram: 0x80001000\n    subsegments:\n"
                 + "".join(f"      - [0x{0x1000 + index * 16:X}, asm, {name}]\n" for index, name in enumerate(names))
                 + "  - [0x1200]\n"
             )

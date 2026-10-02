@@ -9,11 +9,6 @@ from unbake.decomp import drafts, work
 from unbake.project.config import Held, Policy, Project
 
 
-def source(project: Project, path: Path) -> Path:
-    """Keep original tried bytes and their adjacent header overlay together."""
-    return path
-
-
 def ensure(project: Project, policy: Policy, source: Path, versions: tuple[str, ...]) -> dict[str, Any]:
     rows = drafts.Store(policy, project).rows(source.stem)
     digest = drafts.source_identity(source.read_bytes())
@@ -27,26 +22,5 @@ def ensure(project: Project, policy: Policy, source: Path, versions: tuple[str, 
         )
     if not latest["identical_everywhere"] or latest["preconditions"]:
         raise Held("submit", f"submit.exact: {source.stem} requires identical_everywhere=true and resolved needs")
-    current = work.identity(project, source, list(versions), policy=policy)
-    recorded = latest["work"]
-    for key in (
-        "schema",
-        "project_id",
-        "workspace_id",
-        "source_sha256",
-        "overlay_sha256",
-        "names_from",
-        "versions",
-        "rom_sha1",
-        "compiler_sha256",
-        "flags",
-        "target_sha256",
-        "generation_sha256",
-        "layout_sha256",
-    ):
-        if recorded.get(key) != current[key]:
-            raise Held("submit", f"submit.{key}: changed since latest try")
-    if recorded.get("evidence", {}).get("config_sha256") != current["evidence"]["config_sha256"]:
-        raise Held("submit", "submit.config_sha256: changed since latest try")
-    work.header_edits(project, current)
+    current = work.current_trial(project, policy, source, list(versions), latest["work"])
     return dict(current)

@@ -26,7 +26,7 @@ from unbake.match.common import (
 )
 from unbake.match.publication import collect, publish
 from unbake.match.staging import copy_tree
-from unbake.project import build
+from unbake.project import build, config
 from unbake.project.config import Held, Policy, Project
 
 _ROW = re.compile(
@@ -69,7 +69,13 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
     versions = tuple(row.get("versions", holding))
     if versions != holding:
         held("submit.versions: submission must cover every holding version")
-    manifest = proof.ensure(project, policy, source, holding)
+    matched = row["matched"]
+    if matched:
+        manifest = proof.ensure(project, policy, source, holding)
+    else:
+        from unbake.match.nonmatching import admit
+
+        manifest = admit(project, policy, source)
     try:
         text = content.decode("utf-8")
     except UnicodeError as error:
@@ -86,7 +92,7 @@ def validate(project: Project, policy: Policy, row: dict[str, Any]) -> Draft:
         relative(project, edit.path)
     pending: list[needs.Need] = list(findings)
     row["work"] = manifest
-    return Draft(row, content, versions, pending)
+    return Draft(row, content, versions, pending, matched)
 
 
 def submit(
@@ -95,21 +101,21 @@ def submit(
     source: str | Path | None,
     *,
     versions: tuple[str, ...] | None = None,
+    matched: bool = True,
 ) -> list[str]:
     """Enqueue canonical source bytes judged by their latest explicit trial."""
     if source is None:
         held("source: missing value")
     features.load()
     source = Path(source).resolve()
-    source = proof.source(project, source)
     selected = holding_versions(project, function(source.stem)) if versions is None else versions
     for version in selected:
         project.version(version)
-    proof.ensure(project, policy, source, selected)
     row: dict[str, Any] = {
         "function": function(source.stem),
         "source": str(source),
         "source_sha256": drafts.source_identity(read(source)),
+        "matched": matched,
     }
     if versions is not None:
         row["versions"] = list(versions)
@@ -169,7 +175,15 @@ class _Generations(dict[str, Path]):
 def run(
     project: Project, policy: Policy, *, function: str | None = None, functions: tuple[str, ...] | None = None
 ) -> list[str]:
-    """Build outside build/.lock, isolate failures, then publish verified files."""
+    """Serialize admission, staging, cartridge proof and the final publication."""
+    with build.lock(project):
+        return _run(config.load(project.root), policy, function=function, functions=functions)
+
+
+def _run(
+    project: Project, policy: Policy, *, function: str | None = None, functions: tuple[str, ...] | None = None
+) -> list[str]:
+    """Prove a staged batch and publish while the caller holds the publication lock."""
     features.load()
     receipts: list[str] = []
     with queue_lock(project):
@@ -212,10 +226,17 @@ def run(
                 published = True
             collect(replace(project, versions=tuple(current)))
         receipts.extend(
-            f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}" for draft in candidates
+            f"OK(match): {draft.function} matched on VERSION {', '.join(draft.versions)}"
+            if draft.matched
+            else (
+                f"OK(submit): {draft.function} published as NON_MATCHING; "
+                f"asm rows retained on {', '.join(draft.versions)}"
+            )
+            for draft in candidates
         )
         receipts.extend(f"OK(submit): {version}: {line}" for version, line in attempt.sha1.items())
-        if len(candidates) > 1:
+        matched_candidates = [draft for draft in candidates if draft.matched]
+        if len(matched_candidates) > 1:
             entries = [
                 (
                     draft.function,
@@ -223,7 +244,7 @@ def run(
                     draft.versions,
                     dict(draft.row["work"]["target_sha256"]),
                 )
-                for draft in candidates
+                for draft in matched_candidates
             ]
             try:
                 type_context.feedback_many(project, entries, policy=policy)
@@ -231,7 +252,7 @@ def run(
                 reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"
                 receipts.append(f"HELD(types): {reason}; batch was published")
         else:
-            for draft in candidates:
+            for draft in matched_candidates:
                 source = project.src / (draft.function + ".c")
                 targets = dict(draft.row["work"]["target_sha256"])
                 try:
@@ -255,44 +276,37 @@ def run(
 
 
 def publish_source(project: Project, policy: Policy, source: Path) -> list[str]:
-    """Publish only the requested file, with one transactional all-owner proof."""
-    rows = drafts.Store(policy, project).rows(source.stem)
-    if rows and not rows[-1]["identical_everywhere"]:
-        from unbake.match import nonmatching
-
-        return nonmatching.publish_source(project, policy, source)
-    submit(project, policy, source)
-    return run(project, policy, function=source.stem)
+    with build.lock(project):
+        return _publish_source(config.load(project.root), policy, source)
 
 
 def publish_sources(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
-    """Admit each named file, prove exact candidates together, and isolate failures."""
+    with build.lock(project):
+        return _publish_sources(config.load(project.root), policy, sources)
+
+
+def _publish_source(project: Project, policy: Policy, source: Path) -> list[str]:
+    """Use the same transaction for exact and assembly-backed publications."""
+    rows = drafts.Store(policy, project).rows(source.stem)
+    matched = not rows or rows[-1]["identical_everywhere"]
+    submit(project, policy, source, matched=matched)
+    return run(project, policy, function=source.stem)
+
+
+def _publish_sources(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
+    """Admit all receipts, fold them together, then prove and publish one batch."""
     names = [source.stem for source in sources]
     if len(set(names)) != len(names):
         held("submit.source: duplicate function names in --batch")
-    receipts, exact, fuzzy = [], [], []
+    receipts, admitted = [], []
     for source in sources:
         try:
             rows = drafts.Store(policy, project).rows(source.stem)
-            if rows and not rows[-1]["identical_everywhere"]:
-                from unbake.match import nonmatching
-
-                nonmatching.admit(project, policy, source)
-                fuzzy.append(source)
-            else:
-                submit(project, policy, source)
-                exact.append(source.stem)
+            matched = not rows or rows[-1]["identical_everywhere"]
+            submit(project, policy, source, matched=matched)
+            admitted.append(source.stem)
         except Held as error:
             receipts.append(f"HELD(submit): {source.stem}: {error.reason}")
-    if exact:
-        receipts.extend(run(project, policy, functions=tuple(exact)))
-    for source in fuzzy:
-        # Exact publication changes the proof context; refresh through the real trial.
-        from unbake.decomp import trial
-
-        try:
-            trial.retain_draft(project, policy, source, project.work, versions=None)
-            receipts.extend(publish_source(project, policy, source))
-        except Held as error:
-            receipts.append(f"HELD(submit): {source.stem}: {error.reason}")
+    if admitted:
+        receipts.extend(run(project, policy, functions=tuple(admitted)))
     return receipts

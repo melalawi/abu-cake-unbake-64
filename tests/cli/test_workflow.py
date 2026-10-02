@@ -48,7 +48,7 @@ class WorkflowTests(MatchFixture):
         source.write_text(source.read_text() + "/* edited */\n")
         action, reason = workflow.select(self.project, self.policy)
         self.assertIn(" try ", action)
-        self.assertIn("current inputs", reason)
+        self.assertIn("inputs changed", reason)
         self.assertEqual(self.queued(), [])
         self.assert_untouched()
 

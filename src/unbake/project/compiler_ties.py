@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.project import compiler_files, toolchain
+from unbake.project import toolchain
 from unbake.project.config import Held, Project
 
 
@@ -80,85 +79,55 @@ def candidate(project: Project, ref: str, ident: str, function: str | None = Non
     )
 
 
-def pin(project: Project, ref: str, ident: str, evidence: dict[str, Any], config_sha256: str) -> Project:
-    from unbake.project import build, config, makefile
+def selected(project: Project, evidence: dict[str, Any]) -> Project:
+    """Apply one measured decision in memory, never to neighbouring items."""
+    function, ident = evidence["function"], evidence["selected"]
+    units = dict(project.units)
+    units[function] = ident
+    units.pop((project.src.relative_to(project.root) / (function + ".c")).as_posix(), None)
+    return replace(project, units=units)
 
-    with build.lock(project):
-        path = project.root / "config.toml"
-        content = path.read_bytes()
-        if hashlib.sha256(content).hexdigest() != config_sha256:
-            raise Held("try", "compiler.tie_stale: configuration changed during candidate comparisons")
-        data = toml.loads(content.decode())
-        ids = read(data.get("compiler_ties", {}), project.compilers)
-        if ids.get(ref) != project.compiler_ties[ref] or ident not in ids[ref]:
-            raise Held("try", f"compiler.tied_set: {ref}: candidates changed during comparison")
-        equivalent = evidence.get("reason") == "equivalent"
-        if equivalent:
-            function = evidence["function"]
-            selection_ref = "tie:unit:" + function
-            data["units"][function] = ident
-            data["units"].pop((project.src.relative_to(project.root) / (function + ".c")).as_posix(), None)
-            data["compiler_ties"][selection_ref] = evidence["exact_candidates"]
-        else:
-            selection_ref = ref
-            data["units"] = {name: ident if value == ref else value for name, value in data["units"].items()}
-            if data["project"]["default_compiler"] == ref:
-                data["project"]["default_compiler"] = ident
-        if evidence.get("function"):
-            data["units"][evidence["function"]] = ident
-        selection = {"compiler": ident, "evidence_json": json.dumps(evidence, sort_keys=True)}
-        if equivalent:
+
+def publication_evidence(project: Project, evidence: dict[str, Any]) -> dict[str, Any]:
+    """Emit structured measurements; diagnostics belong in trial logs."""
+
+    def structured(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: structured(item)
+                for key, item in value.items()
+                if key not in {"differences", "error", "config_sha256"}
+            }
+        if isinstance(value, list):
+            return [structured(item) for item in value]
+        return value
+
+    result: dict[str, Any] = structured(evidence)
+    result["generations"] = {
+        version: (project.build.relative_to(project.root) / Path(generation).name).as_posix()
+        for version, generation in evidence.get("generations", {}).items()
+    }
+    return result
+
+
+def fold(project: Project, receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fold only the requested sources' measurements into staged configuration."""
+    data = toml.loads((project.root / "config.toml").read_text())
+    for selection in data.get("compiler_selections", {}).values():
+        selection["evidence_json"] = json.dumps(
+            publication_evidence(project, json.loads(selection["evidence_json"])), sort_keys=True
+        )
+    for evidence in receipts:
+        evidence = publication_evidence(project, evidence)
+        function, ident = evidence["function"], evidence["selected"]
+        ref = "tie:unit:" + function
+        data.setdefault("units", {})[function] = ident
+        data["units"].pop((project.src.relative_to(project.root) / (function + ".c")).as_posix(), None)
+        selection = {"compiler": ident, "function": function, "evidence_json": json.dumps(evidence, sort_keys=True)}
+        if evidence["reason"] == "equivalent":
+            data.setdefault("compiler_ties", {})[ref] = evidence["exact_candidates"]
             selection.update(
-                status="equivalent",
-                function=function,
-                candidates=evidence["exact_candidates"],
-                build_rule=evidence["build_rule"],
+                status="equivalent", candidates=evidence["exact_candidates"], build_rule=evidence["build_rule"]
             )
-        data.setdefault("compiler_selections", {})[selection_ref] = selection
-        recipe = project.tools / "build.json"
-        try:
-            previous_recipe = recipe.read_bytes()
-        except OSError as error:
-            raise Held("try", f"compiler.tie_recipe: rendered build recipe missing: {error}") from error
-        manifest = project.tools / "compiler.sha256"
-        try:
-            previous_manifest = manifest.read_bytes()
-            lines = previous_manifest.decode().splitlines(keepends=True)
-        except (OSError, UnicodeError) as error:
-            raise Held("try", f"compiler.tie_recipe: helper manifest missing or malformed: {error}") from error
-        relative = recipe.relative_to(project.root).as_posix()
-        entries = [i for i, line in enumerate(lines) if line.strip().split(maxsplit=1)[1:] == [relative]]
-        if len(entries) != 1:
-            raise Held("try", f"compiler.tie_recipe: {relative}: expected exactly one helper manifest entry")
-        if lines[entries[0]].split()[0] != hashlib.sha256(previous_recipe).hexdigest():
-            raise Held("try", f"compiler.tie_recipe: {relative}: existing recipe differs from helper manifest")
-        rendered = (
-            json.dumps(
-                makefile.description(
-                    replace(project, units=data["units"], default_compiler=data["project"]["default_compiler"])
-                ),
-                sort_keys=True,
-                indent=2,
-            )
-            + "\n"
-        ).encode()
-        lines[entries[0]] = f"{hashlib.sha256(rendered).hexdigest()}  {relative}\n"
-        from unbake.typemap.mapping import compiler_inputs
-
-        config_content = toml.dumps(data).encode()
-        mapped = compiler_inputs(project, config_content)
-        previous_map = mapped[0].read_bytes() if mapped else None
-        try:
-            compiler_files.atomic_bytes(recipe, rendered)
-            compiler_files.atomic_bytes(manifest, "".join(lines).encode())
-            if mapped is not None:
-                compiler_files.atomic_bytes(mapped[0], mapped[1])
-            compiler_files.atomic_bytes(path, config_content)
-        except BaseException:
-            compiler_files.atomic_bytes(recipe, previous_recipe)
-            compiler_files.atomic_bytes(manifest, previous_manifest)
-            compiler_files.atomic_bytes(path, content)
-            if mapped is not None and previous_map is not None:
-                compiler_files.atomic_bytes(mapped[0], previous_map)
-            raise
-    return config.load(project.root)
+        data.setdefault("compiler_selections", {})[ref] = selection
+    return cast(dict[str, Any], data)

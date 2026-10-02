@@ -161,9 +161,9 @@ class PublicationTests(MatchFixture):
         fcntl.flock(trial_hold, fcntl.LOCK_SH)
 
         def while_building(tree: Path, generation_for: Callable[[str], Path]) -> Any:
-            with (self.root / "build" / ".lock").open("a+b") as final_lock:
+            with (self.root / "build" / ".lock").open("a+b") as final_lock, self.assertRaises(BlockingIOError):
                 fcntl.flock(final_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                events.append("final lock is free")
+            events.append("publication lock is held")
             generation = self.current(self.project, "us")
             with (generation / ".inuse").open("rb") as simulated_try:
                 fcntl.flock(simulated_try, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -180,7 +180,7 @@ class PublicationTests(MatchFixture):
 
         self.on_build = while_building
         receipts = match.run(self.project, self.policy)
-        self.assertEqual(events, ["final lock is free", "try completed"])
+        self.assertEqual(events, ["publication lock is held", "try completed"])
         self.assertTrue(receipts[0].startswith("OK(match): alpha"))
         self.assertTrue(self.original["us"].exists())
         self.assertEqual((self.original["us"] / "object.o").read_bytes(), b"original immutable output")
@@ -221,7 +221,7 @@ class PublicationTests(MatchFixture):
         receipts = match.run(self.project, self.policy)
         self.assertTrue(any(line.startswith("OK(match): alpha") for line in receipts), receipts)
 
-    def test_overlapping_match_builds_publish_once_without_a_long_runner_lock(self) -> None:
+    def test_generation_recheck_defends_against_reentrant_publication(self) -> None:
         self.queue("alpha")
         nested = []
 

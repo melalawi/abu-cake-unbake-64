@@ -72,14 +72,13 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
         if history:
             latest = history[-1]
             try:
-                current = dict(work.identity(project, source, owning_versions(project, subject, None), policy=policy))
-                if latest["work"] == current:
-                    if fuzzy_bar.evaluate(
-                        latest["compares"], owning_versions(project, subject, None), latest["preconditions"]
-                    ).passed:
-                        verb, reason = "submit", "latest owner-bar trial covers every holding version"
-                    else:
-                        reason = "edit this draft to resolve the measured differences, then try again"
+                work.current_trial(project, policy, source, owning_versions(project, subject, None), latest["work"])
+                if fuzzy_bar.evaluate(
+                    latest["compares"], owning_versions(project, subject, None), latest["preconditions"]
+                ).passed:
+                    verb, reason = "submit", "latest owner-bar trial covers every holding version"
+                else:
+                    reason = "edit this draft to resolve the measured differences, then try again"
             except Held:
                 reason = "draft inputs changed; refresh the named inputs before trying again"
         score = min(history[-1]["score"].values()) if history else 0.0

@@ -171,11 +171,11 @@ class ExclusionIdentityTests(MainCase):
             cartridge.symbols.write_text(cartridge.symbols.read_text().replace("alpha", "renamed"))
         return path, evidence
 
-    def test_next_refreshes_reserved_name_from_identical_measured_boundary(self):
+    def test_next_reads_reserved_name_without_changing_manifest(self):
         path, _ = self.renamed_reservation()
         code, out, error = self.run_main(self.args("next"))
         self.assertEqual(code, 0, out + error)
-        self.assertEqual(json.loads(path.read_bytes()), {"schema": 1, "functions": ["renamed"]})
+        self.assertEqual(json.loads(path.read_bytes()), {"schema": 1, "functions": ["alpha"]})
         self.assertIn("map", out)
         before = path.stat().st_mtime_ns
         code, _, _ = self.run_main(self.args("next"))
@@ -189,7 +189,7 @@ class ExclusionIdentityTests(MainCase):
         self.assertEqual(code, 1)
         self.assertIn("draft.excluded: renamed", out)
         generate.assert_not_called()
-        self.assertEqual(json.loads(path.read_bytes())["functions"], ["renamed"])
+        self.assertEqual(json.loads(path.read_bytes())["functions"], ["alpha"])
 
     def test_changed_identity_boundary_and_unknown_names_never_refresh(self):
         path, (evidence_path, value) = self.renamed_reservation()
@@ -225,20 +225,12 @@ class ExclusionIdentityTests(MainCase):
         self.assertIn("exclusions.function", out)
         self.assertEqual(path.read_bytes(), before)
 
-    def test_refresh_refuses_symlink_and_concurrent_write(self):
-        from unbake.decomp.exclusion_identity import publish
-        from unbake.project.config import Held
+    def test_publication_folds_the_resolved_name_and_drops_published_reservations(self):
+        from unbake.decomp import exclusions
 
-        path = self.manifest({"schema": 1, "functions": ["alpha"]})
-        before = path.read_bytes()
-        path.write_text('{"schema": 1, "functions": []}')
-        changed = path.read_bytes()
-        with self.assertRaisesRegex(Held, "exclusions.stale"):
-            publish(self.project, path, before, ["renamed"])
-        self.assertEqual(path.read_bytes(), changed)
-        target = path.with_name("original.json")
-        path.rename(target)
-        path.symlink_to(target)
-        with self.assertRaisesRegex(Held, "exclusions.stale"):
-            publish(self.project, path, changed, ["renamed"])
-        self.assertEqual(target.read_bytes(), changed)
+        path, _ = self.renamed_reservation()
+        before = path.read_text()
+        edits = exclusions.publication_edit(self.project, {"renamed"})
+        self.assertEqual(path.read_text(), before)
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(json.loads(edits[0].after)["functions"], [])

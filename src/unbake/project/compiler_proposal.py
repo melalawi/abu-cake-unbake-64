@@ -385,7 +385,8 @@ def receipt(proposal: CompilerProposal) -> list[str]:
     independent = [ref for ref in counts if ref.startswith("tie:unit:")]
     if independent:
         lines.append(
-            f"compiler independent candidate sets: {len(independent)} units; each first try pins only its item"
+            f"compiler independent candidate sets: {len(independent)} units; "
+            "try measures each item; submit publishes its choice"
         )
     for ident, count in sorted(counts.items()):
         if ident.startswith("tie:unit:"):

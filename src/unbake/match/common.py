@@ -28,6 +28,7 @@ class Draft:
     content: bytes
     versions: tuple[str, ...]
     needs: list[needs.Need] = field(default_factory=list)
+    matched: bool = True
 
     @property
     def function(self) -> str:
@@ -105,9 +106,11 @@ def queue(project: Project) -> list[dict[str, Any]]:
             held(f"{path}:{number}: {error}")
         if not isinstance(row, dict):
             held(f"{path}:{number}: queue row must be an object")
-        for key in ("function", "source", "source_sha256"):
+        for key in ("function", "source", "source_sha256", "matched"):
             if key not in row:
                 held(f"{path}:{number}: missing {key}")
+        if not isinstance(row["matched"], bool):
+            held(f"{path}:{number}: invalid matched")
         function(row["function"])
         if not isinstance(row["source"], str) or not Path(row["source"]).is_absolute():
             held(f"{path}:{number}: source must be an absolute path")

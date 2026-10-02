@@ -40,7 +40,12 @@ Map measures the whole program across every version.
 Solve publishes shared types from those facts.
 Next ranks cross-version items and prints the command to run.
 Follow it through draft then try then submit.
-Try measures each containing version with its compiler candidates.
+Try measures each containing version with its compiler candidates and retains
+source-scoped receipts without changing project build inputs. Submit publishes
+compiler choices, equivalence evidence, shared declarations, layout and exclusion
+removals together, holding the publication lock through the cartridge proof.
+Use `submit --batch SOURCE...` to fold and prove several receipts together.
+Unrelated compiler evidence and layout entries do not invalidate a receipt.
 Exact equivalents retain their proofs and a deterministic build choice.
 Submit proves the cartridge and feeds types back into solve.
 Passing fuzzy drafts keep their assembly under `NON_MATCHING`.

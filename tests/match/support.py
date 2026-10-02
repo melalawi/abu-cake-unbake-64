@@ -104,6 +104,7 @@ class MatchFixture(unittest.TestCase):
             work=self.root / "build/work",
             drafts=self.root / "build/drafts",
         )
+        patch("unbake.project.config.load", side_effect=lambda *_: self.project).start()
         self.policy = Policy(
             cores=2,
             stall_trials=4,

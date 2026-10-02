@@ -165,7 +165,7 @@ def description(project: Project) -> dict[str, Any]:
 
     for source in project.src.rglob("*.c"):
         if ref := reference(project, source):
-            raise Held("build", f"compiler.tied_set: {ref}: run try to pin before building C {source.stem}")
+            raise Held("build", f"compiler.tied_set: {ref}: run try then submit before building C {source.stem}")
     build = recipe(project)
     compilers = {}
     for ident, compiler in project.compilers.items():

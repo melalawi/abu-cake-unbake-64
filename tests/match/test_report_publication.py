@@ -44,7 +44,7 @@ class ReportPublicationTests(MatchFixture):
             self.assertNotEqual(generation, self.original[version])
             import fcntl
 
-            with (self.root / "build/.lock").open("a+b") as lock:
+            with (self.root / "build/.lock").open("a+b") as lock, self.assertRaises(BlockingIOError):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with (self.root / ".unbake/state/match-queue.lock").open("a+b") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

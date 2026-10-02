@@ -5,7 +5,6 @@ import io
 import json
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.cli.support import MainCase
@@ -142,7 +141,7 @@ class GateCliTests(MainCase):
 
 class GateAdmissionTests(MatchFixture):
     def fuzzy(self, exact=9, **differences):
-        source = self.draft("alpha")
+        source = self.draft("alpha", '#include "types.h"\nint alpha(void) { return 0; }\n')
         result = trial.Trial(
             "alpha",
             drafts.source_identity(source.read_bytes()),
@@ -182,18 +181,12 @@ class GateAdmissionTests(MatchFixture):
         source = self.fuzzy(register=1)
         captured = []
 
-        def transaction(project, policy, changes, *, verify):
-            verify()
-            captured.extend(changes)
-            for change in changes:
-                if change.after is not None:
-                    change.path.parent.mkdir(parents=True, exist_ok=True)
-                    change.path.write_bytes(change.after)
-            return [SimpleNamespace(version=v, sha1_line="ROM: OK") for v in self.versions]
+        def inspect(tree, generation_for):
+            captured.append((tree / "src/alpha.c").read_bytes())
 
+        self.on_build = inspect
         splits = {v: self.project.version(v).split.read_bytes() for v in self.versions}
-        with patch.object(name_transaction, "apply", side_effect=transaction):
-            code, output = self.public_submit(source)
+        code, output = self.public_submit(source)
         self.assertEqual(code, 0, output)
         self.assertIn("published as NON_MATCHING", output)
         self.assertEqual(

@@ -27,7 +27,7 @@ class CurrentTrialTests(MatchFixture):
         self.assert_untouched()
 
     def test_header_compiler_layout_and_generation_changes_refuse(self) -> None:
-        source = self.draft("alpha")
+        source = self.draft("alpha", '#include "types.h"\nint alpha(void) { return 0; }\n')
         header = self.project.include[0] / "types.h"
         original = header.read_bytes()
         header.write_bytes(original + b"/* header edit */\n")
@@ -42,6 +42,31 @@ class CurrentTrialTests(MatchFixture):
         target = self.original["us"] / "obj/asm/text/alpha.o"
         target.write_bytes(b"changed target")
         with self.assertRaisesRegex(Held, "submit.target_sha256"):
+            proof.ensure(self.project, self.policy, source, self.versions)
+
+    def test_unrelated_headers_layout_and_config_evidence_keep_receipt_valid(self) -> None:
+        source = self.draft("alpha")
+        (self.project.include[0] / "unrelated.h").write_text("typedef int Other;\n")
+        with (self.root / "config.toml").open("a") as output:
+            output.write('[compiler_selections.other]\nevidence_json="{}"\n')
+        for version in self.versions:
+            symbols = self.project.version(version).symbols
+            symbols.write_text(symbols.read_text().replace("beta = 0x80001010", "beta = 0x80001014"))
+        proof.ensure(self.project, self.policy, source, self.versions)
+
+    def test_forced_header_and_effective_assembler_flags_invalidate_receipt(self) -> None:
+        path = self.root / "config.toml"
+        with path.open("a") as output:
+            output.write('[build.unit_cflags]\nalpha=["-include", "types.h"]\n')
+        source = self.draft("alpha")
+        header = self.project.include[0] / "types.h"
+        before = header.read_bytes()
+        header.write_bytes(before + b"/* changed forced input */\n")
+        with self.assertRaisesRegex(Held, "submit.overlay_sha256"):
+            proof.ensure(self.project, self.policy, source, self.versions)
+        header.write_bytes(before)
+        path.write_text(path.read_text().replace("sn64_asflags=[]", 'sn64_asflags=["-G0"]'))
+        with self.assertRaisesRegex(Held, "submit.compiler_sha256"):
             proof.ensure(self.project, self.policy, source, self.versions)
 
     def test_partial_or_old_exact_trial_cannot_authorize_submission(self) -> None:
@@ -64,7 +89,7 @@ class CurrentTrialTests(MatchFixture):
         manifest.parent.mkdir(parents=True)
         manifest.write_text('{"providers": []}\n')
         source = self.draft("alpha")
-        manifest.write_text('{"providers": [{"kind": "private"}]}\n')
+        manifest.write_text('{"providers": [{"kind": "private", "owners": ["alpha"]}]}\n')
         with self.assertRaisesRegex(Held, "submit.layout_sha256"):
             proof.ensure(self.project, self.policy, source, self.versions)
         self.assertEqual(self.queued(), [])
