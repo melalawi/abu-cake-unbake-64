@@ -43,8 +43,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         ):
             data["build"][key] = "policy:" + field
         data["compilers"]["ido-5.3"] = dict(data["compilers"]["ido-7.1"])
-        data["compiler_ties"] = {"tie:unit:" + name: ["ido-5.3", "ido-7.1"] for name in names}
-        data["units"] = {name: "tie:unit:" + name for name in names}
+        data["units"] = {name: "ido-5.3" for name in names}
         body = bytes.fromhex("03e0000824020001") * len(names)
         image = bytes.fromhex("80371240") + bytes(60) + body
         for version in data["project"]["versions"]:

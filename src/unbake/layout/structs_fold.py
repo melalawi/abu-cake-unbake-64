@@ -326,6 +326,8 @@ def fold(
         if context is None:
             context = Headers.read(project)
     else:
+        if versions is None:
+            held("versions", "header paths require explicit versions")
         root = Path(headers).resolve() if isinstance(headers, (str, Path)) else None
         paths = sorted(root.rglob("*.h")) if root else sorted(Path(path) for path in headers)
         if not paths:

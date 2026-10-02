@@ -6,7 +6,6 @@ from pathlib import Path
 
 from tests.decomp.support import fixture
 from unbake.match.attribution import diagnose
-from unbake.match.common import Attempt, Draft
 
 
 class AttributionTests(unittest.TestCase):
@@ -20,9 +19,7 @@ class AttributionTests(unittest.TestCase):
                 "obj/src/beta.o:(.unbake_pool_80003004+0x0): first defined here\n"
                 "ld: obj/src/existing.o: undefined reference to `missing'\n"
             )
-            candidates = [Draft({"function": name}, b"", ("us",), [], True) for name in ("alpha", "beta", "gamma")]
-            result = Attempt(project.root, {"us": generation}, ["us"])
-            faults = diagnose(project, result, candidates)
+            faults = diagnose(project, ["us"], {"us": generation}, {"alpha", "beta", "gamma"})
             self.assertEqual(set(faults), {"alpha", "beta"})
             self.assertEqual(len(faults["alpha"]), 1)
             self.assertIn("multiple definition", faults["alpha"][0])
@@ -32,6 +29,19 @@ class AttributionTests(unittest.TestCase):
             project, _, _ = fixture(Path(directory))
             generation = project.build / "us.generation"
             (generation / "build.log").write_text("HELD(compile): batch objects failed: src/beta.c: invalid C\n")
-            candidates = [Draft({"function": name}, b"", ("us",), [], True) for name in ("alpha", "beta")]
-            result = Attempt(project.root, {"us": generation}, ["us"])
-            self.assertEqual(set(diagnose(project, result, candidates)), {"beta"})
+            self.assertEqual(set(diagnose(project, ["us"], {"us": generation}, {"alpha", "beta"})), {"beta"})
+
+    def test_compiler_lines_follow_the_failed_source_without_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, _, _ = fixture(Path(directory))
+            generation = project.build / "us.generation"
+            (generation / "build.log").write_text(
+                "HELD(compile): batch objects failed:\n"
+                "/abs/build/src/beta.c: /abs/tools/cc1 exited 33: source.i: In function `beta':\n"
+                "/abs/build/obj/src/.object-x/source.i:12: structure has no member named `value'\n"
+                "make: *** [build] Error 1\n"
+            )
+            faults = diagnose(project, ["us"], {"us": generation}, {"alpha", "beta"})
+            self.assertEqual(set(faults), {"beta"})
+            self.assertIn("source.i:12: structure has no member named `value'", faults["beta"][0])
+            self.assertNotIn("/abs/", faults["beta"][0])

@@ -3,7 +3,7 @@
 import unittest
 
 from unbake.layout.structs import layouts
-from unbake.layout.structs_identity import resolve
+from unbake.layout.structs_identity import identity
 from unbake.layout.structs_parser import Parser
 from unbake.match import type_rewrite
 
@@ -12,7 +12,14 @@ class TypeRewriteTests(unittest.TestCase):
     def rewrite(self, source, context):
         parser = Parser(source)
         records = parser.parse()
-        resolution = resolve(records, layouts(context))
+        canon = {layout.name: layout for layout in layouts(context)}
+        known = {identity(layout, canon): layout for layout in canon.values()}
+        local = {record.name: record for record in records if record.name}
+        resolution = {
+            name: (known[key].name, known[key])
+            for name, record in local.items()
+            if (key := identity(record, local)) in known
+        }
         for (start, end), target in sorted(type_rewrite.edits(parser, context, resolution).items(), reverse=True):
             source = source[:start] + target + source[end:]
         return source
@@ -58,3 +65,26 @@ class TypeRewriteTests(unittest.TestCase):
         result = self.rewrite(source, context)
         self.assertIn('"Old // still a string /* here */"', result)
         self.assertIn("int Old = 1; return Old;", result)
+
+    def test_anonymous_typedef_members_follow_the_shared_layout(self):
+        context = "typedef struct Canon { int pad; int owned; } Canon;"
+        source = (
+            "typedef struct { int pad; int flags; } Entity;\n"
+            "extern Entity *table[];\n"
+            "int alpha(int id) { return table[id]->flags & 1; }\n"
+        )
+        result = self.rewrite(source, context)
+        self.assertIn("table[id]->owned & 1", result)
+        self.assertIn("extern Canon *table[];", result)
+
+    def test_gnu_label_tables_and_attributes_parse(self):
+        context = "typedef struct Canon { int value; } Canon;"
+        source = (
+            "typedef struct Old { int old; } Old;\n"
+            "int alpha(Old *p, int s) {\n"
+            '  static void *labels[2] __attribute__((section(".sdata"))) = { &&one, &&two };\n'
+            "  goto *labels[s];\n one: return p->old;\n two: return 0;\n}\n"
+        )
+        result = self.rewrite(source, context)
+        self.assertIn("return p->value;", result)
+        self.assertIn("&&one, &&two", result)

@@ -533,3 +533,20 @@ class FoldTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefinitionOrderTests(unittest.TestCase):
+    def test_by_value_member_aggregate_is_defined_first(self):
+        from unbake.layout.structs_fold import _definition_order
+        from unbake.layout.structs_parser import Parser
+
+        parser = Parser(
+            "typedef struct Mid Mid;\n"
+            "typedef union Zed { float v0; char v1; } Zed;\n"
+            "typedef struct Alpha { char pad[4]; Zed value; struct Alpha *next; Mid *link; } Alpha;\n"
+            "struct Mid { int x; };\n"
+        )
+        parser.parse()
+        records = [parser.layout(item) for item in parser.aggregates if item.name]
+        # Pointers impose no order; the by-value union precedes its user.
+        self.assertEqual([record.name for record in _definition_order(records)], ["Mid", "Zed", "Alpha"])
