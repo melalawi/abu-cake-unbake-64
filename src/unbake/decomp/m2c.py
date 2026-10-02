@@ -226,10 +226,17 @@ def _draft(
     output = header_types(output, context.read_text())
     # Reject unsupported instructions/register reads before changing headers.
     output = lower(output, context.read_text(), allow_fields=True)
+    layouts = None
+    if type_context and use_type_db:
+        from unbake.typemap import load
+
+        database = load(original_project)
+        assert database is not None
+        layouts = database["structs"]
+    output, shared = share(project, function, output, context.read_text(), layouts=layouts)
     selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
     context.write_text(_context(headers, selected), encoding="utf-8")
     context.write_text(preprocess_context(context, project, policy, v, function), encoding="utf-8")
-    output, shared = share(project, function, output, context.read_text())
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:
         headers.append((shared.resolve(), shared.relative_to(project.include[0]).as_posix()))
     if shared is not None:

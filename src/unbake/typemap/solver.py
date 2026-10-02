@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
-from unbake.typemap import declarations, evidence, storage
+from unbake.typemap import declarations, evidence, layouts, storage
 from unbake.typemap.mapping import load_map
 
 
@@ -216,6 +216,7 @@ def infer(
     neighbours: dict[str, set[str]] = defaultdict(set)
     fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     forwarded: dict[str, set[str]] = defaultdict(set)
+    memory_sources: dict[str, str] = {}
     for function, item in facts["functions"].items():
         for version, body in item["versions"].items():
             for hint in body.get("value_types", []):
@@ -293,7 +294,16 @@ def infer(
                     fields[origin][offset].append(
                         {
                             key: memory[key]
-                            for key in ("function", "version", "instruction", "rom_offset", "width", "partial")
+                            for key in (
+                                "function",
+                                "version",
+                                "instruction",
+                                "rom_offset",
+                                "width",
+                                "partial",
+                                "opcode",
+                                "signedness",
+                            )
                         }
                     )
                     graph.touch(origin, function)
@@ -304,6 +314,8 @@ def infer(
                     graph.seed(cell, scalar, {"kind": "machine", **memory})
                 if memory["direction"] == "read":
                     graph.connect(cell, value_node, memory)
+                    if memory.get("indexed") is None:
+                        memory_sources[value_node] = cell
                 else:
                     node = origin_node(memory["value"], addresses[version])
                     if node is not None:
@@ -327,6 +339,14 @@ def infer(
             return None
         if origin in base_cache:
             return base_cache[origin]
+        if origin in memory_sources:
+            root = common_base(memory_sources[origin], active | {origin})
+            base_cache[origin] = root
+            return root
+        if origin.startswith("field:"):
+            source, offset = origin.removeprefix("field:").rsplit(":", 1)
+            root = common_base(source, active | {origin})
+            return f"field:{root}:{offset}" if root is not None else None
         sources = forwarded.get(origin, set())
         if not sources:
             return origin
@@ -418,15 +438,18 @@ def infer(
                 "observed_offsets": sorted(offsets),
             }
 
-        if graph.resolved.get(origin, {}).get("state") != "known":
-            unresolved("common base has unknown or conflicting pointer type")
-            continue
-        if base_type != "void *":
-            if base_type and base_type[:-2].removeprefix("struct ").removeprefix("union ") not in layout_index:
-                unresolved("common base already carries an incompatible scalar or pointer type")
-            continue
-        if origin.startswith(("param:", "result:")):
-            owner = origin.split(":")[1]
+        # A storage layout is supported by dereferences of this common source,
+        # independently of scalar spellings in its value-flow component. Reuse
+        # an authored aggregate when present; never overwrite its declaration.
+        if base_type and base_type.endswith(" *"):
+            base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
+            if base in layout_index:
+                continue
+        authority = origin
+        while authority.startswith("field:"):
+            authority = authority.removeprefix("field:").rsplit(":", 1)[0]
+        if authority.startswith(("param:", "result:")):
+            owner = authority.split(":")[1]
             abi = signatures.get(owner, {})
             if not abi.get("arity_known") or not abi.get("return_known"):
                 unresolved("common-base owner ABI is incomplete or conflicting")
@@ -440,8 +463,8 @@ def infer(
             ):
                 unresolved("common-base owner return type is incomplete or conflicting")
                 continue
-        elif origin.startswith("return:"):
-            _, caller, version, index, _reg = origin.split(":")
+        elif authority.startswith("return:"):
+            _, caller, version, index, _reg = authority.split(":")
             calls = facts["functions"][caller]["versions"][version]["calls"]
             callee = next(
                 (
@@ -457,50 +480,16 @@ def infer(
             ):
                 unresolved("common-base callee ABI is incomplete or conflicting")
                 continue
-        elif not origin.startswith(("address:", "global:")):
+        elif not authority.startswith(("address:", "global:")):
             unresolved("common base is not a global or a known-signature parameter/return")
             continue
-        measured: list[dict[str, Any]] = [
-            {
-                "offset": offset,
-                "widths": sorted({a["width"] for a in accesses}),
-                **{key: graph.resolved.get(f"field:{origin}:{offset}", {}).get(key) for key in ("state", "type")},
-            }
-            for offset, accesses in sorted(offsets.items())
-        ]
-        name = "Shape_" + storage.digest(origin.encode())[:12]
-        cursor = 0
-        lines = [f"struct {name} {{"]
-        valid = True
-        for field in measured:
-            offset = field["offset"]
-            widths = field["widths"]
-            if offset < cursor or offset < 0 or len(widths) != 1 or offset % widths[0]:
-                valid = False
-                break
-            if offset > cursor:
-                lines.append(f"    unsigned char padding_{cursor:X}[{offset - cursor}];")
-            if field["state"] == "known":
-                lines.append(f"    {field['type']} field_{offset:X};")
-            else:
-                lines.append(f"    unsigned char unknown_{offset:X}[{widths[0]}];")
-            cursor = offset + widths[0]
-        lines.append("};")
-        inferred_structs[name] = {
-            "state": "known" if valid else "unknown",
-            "partial": True,
-            "type": f"struct {name}" if valid else None,
-            "common_base": origin,
-            "users": users,
-            "fields": measured,
-            "size": None,
-            "declaration": "\n".join(lines) if valid else None,
-            "minimum_size": cursor if valid else None,
-            "provenance": [a for rows in offsets.values() for a in rows],
-        }
+        inferred_structs[name] = layouts.observed(name, origin, offsets, graph.resolved, users)
+        inferred_structs[name]["base_nodes"] = sorted(
+            {origin} | {node for node in fields if common_base(node) == origin}
+        )
     shape_components: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for record in inferred_structs.values():
-        if record["state"] == "known":
+        if record["state"] == "known" and graph.resolved.get(record["common_base"], {}).get("type") == "void *":
             shape_components[id(graph.resolved[record["common_base"]])].append(record)
     for records in shape_components.values():
         # Equality of value types does not establish object identity. Multiple

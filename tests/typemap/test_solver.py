@@ -152,6 +152,73 @@ class SolverTests(unittest.TestCase):
 
 
 class MachineEvidenceTests(unittest.TestCase):
+    def test_loads_from_one_shared_pointer_field_preserve_common_provenance(self) -> None:
+        mapped = facts(
+            {
+                "first": (0x80001000, [0x8C880004, 0x81020009, 0x03E00008, 0]),
+                "second": (0x80002000, [0x8C880004, 0x9102000A, 0x03E00008, 0]),
+            }
+        )
+        mapped["globals"] = {"source": {"versions": {"us": {"address": 0x80003000}}, "accesses": []}}
+        for body in mapped["functions"].values():
+            body["versions"]["us"]["memory"][0]["base"]["origins"] = [{"id": "global:source", "offset": 0}]
+        result = infer(SimpleNamespace(), mapped, [])
+        shapes = {shape["common_base"]: shape for shape in result["structs"].values()}
+        self.assertEqual(set(shapes), {"global:source", "field:global:source:4"})
+        nested = shapes["field:global:source:4"]
+        self.assertEqual(nested["state"], "known")
+        self.assertEqual(nested["users"], ["first", "second"])
+        self.assertIn("signed char field_9;", nested["declaration"])
+        self.assertIn("unsigned char field_A;", nested["declaration"])
+        self.assertEqual(nested["base_nodes"], ["field:global:source:4", "memory:first:us:0", "memory:second:us:0"])
+
+    def test_observed_global_layout_does_not_require_a_semantic_pointer_type(self) -> None:
+        mapped = facts(
+            {
+                "first": (0x80001000, [0x8C820004, 0x03E00008, 0]),
+                "second": (0x80002000, [0x9482000A, 0x03E00008, 0]),
+            }
+        )
+        mapped["globals"] = {"source": {"versions": {"us": {"address": 0x80003000}}, "accesses": []}}
+        for body in mapped["functions"].values():
+            body["versions"]["us"]["memory"][0]["base"]["origins"] = [{"id": "global:source", "offset": 0}]
+        result = infer(SimpleNamespace(), mapped, [extract("extern int source;", {"kind": "proven"})])
+        shape = next(iter(result["structs"].values()))
+        self.assertEqual(shape["state"], "known")
+        self.assertEqual(shape["common_base"], "global:source")
+        self.assertEqual(shape["minimum_size"], 12)
+        self.assertIsNone(shape["size"])
+        self.assertIn("int field_4;", shape["declaration"])
+        self.assertIn("unsigned char padding_8[2];", shape["declaration"])
+        self.assertIn("unsigned short field_A;", shape["declaration"])
+        self.assertEqual(result["globals"]["source"]["type"], "int")
+        parsed = extract(shape["declaration"], {})["structs"]
+        fields = next(iter(parsed.values()))["fields"]
+        self.assertEqual([(field["offset"], field["size"]) for field in fields], [(0, 4), (4, 4), (8, 2), (10, 2)])
+
+    def test_layout_widths_keep_conflicting_fields_opaque_and_bad_intervals_named(self) -> None:
+        from unbake.typemap.layouts import observed
+
+        def access(opcode, width=4, sign=True, partial=False):
+            return {"function": "first", "opcode": opcode, "width": width, "signedness": sign, "partial": partial}
+
+        shape = observed("Shape_test", "global:source", {4: [access(0x23), access(0x31)]}, {}, ["first", "second"])
+        self.assertEqual(shape["state"], "known")
+        self.assertIn("unsigned char unknown_4[4];", shape["declaration"])
+        self.assertEqual(shape["fields"][0]["state"], "unknown")
+        self.assertIn("conflicting", shape["fields"][0]["reason"])
+        for offsets, reason in (
+            ({-4: [access(0x23)]}, "negative"),
+            ({0: [access(0x23)], 2: [access(0x25, 2, False)]}, "overlapping"),
+            ({0: [access(0x23), access(0x25, 2, False)]}, "inconsistent"),
+            ({0: [access(0x22, partial=True)]}, "partial memory"),
+        ):
+            with self.subTest(reason=reason):
+                shape = observed("Shape_test", "global:source", offsets, {}, ["first", "second"])
+                self.assertEqual(shape["state"], "unknown")
+                self.assertIsNone(shape["declaration"])
+                self.assertIn(reason, shape["reason"])
+
     def test_seedless_integer_signature(self) -> None:
         result = solve({"add": (0x80001000, [0x00851020, 0x03E00008, 0])}, "")
         self.assertEqual(result["functions"]["add"]["prototype"], "int add(int arg0, int arg1);")
