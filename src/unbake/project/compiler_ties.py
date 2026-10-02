@@ -49,7 +49,7 @@ def candidate(project: Project, ref: str, ident: str) -> Project:
 
 
 def pin(project: Project, ref: str, ident: str, evidence: dict[str, Any], config_sha256: str) -> Project:
-    from unbake.project import build, config
+    from unbake.project import build, config, makefile
 
     with build.lock(project):
         path = project.root / "config.toml"
@@ -67,5 +67,34 @@ def pin(project: Project, ref: str, ident: str, evidence: dict[str, Any], config
             "compiler": ident,
             "evidence_json": json.dumps(evidence, sort_keys=True),
         }
-        compiler_files.atomic_bytes(path, toml.dumps(data).encode())
+        recipe = project.tools / "build.json"
+        try:
+            previous_recipe = recipe.read_bytes()
+        except OSError as error:
+            raise Held("try", f"compiler.tie_recipe: rendered build recipe missing: {error}") from error
+        manifest = project.tools / "compiler.sha256"
+        try:
+            previous_manifest = manifest.read_bytes()
+            lines = previous_manifest.decode().splitlines(keepends=True)
+        except (OSError, UnicodeError) as error:
+            raise Held("try", f"compiler.tie_recipe: helper manifest missing or malformed: {error}") from error
+        relative = recipe.relative_to(project.root).as_posix()
+        entries = [i for i, line in enumerate(lines) if line.strip().split(maxsplit=1)[1:] == [relative]]
+        if len(entries) != 1:
+            raise Held("try", f"compiler.tie_recipe: {relative}: expected exactly one helper manifest entry")
+        if lines[entries[0]].split()[0] != hashlib.sha256(previous_recipe).hexdigest():
+            raise Held("try", f"compiler.tie_recipe: {relative}: existing recipe differs from helper manifest")
+        rendered = (
+            json.dumps(makefile.description(candidate(project, ref, ident)), sort_keys=True, indent=2) + "\n"
+        ).encode()
+        lines[entries[0]] = f"{hashlib.sha256(rendered).hexdigest()}  {relative}\n"
+        try:
+            compiler_files.atomic_bytes(recipe, rendered)
+            compiler_files.atomic_bytes(manifest, "".join(lines).encode())
+            compiler_files.atomic_bytes(path, toml.dumps(data).encode())
+        except BaseException:
+            compiler_files.atomic_bytes(recipe, previous_recipe)
+            compiler_files.atomic_bytes(manifest, previous_manifest)
+            compiler_files.atomic_bytes(path, content)
+            raise
     return config.load(project.root)

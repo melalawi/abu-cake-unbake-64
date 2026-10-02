@@ -97,4 +97,6 @@ A unique exact reproduction or strictly better measured rank pins the entire
 region, recording source and target hashes, compiler pins, flags, per-version
 scores and the selection reason under `compiler_selections`. Equal results or
 an incomplete comparison leave the set intact with a named refusal. Malformed
-sets refuse `compiler.tied_set`. C builds require a resolved pin.
+sets refuse `compiler.tied_set`. C builds require a resolved pin. Pinning
+updates the generated build recipe and its checksum entry together with config,
+with rollback if publication fails.

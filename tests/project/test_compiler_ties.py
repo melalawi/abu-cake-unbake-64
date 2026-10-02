@@ -14,7 +14,7 @@ from tests.project.test_bootstrap import policy
 from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
 from unbake.decomp.trial_compilers import resolve
-from unbake.project import compiler_ties, config
+from unbake.project import compiler_files, compiler_ties, config, makefile
 
 
 class CompilerTieTests(unittest.TestCase):
@@ -40,6 +40,16 @@ class CompilerTieTests(unittest.TestCase):
         target.write_bytes(b"target")
         self.pinned = {"us": (self.root, target), "us-rev1": (self.root, target)}
         self.before = path.read_bytes()
+        self.recipe = self.project.tools / "build.json"
+        self.recipe.parent.mkdir(parents=True, exist_ok=True)
+        (self.project.src / "alpha.c").unlink()
+        self.recipe.write_text(json.dumps(makefile.description(self.project)))
+        self.recipe_before = self.recipe.read_bytes()
+        self.manifest = self.project.tools / "compiler.sha256"
+        self.manifest.write_text(
+            hashlib.sha256(self.recipe_before).hexdigest() + "  tools/build.json\n" + "0" * 64 + "  tools/unchanged\n"
+        )
+        self.manifest_before = self.manifest.read_bytes()
 
     def trial(self, project, *args, **kwargs):
         ident = project.compiler_for(self.source).id
@@ -56,6 +66,11 @@ class CompilerTieTests(unittest.TestCase):
     def test_unique_match_pins_entire_region_with_evidence(self):
         resolved = self.run_resolve()
         self.assertEqual(resolved.units, {"alpha": "ido-7.1", "beta": "ido-7.1"})
+        self.assertEqual(json.loads(self.recipe.read_bytes())["units"], resolved.units)
+        self.assertIn(
+            hashlib.sha256(self.recipe.read_bytes()).hexdigest() + "  tools/build.json", self.manifest.read_text()
+        )
+        self.assertIn("0" * 64 + "  tools/unchanged", self.manifest.read_text())
         data = toml.loads((self.root / "config.toml").read_text())
         proof = json.loads(data["compiler_selections"][self.ref]["evidence_json"])
         self.assertEqual(proof["reason"], "unique exact reproduction")
@@ -102,6 +117,26 @@ class CompilerTieTests(unittest.TestCase):
         with self.assertRaisesRegex(config.Held, "compiler.tie_stale"):
             compiler_ties.pin(self.project, self.ref, "ido-7.1", {}, "changed")
         self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
+
+    def test_pin_recipe_and_config_roll_back_together_on_write_failure(self):
+        atomic = compiler_files.atomic_bytes
+        calls = 0
+
+        def write(path, content):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise OSError("write failed")
+            atomic(path, content)
+
+        with (
+            patch.object(compiler_files, "atomic_bytes", side_effect=write),
+            self.assertRaisesRegex(OSError, "write failed"),
+        ):
+            self.run_resolve()
+        self.assertEqual((self.root / "config.toml").read_bytes(), self.before)
+        self.assertEqual(self.recipe.read_bytes(), self.recipe_before)
+        self.assertEqual(self.manifest.read_bytes(), self.manifest_before)
 
     def test_malformed_sets_are_named(self):
         for ids in ([], ["ido-7.1"], ["ido-7.1", "ido-7.1"], ["ido-7.1", "missing"], "ido-7.1"):
