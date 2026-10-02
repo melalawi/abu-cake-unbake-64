@@ -50,7 +50,7 @@ Path(objdiff).chmod(0o755)
 permuter_sha = "2e4e0d991e4258df332c19d8dcf372212fe27f1b18e777d9e1eb25fc2c64a404"
 permuter = download("https://codeload.github.com/simonlindholm/decomp-permuter/tar.gz/059609d4aec73eb0650726772954e1ad575825f8", "permuter.tar.gz", permuter_sha)
 values = {
-    "cores": 2, "stall_trials": 5, "search_beam": 4, "assignment_idle_hours": 3,
+    "cores": 2, "setup_version_jobs": 4, "stall_trials": 5, "search_beam": 4, "assignment_idle_hours": 3,
     "init_same_game_similarity": 0.1, "init_split": "functions", "init_probe_count": 20,
     "cache_root": str(root / "cache"), "state_root": str(root / "state"),
     "objdiff_cli": objdiff, "objdiff_sha256": digests[arch],

@@ -33,7 +33,7 @@ class SetupMemoryTests(unittest.TestCase):
             )
             with Path(os.environ["UNBAKE_POLICY"]).open("rb") as stream:
                 settings = tomllib.load(stream)
-            settings.update(cores=12, setup_version_jobs=2)
+            settings.update(cores=12, setup_version_jobs=4)
             policy = directory / "policy.toml"
             policy.write_text("".join(f"{key} = {json.dumps(value)}\n" for key, value in settings.items()))
             environment = dict(os.environ, UNBAKE_POLICY=str(policy), PYTHONNOUSERSITE="1")
@@ -89,7 +89,7 @@ class SetupMemoryTests(unittest.TestCase):
             code = bytearray(0x180)
             struct.pack_into(f">{len(boot)}I", code, 0, *boot)
             struct.pack_into(">3I", code, 0x100, 0x24020001, 0x03E00008, 0)
-            for count in (2, 6, 18):
+            for count in (4, 6, 18):
                 project = directory / f"Memory{count}"
                 status, output, *_ = command("init", str(project))
                 self.assertEqual(status, 0, output)
@@ -107,11 +107,11 @@ class SetupMemoryTests(unittest.TestCase):
                 status, output, peak, active, seconds = command("--project", str(project), "setup", "--confirm", token)
                 self.assertEqual(status, 0, output)
                 self.assertEqual(output.count("every cartridge byte proved"), count)
-                self.assertLessEqual(active, 2)
+                self.assertLessEqual(active, 4)
                 with (project / "config.toml").open("rb") as stream:
                     self.assertEqual(tomllib.load(stream)["project"]["state"], "ready")
                 samples.append((count, proposal_peak, peak, active, round(seconds, 3)))
-            # 9x as many cartridge bytes must not create 9x resident work.
+            # 4.5x as many cartridge bytes must not create 4.5x resident work.
             # Allow host/process sampling variation, while catching retained ROMs
             # and concurrent extractors from the previous scheduling boundary.
             self.assertLess(samples[-1][1], samples[0][1] + 64 * 1024 * 1024, samples)

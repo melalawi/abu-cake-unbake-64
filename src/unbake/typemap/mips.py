@@ -44,29 +44,42 @@ RETURNS = (2, 3, 32, 34)
 class Value:
     origins: tuple[tuple[str, int], ...] = ()
     constant: int | None = None
+    defined: bool = True
+    dependencies: tuple[str, ...] = ()
 
     def shift(self, offset: int) -> Value:
         if self.constant is not None:
             return Value(constant=(self.constant + offset) & 0xFFFFFFFF)
-        return Value(tuple((name, delta + offset) for name, delta in self.origins))
+        return Value(
+            tuple((name, delta + offset) for name, delta in self.origins),
+            defined=self.defined,
+            dependencies=self.dependencies,
+        )
 
     def merge(self, other: Value) -> Value:
         if self == other:
             return self
+        dependencies = tuple(sorted(set(self.dependencies + other.dependencies)))
         if not self.origins or not other.origins:
-            return UNKNOWN
+            return Value(defined=self.defined and other.defined, dependencies=dependencies)
         origins = tuple(sorted(set(self.origins + other.origins)))
-        return Value(origins) if len(origins) <= 4 else UNKNOWN
+        return (
+            Value(origins, defined=self.defined and other.defined, dependencies=dependencies)
+            if len(origins) <= 4
+            else Value(defined=self.defined and other.defined, dependencies=dependencies)
+        )
 
     def data(self) -> dict[str, Any]:
         return {
             "origins": [{"id": name, "offset": offset} for name, offset in self.origins],
             "constant": self.constant,
             "unknown": not self.origins and self.constant is None,
+            "defined": self.defined,
+            "dependencies": list(self.dependencies),
         }
 
 
-UNKNOWN = Value()
+UNKNOWN = Value(defined=False)
 ZERO = Value(constant=0)
 
 
@@ -236,6 +249,12 @@ class Analysis:
                 read = [rs, rt]
             elif fn not in (12, 13, 15):
                 read, destination = [rs, rt], rd
+        elif op == 16 and rs in (0, 2):
+            # A word transfer from a CPU control register defines its GPR
+            # destination even though the control value has unknown semantics.
+            destination, value = rt, Value()
+        elif op == 16 and rs in (4, 6):
+            read = [rt]
         elif op == 17:
             if rs in (0, 1, 2):
                 read, destination = [rd + 32], rt
@@ -245,6 +264,8 @@ class Analysis:
                 value = regs[rt] if rs == 4 else UNKNOWN
             elif rs >= 16:
                 read, destination = [rd + 32, rt + 32], (word >> 6 & 31) + 32
+                if fn in (*range(4, 16), *range(0x20, 0x26)):
+                    read = [rd + 32]
                 if fn == 6:
                     value = regs[rd + 32]
                 if fn >= 0x30:
@@ -267,7 +288,11 @@ class Analysis:
                 or (op == 17 and rs >= 16 and fn < 0x30)
             )
         ):
-            value = Value(((f"value:{self.function}:{self.version}:{index}", 0),))
+            value = Value(
+                ((f"value:{self.function}:{self.version}:{index}", 0),),
+                defined=all(regs[item].defined for item in read),
+                dependencies=tuple(sorted({dependency for item in read for dependency in regs[item].dependencies})),
+            )
             if op == 17 and rs >= 16:
                 output_type = "double" if (fn == 0x21 or (rs == 17 and fn not in (0x20, 0x24, 0x25))) else "float"
                 if fn in (0x24, 0x25, 0x0C, 0x0D, 0x0E, 0x0F):
@@ -350,7 +375,8 @@ class Analysis:
                 for r in (*range(1, 16), 24, 25, *range(32, 52)):
                     state.registers[r] = UNKNOWN
                 for r in RETURNS:
-                    state.registers[r] = Value(((f"return:{self.function}:{self.version}:{index}:{register(r)}", 0),))
+                    origin = f"return:{self.function}:{self.version}:{index}:{register(r)}"
+                    state.registers[r] = Value(((origin, 0),), dependencies=(origin,))
                 return [(next_index, state)] if next_index < len(self.words) else []
             successors = []
             if target is not None and self.address <= target < self.address + len(self.words) * 4:
@@ -371,7 +397,7 @@ class Analysis:
                 self.leaders.add(index + 2)
                 if target is not None and self.address <= target < self.address + len(self.words) * 4:
                     self.leaders.add((target - self.address) // 4)
-        registers = [Value(((f"param:{self.function}:{register(r)}", 0),)) for r in range(64)]
+        registers = [Value(((f"param:{self.function}:{register(r)}", 0),), defined=r not in RETURNS) for r in range(64)]
         registers[0], registers[29] = ZERO, Value(((f"stack:{self.function}", 0),))
         states = {0: State(registers)}
         pending = deque([0])

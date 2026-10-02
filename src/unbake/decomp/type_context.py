@@ -18,10 +18,10 @@ def provider() -> Any:
         raise Held("types", "types.database: map and solve must provide current type context") from error
 
 
-def required(project: Project) -> tuple[str, str]:
+def required(project: Project, function: str | None = None) -> tuple[str, str]:
     api = provider()
     api.load(project, required=True)
-    context = api.context(project)
+    context = api.context(project, function=function) if function is not None else api.context(project)
     path = project.build / "types/database.json"
     if not path.is_file():
         raise Held("types", f"types.database: missing {path}")

@@ -23,7 +23,7 @@ from unbake.report import units as report_units
 def policy(root: Path) -> Any:
     executable = Path(sys.executable)
     return config.Policy(
-        setup_version_jobs=1,
+        setup_version_jobs=4,
         cores=2,
         stall_trials=3,
         search_beam=2,

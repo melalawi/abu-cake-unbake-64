@@ -285,6 +285,28 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(repeated["structs"][shape]["size"])
         self.assertIn(f"struct {shape} {{", (project.include[0] / "shared/typemap.h").read_text())
 
+    def test_abi_supplement_retains_map_and_is_content_pinned(self) -> None:
+        from unbake.typemap.mapping import Analysis
+        from unbake.typemap.solver import solve as solve_
+
+        map_program(self.project)
+        path = self.project.build / "map/facts.json"
+        manifest = storage.read(path, "map.facts")
+        manifest.pop("abi_analysis_sha256")
+        storage.write(path, storage.encoded(manifest))
+        original = path.read_bytes()
+        first = solve_(self.project)
+        self.assertEqual(path.read_bytes(), original)
+        with patch.object(Analysis, "run", side_effect=AssertionError("unexpected repeat ABI analysis")):
+            second = solve_(self.project)
+        self.assertEqual(second["abi_supplement"], first["abi_supplement"])
+        supplement = self.project.build / "map" / first["abi_supplement"]["path"]
+        supplement.write_bytes(b"changed")
+        with self.assertRaisesRegex(Held, "map.abi"):
+            load(self.project)
+        with self.assertRaisesRegex(Held, "map.abi"):
+            solve_(self.project)
+
     def test_batch_feedback_maps_and_solves_once_for_all_exact_receipts(self) -> None:
         from unbake.typemap.mapping import refresh_map as map_
         from unbake.typemap.solver import solve as solve_

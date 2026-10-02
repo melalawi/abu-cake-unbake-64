@@ -41,6 +41,12 @@ def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
         if not isinstance(shard, str) or Path(shard).name != shard:
             raise Held("draft", "map.shards: invalid shard name in database")
         storage.verify_file(project.build / "map" / shard, value["map_shard_sha256"], "map.shards")
+    supplement = value.get("abi_supplement")
+    if supplement is not None:
+        filename = supplement.get("path")
+        if not isinstance(filename, str) or Path(filename).name != filename:
+            raise Held("draft", "map.abi.path: invalid ABI supplement name")
+        storage.verify_file(project.build / "map" / filename, supplement["sha256"], "map.abi")
     for row in value.get("constraints", []):
         if row.get("kind") == "shard":
             path = project.root / row["path"]
@@ -54,12 +60,19 @@ def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
     return value
 
 
-def context(project: Project) -> str:
+def context(project: Project, *, function: str | None = None) -> str:
     value = load(project)
     assert value is not None
     lines = ['#include "shared/typemap.h"', '#include "shared/prototypes.h"']
     lines.extend("/* unknown: " + row.replace("*/", "* /") + " */" for row in value["unknown"])
     lines.extend("/* conflict: " + row["key"].replace("*/", "* /") + " */" for row in value["conflicts"])
+    for name, record in sorted(value["functions"].items()):
+        from unbake.typemap.abi_declarations import for_caller
+
+        carrier = for_caller(record, function)
+        if carrier.get("prototype"):
+            reasons = "; ".join(carrier["reasons"]).replace("*/", "* /")
+            lines.extend((f"/* {name}: {reasons} */", carrier["prototype"]))
     return "\n".join(lines) + "\n"
 
 
@@ -143,7 +156,16 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         root / "shared/typemap.h": "\n".join(type_lines).encode(),
         root / "shared/prototypes.h": "\n".join(prototypes).encode(),
     }
-    validate_headers(project, outputs, policy)
+    abi_context = "\n".join(
+        record["abi_declaration"]["prototype"]
+        for record in value["functions"].values()
+        if record.get("abi_declaration", {}).get("prototype")
+    )
+    validate_headers(project, outputs, policy, abi_context=abi_context)
+    variants = [record.get("abi_declaration", {}).get("variants", {}) for record in value["functions"].values()]
+    for register in sorted({reg for choices in variants for reg in choices}):
+        selected = "\n".join(choices[register]["prototype"] for choices in variants if register in choices)
+        validate_headers(project, outputs, policy, abi_context=abi_context + "\n" + selected)
     value["rendered_sha256"] = {
         str(path.relative_to(project.root)): storage.digest(content)
         for path, content in outputs.items()
@@ -313,7 +335,9 @@ def feedback(
     )
 
 
-def validate_headers(project: Project, outputs: dict[Path, bytes | Path], policy: Policy | None) -> None:
+def validate_headers(
+    project: Project, outputs: dict[Path, bytes | Path], policy: Policy | None, *, abi_context: str = ""
+) -> None:
     """Parse the staged shared context before any revision or header is published."""
     from dataclasses import replace
 
@@ -348,15 +372,15 @@ def validate_headers(project: Project, outputs: dict[Path, bytes | Path], policy
                         for content in outputs.values()
                         if isinstance(content, bytes)
                     )
-                    declarations.extract(text, {"kind": "declared"})
+                    declarations.extract(text + "\n" + abi_context, {"kind": "declared"})
                 else:
                     expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
                     context = scratch / "expanded.c"
-                    context.write_text(expanded)
+                    context.write_text(expanded + "\n" + abi_context)
                     if not getattr(policy, "m2c", None):
                         if isinstance(policy, Policy):
                             raise Held("solve", "policy.m2c: required shared context parser")
-                        declarations.extract(expanded, {"kind": "declared"})
+                        declarations.extract(expanded + "\n" + abi_context, {"kind": "declared"})
                         continue
                     run_tool(
                         [

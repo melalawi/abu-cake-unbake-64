@@ -16,7 +16,8 @@ Tool paths belong in `~/.config/unbake/policy.toml`.
 Setup names any missing policy field.
 Supply `setup_version_jobs` explicitly in host policy to limit simultaneous version
 extractions and builds. `cores` supplies a shared build CPU budget for those jobs.
-Choose the version limit for the memory available on the host.
+The measured host policy uses `setup_version_jobs = 4`; supply that value explicitly.
+Choose a lower version limit if the host has less memory.
 Compiler downloads have pinned SHA-256 hashes.
 
 ## Start

@@ -39,7 +39,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         policy = load_policy(local)
     versions = owning_versions(project, function, None)
     naming = versions[0]
-    database, context = ("", "") if args.without_type_db else type_context.required(project)
+    database, context = ("", "") if args.without_type_db else type_context.required(project, function)
     destination = project.drafts / function
     source = destination / (function + ".c")
     refresh = source.exists() and function in type_context.redrafts(project)

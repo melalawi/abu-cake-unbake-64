@@ -2,6 +2,7 @@
 
 import re
 
+from unbake.decomp import opaque_pointers
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS
 from unbake.project.config import Held
@@ -16,6 +17,7 @@ def normalize(source: str, context: str) -> str:
     header, independently of whether its consumers include m2c's prelude.
     Unknown type names without layout evidence are refused before any write.
     """
+    source = opaque_pointers.normalize(source, context)
     parser = Parser(context + "\n" + source)
     # Collect typedefs without evaluating aggregates: a member can itself be
     # the unknown that this pass is about to resolve.

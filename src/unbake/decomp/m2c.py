@@ -6,7 +6,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from unbake.decomp import gbi, similar
+from unbake.decomp import draft_abi, gbi, similar
 from unbake.decomp import work as draft_work
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
@@ -24,7 +24,6 @@ from unbake.decomp.draft_input import (
 )
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
-from unbake.decomp.draft_signatures import declarations as callee_declarations
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
@@ -202,7 +201,15 @@ def _draft(
         project, v, function, jump_tables(project, v, function, saved_returns(body)), generation=generation
     )
     body = delay_slots(local_targets(body), function)
-    signatures = callee_declarations(project, policy, v, body, context.read_text())
+    database = None
+    if type_context and use_type_db:
+        from unbake.typemap import load
+
+        database = load(original_project)
+        assert database is not None
+    signatures = draft_abi.declarations(
+        project, policy, v, body, context.read_text(), function=function, database=database
+    )
     if signatures:
         with context.open("a") as stream:
             stream.write("\n" + signatures + "\n")
@@ -226,6 +233,13 @@ def _draft(
     if not output.strip():
         raise Held("m2c", f"policy.m2c {executable_path} produced no draft for {function}")
     source = work / (function + ".c")
+    if type_context and use_type_db and "Unable to find stack arg" in output:
+        from unbake.typemap.mapping import load_map
+
+        mapped = load_map(original_project)
+        item = next((item for name, item in mapped["functions"].items() if function in (name, *item["aliases"])), None)
+        if item is not None:
+            output = draft_abi.stack_arguments(output, context.read_text(), function, item["versions"][v])
     output = normalize(output, context.read_text())
     if "second half of f64" in output:
         raise Held("m2c", f"{function}: unresolved second half of f64 in decompiler output")
@@ -233,13 +247,7 @@ def _draft(
     output = header_types(output, context.read_text())
     # Reject unsupported instructions/register reads before changing headers.
     output = lower(output, context.read_text(), allow_fields=True)
-    layouts = None
-    if type_context and use_type_db:
-        from unbake.typemap import load
-
-        database = load(original_project)
-        assert database is not None
-        layouts = database["structs"]
+    layouts = database["structs"] if database is not None else None
     output, shared = share(project, function, output, context.read_text(), layouts=layouts)
     selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
     context.write_text(_context(headers, selected), encoding="utf-8")

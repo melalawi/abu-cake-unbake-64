@@ -105,7 +105,7 @@ class MatchFixture(unittest.TestCase):
             drafts=self.root / "build/drafts",
         )
         self.policy = Policy(
-            setup_version_jobs=1,
+            setup_version_jobs=4,
             cores=2,
             stall_trials=4,
             assignment_idle_hours=1.0,

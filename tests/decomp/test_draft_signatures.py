@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import cast
 
 from tests.decomp.support import fixture
+from unbake.decomp.draft_abi import declarations
 from unbake.decomp.draft_fp import register_pairs
-from unbake.decomp.draft_signatures import declarations
 from unbake.project.config import Policy
 
 
@@ -25,6 +25,27 @@ class DraftSignatureTests(unittest.TestCase):
             result = declarations(project, cast(Policy, policy), "us", "jal beta\nnop\n", "")
             self.assertEqual(result, "float beta(void *, float);")
             self.assertEqual(declarations(project, cast(Policy, policy), "us", "jal beta\n", result), "")
+
+    def test_database_contract_has_one_owner_when_c_definition_exists(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
+            project, policy, _ = fixture(Path(temporary))
+            (project.src / "beta.c").write_text("int beta(int value) { return value; }\n")
+            database = {
+                "functions": {
+                    "beta": {
+                        "abi_declaration": {
+                            "prototype": "int beta(int);",
+                            "reasons": ["types.abi.declared: proven C"],
+                        }
+                    }
+                }
+            }
+            result = declarations(
+                project, cast(Policy, policy), "us", "jal beta\nnop\n", "", function="alpha", database=database
+            )
+            self.assertEqual(result.count("beta("), 1)
+            self.assertIn("extern int beta(int);", result)
+            self.assertIn("types.abi.declared", result)
 
     def test_independent_saved_fprs_get_disjoint_pairs_without_a_capacity_limit(self) -> None:
         text = "\n".join(f"ldc1 $f{number}, {number * 8}($sp)" for number in range(20, 32))
