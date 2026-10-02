@@ -25,10 +25,25 @@ def diagnose(
 ) -> dict[str, list[str]]:
     """Compare every allocated input object and defined symbol, retaining all faults."""
     faults: dict[str, list[str]] = {}
+    # Placement victims sit at shifted addresses; relocation-only diffs point at
+    # shifted or misplaced targets. Both are blamed only when nothing else is.
+    placed: dict[str, list[tuple[int, str]]] = {}
+    relocated: dict[str, list[str]] = {}
 
     def blame(name: str, detail: str) -> None:
         if name in names:
             faults.setdefault(name, []).append(detail)
+
+    def shifted(name: str, address: int, detail: str) -> None:
+        if name in names:
+            placed.setdefault(name, []).append((address, detail))
+
+    def masked(obj: Object, section: int, left: bytes, right: bytes, base: int) -> bool:
+        """Whether two section byte runs differ only inside relocated words."""
+        words = {offset - base for offset, _, _ in obj.relocations(section)}
+        return all(
+            left[at : at + 4] == right[at : at + 4] or at in words for at in range(0, min(len(left), len(right)), 4)
+        )
 
     for version in failures:
         if version not in generations:
@@ -107,8 +122,9 @@ def diagnose(
                         and linked[name]["value"] != known[name][0]
                         and (not oversized or function in oversized)
                     ):
-                        blame(
+                        shifted(
                             function,
+                            known[name][0],
                             f"{version}: defined symbol {name}: address "
                             f"0x{linked[name]['value']:08X}, target 0x{known[name][0]:08X}",
                         )
@@ -129,22 +145,32 @@ def diagnose(
                         at, count = symbol["value"], symbol["size"]
                         left, right = expected[at : at + count], actual[at : at + count]
                         if left != right:
-                            blame(
-                                Path(path).stem,
+                            detail = (
                                 f"{version}: symbol {symbol['name']} in {path}: "
-                                f"expected {left[:16].hex()}, produced {right[:16].hex()}",
+                                f"expected {left[:16].hex()}, produced {right[:16].hex()}"
                             )
+                            if masked(obj, section_index, left, right, at):
+                                if Path(path).stem in names:
+                                    relocated.setdefault(Path(path).stem, []).append(detail)
+                            else:
+                                blame(Path(path).stem, detail)
             if actual != expected:
                 if oversized and Path(path).stem not in oversized:
                     continue
                 at = next(i for i, (left, right) in enumerate(zip(expected, actual, strict=True)) if left != right)
                 name = Path(path).stem
                 if path.startswith("obj/src/"):
-                    blame(
-                        name,
+                    detail = (
                         f"{version}: object {path} {section}+0x{at:X} at 0x{address + at:08X}: "
-                        f"expected {expected[at : at + 16].hex()}, produced {actual[at : at + 16].hex()}",
+                        f"expected {expected[at : at + 16].hex()}, produced {actual[at : at + 16].hex()}"
                     )
+                    obj = Object(generation / path)
+                    index = obj.section(section)
+                    if index is not None and masked(obj, index, expected, actual, 0):
+                        if name in names:
+                            relocated.setdefault(name, []).append(detail)
+                    else:
+                        blame(name, detail)
         symbols = [symbol for table in elf.symbols.values() for symbol in table]
         for row in split.functions(project, version):
             name = Path(row.path).name
@@ -154,11 +180,20 @@ def diagnose(
                 if symbol["name"] != name or symbol["section"] in (0, 0xFFF1):
                     continue
                 if symbol["value"] != row.address:
-                    blame(
-                        name, f"{version}: symbol {name}: address 0x{symbol['value']:08X}, expected 0x{row.address:08X}"
+                    shifted(
+                        name,
+                        row.address,
+                        f"{version}: symbol {name}: address 0x{symbol['value']:08X}, expected 0x{row.address:08X}",
                     )
+                    continue
                 actual = material(elf, symbol["value"], row.end - row.start)
                 expected = image[row.start : row.end]
-                if actual is not None and actual != expected:
+                if actual is not None and actual != expected and name not in relocated:
                     blame(name, f"{version}: symbol {name}: bytes differ over {len(expected)} target bytes")
-    return faults
+    if faults:
+        return faults
+    if placed:
+        # The earliest shifted item follows the cause; later ones move with it.
+        name = min(placed, key=lambda item: min(address for address, _ in placed[item]))
+        return {name: [detail for _, detail in placed[name]]}
+    return relocated
