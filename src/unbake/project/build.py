@@ -144,7 +144,9 @@ def build(
         driver = Path(temporary) / "Makefile"
         lines = [".PHONY: all " + " ".join(versions), "all: " + " ".join(versions)]
         for v, generation in generations.items():
-            command = "$(MAKE) -C " + makefile.shell_words([tree, f"VERSION={v}", "COMPARE=1", f"BUILD={generation}"])
+            command = "$(MAKE) -k -C " + makefile.shell_words(
+                [tree, f"VERSION={v}", "COMPARE=1", f"BUILD={generation}"]
+            )
             log_word = makefile.shell_words([generation / "build.log"])
             status_word = makefile.shell_words([generation / "build.exit"])
             lines.extend(

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import struct
 from pathlib import Path
 
 from unbake.layout import split
 from unbake.project.config import Project
+from unbake.project_tools import extract, layout
 from unbake.project_tools.elf import Object
 
 _CONTRIBUTION = re.compile(r"^\s+(\.[\w.]+)\s*\n?\s*(0x[\da-fA-F]+)\s+(0x[\da-fA-F]+)\s+(obj/[^\s]+\.o)\s*$", re.M)
@@ -26,32 +30,19 @@ def material(obj: Object, address: int, size: int) -> bytes | None:
 
 
 def diagnose(
-    project: Project, failures: list[str], generations: dict[str, Path], names: set[str]
+    project: Project,
+    failures: list[str],
+    generations: dict[str, Path],
+    names: set[str],
+    reference: tuple[Project, dict[str, Path]] | None = None,
 ) -> dict[str, list[str]]:
     """Compare every allocated input object and defined symbol, retaining all faults."""
     faults: dict[str, list[str]] = {}
-    # Placement victims sit at shifted addresses; relocation-only diffs point at
-    # shifted or misplaced targets. Both are blamed only when nothing else is.
-    placed: dict[str, list[tuple[int, str]]] = {}
     relocated: dict[str, list[str]] = {}
-    short: dict[str, list[tuple[int, str]]] = {}
 
     def blame(name: str, detail: str) -> None:
         if name in names:
             faults.setdefault(name, []).append(detail)
-
-    def shifted(name: str, address: int, detail: str) -> None:
-        if name in names:
-            placed.setdefault(name, []).append((address, detail))
-
-    def moved(left: bytes, right: bytes) -> bool:
-        """Whether produced bytes are the expected bytes displaced by whole words."""
-        span = min(len(left), len(right))
-        return any(
-            span > 2 * delta
-            and (left[delta:span] == right[: span - delta] or right[delta:span] == left[: span - delta])
-            for delta in range(4, min(span // 2, 1024) + 1, 4)
-        )
 
     def masked(obj: Object, section: int, left: bytes, right: bytes, base: int) -> bool:
         """Whether two section byte runs differ only inside relocated words."""
@@ -64,7 +55,8 @@ def diagnose(
         if version not in generations:
             continue
         generation = generations[version]
-        log = (generation / "build.log").read_text(errors="replace")
+        log_path = generation / "build.log"
+        log = log_path.read_text(errors="replace") if log_path.is_file() else ""
         context: list[str] = []
         # A batch compile reports each failed source on one line; the compiler's
         # own diagnostic lines follow it until the next source or driver line.
@@ -96,13 +88,211 @@ def diagnose(
                 context = []
         for name, lines in compiled.items():
             blame(name, f"{version}: compile diagnostic: {'; '.join(lines)[:600]}")
+        # Object-relative checks run even when another unit prevented linking.
+        # A compile error must not conceal independent byte or binding failures.
+        intervals = extract.unit_ranges(project.version(version).split.read_text())
+        image = project.version(version).baserom.read_bytes()
+        _, known = split.symbols(project.version(version).symbols)
+        addresses = generation / "symbol-addresses.txt"
+        bindings = set(known)
+        if addresses.is_file():
+            bindings.update(line.split()[0] for line in addresses.read_text().splitlines() if line.split())
+        objects = {}
+        for function in sorted(names & intervals.keys()):
+            path = generation / "obj/src" / (function + ".o")
+            if path.is_file() and function not in compiled:
+                objects[function] = Object(path)
+        definitions = {
+            symbol["name"]
+            for obj in objects.values()
+            for table in obj.symbols.values()
+            for symbol in table
+            if symbol["section"] != 0
+        }
+        alignments = {
+            Path(row.path).name: int(row.match["align"], 0)
+            for segment in split.layout(project.version(version).split)[2]
+            for row in segment.rows
+            if row.kind == "c" and row.match["align"]
+        }
+        script_path = generation / f"{project.name}.ld"
+        script = script_path.read_text() if script_path.is_file() else ""
+        configured = (
+            json.loads((project.tools / "build.json").read_text()).get("resident_mappings", {})
+            if (project.tools / "build.json").is_file()
+            else {}
+        )
+        mappings = layout.resident_mappings(configured.get(version, []))
+        targets = contribution_targets(project, version)
+        strong: dict[str, list[str]] = {}
+        for function, obj in objects.items():
+            for table in obj.symbols.values():
+                for symbol in table:
+                    if symbol["section"] not in (0, 0xFFF2) and symbol["info"] >> 4 == 1:
+                        strong.setdefault(symbol["name"], []).append(function)
+        for symbol_name, providers in strong.items():
+            if len(set(providers)) > 1:
+                for function in providers:
+                    blame(function, f"{version}: multiple definition of {symbol_name}: " + ", ".join(providers))
+        reference_rows = split.functions(reference[0], version) if reference is not None else []
+        for function, obj in objects.items():
+            interval = intervals[function]
+            if reference is not None:
+                # Automatic data/BSS selectors have no separate split row. Use
+                # the proved original providers of this same owning text span.
+                baseline_providers = [
+                    row for row in reference_rows if interval["start"] <= row.start < row.end <= interval["end"]
+                ]
+                for section_name in (".data", ".rodata", ".bss"):
+                    section_index = obj.section(section_name)
+                    if section_index is None or not obj.sections[section_index][5]:
+                        continue
+                    if (section_name, f"obj/src/{function}.o") in targets:
+                        continue
+                    expected_size = 0
+                    complete = bool(baseline_providers)
+                    for row in baseline_providers:
+                        prefix = "obj/src" if row.kind == "c" else "obj/asm"
+                        baseline = reference[1][version] / prefix / (row.path + ".o")
+                        if not baseline.is_file():
+                            complete = False
+                            break
+                        baseline_obj = Object(baseline)
+                        baseline_index = baseline_obj.section(section_name)
+                        if baseline_index is not None:
+                            expected_size += baseline_obj.sections[baseline_index][5]
+                    # Compiler constants installed as resident overlays are
+                    # proved by layout, and do not consume the automatic span.
+                    selector = re.escape(f"obj/src/{function}.o") + r"\s*\(" + re.escape(section_name) + r"\)"
+                    if complete and re.search(selector, script) and obj.sections[section_index][5] != expected_size:
+                        blame(
+                            function,
+                            f"{version}: shift origin object obj/src/{function}.o {section_name}: "
+                            f"size {obj.sections[section_index][5]}, target span {expected_size}",
+                        )
+            index = obj.section(".text")
+            if index is None:
+                blame(function, f"{version}: object obj/src/{function}.o: missing .text")
+                continue
+            code = obj.content(index)
+            target = image[interval["start"] : interval["end"]]
+            if len(code) > len(target):
+                blame(
+                    function,
+                    f"{version}: object obj/src/{function}.o: .text size {len(code)} exceeds target span {len(target)}",
+                )
+            alignment = alignments.get(function, 1)
+            consumed = -(-(interval["address"] + len(code)) // alignment) * alignment - interval["address"]
+            if len(code) < len(target) and consumed != len(target):
+                blame(
+                    function,
+                    f"{version}: shift origin object obj/src/{function}.o .text: size {len(code)}, "
+                    f"consumed {consumed} bytes, target span {len(target)}",
+                )
+            relocations = {offset for offset, _, _ in obj.relocations(index)}
+            for at in range(0, min(len(code), len(target)), 4):
+                if at not in relocations and code[at : at + 4] != target[at : at + 4]:
+                    blame(
+                        function,
+                        f"{version}: object obj/src/{function}.o .text+0x{at:X}: symbol {function}: "
+                        f"expected {target[at : at + 4].hex()}, produced {code[at : at + 4].hex()}",
+                    )
+                    break
+            unknown = sorted(
+                {
+                    symbol["name"]
+                    for table in obj.symbols.values()
+                    for symbol in table
+                    if symbol["section"] == 0
+                    and symbol["name"]
+                    and symbol["info"] >> 4 == 1
+                    and symbol["name"] not in bindings | definitions
+                }
+            )
+            if unknown:
+                blame(function, f"{version}: undefined reference to {', '.join(unknown)}")
+            # Allocated storage rows get their own object-relative proof too;
+            # a failed compile elsewhere must not conceal data or BSS faults.
+            for (section_name, object_name), (start, end) in targets.items():
+                if object_name != f"obj/src/{function}.o" or section_name == ".text":
+                    continue
+                section_index = obj.section(section_name)
+                if section_index is None:
+                    continue
+                size = obj.sections[section_index][5]
+                if size != end - start:
+                    blame(
+                        function,
+                        f"{version}: shift origin object {object_name} {section_name}: "
+                        f"size {size}, target span {end - start}",
+                    )
+                if obj.sections[section_index][1] == 8:
+                    continue
+                content = obj.content(section_index)
+                for segment in split.layout(project.version(version).split)[2]:
+                    if "start" not in segment.fields or "vram" not in segment.fields or segment.end is None:
+                        continue
+                    offset = int(segment.fields["start"], 0) + start - int(segment.fields["vram"], 0)
+                    if not int(segment.fields["start"], 0) <= offset < offset + size <= segment.end:
+                        continue
+                    expected_bytes = image[offset : offset + size]
+                    if content != expected_bytes and not masked(obj, section_index, content, expected_bytes, 0):
+                        blame(function, f"{version}: object {object_name} {section_name}: bytes differ at target span")
+                    break
+            if script:
+                try:
+                    layout.place_object(
+                        argparse.Namespace(build=generation),
+                        f"obj/src/{function}.o",
+                        script,
+                        intervals,
+                        image,
+                        mappings,
+                        [],
+                        False,
+                    )
+                except (OSError, ValueError, KeyError, struct.error) as error:
+                    blame(function, f"{version}: object obj/src/{function}.o: {error}")
+
         elf_path = generation / f"{project.name}.elf"
         map_path = generation / f"{project.name}.map"
-        if not elf_path.is_file() or not map_path.is_file():
+        if not map_path.is_file():
+            continue
+        targets = contribution_targets(project, version)
+        contributions = [
+            (section, int(address, 16), int(size, 16), path)
+            for section, address, size, path in _CONTRIBUTION.findall(map_path.read_text())
+            if int(address, 16) and int(size, 16)
+        ]
+        # Compare consumed spans in link order, including alignment/fill before
+        # the next provider. Equal incoming and outgoing displacement means a
+        # victim. A change in displacement identifies the contributing origin.
+        origins: set[str] = set()
+        for i, (section, address, size, path) in enumerate(contributions):
+            span = targets.get((section, path))
+            if span is None:
+                continue
+            start, end = span
+            following = next((row for row in contributions[i + 1 :] if (row[0], row[3]) in targets), None)
+            consumed = size
+            expected_size = end - start
+            if following is not None:
+                next_start, _ = targets[following[0], following[3]]
+                # Output sections and overlays can reset the location counter.
+                if next_start == end and following[1] >= address + size:
+                    consumed = following[1] - address
+            if consumed != expected_size:
+                name = Path(path).stem
+                origins.add(name)
+                blame(
+                    name,
+                    f"{version}: shift origin object {path} {section}: consumed {consumed} bytes, "
+                    f"target span {expected_size}; address 0x{address:08X}, target 0x{start:08X}",
+                )
+        if not elf_path.is_file():
             continue
         elf = Object(elf_path)
         _, _, segments = split.layout(project.version(version).split)
-        image = project.version(version).baserom.read_bytes()
 
         def resident(
             address: int, size: int, spans: list[split.Segment] = segments, rom: bytes = image
@@ -115,130 +305,92 @@ def diagnose(
                         return rom[offset : offset + size]
             return None
 
-        owners = {Path(row.path).name: row for row in split.functions(project, version)}
         linked = {symbol["name"]: symbol for table in elf.symbols.values() for symbol in table}
-        _, known = split.symbols(project.version(version).symbols)
-        oversized = set()
-        contributions = _CONTRIBUTION.findall(map_path.read_text())
-        for section, _, size_hex, path in contributions:
-            name = Path(path).stem
-            if path.startswith("obj/src/") and section == ".text" and name in owners:
-                row = owners[name]
-                if int(size_hex, 16) > row.end - row.start:
-                    oversized.add(name)
-                    blame(
-                        name,
-                        f"{version}: object {path}: .text size {int(size_hex, 16)} exceeds target span "
-                        f"{row.end - row.start}",
-                    )
-                elif int(size_hex, 16) < row.end - row.start and name in names:
-                    # Alignment may legitimately absorb a short text; it is a cause only before a shift.
-                    short.setdefault(name, []).append(
-                        (
-                            row.address,
-                            f"{version}: object {path}: .text size {int(size_hex, 16)} is short of target span "
-                            f"{row.end - row.start}",
-                        )
-                    )
-        for function in sorted(names):
-            path = generation / "obj/src" / (function + ".o")
-            if not path.is_file():
+        for section, address, size, path in contributions:
+            function = Path(path).stem
+            if function not in objects:
                 continue
-            obj = Object(path)
+            obj = objects[function]
+            index = obj.section(section)
+            if index is None:
+                continue
+            span = targets.get((section, path))
+            if span is None:
+                # Explicit defined data symbols can anchor sections absent from
+                # the text rows, including BSS with no ROM material.
+                anchors = {
+                    known[symbol["name"]][0] - symbol["value"]
+                    for table in obj.symbols.values()
+                    for symbol in table
+                    if symbol["section"] == index and symbol["name"] in known
+                }
+                if len(anchors) == 1:
+                    target_address = anchors.pop()
+                else:
+                    continue
+            else:
+                target_address = span[0]
+            if address != target_address and function not in origins:
+                # Reprove placement victims after origins have been removed.
+                continue
+            actual, expected = material(elf, address, size), resident(target_address, size)
+            if actual is not None and expected is not None and actual != expected:
+                at = next(i for i, (a, b) in enumerate(zip(expected, actual, strict=True)) if a != b)
+                detail = (
+                    f"{version}: object {path} {section}+0x{at:X}: "
+                    f"expected {expected[at : at + 16].hex()}, produced {actual[at : at + 16].hex()}"
+                )
+                if masked(obj, index, expected, actual, 0):
+                    relocated.setdefault(function, []).append(detail)
+                else:
+                    blame(function, detail)
             for table in obj.symbols.values():
                 for symbol in table:
-                    if symbol["section"] == 0 or symbol["info"] >> 4 == 0:
-                        continue
                     name = symbol["name"]
-                    if (
-                        name in known
-                        and name in linked
-                        and linked[name]["value"] != known[name][0]
-                        and (not oversized or function in oversized)
-                    ):
-                        shifted(
+                    if symbol["section"] != index or name not in known or name not in linked:
+                        continue
+                    relative = linked[name]["value"] - address
+                    expected_relative = known[name][0] - target_address
+                    if relative != expected_relative:
+                        blame(
                             function,
-                            known[name][0],
-                            f"{version}: defined symbol {name}: address "
-                            f"0x{linked[name]['value']:08X}, target 0x{known[name][0]:08X}",
+                            f"{version}: defined symbol {name}: section offset 0x{relative:X}, "
+                            f"target 0x{expected_relative:X}",
                         )
-        for section, address_hex, size_hex, path in contributions:
-            if not path.startswith("obj/src/") or Path(path).stem not in names:
+    return faults or relocated
+
+
+def contribution_targets(project: Project, version: str) -> dict[tuple[str, str], tuple[int, int]]:
+    """Explicit input section extents from the staged owning rows, in VRAM."""
+    targets = {}
+    _, _, segments = split.layout(project.version(version).split)
+    c_units = {Path(row.path).name for row in split.functions(project, version) if row.kind == "c"}
+    for segment in segments:
+        if "vram" not in segment.fields or "start" not in segment.fields:
+            continue
+        bias = int(segment.fields["vram"], 0) - int(segment.fields["start"], 0)
+        for i, row in enumerate(segment.rows):
+            end = segment.rows[i + 1].start if i + 1 < len(segment.rows) else segment.end
+            if end is None:
                 continue
-            address, size = int(address_hex, 16), int(size_hex, 16)
-            if not size or not address:
+            kind = row.kind.lstrip(".")
+            if kind in ("asm", "c"):
+                section = ".text"
+                path = f"obj/{'src' if kind == 'c' else 'asm'}/{row.path}.o"
+            elif kind in ("data", "rodata", "rdata", "bss"):
+                section = "." + kind
+                name = Path(row.path).name
+                path = f"obj/src/{name}.o" if name in c_units else f"obj/asm/data/{row.path}.{kind}.o"
+            else:
                 continue
-            actual, expected = material(elf, address, size), resident(address, size)
-            if actual is None or expected is None:
-                continue
-            if path.startswith("obj/src/") and (not oversized or Path(path).stem in oversized):
-                obj = Object(generation / path)
-                section_index = obj.section(section)
-                for table in obj.symbols.values():
-                    for symbol in table:
-                        if symbol["section"] != section_index or not symbol["size"]:
-                            continue
-                        at, count = symbol["value"], symbol["size"]
-                        left, right = expected[at : at + count], actual[at : at + count]
-                        if left != right:
-                            detail = (
-                                f"{version}: symbol {symbol['name']} in {path}: "
-                                f"expected {left[:16].hex()}, produced {right[:16].hex()}"
-                            )
-                            if moved(left, right):
-                                shifted(Path(path).stem, address + at, detail)
-                            elif masked(obj, section_index, left, right, at):
-                                if Path(path).stem in names:
-                                    relocated.setdefault(Path(path).stem, []).append(detail)
-                            else:
-                                blame(Path(path).stem, detail)
-            if actual != expected:
-                if oversized and Path(path).stem not in oversized:
-                    continue
-                at = next(i for i, (left, right) in enumerate(zip(expected, actual, strict=True)) if left != right)
-                name = Path(path).stem
-                if path.startswith("obj/src/"):
-                    detail = (
-                        f"{version}: object {path} {section}+0x{at:X} at 0x{address + at:08X}: "
-                        f"expected {expected[at : at + 16].hex()}, produced {actual[at : at + 16].hex()}"
-                    )
-                    obj = Object(generation / path)
-                    index = obj.section(section)
-                    if moved(expected, actual):
-                        shifted(name, address, detail)
-                    elif index is not None and masked(obj, index, expected, actual, 0):
-                        if name in names:
-                            relocated.setdefault(name, []).append(detail)
-                    else:
-                        blame(name, detail)
-        symbols = [symbol for table in elf.symbols.values() for symbol in table]
-        for row in split.functions(project, version):
-            name = Path(row.path).name
-            if name not in names or (oversized and name not in oversized):
-                continue
-            for symbol in symbols:
-                if symbol["name"] != name or symbol["section"] in (0, 0xFFF1):
-                    continue
-                if symbol["value"] != row.address:
-                    shifted(
-                        name,
-                        row.address,
-                        f"{version}: symbol {name}: address 0x{symbol['value']:08X}, expected 0x{row.address:08X}",
-                    )
-                    continue
-                actual = material(elf, symbol["value"], row.end - row.start)
-                expected = image[row.start : row.end]
-                if actual is not None and actual != expected and name not in relocated:
-                    blame(name, f"{version}: symbol {name}: bytes differ over {len(expected)} target bytes")
-    if faults:
-        return faults
-    if placed:
-        # The earliest shifted item follows the cause; later ones move with it.
-        first = min(address for items in placed.values() for address, _ in items)
-        causes = {name: items for name, items in short.items() if min(a for a, _ in items) < first}
-        if causes:
-            name = max(causes, key=lambda item: min(a for a, _ in causes[item]))
-            return {name: [detail for _, detail in causes[name]]}
-        name = min(placed, key=lambda item: min(address for address, _ in placed[item]))
-        return {name: [detail for _, detail in placed[name]]}
-    return relocated
+            targets[section, path] = row.start + bias, end + bias
+            if section == ".rodata" and path.startswith("obj/src/"):
+                targets[".rdata", path] = row.start + bias, end + bias
+    for name, interval in extract.unit_ranges(project.version(version).split.read_text()).items():
+        for row in interval.get("rodata_slices", []):
+            if row["path"].startswith("rodata/"):
+                targets[f".unbake_pool_{row['address']:08X}", f"obj/src/{name}.o"] = (
+                    row["address"],
+                    row["address"] + row["end"] - row["start"],
+                )
+    return targets

@@ -48,9 +48,6 @@ from unbake.report import progress
 FOLDED_RULES = frozenset({"invented-struct", "local-type-copy", "raw-offset"})
 
 
-_BISECT_LIMIT = 64
-
-
 @dataclass
 class Candidate:
     function: str
@@ -118,15 +115,21 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 extracted = {v: staged.version(v).split.read_text() for v in versions}
                 faults = incremental.prepare(project, staged, policy, generations, base.splits)
                 if faults is not None:
+                    for name, reasons in attribution.diagnose(
+                        staged,
+                        versions,
+                        generations,
+                        {candidate.function for candidate in candidates},
+                        (project, current),
+                    ).items():
+                        for reason in reasons:
+                            if reason not in faults.setdefault(name, []):
+                                faults[name].append(reason)
                     unrelated = faults.keys() - {candidate.function for candidate in candidates}
                     if unrelated:
                         held("submit.dependencies: " + "; ".join(faults[next(iter(unrelated))]))
-                    for name, reasons in sorted(faults.items()):
-                        receipts.append(f"HELD(match): {name}: build compare failed on " + "; ".join(reasons[:4]))
-                    candidates = [candidate for candidate in candidates if candidate.function not in faults]
-                    if not candidates:
-                        return receipts
-                    _materialize(staged, base, candidates)
+                    passing = [candidate for candidate in candidates if candidate.function not in faults]
+                    _materialize(staged, base, passing)
                     results = _relink(staged, policy, generations, extracted)
                 else:
                     staging.copy_assembly(project, staged)
@@ -134,7 +137,23 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                         staging.independent_objects(generations[version])
                         staging.chunk_stale_sources(generations[version], staged.tools, staged.version(version).symbols)
                     results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
-                candidates, sha1 = _isolate(project, staged, base, policy, candidates, generations, results, receipts)
+                    faults = attribution.diagnose(
+                        staged,
+                        versions,
+                        generations,
+                        {candidate.function for candidate in candidates},
+                        (project, current),
+                    )
+                    if faults:
+                        # Make cannot link a failed compile. Restore those original
+                        # providers and link every successful object before naming
+                        # this round's compile, placement, binding and byte faults.
+                        passing = [candidate for candidate in candidates if candidate.function not in faults]
+                        _materialize(staged, base, passing)
+                        results = _relink(staged, policy, generations, extracted)
+                candidates, sha1 = _isolate(
+                    project, staged, base, policy, candidates, generations, results, receipts, faults, current
+                )
             if not candidates:
                 return receipts
             with reporting.phase("publication", sources=len(candidates)):
@@ -235,6 +254,14 @@ class _Base:
         self.sources = {path.name: path.read_text() for path in staged.src.glob("*.c")}
         exclusions = staged.root / "unbake-exclusions.json"
         self.exclusions = exclusions.read_text() if exclusions.is_file() else None
+        self.exclusion_aliases: dict[str, set[str]] = {}
+        if self.exclusions is not None:
+            from unbake.decomp import exclusions as reserved
+
+            reserved.load(staged)
+            for version in staged.versions:
+                for row in split.functions(staged, version):
+                    self.exclusion_aliases.setdefault(Path(row.path).name, set()).update((row.name, *row.aliases))
 
 
 def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
@@ -277,7 +304,20 @@ def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> N
     _recipe(staged)
     exclusions = staged.root / "unbake-exclusions.json"
     if base.exclusions is not None:
-        split_apply.write(exclusions, base.exclusions)
+        # Folded secondary entries are published by their owning C unit. They
+        # must leave the manifest before validation against the merged rows.
+        released = {candidate.function for candidate in candidates if candidate.matched}
+        for candidate in candidates:
+            if candidate.matched:
+                for lines in candidate.removed_rows.values():
+                    for line in lines:
+                        row = split.ROW.fullmatch(line)
+                        if row is not None:
+                            released.add(Path(split.plain(row["path"])).name)
+        released.update(alias for name in tuple(released) for alias in base.exclusion_aliases.get(name, set()))
+        manifest = json.loads(base.exclusions)
+        manifest["functions"] = [name for name in manifest["functions"] if name not in released]
+        split_apply.write(exclusions, json.dumps(manifest, indent=2) + "\n")
         from unbake.decomp import exclusions as reserved
 
         for edit in reserved.publication_edit(staged, {c.function for c in candidates if c.matched}):
@@ -464,6 +504,8 @@ def _isolate(
     generations: dict[str, Path],
     results: dict[str, build.BuildResult],
     receipts: list[str],
+    initial_faults: dict[str, list[str]] | None = None,
+    reference: dict[str, Path] | None = None,
 ) -> tuple[list[Candidate], dict[str, str]]:
     """Name culprits from the built objects, then relink the rest from the same objects."""
     extracted = {version: staged.version(version).split.read_text() for version in generations}
@@ -475,23 +517,26 @@ def _isolate(
             failures={v: staging.compare_failure(staged, v, results[v]) for v in failures},
             generations={v: str(g) for v, g in generations.items()},
         )
-        if not failures:
+        if not failures and not initial_faults:
             return candidates, {v: results[v].sha1_line for v in results}
         names = {candidate.function for candidate in candidates}
-        culprits = attribution.diagnose(staged, failures, generations, names)
-        reporting.record("attribution", culprits=culprits)
-        if not culprits and len(candidates) > _BISECT_LIMIT:
-            # Halving thousands of sources costs a link per step and names one culprit.
-            detail = "; ".join(staging.compare_failure(staged, v, results[v])[-300:] for v in failures)
-            held(f"submit.attribution: unattributed proof failure across {len(candidates)} sources: {detail}")
+        culprits = attribution.diagnose(
+            staged, failures, generations, names, (project, reference) if reference is not None else None
+        )
+        for name, details in (initial_faults or {}).items():
+            culprits.setdefault(name, []).extend(details)
+        initial_faults = None
         if not culprits:
             culprits = _bisect(staged, base, policy, candidates, generations, failures, extracted)
+        reporting.record("attribution", culprits=culprits)
         for name, details in sorted(culprits.items()):
             receipts.append(f"HELD(match): {name}: build compare failed on " + "; ".join(details[:4]))
         candidates = [candidate for candidate in candidates if candidate.function not in culprits]
         if not candidates:
             return [], {}
         _materialize(staged, base, candidates)
+        if not failures:
+            return candidates, {v: results[v].sha1_line for v in results}
         if any(not (generations[v] / "obj/src" / f"{c.function}.o").is_file() for c in candidates for v in c.versions):
             # A failed compile chunk discards its siblings; make rebuilds only those, from the cache.
             staging.copy_assembly(project, staged)
@@ -510,8 +555,8 @@ def _relink(
 ) -> dict[str, build.BuildResult]:
     """Link the staged layout over objects this transaction already built.
 
-    extracted holds the split each generation's link inputs describe; a split that
-    only returned C rows to assembly is rewritten in place instead of re-extracted.
+    extracted holds the split each generation's link inputs describe. Changes
+    confined to owning the same text spans rewrite that graph in place.
     """
     reuse = {}
     for version, generation in generations.items():
@@ -535,18 +580,50 @@ def _bisect(
     failures: list[str],
     extracted: dict[str, str],
 ) -> dict[str, list[str]]:
-    """Find one unattributed fault by relinking halves of the retained objects."""
+    """Collect independent faults and minimal conflicts from retained objects."""
     detail = ", ".join(failures)
-    suspect, accepted = list(candidates), list[Candidate]()
-    while len(suspect) > 1:
-        left, right = suspect[: len(suspect) // 2], suspect[len(suspect) // 2 :]
-        _materialize(staged, base, accepted + left)
-        if all(result.ok for result in _relink(staged, policy, generations, extracted).values()):
-            accepted += left
-            suspect = right
-        else:
-            suspect = left
-    return {suspect[0].function: [f"cartridge differs on {detail}; isolated by relinking retained objects"]}
+
+    def differs(members: list[Candidate]) -> bool:
+        _materialize(staged, base, members)
+        return any(not result.ok for result in _relink(staged, policy, generations, extracted).values())
+
+    if differs([]):
+        held(f"submit.dependencies: cartridge differs on {detail} with no batch sources")
+    faults: dict[str, list[str]] = {}
+
+    def inspect(members: list[Candidate]) -> None:
+        if not members or not differs(members):
+            return
+        if len(members) == 1:
+            faults[members[0].function] = [f"cartridge differs on {detail}; isolated by relinking retained objects"]
+            return
+        left, right = members[: len(members) // 2], members[len(members) // 2 :]
+        left_bad, right_bad = differs(left), differs(right)
+        if left_bad or right_bad:
+            if left_bad:
+                inspect(left)
+            if right_bad:
+                inspect(right)
+            # A second fault may require members spanning both halves. Check
+            # the remainder after removing every independently failing unit.
+            remainder = [member for member in members if member.function not in faults]
+            inspect(remainder)
+            return
+        # Each half passes alone: reduce the joint failure to its participants.
+        conflict = list(members)
+        for member in members:
+            reduced = [item for item in conflict if item is not member]
+            if differs(reduced):
+                conflict = reduced
+        for member in conflict:
+            faults[member.function] = [
+                f"cartridge differs on {detail}; isolated conflicting retained objects: "
+                + ", ".join(item.function for item in conflict)
+            ]
+        inspect([member for member in members if member not in conflict])
+
+    inspect(candidates)
+    return faults
 
 
 def _commit(

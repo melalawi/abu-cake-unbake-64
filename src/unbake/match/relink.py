@@ -60,6 +60,7 @@ def prove(
     # Copied output belongs to the previous set and cannot count as fresh evidence.
     image.unlink(missing_ok=True)
     elf.unlink(missing_ok=True)
+    (generation / f"{project.name}.map").unlink(missing_ok=True)
     output: list[str] = []
 
     def run(command: list[str], cwd: Path = project.root) -> None:
@@ -84,7 +85,7 @@ def prove(
         graph = (generation / ".split.mk").read_text()
         objects: list[str] = []
         for kind in ("C", "ASM", "ASSET"):
-            match = re.search(rf"^{kind}_OBJECTS := (.*)$", graph, re.M)
+            match = re.search(rf"^{kind}_OBJECTS :=[ \t]*(.*)$", graph, re.M)
             if match is None:
                 raise Held("match", f"submit.relink: missing {kind} object inventory")
             objects.extend(word.replace("$(BUILD)/", "") for word in match[1].split())
@@ -160,54 +161,121 @@ def prove(
     return build.BuildResult(version, ok, sha1_line, log, generation)
 
 
-def revert_rows(project: Project, generation: Path, before: str, after: str) -> bool:
-    """Rewrite extracted link inputs when the split only returned C rows to assembly.
+def retarget_rows(project: Project, generation: Path, before: str, after: str) -> bool:
+    """Transfer contiguous text spans between assembly and C without extraction.
 
-    Splat's output for such a split differs only in each unit's object path, the
-    object inventory, its unit range and the symbol dump's row kind, so the
-    retained objects relink without a second extraction. Anything else is False.
+    A C unit may own several adjacent assembly entries. Only ownership changes
+    are accepted: segment fields, outer boundaries, storage rows and alignment
+    remain explicit and identical. Validate everything before writing the graph.
     """
     from unbake.layout import split
+    from unbake.project_tools.extract import unit_ranges
 
-    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
-    if len(old) != len(new):
+    _, old_lines, old_segments = split.parse_layout(Path("before"), before)
+    _, new_lines, new_segments = split.parse_layout(Path("after"), after)
+    old_rows = {row.line for segment in old_segments for row in segment.rows}
+    new_rows = {row.line for segment in new_segments for row in segment.rows}
+    if [line for i, line in enumerate(old_lines) if i not in old_rows] != [
+        line for i, line in enumerate(new_lines) if i not in new_rows
+    ]:
         return False
-    units: dict[str, str] = {}
-    for left, right in zip(old, new, strict=True):
-        if left == right:
-            continue
-        was, now = split.ROW.fullmatch(left), split.ROW.fullmatch(right)
-        if was is None or now is None or (was["kind"], now["kind"]) != ("c", "asm") or was["start"] != now["start"]:
-            return False
-        name = Path(split.plain(was["path"])).name
-        if Path(split.plain(now["path"])).name != name:
-            return False
-        units[name] = split.plain(now["path"])
-    if not units or not all((generation / "obj/asm" / f"{path}.o").is_file() for path in units.values()):
+    if len(old_segments) != len(new_segments):
         return False
+    transfers: list[tuple[list[split.Row], list[split.Row]]] = []
+    for left, right in zip(old_segments, new_segments, strict=True):
+        if left.fields != right.fields or left.end != right.end:
+            return False
+        i = j = 0
+        while i < len(left.rows) and j < len(right.rows):
+            was, now = left.rows[i], right.rows[j]
+            if old_lines[was.line] == new_lines[now.line]:
+                i += 1
+                j += 1
+                continue
+            if was.start != now.start:
+                return False
+            common = {row.start for row in left.rows[i + 1 :]} & {row.start for row in right.rows[j + 1 :]}
+            end = min(common) if common else left.end
+            if end is None:
+                return False
+            a, b = i + 1, j + 1
+            while a < len(left.rows) and left.rows[a].start < end:
+                a += 1
+            while b < len(right.rows) and right.rows[b].start < end:
+                b += 1
+            old, new = left.rows[i:a], right.rows[j:b]
+            forward = len(new) == 1 and new[0].kind == "c" and all(row.kind == "asm" for row in old)
+            reverse = len(old) == 1 and old[0].kind == "c" and all(row.kind == "asm" for row in new)
+            if not (forward or reverse) or Path(was.path).name != Path(now.path).name:
+                return False
+            if was.match["alignment"] != now.match["alignment"] or any(
+                row.match["alignment"] for row in (old[1:] if forward else new[1:])
+            ):
+                return False
+            transfers.append((old, new))
+            i, j = a, b
+        if i != len(left.rows) or j != len(right.rows):
+            return False
     script = generation / f"{project.name}.ld"
     graph = generation / ".split.mk"
     ranges = generation / "unit-ranges.json"
     dump = generation / "splat_symbols.csv"
-    text, inventory, table = script.read_text(), graph.read_text(), json.loads(ranges.read_text())
-    rows = dump.read_text().splitlines(keepends=True)
-    for name, path in units.items():
-        text, count = re.subn(rf"\bobj/src/{re.escape(name)}\.o\(", f"obj/asm/{path}.o(", text)
-        source, target = f"$(BUILD)/obj/src/{name}.o", f"$(BUILD)/obj/asm/{path}.o"
-        lines = inventory.split("\n")
-        c = next(i for i, line in enumerate(lines) if line.startswith("C_OBJECTS := "))
-        a = next(i for i, line in enumerate(lines) if line.startswith("ASM_OBJECTS := "))
-        words = lines[c].split(" ")
-        if not count or source not in words or name not in table:
+    if not all(path.is_file() for path in (script, graph, ranges, dump)):
+        return False
+    if json.loads(ranges.read_text()) != unit_ranges(before):
+        return False
+    text, lines, rows = script.read_text(), graph.read_text().splitlines(), dump.read_text().splitlines(keepends=True)
+    inventories = {}
+    for kind in ("C", "ASM"):
+        index = next((i for i, line in enumerate(lines) if line.startswith(kind + "_OBJECTS :=")), None)
+        if index is None:
             return False
-        lines[c] = " ".join(word for word in words if word != source)
-        lines[a] += f" {target}"
-        inventory = "\n".join(lines)
-        del table[name]
-        suffix = f",{name},c\n"
-        rows = [row[: -len(suffix)] + f",{name},asm\n" if row.endswith(suffix) else row for row in rows]
+        inventories[kind] = (index, lines[index].split(":=", 1)[1].split())
+
+    def object_path(row: split.Row) -> str:
+        return f"obj/src/{row.path}.o" if row.kind == "c" else f"obj/asm/{row.path}.o"
+
+    for old, new in transfers:
+        old_paths, new_paths = [object_path(row) for row in old], [object_path(row) for row in new]
+        old_kind, new_kind = ("C" if old[0].kind == "c" else "ASM"), ("C" if new[0].kind == "c" else "ASM")
+        if new_kind == "ASM" and any(not (generation / path).is_file() for path in new_paths):
+            return False
+        for path in old_paths:
+            word = "$(BUILD)/" + path
+            if word not in inventories[old_kind][1]:
+                return False
+            inventories[old_kind][1].remove(word)
+        inventories[new_kind][1].extend("$(BUILD)/" + path for path in new_paths)
+        # The first row supplies all sections of the newly owning object; folded
+        # entries' selectors disappear. Reversal restores each retained provider.
+        pattern = re.escape(old_paths[0]) + r"\s*\(([^()]+)\)"
+
+        def selectors(match: re.Match[str], paths: list[str] = new_paths) -> str:
+            return ";\n        ".join(path + "(" + match[1] + ")" for path in paths)
+
+        text, count = re.subn(pattern, selectors, text)
+        if not count:
+            return False
+        for path in old_paths[1:]:
+            text = re.sub(re.escape(path) + r"\s*\([^()]+\);?", "", text)
+        aliases = {Path(row.path).name for row in (old if new_kind == "C" else new)}
+        for index, row in enumerate(rows):
+            fields = row.rstrip("\n").split(",")
+            if len(fields) >= 2 and fields[-2] in aliases and fields[-1] in ("asm", "c"):
+                fields[-1] = new[0].kind
+                rows[index] = ",".join(fields) + "\n"
+        if new_kind == "C":
+            name = new[0].path
+            lines.append(f"$(BUILD)/obj/src/{name}.built: {project.src.relative_to(project.root)}/{name}.c")
+    for kind, (index, words) in inventories.items():
+        lines[index] = kind + "_OBJECTS := " + " ".join(words)
     script.write_text(text)
-    graph.write_text(inventory)
-    ranges.write_text(json.dumps(table, sort_keys=True))
+    graph.write_text("\n".join(lines) + "\n")
+    ranges.write_text(json.dumps(unit_ranges(after), sort_keys=True))
     dump.write_text("".join(rows))
     return True
+
+
+def revert_rows(project: Project, generation: Path, before: str, after: str) -> bool:
+    """Restore assembly ownership, including entries folded into one C unit."""
+    return retarget_rows(project, generation, before, after)

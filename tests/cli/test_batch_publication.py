@@ -17,7 +17,17 @@ from unbake.project import config, makefile
 
 class BatchPublicationCliTests(unittest.TestCase):
     names = tuple(f"item_{index:02d}" for index in range(32))
-    setUp = fixture.PublicationBoundaryCliTests.setUp
+
+    def setUp(self):
+        fixture.PublicationBoundaryCliTests.setUp(self)
+        path = self.root / "config.toml"
+        data = toml.loads(path.read_text())
+        data["project"]["readme_order"] = list(self.project.versions)
+        for version in self.project.versions:
+            data["version"][version].update(cartridge_id="NUS-TEST-0", region="USA", description="Synthetic release.")
+        path.write_text(toml.dumps(data))
+        self.project = config.load(self.root)
+
     write_policy = fixture.PublicationBoundaryCliTests.write_policy
     cli = fixture.PublicationBoundaryCliTests.cli
     make = fixture.PublicationBoundaryCliTests.make
@@ -130,7 +140,9 @@ class BatchPublicationCliTests(unittest.TestCase):
         proofs = [row for row in self.evidence() if row["event"] == "proof"]
         # Object preflight names byte faults before the passing subset links once.
         self.assertEqual(len(proofs), 1)
-        self.assertEqual(len(proofs[-1]["sources"]), 29)
+        self.assertEqual(len(proofs[-1]["sources"]), 32)
+        attribution = [row for row in self.evidence() if row["event"] == "attribution"]
+        self.assertEqual(set(attribution[-1]["culprits"]), bad)
         self.assertFalse(proofs[-1]["failures"])
         self.assertIn(": OK", self.make())
 
@@ -208,3 +220,61 @@ class BatchPublicationCliTests(unittest.TestCase):
                 process.wait(timeout=10)
         self.assertEqual(len([row for row in self.evidence() if row["event"] == "proof"]), 1)
         self.assertFalse(list(self.project.src.glob("*.c")))
+
+    def test_compile_binding_and_byte_faults_share_one_proof_even_after_full_build(self):
+        for fallback in (False, True):
+            with self.subTest(fallback=fallback):
+                if fallback:
+                    path = self.root / "config.toml"
+                    data = toml.loads(path.read_text())
+                    data["build"]["cppflags"].append("-DPROOF_BATCH=1")
+                    path.write_text(toml.dumps(data))
+                self.sources[5].write_text(f"int {self.names[5]}(void) {{ invalid C; }}\n")
+                self.sources[17].write_text(
+                    f"extern int missing(void); int {self.names[17]}(void) {{ return missing(); }}\n"
+                )
+                self.sources[29].write_text(f"int {self.names[29]}(void) {{ return 2; }}\n")
+                # The first pass publishes its survivors. Repeating the three
+                # refused inputs exercises the full-build branch on changed flags.
+                sources = [self.sources[i] for i in (5, 17, 29)] if fallback else self.sources
+                before = len(self.evidence())
+                result = subprocess.run(
+                    [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, sources)],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                rows = self.evidence()[before:]
+                proofs = [row for row in rows if row["event"] == "proof"]
+                self.assertEqual(len(proofs), 1)
+                self.assertEqual(bool([row for row in rows if row["event"] == "compile"]), not fallback)
+                attribution = [row for row in rows if row["event"] == "attribution"]
+                culprits = attribution[0]["culprits"]
+                self.assertEqual(set(culprits), {self.names[i] for i in (5, 17, 29)})
+                self.assertIn("compile diagnostic", "; ".join(culprits[self.names[5]]))
+                self.assertTrue(
+                    any(
+                        "undefined reference to" in reason and "missing" in reason
+                        for reason in culprits[self.names[17]]
+                    )
+                )
+                self.assertIn("produced", "; ".join(culprits[self.names[29]]))
+                self.assertIn(": OK", self.make())
+
+    def test_folded_port_and_next_batch_reuse_every_extraction(self):
+        first = self.sources[0]
+        first.write_text(f"int {self.names[0]}(void) {{ return 1; }}\nint {self.names[1]}(void) {{ return 1; }}\n")
+        self.cli("submit", first)
+        self.cli("submit", "--batch", *self.sources[2:])
+        rows = self.evidence()
+        self.assertFalse([row for row in rows if row["event"] == "incremental_fallback"])
+        relinks = [row for row in rows if row["event"] == "relink"]
+        self.assertEqual(len(relinks), 2)
+        self.assertTrue(all(all(value == "True" for value in row["reused"].values()) for row in relinks))
+        proofs = [row for row in rows if row["event"] == "proof"]
+        self.assertEqual(len(proofs), 2)
+        self.assertTrue(all(not row["failures"] for row in proofs))
+        self.assertIn(": OK", self.make())

@@ -25,50 +25,10 @@ def _miss(reason: str) -> bool:
 
 def advance(project: Project, version: str, generation: Path, before: str, after: str) -> bool:
     """Retarget an extraction when only existing text rows switch from assembly to C."""
-    old, new = before.splitlines(keepends=True), after.splitlines(keepends=True)
-    if len(old) != len(new):
-        return _miss("split row count changed")
-    changes = {}
-    for left, right in zip(old, new, strict=True):
-        if left == right:
-            continue
-        was, now = split.ROW.fullmatch(left), split.ROW.fullmatch(right)
-        if was is None or now is None or (was["kind"], now["kind"]) != ("asm", "c"):
-            return _miss("split edits change more than row kind")
-        name = split.plain(now["path"])
-        if was["start"] != now["start"] or Path(split.plain(was["path"])).name != name:
-            return _miss("split placement changed")
-        changes[name] = split.plain(was["path"])
-    script = generation / f"{project.name}.ld"
-    graph = generation / ".split.mk"
-    ranges = generation / "unit-ranges.json"
-    dump = generation / "splat_symbols.csv"
-    if not all(path.is_file() for path in (script, graph, ranges, dump)):
-        return _miss("retained extraction missing")
-    if json.loads(ranges.read_text()) != extract.unit_ranges(before):
-        return _miss("retained ranges differ")
-    text = script.read_text()
-    lines = graph.read_text().splitlines()
-    inventories = {}
-    for kind in ("C", "ASM"):
-        index = next((i for i, line in enumerate(lines) if line.startswith(kind + "_OBJECTS := ")), None)
-        if index is None:
-            return _miss("object inventory missing")
-        inventories[kind] = (index, lines[index].split(" := ", 1)[1].split())
-    rows = dump.read_text().splitlines(keepends=True)
-    for name, path in changes.items():
-        source, target = f"$(BUILD)/obj/asm/{path}.o", f"$(BUILD)/obj/src/{name}.o"
-        if source not in inventories["ASM"][1]:
-            return _miss("assembly inventory lacks changed row")
-        text, count = re.subn(rf"\bobj/asm/{re.escape(path)}\.o\(", f"obj/src/{name}.o(", text)
-        if not count:
-            return _miss("link script lacks changed row")
-        inventories["ASM"][1].remove(source)
-        inventories["C"][1].append(target)
-        rows = [row[:-4] + "c\n" if row.endswith(f",{name},asm\n") else row for row in rows]
-        lines.append(f"{target[:-2]}.built: {project.src.relative_to(project.root)}/{name}.c")
-    for kind, (index, words) in inventories.items():
-        lines[index] = kind + "_OBJECTS := " + " ".join(words)
+    from unbake.match.relink import retarget_rows
+
+    if not retarget_rows(project, generation, before, after):
+        return _miss("split spans or retained extraction changed")
     symbols = extract.symbols_from([project.version(version).symbols])
     definitions = generation / "committed_symbols.ld"
     addresses = generation / "symbol-addresses.txt"
@@ -88,10 +48,6 @@ def advance(project: Project, version: str, generation: Path, before: str, after
         for filename in ("undefined_funcs_auto.txt", "undefined_syms_auto.txt"):
             automatic = generation / filename
             automatic.write_text(extract.automatic_symbols(automatic.read_text(), additions))
-    script.write_text(text)
-    graph.write_text("\n".join(lines) + "\n")
-    ranges.write_text(json.dumps(extract.unit_ranges(after), sort_keys=True))
-    dump.write_text("".join(rows))
     return True
 
 
@@ -156,6 +112,12 @@ def prepare(
         failures = build.compile_objects(staged, policy, sources, version, generation / "obj/src") if sources else {}
         faults = {name: [f"{version}: compile diagnostic: {reason}"] for name, reason in failures.items()}
         intervals = extract.unit_ranges(staged.version(version).split.read_text())
+        alignments = {
+            Path(row.path).name: int(row.match["align"], 0)
+            for segment in split.layout(staged.version(version).split)[2]
+            for row in segment.rows
+            if row.kind == "c" and row.match["align"]
+        }
         image = staged.version(version).baserom.read_bytes()
         known = {line.split()[0] for line in (generation / "symbol-addresses.txt").read_text().splitlines()}
         definitions: set[str] = set()
@@ -186,6 +148,13 @@ def prepare(
             if len(code) > len(target):
                 faults.setdefault(name, []).append(
                     f"{version}: object obj/src/{name}.o: .text size {len(code)} exceeds target span {len(target)}"
+                )
+            alignment = alignments.get(name, 1)
+            consumed = -(-(interval["address"] + len(code)) // alignment) * alignment - interval["address"]
+            if len(code) < len(target) and consumed != len(target):
+                faults.setdefault(name, []).append(
+                    f"{version}: shift origin object obj/src/{name}.o .text: size {len(code)}, "
+                    f"consumed {consumed} bytes, target span {len(target)}"
                 )
             for at in range(0, min(len(code), len(target)), 4):
                 if at not in relocations and code[at : at + 4] != target[at : at + 4]:
