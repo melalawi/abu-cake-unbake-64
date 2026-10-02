@@ -8,7 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_config import write_policy
@@ -56,12 +56,14 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(before, [path.stat().st_mtime_ns for path in paths])
 
     def test_real_game_readmes_preserve_every_owner_byte_across_setup_and_report(self) -> None:
+        patch("unbake.project.hygiene.subprocess.run", return_value=Mock(returncode=0, stdout=b"")).start()
         references = Path(__file__).parents[1] / "report"
         # Independently mask only generated bar art, percentages and counters.
         figures = re.compile(
             rb"\[(?:[#\-]|\xe2\x96[\x88\x92\x91]){20}\] +[0-9]+\.[0-9]+%"
             rb"(?: \(~[0-9]+\.[0-9]+%\))? +[0-9,]+ of [0-9,]+"
         )
+        mask_identity = re.compile(rb"SHA256 `[0-9a-f]+`")
         readme = self.root / "README.md"
         for game in ("BattleTanx", "RageWars"):
             head = (references / "readme" / f"{game}.md").read_bytes()
@@ -72,7 +74,6 @@ class SetupTests(unittest.TestCase):
             project = replace(
                 self.project,
                 versions=versions,
-                readme_order=versions,
                 version_map={
                     name: replace(
                         self.project.version("us"),
@@ -105,11 +106,16 @@ class SetupTests(unittest.TestCase):
                     self.assertEqual((new_before, new_after), (before, after))
                     if variant == "HEAD":
                         # Fixture ROM bytes differ from the real cartridge identity.
-                        mask_identity = re.compile(rb"SHA256 `[0-9a-f]+`")
-                        self.assertEqual(
-                            mask_identity.sub(b"SHA256 <identity>", figures.sub(b"<generated>", rendered)),
-                            mask_identity.sub(b"SHA256 <identity>", figures.sub(b"<generated>", original)),
-                        )
+                        def owner_content(content: bytes) -> tuple[str, list[str], str]:
+                            masked = mask_identity.sub(b"SHA256 <identity>", figures.sub(b"<generated>", content))
+                            prefix, body, suffix = readme_layout.section(masked.decode(errors="surrogateescape"))
+                            blocks = body.strip().split("\n\n")
+                            if blocks[0].startswith("<pre>"):
+                                summary = blocks[0][len("<pre>") : -len("</pre>")]
+                                blocks[0] = "<br>".join(sorted(summary.split("<br>")))
+                            return prefix, sorted(blocks), suffix
+
+                        self.assertEqual(owner_content(rendered), owner_content(original))
                     self.assertEqual(readme.read_bytes(), rendered)
                     self.assertIn(b"## Notes", rendered)
                     self.assertIn(b"### Workflow", rendered)

@@ -191,7 +191,6 @@ def fixture(root: Path, kind: str = "ido") -> Any:
         build=root / "build",
         work=root / "build/work",
         drafts=root / "build/drafts",
-        readme_order=("us",),
     )
     facts = {
         "ld": str(root / "tools/ld"),

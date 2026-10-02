@@ -69,7 +69,6 @@ class Project:
     build: Path
     work: Path
     drafts: Path
-    readme_order: tuple[str, ...] = ()
 
     def compiler_reference(self, unit: str | Path) -> str:
         """An exception unit names its compiler; every other unit uses the default."""
@@ -382,9 +381,6 @@ def load(root: Path, *, text: str | None = None) -> Project:
             first = mutable.relative_to(pending.build).parts[0]
             if first == v or re.fullmatch(re.escape(v) + r"\.\d+", first):
                 raise Held("config", "paths.work/paths.drafts: overlaps version generation")
-    readme_order = _strings(project.get("readme_order", []), _label(path, "project", "readme_order"))
-    if readme_order and (len(readme_order) != len(versions) or set(readme_order) != set(versions)):
-        raise Held("config", "project.readme_order: expected every VERSION exactly once")
     names_from = _text(value(project, "project", "names_from"), _label(path, "project", "names_from"))
     if names_from not in versions:
         raise Held("config", f"{_label(path, 'project', 'names_from')}: unknown VERSION {names_from}")
@@ -468,7 +464,6 @@ def load(root: Path, *, text: str | None = None) -> Project:
         pending.build,
         pending.work,
         pending.drafts,
-        readme_order,
     )
 
 

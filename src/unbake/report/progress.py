@@ -406,12 +406,8 @@ def findings(project: Project, policy: Policy) -> list[str]:
 
 def readme_descriptions(project: Project) -> dict[str, str]:
     """Require owner release labels and use each version's supplied ROM identity."""
-    if not project.readme_order:
-        raise Held("report", "project.readme_order: missing value")
-    if len(project.readme_order) != len(project.versions) or set(project.readme_order) != set(project.versions):
-        raise Held("report", "project.readme_order: expected every VERSION exactly once")
     descriptions = {}
-    for name in project.readme_order:
+    for name in project.versions:
         version = project.version(name)
         for field in ("cartridge_id", "region", "description"):
             value = getattr(version, field)
@@ -427,7 +423,9 @@ def readme_descriptions(project: Project) -> dict[str, str]:
         descriptions[name] = (
             f"{name} ({version.cartridge_id}, {version.region}). {version.description} SHA256 `{digest}`"
         )
-    return descriptions
+    return {
+        name: descriptions[name] for name in sorted(descriptions, key=lambda name: project.version(name).cartridge_id)
+    }
 
 
 def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
@@ -449,7 +447,7 @@ def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]
     readme = project.root / "README.md"
     if set(reports) != set(project.versions):
         raise Held("report", "reports: expected every configured VERSION exactly once")
-    reports = {name: reports[name] for name in project.readme_order}
+    reports = {name: reports[name] for name in descriptions}
     for version, document in reports.items():
         if "units" in document:
             expected_units = [(row.name, row.kind == "c") for row in report_units.functions(project.version(version))]

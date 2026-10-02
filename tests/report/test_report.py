@@ -15,13 +15,13 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tests.project.makefile_fixture import fixture
 from tests.support import test_policy, tool
 from unbake.cli import check
 from unbake.decomp import score
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, Version
 from unbake.report import progress as report
 from unbake.report import readme_layout
 from unbake.report import units as report_units
@@ -201,7 +201,41 @@ class ConfiguredReadmeTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.addCleanup(patch.stopall)
         self.root = Path(temporary.name)
-        self.project, self.policy = fixture(self.root)
+        rom = self.root / "baserom.z64"
+        rom.write_bytes(b"ABC")
+        version = Version(
+            "us",
+            rom,
+            "",
+            self.root / "split.yaml",
+            self.root / "symbols.txt",
+            (),
+            cartridge_id="NUS-TEST-0",
+            region="Test region",
+            description="Test release.",
+        )
+        self.project = Project(
+            self.root,
+            "game",
+            "Game",
+            "us",
+            ("us",),
+            self.root / "src",
+            (),
+            self.root / "asm",
+            self.root / "tools",
+            {},
+            "",
+            {},
+            {"us": version},
+            "",
+            "",
+            self.root / "roms",
+            self.root / "build",
+            self.root / "build/work",
+            self.root / "build/drafts",
+        )
+        self.policy = Mock(spec=Policy)
         self.readme = self.root / "README.md"
         self.original = (
             b"# Owner title\r\n\r\nOwner intro \xff.\r\n\r\n## Progress\r\n\r\n"
@@ -233,22 +267,38 @@ class ConfiguredReadmeTests(unittest.TestCase):
         self.assertEqual(mask(after), mask(before))
         self.assertIn(b"]  0.00%", after)
 
-    def test_explicit_order_controls_summary_and_tables_independently_of_config_order(self) -> None:
+    def test_cartridge_order_controls_summary_and_tables_independently_of_config_order(self) -> None:
         version = self.project.version("us")
-        project = replace(
-            self.project,
-            versions=("eu", "us"),
-            readme_order=("us", "eu"),
-            version_map={"us": version, "eu": replace(version, name="eu")},
-        )
-        report.write(project, self.policy, reports={"eu": self.reports["us"], **self.reports})
-        _, body, _ = readme_layout.section(self.readme.read_text(errors="surrogateescape"))
-        self.assertEqual(re.findall(r"<code>([\w-]+) +\[", body)[:3], ["all", "us", "eu"])
-        self.assertEqual(re.findall(r"^\| ([\w-]+) \(", body, re.MULTILINE), ["us", "eu"])
+        cartridges = {
+            "de": "NUS-NRWD-0",
+            "us": "NUS-NRWE-0",
+            "us-rev1": "NUS-NRWE-1",
+            "eu": "NUS-NRWP-0",
+            "eu-x": "NUS-NRWX-0",
+        }
+        expected = list(cartridges)
+        for names in (tuple(sorted(cartridges)), tuple(reversed(expected))):
+            with self.subTest(versions=names):
+                project = replace(
+                    self.project,
+                    versions=names,
+                    version_map={
+                        name: replace(version, name=name, cartridge_id=ident) for name, ident in cartridges.items()
+                    },
+                )
+                self.readme.write_bytes(self.original)
+                reports = {name: self.reports["us"] for name in reversed(names)}
+                report.write(project, self.policy, reports=reports)
+                _, body, _ = readme_layout.section(self.readme.read_text(errors="surrogateescape"))
+                self.assertEqual(re.findall(r"<code>([\w-]+) +\[", body)[:6], ["all", *expected])
+                self.assertEqual(re.findall(r"^\| ([\w-]+) \(", body, re.MULTILINE), expected)
+                rendered = self.readme.read_bytes()
+                report.write(project, self.policy, reports=reports)
+                self.assertEqual(self.readme.read_bytes(), rendered)
 
     def test_missing_owner_fields_are_named_before_any_publication(self) -> None:
         version = self.project.version("us")
-        cases = [(replace(self.project, readme_order=()), "project.readme_order")]
+        cases = []
         for field in ("cartridge_id", "region", "description"):
             cases.append(
                 (replace(self.project, version_map={"us": replace(version, **{field: ""})}), "version.us." + field)
@@ -259,10 +309,24 @@ class ConfiguredReadmeTests(unittest.TestCase):
             self.assertEqual(self.readme.read_bytes(), self.original)
             self.assertFalse((self.root / "versions/us/report.json").exists())
 
-    def test_invalid_order_and_description_are_named(self) -> None:
-        for order in (("us", "us"), ("eu",)):
-            with self.subTest(order=order), self.assertRaisesRegex(Held, "project.readme_order"):
-                report.readme_descriptions(replace(self.project, readme_order=order))
+    def test_missing_cartridge_names_version_before_build_or_publication(self) -> None:
+        version = self.project.version("us")
+        for cartridge in ("", "   ", None):
+            with self.subTest(cartridge=cartridge):
+                project = replace(
+                    self.project,
+                    versions=("us", "eu"),
+                    version_map={"us": version, "eu": replace(version, name="eu", cartridge_id=cartridge)},
+                )
+                with patch.object(report, "measure") as measure, patch.object(report.build, "lock") as lock:
+                    with self.assertRaisesRegex(Held, r"version\.eu\.cartridge_id: missing value"):
+                        report.write(project, self.policy)
+                    measure.assert_not_called()
+                    lock.assert_not_called()
+                self.assertEqual(self.readme.read_bytes(), self.original)
+                self.assertFalse((self.root / "versions").exists())
+
+    def test_invalid_description_is_named(self) -> None:
         for text in ("bad|table", "bad\rheading", "bad\nheading"):
             version = replace(self.project.version("us"), description=text)
             with self.subTest(text=text), self.assertRaisesRegex(Held, "version.us.description"):
@@ -411,7 +475,7 @@ class ReportTest(unittest.TestCase):
         for versions in (("us", "other"), ("other", "us")):
             with self.subTest(versions=versions):
                 self.readme.write_text("## Progress\n\n| us (fixture) |\n\n| other (fixture) |\n\n## End\n")
-                report.write(replace(project, versions=versions, readme_order=versions), self.policy)
+                report.write(replace(project, versions=versions), self.policy)
                 for name, expected_open in (("us", ["draft", "untouched"]), ("other", ["draft"])):
                     saved = json.loads((project.root / "versions" / name / "report.json").read_bytes())
                     opened = [unit["name"] for unit in saved["units"] if not unit["metadata"]["complete"]]

@@ -122,7 +122,6 @@ class UnitsTests(unittest.TestCase):
                 build=root / "build",
                 work=root / "build/work",
                 drafts=root / "build/drafts",
-                readme_order=("us",),
             )
             project.src.mkdir()
             policy = test_policy(root)
