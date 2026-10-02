@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import struct
 import subprocess
@@ -296,7 +297,7 @@ def measure(project: Project, policy: Policy, version: str, *, generation: Path 
                 for field in ("base_path", "target_path"):
                     if field not in unit:
                         continue
-                    path = (generation / unit[field]).resolve()
+                    path = Path(os.path.abspath(generation / unit[field]))
                     if path.is_relative_to(workspace):
                         content = path.read_bytes()
                         durable = reports / "objects" / (hashlib.sha256(content).hexdigest() + ".o")
@@ -308,7 +309,7 @@ def measure(project: Project, policy: Policy, version: str, *, generation: Path 
             # report atomically replaces the public objdiff.json meanwhile.
             private_units = [
                 {
-                    k: str((generation / v).resolve()) if k in ("base_path", "target_path") else v
+                    k: os.path.abspath(generation / v) if k in ("base_path", "target_path") else v
                     for k, v in unit.items()
                 }
                 for unit in units

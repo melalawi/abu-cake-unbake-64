@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -29,6 +30,14 @@ def prepare_build(build: Path) -> None:
     if build.is_symlink():
         if not build.is_dir():
             raise ValueError(f"{build}: build generation symlink is invalid")
+        # Retained proof generations share immutable assembly directories.
+        # Ordinary Make may rebuild assembly, so detach before reading its graph.
+        for name in ("asm", "assets"):
+            path = build / "obj" / name
+            if path.is_symlink():
+                source = path.resolve()
+                path.unlink()
+                shutil.copytree(source, path, symlinks=True)
         return
     if build.exists() and not build.is_dir():
         raise ValueError(f"{build}: build must be a directory")

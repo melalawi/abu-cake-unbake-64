@@ -83,7 +83,9 @@ def compare_failure(project: Project, version: str, result: build.BuildResult) -
     )
 
 
-def copy_tree(project: Project, source: Path, destination: Path, *, skip: tuple[str, ...] = ()) -> None:
+def copy_tree(
+    project: Project, source: Path, destination: Path, *, skip: tuple[str, ...] = (), assembly: bool = True
+) -> None:
     """Copy project inputs; skip names top-level inputs the build never reads."""
 
     def ignore(directory: str, names: list[str]) -> list[str]:
@@ -91,7 +93,9 @@ def copy_tree(project: Project, source: Path, destination: Path, *, skip: tuple[
         return [
             name
             for name in names
-            if not project_input(project, parent / name) or (parent == Path(".") and name in skip)
+            if not project_input(project, parent / name)
+            or (parent == Path(".") and name in skip)
+            or (not assembly and parent / name == project.asm.relative_to(project.root))
         ]
 
     shutil.copytree(source, destination, ignore=ignore, symlinks=True)
@@ -119,7 +123,7 @@ def fingerprint(project: Project, root: Path) -> dict[str, str]:
     return result
 
 
-def generation(project: Project, version: str, current: Path, holds: ExitStack) -> Path:
+def generation(project: Project, version: str, current: Path, holds: ExitStack, *, retained: bool = False) -> Path:
     parent = project.build
     number = 1
     prefix = version + "."
@@ -137,6 +141,25 @@ def generation(project: Project, version: str, current: Path, holds: ExitStack) 
             except FileExistsError:
                 number += 1
     try:
+        if retained:
+            for path in current.iterdir():
+                if path.name in {".inuse", "report", "obj"} or path.suffix in {".elf", ".map", ".z64"}:
+                    continue
+                if path.is_dir():
+                    shutil.copytree(path, generation / path.name, symlinks=True)
+                else:
+                    shutil.copy2(path, generation / path.name)
+            objects = generation / "obj"
+            objects.mkdir()
+            for path in (current / "obj").iterdir():
+                target = objects / path.name
+                if path.name in {"asm", "assets"}:
+                    target.symlink_to(path.resolve(), target_is_directory=True)
+                elif path.is_dir():
+                    shutil.copytree(path, target, symlinks=True)
+                else:
+                    shutil.copy2(path, target)
+            return generation
         result = subprocess.run(
             ["cp", "-a", "--reflink=auto", *(str(p) for p in current.iterdir() if p.name != ".inuse"), str(generation)],
             capture_output=True,
@@ -275,3 +298,22 @@ def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
             else:
                 edit.path.unlink(missing_ok=True)
         raise
+
+
+def copy_assembly(project: Project, staged: Project) -> None:
+    """Hydrate assembly only when a changed boundary requires extraction."""
+    if not staged.asm.exists():
+        if project.asm.is_dir():
+            shutil.copytree(project.asm, staged.asm, symlinks=True)
+        else:
+            staged.asm.mkdir(parents=True)
+
+
+def independent_objects(generation: Path) -> None:
+    """Detach retained assembly before a fallback Make can write through its directory."""
+    for name in ("asm", "assets"):
+        path = generation / "obj" / name
+        if path.is_symlink():
+            source = path.resolve()
+            path.unlink()
+            shutil.copytree(source, path, symlinks=True)

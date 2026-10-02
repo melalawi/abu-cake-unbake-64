@@ -58,6 +58,52 @@ class BatchPublicationCliTests(unittest.TestCase):
             for line in path.read_text().splitlines()
         ]
 
+    def test_second_batch_reuses_published_objects_and_links_once(self):
+        self.cli("submit", self.sources[0])
+        generations = {v: (self.project.build / v).resolve() for v in self.project.versions}
+        retained = {v: (g / "obj/src" / (self.names[0] + ".o")).read_bytes() for v, g in generations.items()}
+        # An unrelated new header must not invalidate the previously published unit.
+        (self.project.include[0] / "unused.h").write_text("typedef int Unused;\n")
+        self.cli("submit", "--batch", *self.sources[1:])
+        compiled = [row for row in self.evidence() if row["event"] == "compile"]
+        self.assertEqual(len(compiled), 2 * len(self.project.versions))
+        later = [row for row in compiled if len(row["sources"]) > 1]
+        self.assertEqual(len(later), len(self.project.versions))
+        for row in later:
+            self.assertEqual(set(row["sources"]), set(self.names[1:]))
+        proofs = [row for row in self.evidence() if row["event"] == "proof"]
+        self.assertEqual(len(proofs), 2)
+        self.assertTrue(all(not row["failures"] for row in proofs))
+        for version, content in retained.items():
+            generation = (self.project.build / version).resolve()
+            self.assertEqual((generation / "obj/src" / (self.names[0] + ".o")).read_bytes(), content)
+            self.assertTrue((generation / "obj/asm").is_symlink())
+            self.assertTrue((generation / "obj/asm").is_dir())
+        self.assertIn(": OK", self.make())
+
+    def test_changed_header_cannot_reuse_a_now_mismatching_published_object(self):
+        header = self.project.include[0] / "value.h"
+        header.write_text("#define PROOF_VALUE 1\n")
+        first = self.sources[0]
+        first.write_text(f'#include "value.h"\nint {first.stem}(void) {{ return PROOF_VALUE; }}\n')
+        self.cli("submit", first)
+        generations = {v: (self.project.build / v).resolve() for v in self.project.versions}
+        header.write_text("#define PROOF_VALUE 2\n")
+        result = subprocess.run(
+            [str(self.script), "--project", str(self.root), "submit", str(self.sources[1])],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, output)
+        self.assertIn("submit.dependencies", output)
+        self.assertIn(self.names[0], output)
+        self.assertFalse((self.project.src / self.sources[1].name).exists())
+        self.assertEqual(generations, {v: (self.project.build / v).resolve() for v in self.project.versions})
+
     def test_three_changed_sources_are_isolated_and_29_publish(self):
         for source in self.sources:
             self.cli("try", source)
@@ -82,8 +128,8 @@ class BatchPublicationCliTests(unittest.TestCase):
             else:
                 self.assertIn(f"{name} matched on VERSION", result.stdout)
         proofs = [row for row in self.evidence() if row["event"] == "proof"]
-        # The changed sources build, fail by name, and the rest prove in one relink.
-        self.assertEqual(len(proofs), 2)
+        # Object preflight names byte faults before the passing subset links once.
+        self.assertEqual(len(proofs), 1)
         self.assertEqual(len(proofs[-1]["sources"]), 29)
         self.assertFalse(proofs[-1]["failures"])
         self.assertIn(": OK", self.make())

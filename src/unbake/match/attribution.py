@@ -163,6 +163,8 @@ def diagnose(
                             f"0x{linked[name]['value']:08X}, target 0x{known[name][0]:08X}",
                         )
         for section, address_hex, size_hex, path in contributions:
+            if not path.startswith("obj/src/") or Path(path).stem not in names:
+                continue
             address, size = int(address_hex, 16), int(size_hex, 16)
             if not size or not address:
                 continue

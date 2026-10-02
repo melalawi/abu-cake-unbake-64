@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -142,6 +143,18 @@ def assembly_inputs(asflags: list[str]) -> tuple[list[str], list[str | bytes]]:
     return flags, inputs
 
 
+def dependency_paths(text: str) -> list[str]:
+    """Combine compiler dependency rules, including IDO's separate header rule."""
+    return list(
+        dict.fromkeys(
+            word
+            for line in text.replace("\\\n", " ").splitlines()
+            if ":" in line
+            for word in line.split(":", 1)[1].split()
+        )
+    )
+
+
 def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None:
     if data is None:
         data = read_recipe(args.recipe)
@@ -214,7 +227,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
         if args.depfile:
             text = run([cc, *[f for f in flags if f != "-c"], "-M", str(args.source)]).decode()
             target = args.dep_target or str(out)
-            args.depfile.write_text(target + ":" + text.split(":", 1)[1])
+            args.depfile.write_text(target + ": " + " ".join(dependency_paths(text)) + "\n")
         content = run([cc, *[f for f in flags if f != "-c"], "-E", str(args.source)])
 
     manifest = args.recipe.parent / "compiler.sha256"
@@ -317,6 +330,11 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
         temporary.replace(out)
     if assembly and args.depfile and not args.depfile.exists():
         args.depfile.write_text((args.dep_target or str(out)) + ": " + str(args.source) + "\n")
+
+    if args.kind == "cc" and args.depfile and args.depfile.is_file():
+        words = dependency_paths(args.depfile.read_text())
+        dependency_hashes = {str(Path(word)): hashlib.sha256(Path(word).read_bytes()).hexdigest() for word in words}
+        out.with_suffix(".inputs.json").write_text(json.dumps(dependency_hashes, sort_keys=True))
 
 
 def compile_batch(args: argparse.Namespace) -> None:

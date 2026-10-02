@@ -28,7 +28,7 @@ from unbake.decomp import checks, drafts, symbols_edits, type_context
 from unbake.decomp.needs import Need, SymbolNeed
 from unbake.layout import split, split_apply
 from unbake.layout.header_context import Headers
-from unbake.match import attribution, data_symbols, declarations, relink, reporting, staging
+from unbake.match import attribution, data_symbols, declarations, incremental, relink, reporting, staging
 from unbake.match.common import atomic, held
 from unbake.match.publication import collect, swap
 from unbake.project import build, compiler_choice, config, makefile
@@ -86,7 +86,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                     current[version] = holds.enter_context(build.pin(build.current_generation(project, version)))
             with reporting.phase("stage"):
                 tree = workspace / "tree"
-                staging.copy_tree(project, project.root, tree, skip=("docs",))
+                staging.copy_tree(project, project.root, tree, skip=("docs",), assembly=False)
                 local_policy = project.tools / "clone-policy.toml"
                 if local_policy.is_file():
                     shutil.copy2(local_policy, tree / local_policy.relative_to(project.root))
@@ -109,10 +109,27 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             generations: dict[str, Path] = {}
             versions = list(project.versions)
             for version in versions:
-                generations[version] = staging.generation(project, version, current[version], holds)
-                staging.chunk_stale_sources(generations[version], staged.tools, staged.version(version).symbols)
+                generations[version] = staging.generation(project, version, current[version], holds, retained=True)
             with reporting.phase("proof", sources=len(candidates)):
-                results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
+                extracted = {v: staged.version(v).split.read_text() for v in versions}
+                faults = incremental.prepare(project, staged, policy, generations, base.splits)
+                if faults is not None:
+                    unrelated = faults.keys() - {candidate.function for candidate in candidates}
+                    if unrelated:
+                        held("submit.dependencies: " + "; ".join(faults[next(iter(unrelated))]))
+                    for name, reasons in sorted(faults.items()):
+                        receipts.append(f"HELD(match): {name}: build compare failed on " + "; ".join(reasons[:4]))
+                    candidates = [candidate for candidate in candidates if candidate.function not in faults]
+                    if not candidates:
+                        return receipts
+                    _materialize(staged, base, candidates)
+                    results = _relink(staged, policy, generations, extracted)
+                else:
+                    staging.copy_assembly(project, staged)
+                    for version in versions:
+                        staging.independent_objects(generations[version])
+                        staging.chunk_stale_sources(generations[version], staged.tools, staged.version(version).symbols)
+                    results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
                 candidates, sha1 = _isolate(project, staged, base, policy, candidates, generations, results, receipts)
             if not candidates:
                 return receipts
@@ -128,7 +145,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 for candidate in candidates
             )
             receipts.extend(f"OK(submit): {version}: {line}" for version, line in sha1.items())
-        collect(project)
+        collect(project, generations=current.values())
         with reporting.phase("type_feedback", sources=len(candidates)):
             receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
         return receipts
@@ -468,6 +485,9 @@ def _isolate(
         _materialize(staged, base, candidates)
         if any(not (generations[v] / "obj/src" / f"{c.function}.o").is_file() for c in candidates for v in c.versions):
             # A failed compile chunk discards its siblings; make rebuilds only those, from the cache.
+            staging.copy_assembly(project, staged)
+            for generation in generations.values():
+                staging.independent_objects(generation)
             results = build.build(
                 project, policy, list(generations), tree=staged.root, generation_for=generations.__getitem__
             )
@@ -490,7 +510,7 @@ def _relink(
         reuse[version] = text == extracted[version] or relink.revert_rows(staged, generation, extracted[version], text)
         extracted[version] = text
     reporting.record("relink", reused={v: str(r) for v, r in reuse.items()})
-    with ThreadPoolExecutor(max_workers=len(generations)) as pool:
+    with ThreadPoolExecutor(max_workers=min(policy.cores, policy.setup_version_jobs, len(generations))) as pool:
         futures = {
             v: pool.submit(relink.prove, staged, policy, v, g, None, extracted=reuse[v]) for v, g in generations.items()
         }
@@ -530,7 +550,11 @@ def _commit(
     started: dict[str, str],
 ) -> None:
     """Publish the proved staged inputs and generations together, or nothing."""
-    reports = {v: progress.measure(staged, policy, v, generation=generations[v]) for v in project.versions}
+    with ThreadPoolExecutor(max_workers=min(policy.cores, policy.setup_version_jobs, len(project.versions))) as pool:
+        measured = {
+            v: pool.submit(progress.measure, staged, policy, v, generation=generations[v]) for v in project.versions
+        }
+        reports = {v: future.result() for v, future in measured.items()}
     paths = [staged.root / "config.toml", staged.tools / "build.json", staged.tools / "compiler.sha256"]
     paths += [p for v in staged.versions for p in (staged.version(v).split, staged.version(v).symbols)]
     paths += [staged.tools / name.name for name in makefile.TEMPLATES.glob("*.py")] + [staged.tools / "cache.py"]
