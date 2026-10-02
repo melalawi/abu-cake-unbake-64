@@ -74,6 +74,7 @@ class CompilerProposal(Identity):
 
 
 class WorkManifest(Identity):
+    entries: NotRequired[dict[str, dict[str, object]]]
     kind: Literal["function", "struct"]
     subject: str
     source: str

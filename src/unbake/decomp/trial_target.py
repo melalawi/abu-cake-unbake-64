@@ -9,46 +9,7 @@ from pathlib import Path
 
 from unbake.layout import split
 from unbake.project import build
-from unbake.project.config import Held, Project
-from unbake.project_tools.elf import Object
-
-
-def require_symbol_boundary(project: Project, function: str, version: str, target: Path) -> None:
-    """Refuse an object-symbol cut inside its owning row before classifying code.
-
-    A second function symbol inside one split unit can truncate objdiff's entry
-    even though the ROM interval is intact. Repair belongs to split boundary-map.
-    Ordinary candidate size differences remain instruction differences.
-    """
-    rows = [row for row in split.functions(project, version) if function in row.aliases]
-    if len(rows) != 1:
-        return
-    owner = rows[0]
-    obj = Object(target)
-    symbols = [s for table in obj.symbols.values() for s in table if s["info"] & 15 == 2 and s["section"]]
-    entries = [s for s in symbols if s["name"] == function]
-    if not entries:
-        entries = [s for s in symbols if s["value"] == 0]
-    if len(entries) != 1:
-        return
-    entry = entries[0]
-    size = owner.end - owner.start
-    following = [
-        s
-        for s in symbols
-        if s["section"] == entry["section"]
-        and entry["value"] < s["value"] < entry["value"] + size
-        and s["value"] >= entry["value"] + entry["size"]
-    ]
-    if not entry["size"] or entry["size"] >= size or not following:
-        return
-    names = ", ".join(s["name"] for s in sorted(following, key=lambda s: s["value"]))
-    raise Held(
-        "try",
-        f"precondition split-boundary: {function} VERSION {version}: target function symbol covers "
-        f"0x{entry['size']:X} bytes of owning text row 0x{size:X}; remaining bytes belong to {names}; "
-        "resolve the split boundary with split boundary-map before try",
-    )
+from unbake.project.config import Held, Policy, Project
 
 
 def owning_versions(project: Project, function: str, versions: list[str] | None) -> list[str]:
@@ -71,7 +32,9 @@ def owning_versions(project: Project, function: str, versions: list[str] | None)
 
 
 @contextmanager
-def inputs(project: Project, function: str, versions: list[str]) -> Iterator[dict[str, tuple[Path, Path]]]:
+def inputs(
+    project: Project, function: str, versions: list[str], *, source: Path | None = None, policy: Policy | None = None
+) -> Iterator[dict[str, tuple[Path, Path]]]:
     """Build missing targets, then pin their generations before releasing the writer lock."""
     if not versions or len(set(versions)) != len(versions):
         raise Held("try", "versions must be nonempty and unique")
@@ -83,6 +46,10 @@ def inputs(project: Project, function: str, versions: list[str]) -> Iterator[dic
             for version in versions:
                 target = target_object(project, function, version)
                 generation = holds.enter_context(build.pin(build.current_generation(project, version)))
+                if source is not None and policy is not None:
+                    from unbake.decomp import trial_entries
+
+                    target = trial_entries.target(project, policy, source, version, generation, target)
                 pinned[version] = (generation, target)
         yield pinned
 

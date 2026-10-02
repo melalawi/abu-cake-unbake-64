@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from unbake.decomp import drafts, needs
-from unbake.layout import split, structs
+from unbake.layout import entries, split, structs
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import fold, scalar_edits
 from unbake.layout.structs_parser import Parser
@@ -76,7 +76,26 @@ def folded_edits(project: Project, policy: Policy, function: str, text: str, ver
     destination = project.include[0] / "shared" / f"{function.lower()}.h"
     headers = fold(records, project, destination=destination)
     final = final_source(project, text, parsers, headers)
-    return [*headers, *match_edits(project, function, final, versions)]
+    edits = match_edits(project, function, final, versions)
+    for version in versions:
+        group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)
+        if len(group) < 2:
+            continue
+        configured = project.version(version)
+        _, lines, segments = split.layout(configured.split)
+        paths = {row.path for row in group[1:]}
+        removed = [lines[row.line] for segment in segments for row in segment.rows if row.path in paths]
+        edits = [
+            replace(edit, after=_remove_rows(edit.after, removed)) if edit.path == configured.split else edit
+            for edit in edits
+        ]
+    return [*headers, *edits]
+
+
+def _remove_rows(text: str, removed: list[str]) -> str:
+    for line in removed:
+        text = text.replace(line, "", 1)
+    return text
 
 
 def match_edits(project: Project, function: str, text: str, versions: Iterable[str]) -> list[Edit]:

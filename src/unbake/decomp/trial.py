@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-from unbake.decomp import checks, drafts
+from unbake.decomp import checks, drafts, trial_entries
 from unbake.decomp import work as draft_work
 from unbake.decomp.commands import prefix
 from unbake.decomp.score import diff
@@ -19,7 +19,8 @@ from unbake.decomp.trial_compile import compile_draft, run_tool, scratch_directo
 from unbake.decomp.trial_flags import FlagResult, compiler_variants, ranking, variant_project
 from unbake.decomp.trial_source import annotate_divergence
 from unbake.decomp.trial_target import inputs as trial_inputs
-from unbake.decomp.trial_target import owning_versions, require_symbol_boundary
+from unbake.decomp.trial_target import owning_versions
+from unbake.layout import entries as entry_layout
 from unbake.project.config import Held, Policy, Project
 from unbake.project_tools.elf import Object
 
@@ -90,7 +91,13 @@ def retain_draft(
     _source_content(source)
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=directory))
     selected = owning_versions(project, source.stem, versions)
-    with trial_inputs(project, source.stem, selected) as pinned:
+    has_groups = any(len(entry_layout.owners(project, policy, source, v)) > 1 for v in selected)
+    inputs = (
+        trial_inputs(project, source.stem, selected, source=source, policy=policy)
+        if has_groups
+        else trial_inputs(project, source.stem, selected)
+    )
+    with inputs as pinned:
         from unbake.decomp.trial_compilers import resolve
 
         project = resolve(project, policy, source, work, pinned)
@@ -133,12 +140,16 @@ def try_draft(
     selected = owning_versions(project, function or source.stem, versions) if pinned is None else list(pinned)
     function = function or source.stem
     if pinned is None:
-        with trial_inputs(original_project, function, selected) as pinned:
+        has_groups = any(len(entry_layout.owners(project, policy, source, v)) > 1 for v in selected)
+        inputs = (
+            trial_inputs(original_project, function, selected, source=source, policy=policy)
+            if has_groups
+            else trial_inputs(original_project, function, selected)
+        )
+        with inputs as pinned:
             return try_draft(
                 original_project, policy, source, scratch, versions, flags=flags, pinned=pinned, function=function
             )
-    for name, (_, target) in pinned.items():
-        require_symbol_boundary(project, function, name, target)
     trial = Trial(function, drafts.source_identity(content), {}, preconditions, "")
     results = [FlagResult(variant, {}, {}) for variant in variants]
     if flags:
@@ -192,16 +203,34 @@ def try_draft(
                     raise
                 result.failures[name] = error.reason
                 continue
-            document = diff(
-                policy, name, function, target, candidate, variant_work / "objdiff.json", generation=generation
+            target_view, candidate_view, entry_failures = trial_entries.comparison_views(
+                project, policy, source, name, target, candidate, variant_work
+            )
+            document = (
+                diff(policy, name, function, target, candidate, variant_work / "objdiff.json", generation=generation)
+                if target_view == target
+                else diff(
+                    policy,
+                    name,
+                    function,
+                    target_view,
+                    candidate_view,
+                    variant_work / "objdiff.json",
+                    generation=generation,
+                    placement_target=target,
+                )
             )
             comparison = compare_object(name, document, function)
+            comparison.typed["changed"] += len(entry_failures)
+            comparison.lines.extend("entry: " + failure for failure in entry_failures)
+            if index == 0:
+                trial.preconditions.extend(f"trial.entries.{name}: {failure}" for failure in entry_failures)
             if not comparison_identical(comparison):
                 comparison.lines.extend(
                     f"placement: {reason}" for reason in cast(list[str], document.get("placement_refusals", []))
                 )
-            comparison.target_words = _function_words(target, function)
-            comparison.candidate_words = _function_words(candidate, function)
+            comparison.target_words = _function_words(target_view, function)
+            comparison.candidate_words = _function_words(candidate_view, function)
             result.compares[name] = comparison
             if index == 0:
                 if not flags:

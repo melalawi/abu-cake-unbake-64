@@ -554,7 +554,16 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             key = digest([cartridge.sha1, template, hashlib.sha256(Path(executable).read_bytes()).hexdigest()])
             if cache.is_file() and (saved := json.loads(cache.read_text())).get("key") == key:
                 measured = split.ExtractedText(
-                    [split.Function(**{**row, "aliases": tuple(row["aliases"])}) for row in saved["functions"]],
+                    [
+                        split.Function(
+                            **{
+                                **row,
+                                "aliases": tuple(row["aliases"]),
+                                "entries": tuple(tuple(entry) for entry in row.get("entries", ())),
+                            }
+                        )
+                        for row in saved["functions"]
+                    ],
                     tuple(tuple(row) for row in saved["data"]),
                 )
             else:
