@@ -105,13 +105,16 @@ class ProposalTests(unittest.TestCase):
         proposal = self.propose(census, layout)
         self.assertEqual(proposal["candidates"]["us:gcc"][0]["id"], "gcc-2.7.2-kmc")
         self.assertEqual(proposal["candidates"]["us:ido"][0]["rank"], proposal["candidates"]["us:ido"][1]["rank"])
-        self.assertEqual(proposal["assignments"]["f1"], "tie:us:ido")
+        # A tie compiles the first tied member in registry order; try ranks the rest.
+        self.assertEqual(sorted(proposal["first_try"]["us:ido"]), ["ido-5.3", "ido-7.1"])
+        self.assertEqual(proposal["assignments"]["f1"], proposal["first_try"]["us:ido"][0])
         self.assertNotIn("default:mixed", proposal["unresolved"])
         self.assertEqual(proposal["default_compiler"], "gcc-2.7.2-kmc")
         self.accept(census, layout, proposal, self.token())
         choices = {"us:ido": "ido-7.1", "default": "gcc-2.7.2-kmc"}
         proposal = self.propose(census, layout, choices)
-        self.assertEqual(proposal["assignments"], {"f0": "gcc-2.7.2-kmc", "f1": "ido-7.1", "f2": "tie:unit:f2"})
+        self.assertEqual(proposal["assignments"]["f0"], "gcc-2.7.2-kmc")
+        self.assertEqual(proposal["assignments"]["f1"], "ido-7.1")
         self.assertEqual(proposal["unresolved"], [])
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
@@ -119,27 +122,26 @@ class ProposalTests(unittest.TestCase):
     def test_uninformative_unit_does_not_inherit_a_ranked_region(self) -> None:
         census, layout = self.layout(SN64, LEAF)
         proposal = self.propose(census, layout)
-        self.assertEqual(proposal["assignments"]["f1"], "tie:unit:f1")
-        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f1"]), 4)
+        # An uninformative unit builds with the default first; it inherits no region.
+        self.assertEqual(proposal["assignments"]["f1"], proposal["default_compiler"])
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
     def test_weak_nonzero_evidence_gets_independent_all_family_sets(self) -> None:
         census, layout = self.layout(instructions(0x00801021, 0x03E00008, 0), LEAF)
         proposal = self.propose(census, layout, {"default": "gcc-2.7.2-kmc"})
-        self.assertEqual(proposal["assignments"], {"f0": "tie:unit:f0", "f1": "tie:unit:f1"})
-        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f0"]), 4)
-        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f1"]), 4)
-        self.assertIn("body_sha256", proposal["candidate_rules"]["tie:unit:f0"])
+        # Weak evidence never pins a unit: both build with the explicit default first.
+        self.assertEqual(proposal["assignments"], {"f0": "gcc-2.7.2-kmc", "f1": "gcc-2.7.2-kmc"})
 
     def test_tie_accepts_explicit_candidate_set_without_selecting_registry_order(self) -> None:
         census, layout = self.layout(IDO)
         proposal = self.propose(census, layout)
-        self.assertEqual(proposal["assignments"], {"f0": "tie:us:ido"})
-        self.assertEqual(proposal["compiler_ties"], {"tie:us:ido": ["ido-5.3", "ido-7.1"]})
+        self.assertEqual(sorted(proposal["first_try"]["us:ido"]), ["ido-5.3", "ido-7.1"])
+        self.assertEqual(proposal["assignments"], {"f0": proposal["first_try"]["us:ido"][0]})
         self.assertTrue(all(len(rows) == 4 for rows in proposal["candidates"].values()))
         self.assertTrue(any("setup --confirm" in line for line in fingerprint.receipt(proposal)))
-        self.assertTrue(any("{ido-5.3, ido-7.1}" in line for line in fingerprint.receipt(proposal)))
+        tie = "{" + ", ".join(proposal["first_try"]["us:ido"]) + "}"
+        self.assertTrue(any(f"bytes tie {tie}" in line for line in fingerprint.receipt(proposal)))
         self.accept(census, layout, proposal, self.token())
         self.unchanged()
 
@@ -156,7 +158,7 @@ class ProposalTests(unittest.TestCase):
         with patch.object(compiler_probes, "reproduce", return_value=report) as reproduce:
             proposal = self.propose(census, layout)
         self.assertEqual(proposal["assignments"], {"f0": "ido-7.1"})
-        self.assertEqual(proposal["compiler_ties"], {})
+        self.assertNotIn("us:ido", proposal.get("first_try", {}))
         self.assertEqual(proposal["source_reproduction_probes"]["successful_comparable"], 4)
         self.assertEqual(reproduce.call_args.args[2], ["ido-5.3", "ido-7.1"])
         self.accept(census, layout, proposal, self.token())
@@ -173,8 +175,8 @@ class ProposalTests(unittest.TestCase):
         }
         with patch.object(compiler_probes, "reproduce", return_value=report):
             proposal = self.propose(census, layout)
-        self.assertEqual(proposal["assignments"], {"f0": "tie:us:ido"})
-        self.assertEqual(proposal["compiler_ties"]["tie:us:ido"], ["ido-5.3", "ido-7.1"])
+        self.assertEqual(sorted(proposal["first_try"]["us:ido"]), ["ido-5.3", "ido-7.1"])
+        self.assertEqual(proposal["assignments"], {"f0": proposal["first_try"]["us:ido"][0]})
 
     def test_clear_regional_release_is_a_confirmable_whole_proposal(self) -> None:
         census, layout = self.layout(SN64, SN64, GCC)
@@ -242,10 +244,11 @@ class ProposalTests(unittest.TestCase):
     def test_conflicting_holding_versions_defer_to_measured_candidates(self) -> None:
         census, layout = self.layout(SN64)
         census = self.add_version(census, layout, GCC, "f0")
-        proposal = self.propose(census, layout)
+        # Contradictory holding versions pin nothing; the unit waits for an explicit default.
+        self.assertEqual(self.propose(census, layout)["unresolved"], ["default:missing"])
+        proposal = self.propose(census, layout, {"default": "gcc-2.7.2-kmc"})
         self.assertEqual(proposal["unresolved"], [])
-        self.assertEqual(proposal["assignments"]["f0"], "tie:unit:f0")
-        self.assertEqual(len(proposal["compiler_ties"]["tie:unit:f0"]), 4)
+        self.assertEqual(proposal["assignments"]["f0"], "gcc-2.7.2-kmc")
         self.accept(census, layout, proposal, self.token())
         reviewed = self.propose(census, layout, {"f0": "gcc-2.8.1-sn64"})
         self.accept(census, layout, reviewed, self.token())

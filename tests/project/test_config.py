@@ -92,15 +92,17 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(project.compiler_for(self.directory / "drafts/alpha.c").id, "gcc-2.7.2-kmc")
         self.assertEqual(project.compiler_for("src/alpha.c").id, "gcc-2.7.2-kmc")
         self.path.write_text(self.path.read_text().replace("[units]", '[units]\n"src/alpha.c" = "ido-7.1"'))
-        with self.assertRaisesRegex(config.Held, "conflicts"):
+        # [units] keys are function names; a path is refused by name.
+        with self.assertRaisesRegex(config.Held, r"\[units\]\.src/alpha\.c: expected a function name"):
             config.load(self.root).compiler_for("src/alpha.c")
 
-    def test_segment_compiler_selection_matches_standalone_recipe(self) -> None:
+    def test_unit_compiler_selection_matches_standalone_recipe(self) -> None:
         from unbake.project import makefile
 
+        # Exception units are listed by function name; a segment selects nothing.
         self.path.write_text(
             self.original.replace(
-                "[units]", '[compilers."gcc-2.7.2-kmc"]\ncflags = []\n[units]\nmain = "gcc-2.7.2-kmc"'
+                "[units]", '[compilers."gcc-2.7.2-kmc"]\ncflags = []\n[units]\nalpha = "gcc-2.7.2-kmc"'
             )
         )
         project = config.load(self.root)
@@ -126,9 +128,11 @@ class ConfigTests(unittest.TestCase):
         for field, line in fields.items():
             with self.subTest(field=field):
                 self.held_config(self.original.replace(line, "", 1), field)
-        for section in ("project", "paths", "units", "version.us"):
+        for section in ("project", "paths"):
             with self.subTest(section=section):
                 self.held_config(self.original.replace(f"[{section}]", "[unused]"), f"[{section}]")
+        # A listed version needs its own table.
+        self.held_config(self.original.replace("[version.us]", '[version."us-other"]'), "[version.us]")
         self.held_config(self.original.replace('[compilers."ido-7.1"]', "[unused_compiler]"), "[compilers]")
 
     def test_unknown_compiler_and_units_are_named(self) -> None:
