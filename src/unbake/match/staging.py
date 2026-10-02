@@ -143,7 +143,7 @@ def generation(project: Project, version: str, current: Path, holds: ExitStack) 
         raise
 
 
-def chunk_stale_sources(generation: Path, tools: Path) -> None:
+def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
     """Let the ordinary Make cold-chunk rule refresh outdated C/assembly receipts.
 
     Keep objects and dependency files: the compiler still verifies their content
@@ -155,9 +155,11 @@ def chunk_stale_sources(generation: Path, tools: Path) -> None:
     if not inputs:
         return
     newest = max(path.stat().st_mtime_ns for path in inputs)
-    for kind in ("src", "asm"):
+    # Assembly also depends on the symbol list, which a batch rewrites for every unit.
+    assembly = max(newest, symbols.stat().st_mtime_ns) if symbols.is_file() else newest
+    for kind, limit in (("src", newest), ("asm", assembly)):
         for receipt in (generation / "obj" / kind).rglob("*.built"):
-            if not receipt.is_symlink() and receipt.stat().st_mtime_ns < newest:
+            if not receipt.is_symlink() and receipt.stat().st_mtime_ns < limit:
                 receipt.unlink()
 
 

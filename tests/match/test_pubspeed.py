@@ -33,7 +33,7 @@ class PublicationSpeedTests(MatchFixture):
                 os.utime(receipt, ns=(stamp, stamp))
                 unit.with_suffix(".o").write_bytes(b"warm object")
                 unit.with_suffix(".d").write_text("header dependency")
-        staging.chunk_stale_sources(generation, tools)
+        staging.chunk_stale_sources(generation, tools, tools / "absent-symbols.txt")
         self.assertFalse((generation / "obj/src/100.built").exists())
         self.assertTrue((generation / "obj/src/300.built").exists())
         self.assertFalse((generation / "obj/asm/100.built").exists())

@@ -110,7 +110,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             versions = list(project.versions)
             for version in versions:
                 generations[version] = staging.generation(project, version, current[version], holds)
-                staging.chunk_stale_sources(generations[version], staged.tools)
+                staging.chunk_stale_sources(generations[version], staged.tools, staged.version(version).symbols)
             with reporting.phase("proof", sources=len(candidates)):
                 results = build.build(project, policy, versions, tree=tree, generation_for=generations.__getitem__)
                 candidates, sha1 = _isolate(project, staged, base, policy, candidates, generations, results, receipts)

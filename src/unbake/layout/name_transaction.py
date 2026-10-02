@@ -77,7 +77,7 @@ def apply(
             all_changes = [*changes, *extra]
             for version in project.versions:
                 generations[version] = staging.generation(project, version, current[version], holds)
-                staging.chunk_stale_sources(generations[version], staged.tools)
+                staging.chunk_stale_sources(generations[version], staged.tools, staged.version(version).symbols)
             results = build.build(
                 project, policy, list(project.versions), tree=tree, generation_for=generations.__getitem__
             )
