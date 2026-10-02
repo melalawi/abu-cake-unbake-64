@@ -605,7 +605,7 @@ def infer(
             if known and signature is not None
             else (
                 f"{returned['type']} {name}("
-                + (", ".join(p["type"] + " " + p["name"] for p in params) or "void")
+                + (", ".join(declarations.declarator(p["type"], p["name"]) for p in params) or "void")
                 + ");"
                 if known
                 else None
@@ -642,7 +642,7 @@ def infer(
             "versions": facts["globals"].get(name, {}).get("versions", {}),
             "declaration": globals_.get(name, {}).get("declaration")
             or (
-                f"extern {graph.resolved['global:' + name]['type']} {name};"
+                "extern " + declarations.declarator(graph.resolved["global:" + name]["type"], name) + ";"
                 if ":" not in name and graph.resolved.get("global:" + name, {}).get("state") == "known"
                 else None
             ),
@@ -810,5 +810,5 @@ def solve(project: Project, policy: Policy | None = None) -> dict[str, Any]:
         raise Held("solve", "types.inputs_stale: declarations changed during solve")
     from unbake.typemap.database import publish
 
-    publish(project, result, previous)
+    publish(project, result, previous, policy=policy)
     return result

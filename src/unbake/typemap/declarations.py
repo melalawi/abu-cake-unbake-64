@@ -16,9 +16,9 @@ from unbake.project.config import Held, Policy, Project
 from unbake.typemap import storage
 
 
-def clean(source: str) -> str:
+def clean(source: str, *, line_markers: bool = False) -> str:
     source = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
-    source = re.sub(r"^\s*#[^\n]*", "", source, flags=re.M)
+    source = re.sub(r"^\s*#(?!\s*\d+\s+\")[^\n]*" if line_markers else r"^\s*#[^\n]*", "", source, flags=re.M)
     source = re.sub(r"\b(?:__extension__|__inline__|__inline|__restrict|restrict)\b", "", source)
     source = re.sub(r"\b__attribute__\s*\(\([^\n]*?\)\)", "", source)
     return source
@@ -46,6 +46,9 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
         raise Held("solve", "policy.cpp: required for typed header preprocessing")
     source = "".join(f'#include "{path}"\n' for path in ordered)
     if extra is not None:
+        generated_types = project.include[0] / "shared/typemap.h"
+        if generated_types.is_file():
+            source += f'#include "{generated_types}"\n'
         source += f'#include "{extra}"\n'
     flags: list[str] = []
     pending = iter(project.compilers[project.compiler_id(project.default_compiler)].cflags)
@@ -61,11 +64,12 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
         str(policy.cpp),
         *policy.cppflags,
         *flags,
-        "-P",
+        *(("-P",) if extra is None else ()),
         "-x",
         "c",
         *(f"-I{root}" for root in project.include),
         *(f"-D{macro}" for macro in project.version(version).macros),
+        *(("-DUNBAKE_PROTOTYPES_H",) if extra is not None else ()),
         "-",
     ]
     try:
@@ -74,7 +78,7 @@ def headers(project: Project, policy: Policy | None, version: str, extra: Path |
         raise Held("solve", f"policy.cpp: {error}") from error
     if result.returncode:
         raise Held("solve", "types.declaration: " + result.stderr.strip())
-    return clean(result.stdout)
+    return clean(result.stdout, line_markers=extra is not None)
 
 
 def _type(node: Any) -> str:
@@ -143,8 +147,10 @@ def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -
     return result
 
 
-def extract(source: str, provenance: dict[str, Any], *, definitions: bool = False) -> dict[str, Any]:
-    source = clean(source)
+def extract(
+    source: str, provenance: dict[str, Any], *, definitions: bool = False, owned_source: Path | None = None
+) -> dict[str, Any]:
+    source = clean(source, line_markers=owned_source is not None)
     try:
         tree = c_parser.CParser().parse(source)
     except Exception as error:
@@ -186,7 +192,9 @@ def extract(source: str, provenance: dict[str, Any], *, definitions: bool = Fals
                 "registers": parameter_registers(params, aliases),
                 "provenance": provenance,
             }
-        elif "static" not in declaration.storage:
+        elif "static" not in declaration.storage and (
+            not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
+        ):
             type_ = _type(declaration.type)
             declaration = copy.deepcopy(declaration)
             declaration.init = None
@@ -202,7 +210,8 @@ def extract(source: str, provenance: dict[str, Any], *, definitions: bool = Fals
                     "provenance": provenance,
                 }
     try:
-        for layout in Parser(source).parse():
+        layout_source = clean(source)
+        for layout in Parser(layout_source).parse():
             if not layout.fields:
                 continue
             result["structs"][layout.name] = {
@@ -210,7 +219,7 @@ def extract(source: str, provenance: dict[str, Any], *, definitions: bool = Fals
                 "size": layout.size,
                 "alignment": layout.alignment,
                 "aliases": list(layout.aliases),
-                "declaration": source[layout.start : layout.end] + ";",
+                "declaration": layout_source[layout.start : layout.end] + ";",
                 "fields": [{"name": f.name, "type": f.type, "offset": f.offset, "size": f.size} for f in layout.fields],
                 "provenance": provenance,
             }
@@ -244,7 +253,18 @@ def collect(project: Project, policy: Policy | None) -> list[dict[str, Any]]:
                         "proof": row["proof"],
                     },
                     definitions=True,
+                    owned_source=source,
                 )
                 seed["functions"] = {name: value for name, value in seed["functions"].items() if name == function}
                 seeds.append(seed)
     return seeds
+
+
+def declarator(type_: str, name: str) -> str:
+    """Insert a name in an abstract C type, including arrays and function pointers."""
+    if "(*" in type_ or re.search(r"\(\s*\*", type_):
+        return re.sub(r"(\(\s*\*[^)]*)(\))", rf"\g<1>{name}\2", type_, count=1)
+    array = type_.find("[")
+    if array >= 0:
+        return type_[:array].rstrip() + " " + name + type_[array:]
+    return type_ + " " + name

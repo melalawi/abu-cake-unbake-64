@@ -96,7 +96,7 @@ def _semantic(value: Any) -> Any:
     return value
 
 
-def publish(project: Project, value: dict[str, Any], previous: dict[str, Any]) -> None:
+def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
     root = project.include[0]
@@ -140,6 +140,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any]) -
         root / "shared/typemap.h": "\n".join(type_lines).encode(),
         root / "shared/prototypes.h": "\n".join(prototypes).encode(),
     }
+    validate_headers(project, outputs, policy)
     value["rendered_sha256"] = {
         str(path.relative_to(project.root)): storage.digest(content)
         for path, content in outputs.items()
@@ -307,3 +308,64 @@ def feedback(
     return feedback_many(
         project, [{"function": function, "source": source, "versions": versions, "proof": proof}], policy=policy
     )
+
+
+def validate_headers(project: Project, outputs: dict[Path, bytes | Path], policy: Policy | None) -> None:
+    """Parse the staged shared context before any revision or header is published."""
+    from dataclasses import replace
+
+    from unbake.decomp.draft_context import preprocess_context
+    from unbake.decomp.trial_compile import run_tool
+    from unbake.typemap import declarations
+
+    project.build.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".type-context-", dir=project.build) as temporary:
+        scratch = Path(temporary)
+        roots = []
+        for index, root in enumerate(project.include):
+            staged_root = scratch / str(index)
+            shutil.copytree(root, staged_root)
+            roots.append(staged_root)
+            for path, content in outputs.items():
+                if path.is_relative_to(root) and isinstance(content, bytes):
+                    staged = staged_root / path.relative_to(root)
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(content)
+        staged_project = replace(project, include=tuple(roots))
+        source = scratch / "context.c"
+        source.write_text('#include "shared/typemap.h"\n#include "shared/prototypes.h"\n')
+        assembly = scratch / "validate.s"
+        assembly.write_text(".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
+        for version in project.versions:
+            try:
+                if policy is None:
+                    text = declarations.headers(project, None, version)
+                    text += "\n" + "\n".join(
+                        declarations.clean(content.decode())
+                        for content in outputs.values()
+                        if isinstance(content, bytes)
+                    )
+                    declarations.extract(text, {"kind": "declared"})
+                else:
+                    expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
+                    context = scratch / "expanded.c"
+                    context.write_text(expanded)
+                    if not getattr(policy, "m2c", None):
+                        declarations.extract(expanded, {"kind": "declared"})
+                        continue
+                    run_tool(
+                        [
+                            str(policy.m2c),
+                            "--context",
+                            str(context),
+                            "--function",
+                            "__unbake_validate_context",
+                            str(assembly),
+                        ],
+                        project.root,
+                        "solve",
+                    )
+            except Held as error:
+                raise Held(
+                    "solve", f"types.header_parse: {version}: shared/typemap.h, shared/prototypes.h: {error.reason}"
+                ) from error

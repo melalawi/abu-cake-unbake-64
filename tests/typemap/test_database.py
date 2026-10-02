@@ -171,6 +171,27 @@ class DatabaseTests(unittest.TestCase):
             solve(self.project)
         self.assertEqual(before, {path: path.read_bytes() for path in paths})
 
+    def test_invalid_rendered_header_keeps_previous_revision_and_marks(self) -> None:
+        from unbake.typemap.solver import infer
+
+        map_program(self.project)
+        solve(self.project)
+        paths = [self.project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json")]
+        paths.extend(self.project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
+        before = {path: path.read_bytes() for path in paths}
+
+        def malformed(*args, **kwargs):
+            result = infer(*args, **kwargs)
+            result["functions"]["alpha"].update(state="known", prototype="void alpha(unsigned char[4] arg0);")
+            return result
+
+        with (
+            patch("unbake.typemap.solver.infer", side_effect=malformed),
+            self.assertRaisesRegex(Held, "types.header_parse"),
+        ):
+            solve(self.project)
+        self.assertEqual(before, {path: path.read_bytes() for path in paths})
+
     def test_feedback_refuses_fuzzy_and_unpublished_sources(self) -> None:
         source = self.project.src / "alpha.c"
         source.write_text("int alpha(void) { return 1; }\n")

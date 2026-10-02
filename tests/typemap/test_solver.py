@@ -1,9 +1,10 @@
 """Signatures seed value-flow constraints; offsets and local names do not."""
 
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
-from unbake.typemap.declarations import canonical, extract, parameter_registers
+from unbake.typemap.declarations import canonical, declarator, extract, parameter_registers
 from unbake.typemap.mips import Analysis
 from unbake.typemap.solver import infer
 
@@ -28,6 +29,18 @@ def solve(programs: dict, source: str) -> dict:
 
 
 class SolverTests(unittest.TestCase):
+    def test_array_and_pointer_declarators_are_valid_c(self) -> None:
+        self.assertEqual(declarator("unsigned char[4]", "arg0"), "unsigned char arg0[4]")
+        self.assertEqual(declarator("int[3][4]", "matrix"), "int matrix[3][4]")
+        extract("void leaf(" + declarator("unsigned char[4]", "arg0") + ");", {})
+
+    def test_proven_source_does_not_claim_included_globals_or_arrays(self) -> None:
+        source = '# 1 "shared/prototypes.h"\nextern float table[];\n# 1 "owned.c"\nint leaf(void) { return 1; }\n'
+        seed = extract(source, {"kind": "proven"}, definitions=True, owned_source=Path("owned.c"))
+        self.assertEqual(set(seed["functions"]), {"leaf"})
+        self.assertEqual(seed["globals"], {})
+        self.assertEqual(seed["arrays"], {})
+
     def test_width_placeholder_typedef_does_not_become_a_semantic_type(self) -> None:
         result = solve(
             {"leaf": (0x80001000, [0x03E00008, 0])},
