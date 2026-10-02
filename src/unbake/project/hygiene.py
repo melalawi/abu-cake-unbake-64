@@ -34,12 +34,12 @@ def base_ignore_text(root: Path) -> str:
         "credentials.json",
     ]
     tracked = subprocess.run(
-        ["git", "ls-files", "--error-unmatch", "--", "baserom.sha1"],
+        ["git", "ls-files", "-z", "--", "baserom.sha1", ":(glob)**/baserom.sha1"],
         cwd=root,
         capture_output=True,
         check=False,
     )
-    if tracked.returncode == 0:
+    if tracked.returncode == 0 and tracked.stdout:
         entries.insert(2, "!baserom.sha1")
     return "\n".join(entries) + "\n"
 

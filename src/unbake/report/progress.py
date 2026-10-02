@@ -170,6 +170,34 @@ _FIGURE = re.compile(
 )
 
 
+def _retain_spacing(original: str, generated: str) -> str:
+    """Keep owner spacing even when a percentage gains or loses a digit."""
+    table_pattern = r"^\| ([\w-]+) \([^\n|]+ \|\r?$"
+
+    def key(match: re.Match[str], tables: list[tuple[int, str]]) -> tuple[str, str]:
+        label = match["label"]
+        version = ""
+        if label in {"bytes", "functions"}:
+            version = next((name for offset, name in reversed(tables) if offset < match.start()), "")
+        return version, label
+
+    tables = [(match.start(), match[1]) for match in re.finditer(table_pattern, original, re.MULTILINE)]
+    fields = ("pad", "percent_pad", "count_pad")
+    spacing = {key(match, tables): tuple(match[field] for field in fields) for match in _FIGURE.finditer(original)}
+    tables = [(match.start(), match[1]) for match in re.finditer(table_pattern, generated, re.MULTILINE)]
+
+    def replace(match: re.Match[str]) -> str:
+        pads = spacing.get(key(match, tables))
+        content = match[0]
+        if pads is not None:
+            for field, pad in reversed(list(zip(fields, pads, strict=True))):
+                start, stop = match.span(field)
+                content = content[: start - match.start()] + pad + content[stop - match.start() :]
+        return content
+
+    return _FIGURE.sub(replace, generated)
+
+
 def _replace_figures(content: str, document: dict[str, Any], version: str, table: bool) -> str:
     expected = {"bytes", "functions"} if table else {version}
     seen: list[str] = []
@@ -212,13 +240,14 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: dict[str, str] | None = None) -> str:
-    """Update only figures in existing summaries and VERSION or bytes/functions tables."""
+    """Update the Progress body and retain every other owner byte."""
     before, block, after = readme_layout.section(template)
     if not reports:
         raise Held("report", "reports: missing VERSION values")
     if descriptions is not None:
         newline = "\r\n" if before.endswith("\r\n") else "\n"
-        return before + progress(reports, descriptions).replace("\n", newline) + newline + after
+        generated_body = _retain_spacing(block, progress(reports, descriptions))
+        return before + generated_body.replace("\n", newline) + newline + after
     # A unique configured rename selects the matching report, while the live
     # table description and summary label remain the owner's text.
     labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|\r?$", block, re.MULTILINE)

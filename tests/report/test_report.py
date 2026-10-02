@@ -221,6 +221,18 @@ class ConfiguredReadmeTests(unittest.TestCase):
         report.write(self.project, self.policy, reports=self.reports)
         self.assertEqual(rendered, self.readme.read_bytes())
 
+    def test_zero_progress_keeps_existing_percentage_padding(self) -> None:
+        report.write(self.project, self.policy, reports={"us": document(7, 10, 0, 70)})
+        before = self.readme.read_bytes()
+        report.write(self.project, self.policy, reports={"us": document(0, 10, 0, 0)})
+        after = self.readme.read_bytes()
+
+        def mask(value: bytes) -> bytes:
+            return re.sub(rb"[0-9][0-9,.]*|(?:\xe2\x96[\x88\x92\x91])+", b"<value>", value)
+
+        self.assertEqual(mask(after), mask(before))
+        self.assertIn(b"]  0.00%", after)
+
     def test_explicit_order_controls_summary_and_tables_independently_of_config_order(self) -> None:
         version = self.project.version("us")
         project = replace(

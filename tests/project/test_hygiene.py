@@ -130,6 +130,29 @@ class HygieneTests(unittest.TestCase):
         )
         self.assertIn("!baserom.sha1", result.stdout)
 
+    def test_tracked_version_identity_files_get_the_same_exception(self) -> None:
+        self.track("versions/us/baserom.sha1", b"identity")
+        ignore = self.root / ".gitignore"
+        ignore.write_text(hygiene.ignore_text(self.project))
+        self.assertIn("!baserom.sha1\n", ignore.read_text())
+        self.assertEqual(hygiene.ignore_text(self.project), ignore.read_text())
+        result = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.excludesfile=/dev/null",
+                "check-ignore",
+                "-v",
+                "--no-index",
+                "versions/us/baserom.sha1",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("!baserom.sha1", result.stdout)
+
     def test_check_refuses_compiler_file_even_if_force_added(self) -> None:
         setup.run(self.project, self.policy)
         self.track("tools/fixture/private.txt", b"compiler")
