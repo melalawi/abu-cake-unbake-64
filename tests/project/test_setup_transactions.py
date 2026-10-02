@@ -63,7 +63,7 @@ class SetupTransactionTests(unittest.TestCase):
                     "macros": [],
                 }
             },
-            units={"main": "fixture"},
+            units={},
         )
         data["compilers"]["fixture"]["cflags"] = []
         (self.root / "config.toml").write_text(toml.dumps(data))
@@ -344,7 +344,7 @@ class SetupTransactionTests(unittest.TestCase):
         data["project"]["state"] = "awaiting-roms"
         del data["project"]["default_compiler"]
         del data["compilers"]
-        del data["units"]
+        data.pop("units", None)
         (self.root / "config.toml").write_text(toml.dumps(data))
         pending = config.load_pending(self.root)
         before = setup._inputs(pending)
@@ -368,7 +368,7 @@ class SetupTransactionTests(unittest.TestCase):
         data["project"]["state"] = "awaiting-roms"
         del data["project"]["default_compiler"]
         del data["compilers"]
-        del data["units"]
+        data.pop("units", None)
         (self.root / "config.toml").write_text(toml.dumps(data))
         pending = config.load_pending(self.root)
         rom = cartridge(self.project.version("us").baserom, b"ABC")
