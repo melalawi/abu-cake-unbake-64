@@ -46,6 +46,7 @@ def admit(project: Project, policy: Policy, source: Path) -> dict[str, Any]:
         "target_sha256",
         "generation_sha256",
         "layout_sha256",
+        "entries",
     ):
         if recorded.get(key) != current[key]:
             raise Held("submit", f"submit.{key}: changed since latest try")

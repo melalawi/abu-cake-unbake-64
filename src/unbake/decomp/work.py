@@ -137,6 +137,7 @@ def identity(
         )
     )
     targets, generations = {}, {}
+    entry_inventory = {}
     layouts = {}
     flags = {}
     for version in versions:
@@ -163,6 +164,12 @@ def identity(
             target = generation / "obj" / ("src" if row.kind == "c" else "asm") / (row.path + ".o")
         if not target.is_file():
             raise Held("try", f"trial.target_sha256: target {target} is missing")
+        from unbake.decomp import trial_entries
+
+        selected_policy = policy if policy is not None else load_policy()
+        if pinned is None:
+            target = trial_entries.target(project, selected_policy, source, version, generation, target)
+        entry_inventory[version] = trial_entries.inventory(project, selected_policy, source, version)
         targets[version] = digest(target.read_bytes())
         generations[version] = digest(
             encoded(
@@ -210,6 +217,7 @@ def identity(
             "generation_sha256": generations,
             "layout_sha256": digest(encoded(layouts)),
             "needs": {"headers": overlay_inputs["edits"]},
+            "entries": entry_inventory,
             "evidence": {
                 "config_sha256": digest((project.root / "config.toml").read_bytes()),
                 "overlay_directory": str(source.parent) if (source.parent / "overlay.json").is_file() else None,

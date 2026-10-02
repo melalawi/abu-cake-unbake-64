@@ -189,6 +189,7 @@ def diff(
     output: Path,
     *,
     generation: Path | None = None,
+    placement_target: Path | None = None,
 ) -> dict[str, object]:
     """Retain instruction rows from a real relocatable-object comparison."""
     tool = objdiff_cli(policy, "try")
@@ -244,7 +245,7 @@ def diff(
             resolve_table_placement,
         )
 
-        sections = placements(generation.resolve(), function, target)
+        sections = placements(generation.resolve(), function, placement_target or target)
         addresses = cast(dict[str, int], document["symbol_addresses"])
         placed, proved = resolve_literal_placement(
             generation.resolve(), version, function, candidate, output, addresses

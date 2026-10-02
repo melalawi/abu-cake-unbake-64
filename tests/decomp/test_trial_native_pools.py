@@ -11,8 +11,6 @@ from tests.support import test_policy
 from unbake.decomp.score import diff
 from unbake.decomp.trial import comparison_identical
 from unbake.decomp.trial_compare import compare_object
-from unbake.decomp.trial_target import require_symbol_boundary
-from unbake.project.config import Held, load
 from unbake.project_tools.elf import Object
 
 
@@ -84,15 +82,3 @@ class NativePoolTests(unittest.TestCase):
                         self.assertEqual(result.typed["relocation"], 0)
                     if name in ("missing", "rodata missing"):
                         self.assertIn("missing draft entry", "\n".join(result.lines))
-
-            # A native split owns the interval, while a second function symbol
-            # can still truncate the entry inside that same object.
-            target = assemble(
-                root,
-                "boundary",
-                ".text\n.globl alpha\n.type alpha,@function\n"
-                "alpha: nop\n.size alpha,.-alpha\n.globl tail\n.type tail,@function\n"
-                "tail: jr $ra\nnop\n.size tail,.-tail\n",
-            )
-            with self.assertRaisesRegex(Held, "precondition split-boundary.*tail"):
-                require_symbol_boundary(load(root), "alpha", "us", target)

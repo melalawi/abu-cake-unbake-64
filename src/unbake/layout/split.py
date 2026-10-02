@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -88,6 +89,7 @@ class Function:
     path: str
     kind: str
     aliases: tuple[str, ...]
+    entries: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass
@@ -315,6 +317,13 @@ def functions(project: Project, v: str) -> list[Function]:
     version = project.version(v)
     _, _, segments = layout(version.split)
     _, symbol_rows = symbols(version.symbols)
+    by_address: dict[int, list[str]] = {}
+    for symbol_name, entry in symbol_rows.items():
+        by_address.setdefault(entry[0], []).append(symbol_name)
+    function_symbols = sorted(
+        (entry[0], name) for name, entry in symbol_rows.items() if re.search(r"\btype\s*:\s*func\b", entry[2].string)
+    )
+    function_addresses = [value for value, _ in function_symbols]
     result = []
     for segment in segments:
         for row in segment.rows:
@@ -322,7 +331,7 @@ def functions(project: Project, v: str) -> list[Function]:
                 continue
             vram_address = address(row, version.split)
             stem = Path(row.path).name
-            aliases = tuple(name for name, entry in symbol_rows.items() if entry[0] == vram_address)
+            aliases = tuple(by_address.get(vram_address, ()))
             name = stem if stem in aliases or not aliases else aliases[0]
             result.append(
                 Function(
@@ -334,6 +343,15 @@ def functions(project: Project, v: str) -> list[Function]:
                     row.path,
                     row.kind,
                     tuple(dict.fromkeys((stem, *aliases))),
+                    tuple((alias, 0) for alias in aliases)
+                    + tuple(
+                        (entry_name, entry_address - vram_address)
+                        for entry_address, entry_name in function_symbols[
+                            bisect_left(function_addresses, vram_address + 1) : bisect_left(
+                                function_addresses, vram_address + end(row) - row.start
+                            )
+                        ]
+                    ),
                 )
             )
     return result
