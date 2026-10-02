@@ -52,7 +52,7 @@ def arrange(
     source = bytearray(obj.content(index))
     material = relocated(obj, section, text_address)
     tables = pools(obj, section, True)
-    pending: dict[tuple[str, int], list[tuple[int, int]]] = {}
+    pending: dict[tuple[int, int], list[tuple[int, int]]] = {}
     uses: list[tuple[int, int, int, int, int, int, bool]] = []
     normalized: set[int] = set()
     anchors = storage(obj, index)
@@ -64,7 +64,7 @@ def arrange(
     for offset, kind, symbol in obj.relocations(text):
         if symbol["section"] != index:
             continue
-        key = symbol["name"], symbol["value"]
+        key = symbol["table"], symbol["index"]
         word = int(struct.unpack_from(">I", code, offset)[0])
         if kind == 5:
             pending.setdefault(key, []).append((offset, word))

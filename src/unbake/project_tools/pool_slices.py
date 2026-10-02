@@ -79,10 +79,35 @@ def split_pool(obj: Object, section: str, base: int, slices: list[dict[str, Any]
                 symbol["section"], symbol["value"] = target, value
                 struct.pack_into(">I", packed, number * 16 + 4, value)
                 struct.pack_into(">H", packed, number * 16 + 14, target)
-        for target in sections:
-            symbol_numbers[sym_index, target] = len(packed) // 16
-            packed.extend(struct.pack(">IIIBBH", 0, 0, 0, 0x13, 0, target))
+        # ELF requires all local symbols before the first nonlocal (sh_info).
+        # An unnamed GLOBAL section symbol is exported as `no symbol` by ld,
+        # colliding with every other published pool. Insert LOCAL section
+        # symbols and shift all old relocation indices, including table and
+        # external references, so anonymous entries retain their identity.
+        first = obj.sections[sym_index][7]
+        inserted = bytearray()
+        for position, target in enumerate(sections, first):
+            symbol_numbers[sym_index, target] = position
+            inserted.extend(struct.pack(">IIIBBH", 0, 0, 0, 3, 0, target))
+        packed[first * 16 : first * 16] = inserted
+        original_symbols[sym_index][first:first] = [
+            dict(table=sym_index, index=position, name="", value=0, size=0, info=3, section=target)
+            for position, target in enumerate(sections, first)
+        ]
+        for position, symbol in enumerate(original_symbols[sym_index]):
+            symbol["index"] = position
+        obj.sections[sym_index][7] += len(sections)
         replace(obj, sym_index, packed)
+        for rel_index, header in enumerate(obj.sections):
+            if header[1] != 9 or header[6] != sym_index:
+                continue
+            data = bytearray(obj.content(rel_index))
+            for pos in range(0, len(data), 8):
+                info = struct.unpack_from(">I", data, pos + 4)[0]
+                number = info >> 8
+                if number >= first:
+                    struct.pack_into(">I", data, pos + 4, (number + len(sections)) << 8 | info & 255)
+            replace(obj, rel_index, data)
 
     code = bytearray(obj.content(text))
     for rel_index, header in list(enumerate(obj.sections)):
