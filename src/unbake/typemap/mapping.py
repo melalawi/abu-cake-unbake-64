@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 import struct
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 from unbake.decomp import plan
 from unbake.decomp.indexed import indexed_references
 from unbake.layout import split
 from unbake.project.config import Held, Project
-from unbake.typemap import storage
+from unbake.project_tools.extract import discovered_symbols, symbols_from
+from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis
 
 
@@ -34,8 +36,22 @@ def map_program(project: Project) -> dict[str, Any]:
             raise Held("map", f"map.functions.{version}: no declared function intervals")
         inventory.extend(rows)
         _, native = split.symbols(cartridge.symbols)
+        named = {name: address for name, (address, _, _) in native.items()}
+        generated = project.build_link(version)
+        try:
+            table = generated / "splat_symbols.csv"
+            if table.is_file():
+                named = discovered_symbols(table, named)
+            placements = generated / "symbol-addresses.txt"
+            if placements.is_file():
+                for name, address in symbols_from([placements]).items():
+                    if name in named and named[name] != address:
+                        raise ValueError(f"conflicting generated symbol {name}")
+                    named[name] = address
+        except (OSError, ValueError, KeyError) as error:
+            raise Held("map", f"map.symbols.{version}: {error}") from error
         by_address: dict[int, list[str]] = defaultdict(list)
-        for name, (address, _, _) in native.items():
+        for name, address in named.items():
             by_address[address].append(name)
         symbols[version] = dict(by_address)
     bodies = {}
@@ -65,45 +81,58 @@ def map_program(project: Project) -> dict[str, Any]:
             for symbol in symbol_names:
                 record = globals_.setdefault(symbol, {"versions": {}, "accesses": []})
                 record["versions"][version] = {"address": address}
-    for row in inventory:
-        canonical = names[row.version, row.name]
-        body = bodies[row.version, row.name]
-        words = [word for (word,) in struct.iter_unpack(">I", body)]
-        analysis = Analysis(
-            canonical, row.version, row.address, row.start, words, targets[row.version], symbols[row.version]
-        ).run()
-        indexed = {ref.offset: ref for ref in indexed_references(words)}
-        for memory in analysis["memory"]:
-            relative = memory["instruction"] - row.address
-            ref = indexed.get(relative)
-            if ref is not None:
-                memory["indexed"] = {"anchor": ref.address, "scale": ref.scale, "extent": None}
-            base = memory["base"]["constant"]
-            if base is not None:
-                address = (base + memory["offset"]) & 0xFFFFFFFF
-                symbols_here = symbols[row.version].get(address, [])
-                memory["symbols"] = symbols_here
-                memory["address"] = address
-                if not symbols_here:
-                    key = f"address:{row.version}:{address:08X}"
-                    candidate = globals_.setdefault(
-                        key, {"name": None, "versions": {row.version: {"address": address}}, "accesses": []}
-                    )
-                    candidate["accesses"].append(memory)
-                for symbol in symbols_here:
-                    if symbol in globals_:
-                        globals_[symbol]["accesses"].append(memory)
-        function = functions.setdefault(canonical, {"versions": {}, "aliases": []})
-        function["aliases"] = sorted(set(function["aliases"] + [row.name, *row.aliases]))
-        function["versions"][row.version] = {
-            "name": row.name,
-            "start": row.start,
-            "end": row.end,
-            "address": row.address,
-            "kind": row.kind,
-            "target_sha256": storage.digest(body),
-            **analysis,
-        }
+    directory = project.build / "map"
+    directory.mkdir(parents=True, exist_ok=True)
+    writer = shards.Writer(directory)
+    try:
+        for row in inventory:
+            canonical = names[row.version, row.name]
+            body = bodies[row.version, row.name]
+            words = [word for (word,) in struct.iter_unpack(">I", body)]
+            analysis = Analysis(
+                canonical, row.version, row.address, row.start, words, targets[row.version], symbols[row.version]
+            ).run()
+            indexed = {ref.offset: ref for ref in indexed_references(words)}
+            for memory in analysis["memory"]:
+                relative = memory["instruction"] - row.address
+                ref = indexed.get(relative)
+                if ref is not None:
+                    memory["indexed"] = {"anchor": ref.address, "scale": ref.scale, "extent": None}
+                base = memory["base"]["constant"]
+                if base is not None:
+                    address = (base + memory["offset"]) & 0xFFFFFFFF
+                    symbols_here = symbols[row.version].get(address, [])
+                    memory["symbols"] = symbols_here
+                    memory["address"] = address
+                    if not symbols_here:
+                        key = f"address:{row.version}:{address:08X}"
+                        candidate = globals_.setdefault(
+                            key, {"name": None, "versions": {row.version: {"address": address}}, "accesses": []}
+                        )
+                        candidate["accesses"].append(
+                            {key: memory[key] for key in ("function", "version", "instruction")}
+                        )
+                    for symbol in symbols_here:
+                        if symbol in globals_:
+                            globals_[symbol]["accesses"].append(
+                                {key: memory[key] for key in ("function", "version", "instruction")}
+                            )
+            function = functions.setdefault(canonical, {"versions": {}, "aliases": []})
+            function["aliases"] = sorted(set(function["aliases"] + [row.name, *row.aliases]))
+            record = {
+                "name": row.name,
+                "start": row.start,
+                "end": row.end,
+                "address": row.address,
+                "kind": row.kind,
+                "target_sha256": storage.digest(body),
+                **analysis,
+            }
+            writer.add(canonical, row.version, record)
+            function["versions"][row.version] = {"name": row.name, "target_sha256": record["target_sha256"]}
+        shard_path = writer.finish()
+    finally:
+        writer.close()
     pools = {}
     for path in (project.build / "setup/layout.json", project.root / "docs/setup/layout.json"):
         if path.is_file():
@@ -114,6 +143,9 @@ def map_program(project: Project) -> dict[str, Any]:
     result = {
         **storage.identity(project),
         "inputs_sha256": pinned,
+        "format": "sqlite-zlib-v1",
+        "shard": shard_path.name,
+        "shard_sha256": storage.file_digest(shard_path),
         "functions": functions,
         "globals": globals_,
         "pools": pools,
@@ -122,13 +154,25 @@ def map_program(project: Project) -> dict[str, Any]:
     if pinned != storage.inputs(project):
         raise Held("map", "map.inputs_stale: inputs changed during map")
     storage.write(project.build / "map/facts.json", storage.encoded(result))
+    result["functions"] = shards.Functions(shard_path, functions)
     return result
 
 
 def load_map(project: Project) -> dict[str, Any]:
     path = project.build / "map/facts.json"
+    if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
     result = storage.read(path, "map.facts")
+    if result.get("format") != "sqlite-zlib-v1":
+        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
+    shard = result.get("shard", "")
+    if not isinstance(shard, str) or Path(shard).name != shard:
+        raise Held("solve", "map.shards: invalid shard name")
+    shard_path = path.parent / shard
+    if not shard_path.is_file() or storage.file_digest(shard_path) != result.get("shard_sha256"):
+        raise Held("solve", "map.shards: missing or changed facts; run unbake map")
     storage.validate_identity(project, result, "map.facts")
     if result.get("inputs_sha256") != storage.inputs(project):
         raise Held("solve", "map.inputs_stale: run unbake map")
+    result["functions"] = shards.Functions(shard_path, result["functions"])
     return result

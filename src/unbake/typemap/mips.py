@@ -125,6 +125,7 @@ class Analysis:
         self.outputs: set[str] = set()
         self.uses: dict[str, set[int]] = {}
         self.unknown: set[str] = set()
+        self.value_types: dict[tuple[str, str], dict[str, Any]] = {}
 
     def provenance(self, index: int) -> dict[str, Any]:
         return {
@@ -141,6 +142,11 @@ class Analysis:
                     self.inputs.add(origin.rsplit(":", 1)[1])
                 if origin.startswith("return:"):
                     self.uses.setdefault(origin, set()).add(self.address + index * 4)
+
+    def hint(self, value: Value, type_: str, index: int, record: bool) -> None:
+        if record and len(value.origins) == 1 and value.origins[0][1] == 0:
+            node = value.origins[0][0]
+            self.value_types[node, type_] = {"node": node, "type": type_, **self.provenance(index)}
 
     def step(self, state: State, index: int, record: bool) -> None:
         word = self.words[index]
@@ -174,6 +180,10 @@ class Analysis:
                 destination = operand
                 if slot is not None and len(base.origins) == 1:
                     value = state.stack.get((slot, width), UNKNOWN)
+                    if value == UNKNOWN and slot >= 16:
+                        value = Value(((f"param:{self.function}:stack{slot}", 0),))
+                        if record:
+                            self.inputs.add(f"stack{slot}")
                 elif base.constant is not None and len(self.symbols.get(base.constant, [])) == 1:
                     value = Value((("global:" + self.symbols[base.constant][0], 0),))
                 else:
@@ -246,6 +256,37 @@ class Analysis:
                 self.unknown.add(f"instruction 0x{self.address + index * 4:X}: unsupported opcode 0x{op:X}")
             # Unsupported coprocessor effects cannot retain stale register identities.
             destination = rt
+        # Record value semantics independently of memory storage width. Copies
+        # preserve provenance; actual arithmetic produces a distinct value node.
+        if (
+            destination is not None
+            and value == UNKNOWN
+            and (
+                (op == 0 and fn not in (8, 9, 12, 13, 15))
+                or op in (8, 10, 11, 12, 13, 14, 0x18)
+                or (op == 17 and rs >= 16 and fn < 0x30)
+            )
+        ):
+            value = Value(((f"value:{self.function}:{self.version}:{index}", 0),))
+            if op == 17 and rs >= 16:
+                output_type = "double" if (fn == 0x21 or (rs == 17 and fn not in (0x20, 0x24, 0x25))) else "float"
+                if fn in (0x24, 0x25, 0x0C, 0x0D, 0x0E, 0x0F):
+                    output_type = "int"
+                self.hint(value, output_type, index, record)
+            else:
+                self.hint(value, "int", index, record)
+        if op == 17 and rs >= 16:
+            input_type = {16: "float", 17: "double", 20: "int", 21: "long long"}.get(rs)
+            if input_type:
+                self.hint(regs[rd + 32], input_type, index, record)
+                if fn in (0, 1, 2, 3) or fn >= 0x30:
+                    self.hint(regs[rt + 32], input_type, index, record)
+        if (op == 0 and fn in (0x20, 0x22, 0x24, 0x25, 0x26, 0x27, 0x2A, 0x18, 0x1A)) or op in (8, 10, 12, 14):
+            for item in read:
+                self.hint(regs[item], "int", index, record)
+        elif op == 0 and fn in (0x2B, 0x19, 0x1B):
+            for item in read:
+                self.hint(regs[item], "unsigned int", index, record)
         for item in read:
             self.use(regs[item], index, record)
         if destination:
@@ -293,7 +334,15 @@ class Analysis:
                         "target": target,
                         "callee": callee,
                         "tail": tail,
-                        "arguments": {register(r): state.registers[r].data() for r in ARGUMENTS},
+                        "arguments": {
+                            **{register(r): state.registers[r].data() for r in ARGUMENTS},
+                            **{
+                                f"stack{offset - sp_offset}": value.data()
+                                for (offset, width), value in state.stack.items()
+                                for origin, sp_offset in state.registers[29].origins
+                                if origin == f"stack:{self.function}" and offset - sp_offset >= 16 and width in (4, 8)
+                            },
+                        },
                         "return_use": [],
                     }
                 if tail:
@@ -342,6 +391,12 @@ class Analysis:
             if word >> 26 in MEMORY and index not in covered:
                 self.step(State([ZERO, *([UNKNOWN] * 63)]), index, True)
         for index, call in self.calls.items():
+            call["return_register_use"] = {
+                register(r): sorted(
+                    self.uses.get(f"return:{self.function}:{self.version}:{index}:{register(r)}", set())
+                )
+                for r in RETURNS
+            }
             call["return_use"] = sorted(
                 set().union(
                     *(
@@ -353,6 +408,7 @@ class Analysis:
         return {
             "register_inputs": sorted(self.inputs),
             "register_outputs": sorted(self.outputs),
+            "value_types": list(self.value_types.values()),
             "calls": list(self.calls.values()),
             "returns": list(self.returns.values()),
             "memory": [self.memory[i] for i in sorted(self.memory)],

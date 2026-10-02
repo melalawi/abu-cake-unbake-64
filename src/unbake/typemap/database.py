@@ -2,25 +2,51 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
 from unbake.typemap import storage
 
+_decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
+
 
 def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
     path = project.build / "types/database.json"
     if not path.is_file() and not required:
         return None
-    value = storage.read(path, "types.database")
+    try:
+        stat = path.stat()
+    except OSError as error:
+        raise Held("draft", f"types.database: {path}: {error}") from error
+    stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+    cached = _decoded.get(path)
+    if cached is not None and cached[0] == stamp:
+        value = cached[1]
+    else:
+        value = storage.read(path, "types.database")
+        _decoded[path] = (stamp, value)
     storage.validate_identity(project, value, "types.database")
     if value.get("inputs_sha256") != storage.inputs(project, headers=True):
         raise Held("draft", "types.inputs_stale: run unbake map then unbake solve")
     map_path = project.build / "map/facts.json"
-    if not map_path.is_file() or value.get("map_sha256") != storage.digest(map_path.read_bytes()):
+    if not map_path.is_file() or value.get("map_sha256") != storage.file_digest(map_path):
         raise Held("draft", "types.inputs_stale: map changed; run unbake solve")
+    shard = value.get("map_shard")
+    if shard is not None:
+        if not isinstance(shard, str) or Path(shard).name != shard:
+            raise Held("draft", "map.shards: invalid shard name in database")
+        storage.verify_file(project.build / "map" / shard, value["map_shard_sha256"], "map.shards")
+    for row in value.get("constraints", []):
+        if row.get("kind") == "shard":
+            path = project.root / row["path"]
+            if not path.resolve().is_relative_to((project.build / "types").resolve()):
+                raise Held("draft", "types.constraints: shard is outside the generated type directory")
+            storage.verify_file(path, row["sha256"], "types.constraints")
     for relative, digest in value.get("rendered_sha256", {}).items():
         path = project.root / relative
         if not path.is_file() or storage.digest(path.read_bytes()) != digest:
@@ -89,36 +115,51 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any]) -
         includes.append(f'#include "{relative}"')
     type_lines = ["#ifndef UNBAKE_TYPEMAP_H", "#define UNBAKE_TYPEMAP_H", *includes]
     for name, record in sorted(value["structs"].items()):
-        if record["state"] == "unknown":
+        if record.get("partial") and record.get("declaration"):
+            type_lines.append(record["declaration"])
+        elif record["state"] == "unknown":
             type_lines.append(f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown */")
     type_lines.extend(("#endif", ""))
     prototypes = ["#ifndef UNBAKE_PROTOTYPES_H", "#define UNBAKE_PROTOTYPES_H", '#include "typemap.h"']
     for _name, record in sorted(value["functions"].items()):
         if record["state"] == "known":
-            prototypes.append(record["prototype"])
+            prototype = record["prototype"]
+            prototypes.append(prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype)
     for _name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
             prototypes.append(record["declaration"])
+    for name, record in sorted(value["arrays"].items()):
+        if record["state"] == "known" and record.get("partial") and ":" not in name:
+            prototypes.append(f"extern {record['type']} {name}[];")
     prototypes.extend(("#endif", ""))
-    outputs = {
+    outputs: dict[Path, bytes | Path] = {
         root / "shared/typemap.h": "\n".join(type_lines).encode(),
         root / "shared/prototypes.h": "\n".join(prototypes).encode(),
     }
     value["rendered_sha256"] = {
-        str(path.relative_to(project.root)): storage.digest(content) for path, content in outputs.items()
+        str(path.relative_to(project.root)): storage.digest(content)
+        for path, content in outputs.items()
+        if isinstance(content, bytes)
     }
     database = project.build / "types/database.json"
-    outputs[database] = storage.encoded(value)
-    digest = storage.digest(outputs[database])
+    staged = storage.stage_json(database, value)
+    outputs[database] = staged
+    digest = storage.file_digest(staged)
+    summary: dict[str, Any] = {**storage.identity(project), "revision": value["revision"], "database_sha256": digest}
     changed: set[str] = set()
     for kind in ("functions", "globals", "structs", "arrays"):
         before = previous.get(kind, {})
         after = value[kind]
-        changed.update(
-            f"{kind}:{name}"
-            for name in set(before) | set(after)
-            if _semantic(before.get(name)) != _semantic(after.get(name))
-        )
+        summary[kind] = {
+            name: {"semantic_sha256": storage.digest(storage.encoded(_semantic(row))), "users": row.get("users", [])}
+            for name, row in after.items()
+        }
+        for name in set(before) | set(after):
+            old = before.get(name, {})
+            old_digest = old.get("semantic_sha256") or storage.digest(storage.encoded(_semantic(old)))
+            new_digest = summary[kind].get(name, {}).get("semantic_sha256")
+            if old_digest != new_digest:
+                changed.add(f"{kind}:{name}")
     marks = redrafts(project)
     if previous:
         for function, neighbours in value["dependencies"].items():
@@ -140,21 +181,114 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any]) -
                     "revision": value["revision"],
                     "type_db_sha256": digest,
                 }
+    outputs[project.build / "types/summary.json"] = storage.encoded(summary)
     # Carry pending marks forward so a draft against the newest revision can clear them.
     for mark in marks.values():
         mark.update(revision=value["revision"], type_db_sha256=digest)
     outputs[project.build / "types/redraft.json"] = storage.encoded({**storage.identity(project), "functions": marks})
-    before = {path: path.read_bytes() if path.is_file() else None for path in outputs}
+    backups: dict[Path, Path | None] = {}
     try:
+        for path in outputs:
+            if path.is_file():
+                descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
+                os.close(descriptor)
+                backup_path = Path(name)
+                backups[path] = backup_path
+                shutil.copyfile(path, backup_path)
+            else:
+                backups[path] = None
         for path, content in outputs.items():
-            storage.write(path, content)
-    except BaseException:
-        for path, content in before.items():
-            if content is None:
-                path.unlink(missing_ok=True)
+            if isinstance(content, Path):
+                storage.install(path, content)
             else:
                 storage.write(path, content)
+    except BaseException:
+        for path, backup in backups.items():
+            if backup is None:
+                path.unlink(missing_ok=True)
+            else:
+                os.replace(backup, path)
         raise
+    finally:
+        staged.unlink(missing_ok=True)
+        for backup in backups.values():
+            if backup is not None:
+                backup.unlink(missing_ok=True)
+
+
+def feedback_many(
+    project: Project,
+    entries: list[dict[str, Any]],
+    *,
+    policy: Policy | None = None,
+) -> dict[str, Any]:
+    """Validate every published receipt, then map and solve the batch once."""
+    from unbake.typemap.mapping import map_program
+    from unbake.typemap.solver import solve
+
+    if not entries:
+        raise Held("submit", "types.feedback.entries: at least one published receipt required")
+    checked = []
+    seen = set()
+    for entry in entries:
+        for key in ("function", "source", "versions", "proof"):
+            if key not in entry:
+                raise Held("submit", f"types.feedback.{key}: missing receipt field")
+        function = entry["function"]
+        if not isinstance(function, str) or not re.fullmatch(r"[A-Za-z_]\w*", function) or function in seen:
+            raise Held("submit", "types.feedback.function: required distinct C identifier")
+        seen.add(function)
+        source = Path(entry["source"]).resolve()
+        if not source.is_relative_to(project.src.resolve()) or not source.is_file():
+            raise Held("submit", "types.feedback.source: published project C required")
+        digest = storage.file_digest(source)
+        versions, proof = entry["versions"], entry["proof"]
+        for key in ("matched", "source_sha256", "versions", "target_sha256"):
+            if key not in proof:
+                raise Held("submit", f"types.feedback.{key}: missing proof")
+        if proof["matched"] is not True or proof["source_sha256"] != digest:
+            raise Held("submit", "types.feedback.source_sha256: exact matched source proof required")
+        if (
+            not versions
+            or len(versions) != len(set(versions))
+            or set(versions) != set(proof["versions"])
+            or set(versions) != set(proof["target_sha256"])
+        ):
+            raise Held("submit", "types.feedback.versions: every containing version must be proved")
+        checked.append((function, source, digest, versions, proof))
+    facts = map_program(project)
+    inventory = getattr(facts["functions"], "inventory", facts["functions"])
+    aliases = {alias: name for name, row in inventory.items() for alias in (name, *row.get("aliases", []))}
+    records = {}
+    for function, source, digest, versions, proof in checked:
+        canonical = aliases.get(function)
+        item = facts["functions"][canonical] if canonical is not None else None
+        if item is None or set(versions) != set(item["versions"]):
+            raise Held("submit", "types.feedback.versions: proof differs from whole-program ownership")
+        for version in versions:
+            if proof["target_sha256"][version] != item["versions"][version]["target_sha256"]:
+                raise Held("submit", f"types.feedback.target_sha256: {version}: ROM target differs")
+            if item["versions"][version]["kind"] != "c":
+                raise Held("submit", f"types.feedback.matched: {version}: function is not published C")
+        if storage.file_digest(source) != digest:
+            raise Held("submit", f"types.feedback.source_sha256: published source changed: {source}")
+        records[function] = {
+            "source": str(source.relative_to(project.root)),
+            "source_sha256": digest,
+            "versions": versions,
+            "proof": proof,
+            "rom_target_sha256": {v: item["versions"][v]["target_sha256"] for v in versions},
+        }
+    path = project.build / "types/proven.json"
+    previous = storage.read(path, "types.feedback") if path.is_file() else {**storage.identity(project), "records": {}}
+    storage.validate_identity(project, previous, "types.feedback")
+    previous["records"].update(records)
+    storage.write(path, storage.encoded(previous))
+    if policy is None:
+        from unbake.project.config import read_policy
+
+        policy = read_policy()
+    return solve(project, policy)
 
 
 def feedback(
@@ -166,47 +300,6 @@ def feedback(
     proof: dict[str, Any],
     policy: Policy | None = None,
 ) -> dict[str, Any]:
-    """Accept actual published all-version matches, refresh facts, solve and mark users."""
-    from unbake.typemap.mapping import map_program
-    from unbake.typemap.solver import solve
-
-    if not re.fullmatch(r"[A-Za-z_]\w*", function):
-        raise Held("submit", "types.feedback.function: required C identifier")
-    source = source.resolve()
-    if not source.is_relative_to(project.src.resolve()) or not source.is_file():
-        raise Held("submit", "types.feedback.source: published project C required")
-    digest = storage.digest(source.read_bytes())
-    for key in ("matched", "source_sha256", "versions", "target_sha256"):
-        if key not in proof:
-            raise Held("submit", f"types.feedback.{key}: missing proof")
-    if proof["matched"] is not True or proof["source_sha256"] != digest:
-        raise Held("submit", "types.feedback.source_sha256: exact matched source proof required")
-    if not versions or set(versions) != set(proof["versions"]) or set(versions) != set(proof["target_sha256"]):
-        raise Held("submit", "types.feedback.versions: every containing version must be proved")
-    facts = map_program(project)
-    item = facts["functions"].get(function)
-    if item is None:
-        item = next((row for row in facts["functions"].values() if function in row["aliases"]), None)
-    if item is None or set(versions) != set(item["versions"]):
-        raise Held("submit", "types.feedback.versions: proof differs from whole-program ownership")
-    for version in versions:
-        if proof["target_sha256"][version] != item["versions"][version]["target_sha256"]:
-            raise Held("submit", f"types.feedback.target_sha256: {version}: ROM target differs")
-        if item["versions"][version]["kind"] != "c":
-            raise Held("submit", f"types.feedback.matched: {version}: function is not published C")
-    path = project.build / "types/proven.json"
-    previous = storage.read(path, "types.feedback") if path.is_file() else {**storage.identity(project), "records": {}}
-    storage.validate_identity(project, previous, "types.feedback")
-    previous["records"][function] = {
-        "source": str(source.relative_to(project.root)),
-        "source_sha256": digest,
-        "versions": versions,
-        "proof": proof,
-        "rom_target_sha256": {v: item["versions"][v]["target_sha256"] for v in versions},
-    }
-    storage.write(path, storage.encoded(previous))
-    if policy is None:
-        from unbake.project.config import read_policy
-
-        policy = read_policy()
-    return solve(project, policy)
+    return feedback_many(
+        project, [{"function": function, "source": source, "versions": versions, "proof": proof}], policy=policy
+    )

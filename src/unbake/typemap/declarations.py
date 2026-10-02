@@ -137,7 +137,7 @@ def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -
         if floating and floating_prefix and len(result) < 2:
             result.append("f12" if not result else "f14")
         else:
-            result.append(f"r{4 + slot}" if slot < 4 else None)
+            result.append(f"r{4 + slot}" if slot < 4 else f"stack{slot * 4}")
         floating_prefix &= floating
         slot += width
     return result

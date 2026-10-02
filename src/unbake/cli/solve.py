@@ -20,7 +20,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     for kind in ("functions", "globals", "structs", "arrays"):
         records = value[kind]
         lines.append(f"{kind}: known={sum(row['state'] == 'known' for row in records.values())} total={len(records)}")
-    lines.extend(f"{row['key']}: {row.get('alternatives', [])}" for row in value["conflicts"])
+    lines.extend(f"{row['key']}: {row.get('alternatives', row.get('reason', []))}" for row in value["conflicts"])
     lines.append(f"redraft={len(redrafts(project))}; unknown details are retained in the database")
     common.suggest("unbake next")
     return common.receipt("solve", lines)

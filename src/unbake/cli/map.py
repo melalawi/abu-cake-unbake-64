@@ -14,13 +14,16 @@ def register(phases: common.Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     facts = map_program(project)
     for version in project.versions:
-        bodies = [item["versions"][version] for item in facts["functions"].values() if version in item["versions"]]
+        count = calls = memory = 0
+        for item in facts["functions"].values():
+            if version in item["versions"]:
+                body = item["versions"][version]
+                count += 1
+                calls += len(body["calls"])
+                memory += len(body["memory"])
         common.receipt(
             "map",
-            [
-                f"{version}: functions={len(bodies)} calls={sum(len(b['calls']) for b in bodies)} "
-                f"memory={sum(len(b['memory']) for b in bodies)}"
-            ],
+            [f"{version}: functions={count} calls={calls} memory={memory}"],
         )
     common.suggest("unbake solve")
     return common.receipt(

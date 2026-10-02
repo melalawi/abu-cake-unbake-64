@@ -63,6 +63,17 @@ class MipsFactsTests(unittest.TestCase):
         self.assertEqual(len(result["memory"]), 1)
         self.assertTrue(result["memory"][0]["base"]["unknown"])
 
+    def test_call_retains_register_specific_return_use(self) -> None:
+        result = analyze([0x0C000800, 0, 0x00401821, 0x03E00008, 0], {0x80002000: "leaf"})
+        self.assertEqual(result["calls"][0]["return_register_use"]["r2"], [0x80001008])
+        self.assertEqual(result["calls"][0]["return_register_use"]["f0"], [])
+
+    def test_call_stack_offset_is_relative_to_current_sp(self) -> None:
+        result = analyze([0x27BDFFE0, 0xAFA40010, 0x0C000800, 0, 0x27BD0020, 0x03E00008, 0], {0x80002000: "leaf"})
+        self.assertEqual(
+            result["calls"][0]["arguments"]["stack16"]["origins"], [{"id": "param:caller:r4", "offset": 0}]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

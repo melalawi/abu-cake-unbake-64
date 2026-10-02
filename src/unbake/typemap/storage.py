@@ -16,8 +16,16 @@ def digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def file_digest(path: Path) -> str:
+    hash_ = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            hash_.update(block)
+    return hash_.hexdigest()
+
+
 def encoded(value: object) -> bytes:
-    return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def write(path: Path, content: bytes) -> None:
@@ -64,6 +72,10 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
         if not configured.baserom.is_file():
             raise Held("map", f"map.rom_sha1.{version}: missing {configured.baserom}")
         paths.add(configured.baserom)
+        for filename in ("splat_symbols.csv", "symbol-addresses.txt"):
+            generated_symbols = project.build_link(version) / filename
+            if generated_symbols.is_file():
+                paths.add(generated_symbols)
         for key, path in (("split", configured.split), ("symbols", configured.symbols)):
             if not path.is_file():
                 raise Held("map", f"map.{key}.{version}: missing {path}")
@@ -83,7 +95,7 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
                 if not source.is_file() or digest(source.read_bytes()) != row["source_sha256"]:
                     raise Held("solve", f"types.feedback.source_sha256: published source changed: {source}")
                 paths.add(source)
-    return {str(path.relative_to(project.root)): digest(path.read_bytes()) for path in sorted(paths)}
+    return {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
 
 
 def generated(project: Project, path: Path) -> bool:
@@ -91,3 +103,66 @@ def generated(project: Project, path: Path) -> bool:
         project.include[0] / "shared/typemap.h",
         project.include[0] / "shared/prototypes.h",
     )
+
+
+class FactLog:
+    """Stream redundant diagnostic constraints instead of retaining them in RAM."""
+
+    def __init__(self, directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(prefix=".constraints-", dir=directory)
+        self.temporary = Path(name)
+        self.stream = os.fdopen(descriptor, "w")
+        self.count = 0
+
+    def append(self, value: dict[str, Any]) -> None:
+        self.stream.write(json.dumps(value, separators=(",", ":")) + "\n")
+        self.count += 1
+
+    def finish(self, root: Path) -> dict[str, Any]:
+        self.stream.close()
+        digest_ = file_digest(self.temporary)
+        path = self.temporary.parent / ("constraints-" + digest_ + ".jsonl")
+        os.replace(self.temporary, path)
+        return {"kind": "shard", "path": str(path.relative_to(root)), "sha256": digest_, "count": self.count}
+
+    def close(self) -> None:
+        self.stream.close()
+        self.temporary.unlink(missing_ok=True)
+
+
+def stage_json(path: Path, value: object) -> Path:
+    """Encode one JSON token at a time, without a database-sized string/bytes copy."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise Held("solve", f"types.database: generated path is a symlink: {path}")
+    descriptor, name = tempfile.mkstemp(prefix=".typemap-json-", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+        return temporary
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def install(path: Path, staged: Path) -> None:
+    os.replace(staged, path)
+
+
+_verified: dict[Path, tuple[tuple[int, int, int, int], str]] = {}
+
+
+def verify_file(path: Path, expected: str, key: str) -> None:
+    try:
+        stat = path.stat()
+        stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+        if _verified.get(path) == (stamp, expected):
+            return
+        if file_digest(path) != expected:
+            raise Held("solve", f"{key}: content changed: {path}")
+        _verified[path] = stamp, expected
+    except OSError as error:
+        raise Held("solve", f"{key}: {path}: {error}") from error
