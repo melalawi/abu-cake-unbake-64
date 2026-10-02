@@ -10,11 +10,12 @@ import subprocess
 import threading
 from contextlib import suppress
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import cast
 
 from unbake.layout import data_symbols, split, xver
-from unbake.project.cache import Cache, key
+from unbake.project.cache import Cache, key, parsed
 from unbake.project.config import Held, Policy, Project, load
 
 verified: set[tuple[Path, str]] = set()
@@ -135,6 +136,20 @@ def _read_score(path: Path, function: str) -> float:
     return _symbol_score(document, function)
 
 
+def _map_addresses(path: Path) -> tuple[dict[str, int], dict[str, int]]:
+    assigned: dict[str, int] = {}
+    provided: dict[str, int] = {}
+    for line in path.read_text().splitlines():
+        match = re.match(r"\s*(0[xX][\da-fA-F]+)\s+([A-Za-z_.$][\w.$]*)(?:\s|$)", line)
+        if match:
+            assigned[match[2]] = int(match[1], 16)
+        if "PROVIDE" in line:
+            match = re.search(r"PROVIDE\s*\(\s*([A-Za-z_.$][\w.$]*)\s*=\s*(0[xX][\da-fA-F]+)\s*\)", line)
+            if match:
+                provided.setdefault(match[1], int(match[2], 16))
+    return assigned, provided
+
+
 def relocation_addresses(
     generation: Path, version: str, names: list[str], *, refusals: list[str] | None = None
 ) -> dict[str, int]:
@@ -145,13 +160,10 @@ def relocation_addresses(
         with suppress(Held):
             addresses.update({name: value[0] for name, value in split.symbols(symbols)[1].items()})
     for path in sorted(generation.glob("*.map")):
-        for line in path.read_text().splitlines():
-            match = re.match(r"\s*(0[xX][\da-fA-F]+)\s+([A-Za-z_.$][\w.$]*)(?:\s|$)", line)
-            if match:
-                addresses[match[2]] = int(match[1], 16)
-            match = re.search(r"PROVIDE\s*\(\s*([A-Za-z_.$][\w.$]*)\s*=\s*(0[xX][\da-fA-F]+)\s*\)", line)
-            if match:
-                addresses.setdefault(match[1], int(match[2], 16))
+        assigned, provided = parsed("linker.map", path, partial(_map_addresses, path))
+        addresses.update(assigned)
+        for name, value in provided.items():
+            addresses.setdefault(name, value)
     # Existing correspondence resolves names_from aliases through two agreeing
     # VERSION anchors. Unknown names retain their spelling; never guess from it.
     with suppress(Held, OSError):

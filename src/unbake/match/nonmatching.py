@@ -7,7 +7,6 @@ from typing import Any
 
 from unbake.decomp import checks, drafts, fuzzy_bar, work
 from unbake.layout import split
-from unbake.match import queue
 from unbake.project.config import Held, Policy, Project
 
 
@@ -19,7 +18,7 @@ def admit(project: Project, policy: Policy, source: Path) -> dict[str, Any]:
     if not rows or rows[-1]["source_sha256"] != drafts.source_identity(content):
         raise Held("submit", f"trial.source_sha256: {source} changed or has no latest trial; run unbake try {source}")
     latest = rows[-1]
-    versions = queue.holding_versions(project, source.stem)
+    versions = split.holding_versions(project, source.stem)
     blockers = [f"{source}:{checks.message(f)}" for f in checks.run(content.decode()) if f.fakematch is None]
     verdict = fuzzy_bar.evaluate(latest["compares"], versions, [*latest["preconditions"], *blockers])
     if not verdict.passed:

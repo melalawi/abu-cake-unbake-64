@@ -4,8 +4,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from unbake.decomp.needs import Need, SymbolNeed
-from unbake.decomp.symbols_edits import resolve
+from unbake.decomp.needs import SymbolNeed
 from unbake.layout import split
 from unbake.layout.structs_parser import Parser
 from unbake.project import build
@@ -40,7 +39,7 @@ def unresolved(content: str, known: set[str]) -> set[str]:
     return {name for name in external if uses[name] > 0}
 
 
-def prepare(project: Project, policy: Policy, function: str, version: str, out: Path) -> list[split.Edit]:
+def prepare(project: Project, policy: Policy, function: str, version: str, out: Path) -> list[SymbolNeed]:
     """Compile only unresolved references through the build's content-keyed cache."""
     source = project.src / f"{function}.c"
     content = build.preprocess_object(project, policy, source, version)
@@ -48,7 +47,7 @@ def prepare(project: Project, policy: Policy, function: str, version: str, out: 
     if not unresolved(content.decode("utf-8"), set(known)):
         return []
     obj = build.compile_object(project, policy, source, version, out)
-    return edits(project, policy, function, version, obj)
+    return needs(project, function, version, obj)
 
 
 def signed(word: int) -> int:
@@ -95,8 +94,8 @@ def placements(obj: Object, target: bytes, known: set[str], start: int = 0) -> d
     return found
 
 
-def edits(project: Project, policy: Policy, function: str, version: str, path: Path) -> list[split.Edit]:
-    """Emit per-version symbol facts together with the source publication."""
+def needs(project: Project, function: str, version: str, path: Path) -> list[SymbolNeed]:
+    """Per-version data symbol facts proved by the owning ROM relocation pairs."""
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1:
         raise Held("match", f"{function}: VERSION {version}: expected one owning text row")
@@ -114,8 +113,7 @@ def edits(project: Project, policy: Policy, function: str, version: str, path: P
         found = placements(obj, split.words(project, rows[0]), set(known), entries[0]["value"])
     except (OSError, ValueError) as error:
         raise Held("match", f"{function}: VERSION {version}: data placement: {error}") from error
-    pending: list[Need] = [
+    return [
         SymbolNeed(version, name, address, 0, "data", "address", 0, "owning ROM HI16/LO16 pairs")
         for name, address in found.items()
     ]
-    return resolve(pending, project, policy) if pending else []

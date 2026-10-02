@@ -5,7 +5,8 @@ from pathlib import Path
 
 from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
-from unbake.match import queue, reporting
+from unbake.match import reporting
+from unbake.match.batch import publish
 from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 
 
@@ -32,11 +33,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         receipt("submit", [line])
 
     with reporting.stream(emit):
-        lines = (
-            queue.publish_sources(project, policy, sources)
-            if batch is not None
-            else queue.publish_source(project, policy, args.source)
-        )
+        lines = publish(project, policy, sources)
     suggest(command(project.root, "next"))
     remaining = [line for line in lines if line not in emitted]
     if remaining or not lines:

@@ -47,18 +47,19 @@ def owners(
     project: Project, policy: Policy, source: Path, version: str, *, text: str | None = None
 ) -> list[split.Function]:
     """One C item may own several adjacent text rows; all remain byte pinned."""
-    rows = split.functions(project, version)
-    first = [row for row in rows if source.stem in row.aliases]
+    index = split.owners_by_alias(project, version)
+    first = index.get(source.stem, [])
     if len(first) != 1:
         raise Held("try", f"trial.entries_layout: {source.stem}: requires one owner in {version}")
     # Most sources contain just their named function. Avoid requiring a C parser
     # for those callers; compiled symbol validation remains authoritative.
     text = source.read_text() if text is None else text
     possible = set(re.findall(r"\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{", clean(text)))
-    if not any(name != source.stem and any(name in row.aliases for row in rows) for name in possible):
-        return first
+    if not any(name != source.stem and name in index for name in possible):
+        return list(first)
     names = definitions(project, policy, source, version, text)
-    selected = sorted((row for row in rows if names.intersection(row.aliases)), key=lambda row: row.start)
+    found = {id(row): row for name in names for row in index.get(name, [])}
+    selected = sorted(found.values(), key=lambda row: row.start)
     if not selected or selected[0] != first[0]:
         raise Held("try", f"trial.entries_layout: {source.stem}: must name the first entry")
     _, _, segments = split.layout(project.version(version).split)

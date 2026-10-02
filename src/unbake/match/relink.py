@@ -45,12 +45,15 @@ def prove(
     policy: Policy | SetupPolicy,
     version: str,
     generation: Path,
-    retained: dict[str, str],
+    retained: dict[str, str] | None,
     *,
     extracted: bool = False,
     placed: bool = False,
 ) -> build.BuildResult:
-    """Extract, verify provenance, place, link, objcopy and compare; no compilation."""
+    """Extract, verify provenance, place, link, objcopy and compare; no compilation.
+
+    retained None means this transaction built every object from these staged sources.
+    """
     log = generation / "build.log"
     image = generation / f"{project.name}.{version}.z64"
     elf = generation / f"{project.name}.elf"
@@ -73,9 +76,10 @@ def prove(
             if not isinstance(policy, Policy):
                 raise Held("match", "submit.relink: source verification requires the work policy")
             run(["make", "extract", f"VERSION={version}", f"BUILD={generation}"])
-            retained_inputs = inputs(project, policy, [version])[version]
+            if retained is not None:
+                retained_inputs = inputs(project, policy, [version])[version]
         for source, digest in retained_inputs.items():
-            if retained.get(source) != digest:
+            if retained is not None and retained.get(source) != digest:
                 raise Held("match", f"submit.reuse_inputs: {source}: VERSION {version}: shared inputs changed")
         graph = (generation / ".split.mk").read_text()
         objects: list[str] = []

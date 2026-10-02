@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout import shared
-from unbake.layout.header_context import context
+from unbake.layout.header_context import Headers
+from unbake.layout.header_context import context as header_context
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
@@ -97,27 +98,13 @@ def _conflict(
     )
 
 
-def _scalar_headers(texts: dict[Path, str]) -> list[tuple[bool, dict[str, str], Path]]:
-    candidates = []
-    for path, text in texts.items():
-        parser = Parser(text)
-        if any(token[0] in ("struct", "union") for token in parser.tokens):
-            continue
-        parser.parse()
-        scalars = {
-            name: parser.type_name(target[0], target[1])
-            for name, target in parser.types.items()
-            if isinstance(target, tuple) and parser.type_name(target[0], target[1]) in SCALARS
-        }
-        if scalars:
-            guarded = bool(re.search(r"^\s*#\s*ifndef\b", text, re.M))
-            candidates.append((guarded, scalars, path))
-    return candidates
+def _scalar_headers(headers: Headers) -> list[tuple[bool, dict[str, str], Path]]:
+    return [(entry[0], entry[1], path) for path, entry in headers.scalars.items() if entry is not None]
 
 
-def _scalar_include(project: Any, texts: dict[Path, str], records: list[Layout]) -> str:
+def _scalar_include(project: Any, headers: Headers, records: list[Layout]) -> str:
     """Prefer a guarded scalar home: older compilers reject repeated typedefs."""
-    candidates = _scalar_headers(texts)
+    candidates = _scalar_headers(headers)
     required = set(
         re.findall(
             r"\b[A-Za-z_]\w*\b",
@@ -135,40 +122,30 @@ def _scalar_include(project: Any, texts: dict[Path, str], records: list[Layout])
     return f'#include "{relative.as_posix()}"\n'
 
 
-def _type_includes(project: Any, texts: dict[Path, str], records: list[Layout], destination: Path) -> str:
+def _type_includes(
+    project: Any, headers: Headers, records: list[Layout], destination: Path, promoted: dict[str, Path]
+) -> str:
     """Import shared aggregate and callback typedef homes used by new fields."""
-    combined = "\n".join(texts.values())
-    parser = Parser(combined)
-    records_in_headers = parser.parse()
-    homes: dict[str, Path] = {}
-    cursor = 0
-    for path, text in texts.items():
-        for record in records_in_headers:
-            if cursor <= record.start < cursor + len(text):
-                homes.setdefault(record.name, path)
-        for declaration in parser.declarations:
-            if not cursor <= declaration.start < cursor + len(text):
-                continue
-            value = combined[declaration.start : declaration.end]
-            if not value.lstrip().startswith("typedef "):
-                continue
-            name = re.search(r"\b(\w+)\s*(?:\[[^]]*\]\s*)*;\s*$", value)
-            callback = re.search(r"\(\s*\*\s*(\w+)\s*\)", value)
-            if callback or name:
-                found = callback or name
-                assert found is not None
-                target = parser.types.get(found[1])
-                if isinstance(target, tuple) and not target[1] and parser.type_name(target[0], ()) in SCALARS:
-                    # Scalar homes remain governed by _scalar_include. In
-                    # particular, inferred M2C preludes must not become imports.
-                    continue
-                homes.setdefault(found[1], path)
-        cursor += len(text) + 1
+    homes = {**headers.homes, **promoted}
     required = set(
         re.findall(r"\b\w+\b", " ".join(field.declaration for record in records for field, _ in _nodes(record.fields)))
     )
     own = {name for record in records for name in (record.name, *record.aliases)}
-    paths = {homes[name] for name in required - own if name in homes and homes[name] != destination}
+
+    def scalar(name: str) -> bool:
+        # Scalar homes remain governed by _scalar_include. In particular,
+        # inferred M2C preludes must not become imports.
+        target = headers.types.get(name)
+        return (
+            isinstance(target, tuple)
+            and not target[1]
+            and isinstance(target[0], str)
+            and _scalar_name(headers, target[0])
+        )
+
+    paths = {
+        homes[name] for name in required - own if name in homes and homes[name] != destination and not scalar(name)
+    }
     includes = {
         next(path.relative_to(root).as_posix() for root in project.include if path.is_relative_to(root))
         for path in paths
@@ -176,9 +153,19 @@ def _type_includes(project: Any, texts: dict[Path, str], records: list[Layout], 
     return "".join(f'#include "{name}"\n' for name in sorted(includes))
 
 
-def scalar_edits(project: Any, parser: Parser) -> tuple[set[str], list[tuple[int, int, str]]]:
+def _scalar_name(headers: Headers, spelling: str) -> bool:
+    seen = set()
+    while spelling in headers.types and spelling not in seen:
+        seen.add(spelling)
+        target = headers.types[spelling]
+        if not isinstance(target, tuple) or target[1] or not isinstance(target[0], str):
+            return False
+        spelling = target[0]
+    return spelling in SCALARS
+
+
+def scalar_edits(project: Any, parser: Parser, headers: Headers) -> tuple[set[str], list[tuple[int, int, str]]]:
     """Plan matching scalar typedef removal and required project header includes."""
-    headers = {path: path.read_text() for root in project.include for path in Path(root).rglob("*.h")}
     homes: dict[str, tuple[str, Path]] = {}
     for _, scalars, path in sorted(_scalar_headers(headers), key=lambda item: (not item[0], -len(item[1]), item[2])):
         for name, spelling in scalars.items():
@@ -223,19 +210,19 @@ def _dependencies(fields: tuple[Field, ...]) -> set[str]:
     return result
 
 
-def _order_header(text: str, prefix: str, before: str = "") -> str:
+def _order_header(text: str, headers: Headers, before: str = "") -> str:
     """Order complete declarations without moving guards or duplicating typedefs."""
-    parser = Parser(prefix + text)
-    records = {record.name: record for record in parser.parse() if record.start >= len(prefix)}
+    parser, parsed = headers.parse(text)
+    records = {record.name: record for record in parsed}
     spans: dict[str, tuple[int, int]] = {}
     for declaration in parser.declarations:
         base = declaration.base
         if isinstance(base, Aggregate) and base.name in records and declaration.start <= base.start < declaration.end:
-            spans[base.name] = (declaration.start - len(prefix), declaration.end - len(prefix))
+            spans[base.name] = (declaration.start, declaration.end)
     pending = {name: _dependencies(records[name].fields) & spans.keys() for name in spans}
     # Existing definitions retain their order and every surrounding declaration.
     # Only newly added definitions may move to satisfy a by-value dependency.
-    existing = {record.name for record in Parser(prefix + before).parse() if record.start >= len(prefix)}
+    existing = {record.name for record in headers.parse(before)[1]}
     protected = sorted((span[0], name) for name, span in spans.items() if name in existing)
     for (_, previous), (_, following) in pairwise(protected):
         pending[following].add(previous)
@@ -269,7 +256,7 @@ def _order_header(text: str, prefix: str, before: str = "") -> str:
     # incomplete by-value dependency after its consumer.
     aliases = []
     for declaration in parser.declarations:
-        start, end = declaration.start - len(prefix), declaration.end - len(prefix)
+        start, end = declaration.start, declaration.end
         value = text[start:end]
         if (
             start >= 0
@@ -297,33 +284,38 @@ def fold(
     versions: tuple[str, ...] | None = None,
     destination: Path | None = None,
     prove_headers: bool = True,
+    context: Headers | None = None,
 ) -> list[Edit]:
     """Merge fields into existing include headers, returning edits without writing.
 
     headers is a project (which supplies include paths and affected VERSIONs), an
     include directory, or an iterable of header paths with explicit versions.
+    context is the project's already parsed header set; it is read, never changed.
     """
     project = headers if hasattr(headers, "include") else None
     if project is not None:
         versions = tuple(headers.versions)
-        paths = sorted({path for root in headers.include for path in Path(root).rglob("*.h")})
         root = None
+        if context is None:
+            context = Headers.read(project)
     else:
         root = Path(headers).resolve() if isinstance(headers, (str, Path)) else None
         paths = sorted(root.rglob("*.h")) if root else sorted(Path(path) for path in headers)
+        if not paths:
+            held("headers", "missing include headers")
+        loaded = {}
+        for path in paths:
+            if root is not None and not path.resolve().is_relative_to(root):
+                held(str(path), "header must be inside include")
+            try:
+                loaded[path] = path.read_text()
+            except OSError as error:
+                held(str(path), str(error))
+        context = Headers(loaded, root=root)
     if not versions:
         held("versions", "affected VERSIONs required")
-    if not paths and project is None:
-        held("headers", "missing include headers")
-    texts = {}
-    for path in paths:
-        if root is not None and not path.resolve().is_relative_to(root):
-            held(str(path), "header must be inside include")
-        try:
-            texts[path] = path.read_text()
-        except OSError as error:
-            held(str(path), str(error))
-    texts, parser, existing = context(texts, root=getattr(project, "root", root))
+    texts = dict(context.texts)
+    parser = context.parser()
     combined = parser.source
 
     def opaque_pointer_fields(fields: tuple[Field, ...]) -> tuple[Field, ...]:
@@ -345,16 +337,7 @@ def fold(
         return tuple(rewritten)
 
     records = [replace(record, fields=opaque_pointer_fields(record.fields)) for record in records]
-    locations: dict[str, list[tuple[Path, Layout, int]]] = {}
-    identities: list[tuple[Path, Layout]] = []
-    cursor = 0
-    for path, text in texts.items():
-        for layout in existing:
-            if cursor <= layout.start < cursor + len(text):
-                identities.append((path, layout))
-                for name in (layout.name, *layout.aliases):
-                    locations.setdefault(name, []).append((path, layout, cursor))
-        cursor += len(text) + 1
+    locations = context.locations
     changes: dict[tuple[Path, int, int], dict[str, tuple[Field, list[Field]]]] = {}
     insertions: dict[tuple[Path, int], dict[str, str]] = {}
     gaps: dict[tuple[Path, int], tuple[int, dict[str, tuple[Field, int]]]] = {}
@@ -528,18 +511,16 @@ def fold(
         for start, end, value in sorted(replacements_for_path, reverse=True):
             after = after[:start] + value + after[end:]
         edits.append(Edit(path, before, after, tuple(versions)))
-    import_texts = dict(texts)
     for path, aliases in promoted_aliases.items():
         existing_edit = next((edit for edit in edits if edit.path == path), None)
         before = texts[path]
         after = existing_edit.after if existing_edit is not None else before
         alias_declarations = "".join(f"typedef {kind} {tag} {alias};\n" for kind, tag, alias in sorted(aliases))
-        import_texts[path] = shared.append(before, alias_declarations)
         after = shared.append(after, alias_declarations)
         if existing_edit is not None:
             edits.remove(existing_edit)
         edits.append(Edit(path, before, after, tuple(versions)))
-    staged_texts = {**texts, **{edit.path: edit.after for edit in edits}}
+    promoted = {alias: path for path, aliases in promoted_aliases.items() for _, _, alias in aliases}
     if additions:
         if project is None:
             held("project", "shared declaration home required")
@@ -547,10 +528,10 @@ def fold(
         before = texts.get(path, "")
         before_header = before or (
             f"#ifndef UNBAKE_{path.stem.upper()}_H\n#define UNBAKE_{path.stem.upper()}_H\n"
-            + _scalar_include(project, texts, list(additions.values()))
+            + _scalar_include(project, context, list(additions.values()))
             + "\n#endif\n"
         )
-        imports = _type_includes(project, import_texts, list(additions.values()), path)
+        imports = _type_includes(project, context, list(additions.values()), path, promoted)
         extra = "".join(include + "\n" for include in imports.splitlines() if include not in before_header)
         if extra:
             # Dependencies such as n64sdk.h require the scalar home first.
@@ -573,67 +554,77 @@ def fold(
             before_header = existing_edit.after
         # Forward typedefs must precede existing definitions too: an extended
         # aggregate may now use one of the newly promoted types.
-        prefix = "\n".join(text for other, text in staged_texts.items() if other != path) + "\n"
-        probe_prefix = prefix + forward
-        header_parser = Parser(probe_prefix + shared.append(before_header, new_declarations))
+        header_parser, parsed_header = context.parse(forward + shared.append(before_header, new_declarations))
         header_records = [
-            record
-            for record in header_parser.parse()
-            if len(probe_prefix) <= record.start < len(probe_prefix) + len(before_header)
+            record for record in parsed_header if len(forward) <= record.start < len(forward) + len(before_header)
         ]
         position = min(
-            (record.start - len(probe_prefix) for record in header_records), default=before_header.rfind("#endif")
+            (record.start - len(forward) for record in header_records), default=before_header.rfind("#endif")
         )
         if position < 0:
             position = len(before_header)
         if header_records:
             position = min(
-                declaration.start - len(probe_prefix)
+                declaration.start - len(forward)
                 for declaration in header_parser.declarations
-                if declaration.start <= position + len(probe_prefix) < declaration.end
+                if declaration.start <= position + len(forward) < declaration.end
             )
         before_header = before_header[:position] + forward + before_header[position:]
         after = shared.append(before_header, new_declarations)
-        edits.append(Edit(path, before, _order_header(after, prefix, before), tuple(versions)))
+        edits.append(Edit(path, before, _order_header(after, context, before), tuple(versions)))
     if edits:
-        updated = dict(texts)
+        changed = [edit for edit in edits if edit.path in texts]
         for edit in edits:
-            updated[edit.path] = edit.after
-        updated, _, parsed = context(updated, root=getattr(project, "root", root))
-        # Typedef names can occur in independent headers (SDK and inferred
-        # views). Preserve each declaration, rather than overwriting by name.
-        validated: dict[tuple[Path, str], list[Layout]] = {}
-        cursor = 0
-        for path, text in updated.items():
-            for layout in parsed:
-                if cursor <= layout.start < cursor + len(text):
-                    validated.setdefault((path, layout.name), []).append(layout)
-            cursor += len(text) + 1
-        for path, old_layout in identities:
-            if updated[path] == texts[path]:
-                # An unchanged declaration cannot lose members. Other headers
-                # may introduce a same-named inferred tag; the global parser
-                # index does not track C scopes. The physical include proof
-                # below still verifies every affected consumer.
-                continue
-            new = validated[(path, old_layout.name)].pop(0)
-            if new.size < old_layout.size:
-                held(old_layout.name, "fold shrinks aggregate size")
-            new_fields = {name: (item, offset) for name, item, offset in _leaves(new.fields)}
-            for name, item, offset in _leaves(old_layout.fields):
-                if _padding(item):
+            if edit.path not in texts:
+                try:
+                    context.parse(edit.after)
+                except Held as error:
+                    held(str(edit.path), error.reason)
+        if changed:
+            updated = dict(texts)
+            for edit in changed:
+                updated[edit.path] = edit.after
+            updated, _, parsed = header_context(updated, root=getattr(project, "root", root))
+            # Typedef names can occur in independent headers (SDK and inferred
+            # views). Preserve each declaration, rather than overwriting by name.
+            validated: dict[tuple[Path, str], list[Layout]] = {}
+            cursor = 0
+            for path, text in updated.items():
+                for layout in parsed:
+                    if cursor <= layout.start < cursor + len(text):
+                        validated.setdefault((path, layout.name), []).append(layout)
+                cursor += len(text) + 1
+            for path, old_layout, _ in context.placed:
+                if updated[path] == texts[path]:
+                    # An unchanged declaration cannot lose members. Other headers
+                    # may introduce a same-named inferred tag; the global parser
+                    # index does not track C scopes. The physical include proof
+                    # below still verifies every affected consumer.
                     continue
-                if name not in new_fields:
-                    held(f"{old_layout.name}.{name}", "fold removes existing member")
-                replacement, new_offset = new_fields[name]
-                if (new_offset, replacement.type, replacement.size, replacement.bit_offset, replacement.bit_size) != (
-                    offset,
-                    item.type,
-                    item.size,
-                    item.bit_offset,
-                    item.bit_size,
-                ):
-                    held(f"{old_layout.name}.{name}", "fold changes existing layout")
+                new = validated[(path, old_layout.name)].pop(0)
+                if new.size < old_layout.size:
+                    held(old_layout.name, "fold shrinks aggregate size")
+                new_fields = {name: (item, offset) for name, item, offset in _leaves(new.fields)}
+                for name, item, offset in _leaves(old_layout.fields):
+                    if _padding(item):
+                        continue
+                    if name not in new_fields:
+                        held(f"{old_layout.name}.{name}", "fold removes existing member")
+                    replacement, new_offset = new_fields[name]
+                    if (
+                        new_offset,
+                        replacement.type,
+                        replacement.size,
+                        replacement.bit_offset,
+                        replacement.bit_size,
+                    ) != (
+                        offset,
+                        item.type,
+                        item.size,
+                        item.bit_offset,
+                        item.bit_size,
+                    ):
+                        held(f"{old_layout.name}.{name}", "fold changes existing layout")
         if project is not None and getattr(project, "src", None) is not None and Path(project.src).is_dir():
             if not isinstance(project, Project):
                 held(

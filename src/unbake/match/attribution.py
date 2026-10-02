@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 from unbake.layout import split
-from unbake.match.common import Attempt, Draft
 from unbake.project.config import Project
 from unbake.project_tools.elf import Object
 
@@ -21,22 +20,28 @@ def material(obj: Object, address: int, size: int) -> bytes | None:
     return None
 
 
-def diagnose(project: Project, result: Attempt, candidates: list[Draft]) -> dict[str, list[str]]:
+def diagnose(
+    project: Project, failures: list[str], generations: dict[str, Path], names: set[str]
+) -> dict[str, list[str]]:
     """Compare every allocated input object and defined symbol, retaining all faults."""
-    names = {draft.function for draft in candidates}
     faults: dict[str, list[str]] = {}
 
     def blame(name: str, detail: str) -> None:
         if name in names:
             faults.setdefault(name, []).append(detail)
 
-    for version in result.failures:
-        if version not in result.generations:
+    for version in failures:
+        if version not in generations:
             continue
-        generation = result.generations[version]
+        generation = generations[version]
         log = (generation / "build.log").read_text(errors="replace")
         context: list[str] = []
         for line in log.splitlines():
+            # A batch compile reports each failed source on its own line.
+            failed = re.match(r"^\S*/src/([A-Za-z_]\w*)\.c: (.*)$", line)
+            if failed:
+                blame(failed[1], f"{version}: compile diagnostic: {failed[2][:400]}")
+                continue
             if "in function" in line:
                 context = re.findall(r"obj/src/([^\s/:()]+)\.o", line)
             if any(word in line for word in ("Error:", "HELD(compile)", "batch objects failed")):
@@ -86,8 +91,8 @@ def diagnose(project: Project, result: Attempt, candidates: list[Draft]) -> dict
                         f"{version}: object {path}: .text size {int(size_hex, 16)} exceeds target span "
                         f"{row.end - row.start}",
                     )
-        for draft in candidates:
-            path = generation / "obj/src" / (draft.function + ".o")
+        for function in sorted(names):
+            path = generation / "obj/src" / (function + ".o")
             if not path.is_file():
                 continue
             obj = Object(path)
@@ -100,10 +105,10 @@ def diagnose(project: Project, result: Attempt, candidates: list[Draft]) -> dict
                         name in known
                         and name in linked
                         and linked[name]["value"] != known[name][0]
-                        and (not oversized or draft.function in oversized)
+                        and (not oversized or function in oversized)
                     ):
                         blame(
-                            draft.function,
+                            function,
                             f"{version}: defined symbol {name}: address "
                             f"0x{linked[name]['value']:08X}, target 0x{known[name][0]:08X}",
                         )

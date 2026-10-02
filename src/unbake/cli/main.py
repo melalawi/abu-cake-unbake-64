@@ -14,7 +14,6 @@ from unbake.cli import (
     decomp,
     guidance,
     init,
-    match,
     report,
     rodata,
     setup,
@@ -41,7 +40,6 @@ def make_parser() -> argparse.ArgumentParser:
         init,
         split,
         decomp,
-        match,
         report,
         check,
         clone,
@@ -74,7 +72,6 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
         "rodata": rodata.run,
         "clone": clone.run,
         "split": split.run,
-        "match": match.run,
         "report": report.run,
         "check": check.run,
     }
