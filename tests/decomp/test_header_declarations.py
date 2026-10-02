@@ -4,12 +4,44 @@ import unittest
 from pathlib import Path
 
 from unbake.decomp.draft_context import ordered_headers, required_headers
-from unbake.decomp.header_declarations import declarations
+from unbake.decomp.header_declarations import declaration_source, declarations
+from unbake.layout.structs_parser import Parser
 from unbake.project import makefile
 from unbake.project.config import Held
 
 
 class HeaderDeclarationsTests(unittest.TestCase):
+    def test_logical_directives_keep_offsets_and_cannot_hide_the_next_typedef(self) -> None:
+        source = (
+            "#define WRITE(p) \\\n"
+            "    { unsigned int ignored; } \\\n"
+            "    while (0)\n"
+            "#define COUNT 2\n"
+            "typedef struct { unsigned int w[COUNT]; } Awords;\n"
+            "typedef union { Awords words; long long align; } Acmd;\n"
+        )
+        clean = declaration_source(source)
+        self.assertEqual(len(clean), len(source))
+        self.assertEqual(
+            [i for i, char in enumerate(clean) if char == "\n"], [i for i, char in enumerate(source) if char == "\n"]
+        )
+        self.assertEqual(declarations(source).typedefs, {"Awords", "Acmd"})
+        records = Parser(source).parse()
+        self.assertEqual([(record.name, record.size) for record in records], [("Awords", 8), ("Acmd", 8)])
+        self.assertEqual(source[records[0].start : records[0].end], "struct { unsigned int w[COUNT]; }")
+
+    def test_declaration_line_splices_still_join_identifier_tokens(self) -> None:
+        source = "typedef int Wo\\\nrd; extern Wo\\\nrd value;"
+        parsed = declarations(source)
+        self.assertEqual(parsed.typedefs, {"Word"})
+        self.assertEqual(parsed.uses, {"Word"})
+
+    def test_comment_spelling_inside_literals_is_preserved(self) -> None:
+        source = 'static char *url = "http://example"; /* hidden */\n'
+        self.assertIn('"http://example";', declaration_source(source))
+        self.assertNotIn("hidden", declaration_source(source))
+        self.assertEqual(len(source), len(declaration_source(source)))
+
     def test_original_sdk_callbacks_have_only_their_four_typedef_names(self) -> None:
         source = (makefile.TEMPLATES / "audio_callbacks.h").read_text()
         parsed = declarations(source)

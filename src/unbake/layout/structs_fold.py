@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout import shared
+from unbake.layout.header_context import context
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
@@ -314,11 +315,8 @@ def fold(
             texts[path] = path.read_text()
         except OSError as error:
             held(str(path), str(error))
-    # Parse the entire index together so cross-header typedef dependencies retain
-    # their source order, including forward declarations.
-    combined = "\n".join(texts.values())
-    parser = Parser(combined)
-    existing = parser.parse()
+    texts, parser, existing = context(texts, root=getattr(project, "root", root))
+    combined = parser.source
     own_types = {name for record in records for name in (record.name, *record.aliases)}
 
     def opaque_pointer_fields(fields: tuple[Field, ...]) -> tuple[Field, ...]:
@@ -577,7 +575,7 @@ def fold(
         updated = dict(texts)
         for edit in edits:
             updated[edit.path] = edit.after
-        parsed = Parser("\n".join(updated.values())).parse()
+        updated, _, parsed = context(updated, root=getattr(project, "root", root))
         # Typedef names can occur in independent headers (SDK and inferred
         # views). Preserve each declaration, rather than overwriting by name.
         validated: dict[tuple[Path, str], list[Layout]] = {}

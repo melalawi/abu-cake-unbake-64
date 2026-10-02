@@ -17,6 +17,8 @@ def command(root: Path | None, phase: str) -> str:
 
 
 def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
+    if missing == "headers.declaration":
+        return f"Repair the SDK/shared header prerequisite identified above. Then run {retry}."
     if root is not None and missing is not None and missing.startswith(("types.", "map.")):
         phase = "map" if missing.startswith("map.") else "solve"
         tokens = shlex.split(retry)
