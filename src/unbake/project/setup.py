@@ -302,35 +302,11 @@ def layout_receipts(layout: LayoutManifest) -> list[str]:
 
 
 def _ready_readme(project: PendingProject | Project, census: Census, layout: LayoutManifest, tree: Path) -> None:
-    from unbake.project import init
-    from unbake.project.header import DESTINATIONS
-    from unbake.report.progress import render
-
-    readme = project.root / "README.md"
-    if not readme.is_file() or readme.read_bytes() != init.readme_text(project.root).encode():
+    if (project.root / "README.md").exists():
         return
     facts = setup_config.facts(config.load_pending(project.root), census, name=None, title=None)
-    descriptions = []
-    reports = {}
-    for cartridge in census.cartridges:
-        version = census.names[cartridge.path]
-        descriptions.append(
-            f"| {version} ({DESTINATIONS[cartridge.header.region]}, revision {cartridge.header.revision}) |"
-        )
-        functions = layout["versions"][version]["functions"]
-        reports[version] = {
-            "version": 2,
-            "measures": {
-                "complete_code": 0,
-                "total_code": sum(function["end"] - function["start"] for function in functions),
-                "complete_units": 0,
-                "total_units": len(functions),
-            },
-        }
     template = (makefile.TEMPLATES / "README.ready.md").read_text()
-    template = template.replace("@TITLE@", facts["project"]["title"])
-    template = template.replace("@PROGRESS@", "\n\n".join(descriptions))
-    _write(tree, "README.md", render(template, reports))
+    _write(tree, "README.md", template.replace("@TITLE@", facts["project"]["title"]))
 
 
 def _sdk_headers(project: Project) -> None:
@@ -396,21 +372,16 @@ def _publish(
         path = staged.root / relative
         if path.is_relative_to(staged.roms) and (project.root / relative).exists():
             continue
-        shell_readme = relative == "README.md" and _read(project.root / relative) != path.read_bytes()
-        if (
-            not fresh
-            and not shell_readme
-            and (
-                path.is_relative_to(staged.src)
-                or (
-                    any(path.is_relative_to(directory) for directory in staged.include)
-                    and path != staged.include[0] / _AUDIO_CALLBACKS
-                    and (project.root / relative).exists()
-                )
-                or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
-                or relative in {"README.md", "CONTRIBUTING.md", ".gitignore"}
-                or relative.startswith("docs/")
+        if not fresh and (
+            path.is_relative_to(staged.src)
+            or (
+                any(path.is_relative_to(directory) for directory in staged.include)
+                and path != staged.include[0] / _AUDIO_CALLBACKS
+                and (project.root / relative).exists()
             )
+            or (path.is_relative_to(staged.root / "versions") and path.suffix not in {".sha1"})
+            or relative in {"README.md", "CONTRIBUTING.md", ".gitignore"}
+            or relative.startswith("docs/")
         ):
             continue
         target = project.root / relative

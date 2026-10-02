@@ -98,6 +98,9 @@ class UnitsTests(unittest.TestCase):
                 split=root / "split.yaml",
                 symbols=root / "symbols.txt",
                 macros=(),
+                cartridge_id="NUS-TEST-0",
+                region="Test region",
+                description="Test release.",
             )
             project = Project(
                 root=root,
@@ -119,6 +122,7 @@ class UnitsTests(unittest.TestCase):
                 build=root / "build",
                 work=root / "build/work",
                 drafts=root / "build/drafts",
+                readme_order=("us",),
             )
             project.src.mkdir()
             policy = test_policy(root)

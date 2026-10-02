@@ -167,6 +167,9 @@ def fixture(root: Path, kind: str = "ido") -> Any:
         split,
         root / "versions/us/symbol_addrs.txt",
         ("VERSION_US=1",),
+        cartridge_id="NUS-TEST-0",
+        region="Test region",
+        description="Test release.",
     )
     project = config.Project(
         root,
@@ -188,6 +191,7 @@ def fixture(root: Path, kind: str = "ido") -> Any:
         build=root / "build",
         work=root / "build/work",
         drafts=root / "build/drafts",
+        readme_order=("us",),
     )
     facts = {
         "ld": str(root / "tools/ld"),

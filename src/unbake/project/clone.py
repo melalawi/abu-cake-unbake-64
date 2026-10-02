@@ -246,9 +246,7 @@ def _create(
     local.mkdir(exist_ok=True)
     # Operators can source this environment for setup, clean builds and CLI use.
     (local / "env").write_text(f"export UNBAKE_POLICY={shlex.quote(str(policy_path))}\n")
-    exclude = destination / ".git/info/exclude"
-    with exclude.open("a") as output:
-        output.write("\n" + hygiene.ignore_text(cloned))
+    (destination / ".gitignore").write_text(hygiene.ignore_text(cloned))
     if prepare(cloned, config.load_policy(policy_path)):
         # A replaced compiler invalidates warm code even when its path/flags
         # stay identical. Cache service updates alone do not affect object bytes.

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from unbake.decomp.score import objdiff_cli
-from unbake.project import build
+from unbake.project import build, makefile
 from unbake.project.config import Held, Policy, Project
 from unbake.report import files, readme_layout
 from unbake.report import units as report_units
@@ -211,11 +211,14 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def render(template: str, reports: dict[str, dict[str, Any]]) -> str:
+def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: dict[str, str] | None = None) -> str:
     """Update only figures in existing summaries and VERSION or bytes/functions tables."""
     before, block, after = readme_layout.section(template)
     if not reports:
         raise Held("report", "reports: missing VERSION values")
+    if descriptions is not None:
+        newline = "\r\n" if before.endswith("\r\n") else "\n"
+        return before + progress(reports, descriptions).replace("\n", newline) + newline + after
     # A unique configured rename selects the matching report, while the live
     # table description and summary label remain the owner's text.
     labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|\r?$", block, re.MULTILINE)
@@ -372,9 +375,36 @@ def findings(project: Project, policy: Policy) -> list[str]:
     return lines
 
 
+def readme_descriptions(project: Project) -> dict[str, str]:
+    """Require owner release labels and use each version's supplied ROM identity."""
+    if not project.readme_order:
+        raise Held("report", "project.readme_order: missing value")
+    if len(project.readme_order) != len(project.versions) or set(project.readme_order) != set(project.versions):
+        raise Held("report", "project.readme_order: expected every VERSION exactly once")
+    descriptions = {}
+    for name in project.readme_order:
+        version = project.version(name)
+        for field in ("cartridge_id", "region", "description"):
+            value = getattr(version, field)
+            if not isinstance(value, str) or not value.strip():
+                raise Held("report", f"version.{name}.{field}: missing value")
+            if any(char in value for char in "\r\n|"):
+                raise Held("report", f"version.{name}.{field}: invalid table text")
+        try:
+            with version.baserom.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+        except OSError as error:
+            raise Held("report", f"version.{name}.baserom: {error}") from error
+        descriptions[name] = (
+            f"{name} ({version.cartridge_id}, {version.region}). {version.description} SHA256 `{digest}`"
+        )
+    return descriptions
+
+
 def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
     if not project.versions:
         raise Held("report", "project.versions is missing")
+    descriptions = readme_descriptions(project)
     if reports is None:
         with ExitStack() as holds:
             with build.lock(project):
@@ -388,6 +418,9 @@ def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]
                         raise Held("report", f"VERSION {version}: generation changed during report; retry")
                 return write(project, policy, reports=reports)
     readme = project.root / "README.md"
+    if set(reports) != set(project.versions):
+        raise Held("report", "reports: expected every configured VERSION exactly once")
+    reports = {name: reports[name] for name in project.readme_order}
     for version, document in reports.items():
         if "units" in document:
             expected_units = [(row.name, row.kind == "c") for row in report_units.functions(project.version(version))]
@@ -395,8 +428,11 @@ def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]
             if reported_units != expected_units:
                 raise Held("report", f"VERSION {version}: function rows changed; regenerate report")
     try:
-        original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
-        rendered = render(original, reports)
+        if readme.exists():
+            original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
+        else:
+            original = (makefile.TEMPLATES / "README.ready.md").read_text().replace("@TITLE@", project.title)
+        rendered = render(original, reports, descriptions=descriptions)
         written: list[Path] = []
         for version, document in reports.items():
             destination = project.root / "versions" / version / "report.json"

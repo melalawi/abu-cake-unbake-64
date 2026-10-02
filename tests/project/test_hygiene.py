@@ -69,6 +69,67 @@ class HygieneTests(unittest.TestCase):
                 ignored = subprocess.run(["git", "check-ignore", name], cwd=self.root, capture_output=True, check=False)
                 self.assertEqual(ignored.returncode, 0)
 
+    def test_fresh_clone_ignores_roms_outputs_and_credentials_from_repository_rules(self) -> None:
+        (self.root / ".gitignore").write_text("/.env\n/credentials.json\n")
+        (self.root / ".gitignore").write_text(hygiene.ignore_text(self.project))
+        subprocess.run(["git", "add", "--", ".gitignore"], cwd=self.root, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-qm",
+                "Ignore local inputs",
+            ],
+            cwd=self.root,
+            check=True,
+        )
+        destination = self.root / "proof-clone"
+        subprocess.run(["git", "clone", "-q", "--", str(self.root), str(destination)], check=True)
+        probes = [
+            "roms/probe.z64",
+            "baserom.us.z64",
+            "probe.z64",
+            "build/probe.o",
+            ".env",
+            ".env.local",
+            "credentials.json",
+            "id_rsa",
+            "secret.pem",
+            "secret.key",
+            "probe.n64",
+            "probe.v64",
+            "nested/.env",
+            "nested/credentials.json",
+        ]
+        result = subprocess.run(
+            ["git", "-c", "core.excludesfile=/dev/null", "check-ignore", "-v", "--no-index", *probes],
+            cwd=destination,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(len(result.stdout.splitlines()), len(probes))
+        self.assertTrue(all(line.startswith(".gitignore:") for line in result.stdout.splitlines()))
+
+    def test_tracked_baserom_identity_remains_visible_and_ignore_is_idempotent(self) -> None:
+        identity = self.track("baserom.sha1", b"identity")
+        ignore = self.root / ".gitignore"
+        ignore.write_text(hygiene.ignore_text(self.project))
+        self.assertIn("!baserom.sha1\n", ignore.read_text())
+        self.assertEqual(hygiene.ignore_text(self.project), ignore.read_text())
+        result = subprocess.run(
+            ["git", "-c", "core.excludesfile=/dev/null", "check-ignore", "-v", "--no-index", identity.name],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("!baserom.sha1", result.stdout)
+
     def test_check_refuses_compiler_file_even_if_force_added(self) -> None:
         setup.run(self.project, self.policy)
         self.track("tools/fixture/private.txt", b"compiler")

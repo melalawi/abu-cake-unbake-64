@@ -40,6 +40,11 @@ def facts(project: PendingProject, census: Census, *, name: str | None, title: s
     data["project"].update(name=name, title=title, names_from=census.names_from, versions=list(census.versions))
     data["version"] = {
         census.names[item.path]: {
+            **{
+                key: data.get("version", {}).get(census.names[item.path], {})[key]
+                for key in ("cartridge_id", "region", "description")
+                if key in data.get("version", {}).get(census.names[item.path], {})
+            },
             "baserom": (project.roms / f"baserom.{census.names[item.path]}.z64").relative_to(project.root).as_posix(),
             "baserom_sha1": item.sha1,
             "split": f"versions/{census.names[item.path]}/{name}.yaml",

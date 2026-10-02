@@ -12,12 +12,43 @@ def compiler_directories(project: Project) -> tuple[Path, ...]:
     return tuple(project.tools.relative_to(project.root) / ident for ident in sorted(project.compilers))
 
 
+def base_ignore_text(root: Path) -> str:
+    """Repository rules shared by an empty shell and a ready project."""
+    entries = [
+        "/roms/",
+        "baserom.*",
+        "*.z64",
+        "*.n64",
+        "*.v64",
+        "/build/",
+        "/asm/",
+        "/.splat/",
+        "/.unbake/",
+        "__pycache__/",
+        "*.py[cod]",
+        ".env",
+        ".env.*",
+        "*.pem",
+        "*.key",
+        "id_rsa*",
+        "credentials.json",
+    ]
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", "baserom.sha1"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if tracked.returncode == 0:
+        entries.insert(2, "!baserom.sha1")
+    return "\n".join(entries) + "\n"
+
+
 def ignore_text(project: Project) -> str:
     path = project.root / ".gitignore"
     existing = path.read_text() if path.exists() else ""
     entries = [
-        "__pycache__/",
-        "*.py[cod]",
+        *base_ignore_text(project.root).splitlines(),
         f"/{project.roms.relative_to(project.root).as_posix()}/",
         f"/{project.build.relative_to(project.root).as_posix()}/",
         f"/{project.asm.relative_to(project.root).as_posix()}/",
@@ -26,7 +57,7 @@ def ignore_text(project: Project) -> str:
     ]
     entries.extend(f"/{directory.as_posix()}/" for directory in compiler_directories(project))
     entries.append(f"/{project.tools.relative_to(project.root).as_posix()}/clone-policy.toml")
-    required = {entry.removeprefix("/") for entry in entries}
+    required = {entry.removeprefix("/") for entry in entries if entry.startswith("/") or entry.endswith("/")}
     lines: list[str] = []
     seen: set[str] = set()
     for line in existing.splitlines():
@@ -44,6 +75,10 @@ def ignore_text(project: Project) -> str:
         if key not in seen:
             lines.append(entry)
             seen.add(key)
+    # The tracked identity file must remain visible after every ignore rule.
+    if "!baserom.sha1" in entries:
+        lines = [line for line in lines if line != "!baserom.sha1"]
+        lines.append("!baserom.sha1")
     return "\n".join(lines) + "\n"
 
 

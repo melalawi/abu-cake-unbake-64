@@ -15,7 +15,7 @@ from tests.project.test_config import write_policy
 from unbake.cli.main import make_parser
 from unbake.cli.setup import run as setup_command
 from unbake.project import config, setup
-from unbake.report import progress
+from unbake.report import progress, readme_layout
 
 
 class SetupTests(unittest.TestCase):
@@ -66,11 +66,23 @@ class SetupTests(unittest.TestCase):
         for game in ("BattleTanx", "RageWars"):
             head = (references / "readme" / f"{game}.md").read_bytes()
             reports = json.loads((references / f"{game.lower()}-measures.json").read_bytes())
-            versions = tuple(reports)
+            reports = {name.replace("eu-mul", "eu-x"): doc for name, doc in reports.items()}
+            labels = re.findall(r"^\| ([\w-]+) \(([^,]+), ([^)]+)\)\. (.*?) SHA256", head.decode(), re.MULTILINE)
+            versions = tuple(row[0] for row in labels)
             project = replace(
                 self.project,
                 versions=versions,
-                version_map={name: replace(self.project.version("us"), name=name) for name in versions},
+                readme_order=versions,
+                version_map={
+                    name: replace(
+                        self.project.version("us"),
+                        name=name,
+                        cartridge_id=ident,
+                        region=region,
+                        description=description,
+                    )
+                    for name, ident, region, description in labels
+                },
             )
             # Exercise both the exact HEAD snapshot and live owner edits with CRLF.
             edited = (
@@ -88,7 +100,16 @@ class SetupTests(unittest.TestCase):
                     rendered = readme.read_bytes()
                     progress.write(project, self.policy, reports=reports)
                     self.assertNotEqual(rendered, original)
-                    self.assertEqual(figures.sub(b"<generated>", rendered), figures.sub(b"<generated>", original))
+                    before, _, after = readme_layout.section(original.decode(errors="surrogateescape"))
+                    new_before, _, new_after = readme_layout.section(rendered.decode(errors="surrogateescape"))
+                    self.assertEqual((new_before, new_after), (before, after))
+                    if variant == "HEAD":
+                        # Fixture ROM bytes differ from the real cartridge identity.
+                        mask_identity = re.compile(rb"SHA256 `[0-9a-f]+`")
+                        self.assertEqual(
+                            mask_identity.sub(b"SHA256 <identity>", figures.sub(b"<generated>", rendered)),
+                            mask_identity.sub(b"SHA256 <identity>", figures.sub(b"<generated>", original)),
+                        )
                     self.assertEqual(readme.read_bytes(), rendered)
                     self.assertIn(b"## Notes", rendered)
                     self.assertIn(b"### Workflow", rendered)

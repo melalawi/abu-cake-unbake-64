@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from tests.support import test_policy
 from unbake.cli.main import main
-from unbake.project import build, clone, config, toolchain
+from unbake.project import build, clone, config, hygiene, toolchain
 
 
 class CloneTests(unittest.TestCase):
@@ -39,6 +39,7 @@ class CloneTests(unittest.TestCase):
         config_path.write_text(text)
         (self.live / ".gitignore").write_text("build/\nasm/\nroms/\ntools/cc\n")
         self.project = config.load(self.live)
+        (self.live / ".gitignore").write_text(hygiene.ignore_text(self.project))
         self.project.roms.mkdir(exist_ok=True)
         self.policy = test_policy(self.root)
         self.destination = self.root / "clone"

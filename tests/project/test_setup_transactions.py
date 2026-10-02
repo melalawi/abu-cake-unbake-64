@@ -447,7 +447,7 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), rom.sha1 + "  roms/baserom.us.z64\n")
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
 
-    def test_ready_progress_readme_replaces_only_untouched_shell(self) -> None:
+    def test_ready_readme_is_created_only_when_absent(self) -> None:
         rom = cartridge(self.project.version("us").baserom, b"ABC")
         census = Census((rom,), {rom.path: "us"}, "us", {}, {}, self.project.build / "setup/roms.json")
         layout = {"versions": {"us": {"functions": [{"start": 0, "end": 3}]}}}
@@ -460,12 +460,15 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(readme.read_bytes(), owner)
         readme.write_text(init.readme_text(self.root))
         setup._ready_readme(self.project, census, layout, tree)
-        generated = (tree / "README.md").read_text()
-        _before, block, _after = readme_layout.section(generated)
-        self.assertTrue(readme_layout.complete(block))
-        self.assertNotIn("@", generated)
-        self.assertIn("0 of 3", generated)
+        self.assertFalse((tree / "README.md").exists())
         self.assertEqual(readme.read_text(), init.readme_text(self.root))
+        readme.unlink()
+        setup._ready_readme(self.project, census, layout, tree)
+        generated = (tree / "README.md").read_text()
+        readme_layout.section(generated)
+        self.assertNotIn("@", generated)
+        self.assertNotIn("## Building", generated)
+        self.assertNotIn("## Next command", generated)
 
     def test_seeded_generation_and_assembly_are_isolated_from_live_outputs(self) -> None:
         current = self.project.build_link("us").resolve()

@@ -6,12 +6,14 @@ import subprocess
 from pathlib import Path
 from uuid import uuid4
 
+from unbake.project import hygiene
 from unbake.project.config import SCHEMA_VERSION, Held
 
 
 def readme_text(target: Path) -> str:
-    """The exact untouched shell text used by first setup publication."""
-    return f"# {target.name}\n\nPut your ROMs in `roms/`. Run `unbake setup` in this repo.\n"
+    """A minimal owner document with a tool-owned Progress body."""
+    template = Path(__file__).parents[1] / "project_tools" / "README.ready.md"
+    return template.read_text().replace("@TITLE@", target.name)
 
 
 def run(target: Path) -> list[str]:
@@ -44,7 +46,7 @@ def run(target: Path) -> list[str]:
             '[paths]\nroms = "roms"\nbuild = "build"\nwork = "build/work"\n'
             'drafts = "build/drafts"\nsrc = "src"\ninclude = ["include"]\nasm = "asm"\ntools = "tools"\n'
         )
-        (target / ".gitignore").write_text("/roms/\n/build/\n/asm/\n/.splat/\n__pycache__/\n*.py[cod]\n")
+        (target / ".gitignore").write_text(hygiene.base_ignore_text(target))
         (target / "roms").mkdir()
         (target / "README.md").write_text(readme_text(target))
         (target / "CONTRIBUTING.md").write_text(contributing)

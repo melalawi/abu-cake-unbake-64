@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -22,6 +23,7 @@ from unbake.cli import check
 from unbake.decomp import score
 from unbake.project.config import Held, Policy, Project
 from unbake.report import progress as report
+from unbake.report import readme_layout
 from unbake.report import units as report_units
 
 
@@ -193,6 +195,84 @@ class RenderTests(unittest.TestCase):
                 report.render(template, {"us": document(0, 0, 0, 0)})
 
 
+class ConfiguredReadmeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
+        self.addCleanup(temporary.cleanup)
+        self.addCleanup(patch.stopall)
+        self.root = Path(temporary.name)
+        self.project, self.policy = fixture(self.root)
+        self.readme = self.root / "README.md"
+        self.original = (
+            b"# Owner title\r\n\r\nOwner intro \xff.\r\n\r\n## Progress\r\n\r\n"
+            b"old tool body\r\n\r\n## Contributions\r\nOwner footer."
+        )
+        self.readme.write_bytes(self.original)
+        self.reports = {"us": document(1, 10, 0, 25)}
+
+    def test_configured_report_preserves_all_non_progress_bytes_and_is_idempotent(self) -> None:
+        report.write(self.project, self.policy, reports=self.reports)
+        rendered = self.readme.read_bytes()
+        before, _, after = readme_layout.section(self.original.decode(errors="surrogateescape"))
+        new_before, body, new_after = readme_layout.section(rendered.decode(errors="surrogateescape"))
+        self.assertEqual((new_before, new_after), (before, after))
+        self.assertIn("us (NUS-TEST-0, Test region). Test release. SHA256 `", body)
+        self.assertIn("10.00% (~25.00%)  1 of 10", body)
+        report.write(self.project, self.policy, reports=self.reports)
+        self.assertEqual(rendered, self.readme.read_bytes())
+
+    def test_explicit_order_controls_summary_and_tables_independently_of_config_order(self) -> None:
+        version = self.project.version("us")
+        project = replace(
+            self.project,
+            versions=("eu", "us"),
+            readme_order=("us", "eu"),
+            version_map={"us": version, "eu": replace(version, name="eu")},
+        )
+        report.write(project, self.policy, reports={"eu": self.reports["us"], **self.reports})
+        _, body, _ = readme_layout.section(self.readme.read_text(errors="surrogateescape"))
+        self.assertEqual(re.findall(r"<code>([\w-]+) +\[", body)[:3], ["all", "us", "eu"])
+        self.assertEqual(re.findall(r"^\| ([\w-]+) \(", body, re.MULTILINE), ["us", "eu"])
+
+    def test_missing_owner_fields_are_named_before_any_publication(self) -> None:
+        version = self.project.version("us")
+        cases = [(replace(self.project, readme_order=()), "project.readme_order")]
+        for field in ("cartridge_id", "region", "description"):
+            cases.append(
+                (replace(self.project, version_map={"us": replace(version, **{field: ""})}), "version.us." + field)
+            )
+        for project, field in cases:
+            with self.subTest(field=field), self.assertRaisesRegex(Held, field):
+                report.write(project, self.policy, reports=self.reports)
+            self.assertEqual(self.readme.read_bytes(), self.original)
+            self.assertFalse((self.root / "versions/us/report.json").exists())
+
+    def test_invalid_order_and_description_are_named(self) -> None:
+        for order in (("us", "us"), ("eu",)):
+            with self.subTest(order=order), self.assertRaisesRegex(Held, "project.readme_order"):
+                report.readme_descriptions(replace(self.project, readme_order=order))
+        for text in ("bad|table", "bad\rheading", "bad\nheading"):
+            version = replace(self.project.version("us"), description=text)
+            with self.subTest(text=text), self.assertRaisesRegex(Held, "version.us.description"):
+                report.readme_descriptions(replace(self.project, version_map={"us": version}))
+
+    def test_missing_readme_uses_ready_template_without_build_workflow(self) -> None:
+        self.readme.unlink()
+        report.write(self.project, self.policy, reports=self.reports)
+        generated = self.readme.read_text()
+        self.assertIn("# Game decompilation", generated)
+        self.assertIn("## Progress", generated)
+        self.assertNotIn("## Building", generated)
+        self.assertNotIn("## Next command", generated)
+
+    def test_missing_progress_heading_preserves_existing_readme(self) -> None:
+        self.readme.write_bytes(b"Owner document without progress.\xff")
+        original = self.readme.read_bytes()
+        with self.assertRaisesRegex(Held, "readme.Progress"):
+            report.write(self.project, self.policy, reports=self.reports)
+        self.assertEqual(self.readme.read_bytes(), original)
+
+
 class ReportTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
@@ -319,7 +399,7 @@ class ReportTest(unittest.TestCase):
         for versions in (("us", "other"), ("other", "us")):
             with self.subTest(versions=versions):
                 self.readme.write_text("## Progress\n\n| us (fixture) |\n\n| other (fixture) |\n\n## End\n")
-                report.write(replace(project, versions=versions), self.policy)
+                report.write(replace(project, versions=versions, readme_order=versions), self.policy)
                 for name, expected_open in (("us", ["draft", "untouched"]), ("other", ["draft"])):
                     saved = json.loads((project.root / "versions" / name / "report.json").read_bytes())
                     opened = [unit["name"] for unit in saved["units"] if not unit["metadata"]["complete"]]
