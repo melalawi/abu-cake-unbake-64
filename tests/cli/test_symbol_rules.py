@@ -170,6 +170,31 @@ class SymbolRuleTests(unittest.TestCase):
         self.assertLess(detail["joins"][0]["evidence"][0]["similarity"]["score"], 0.9)
         self.assertEqual(report, self.preview(seed=73))
 
+    def test_aligned_callee_unlocks_previously_refused_caller_graph(self):
+        last = [0x3C078020, 0x03E00008, 0]
+        target = 0x80001000 + len(LEFT) * 4
+        caller = [0x0C000000 | (target >> 2 & 0x03FFFFFF), 0, *leaf(500)[:-2], 0x03E00008, 0]
+        target += len(INSERT) * 4
+        changed = [0x0C000000 | (target >> 2 & 0x03FFFFFF), 0, *leaf(700)[:-2], 0x03E00008, 0]
+        self.inventory(
+            [LEFT, leaf(100), RIGHT, caller, last],
+            [LEFT, INSERT, leaf(100, True), RIGHT, changed, last],
+        )
+        report = self.preview()
+        a, b = self.records(report, "us"), self.records(report, "us-rev1")
+        self.assertEqual(a[1]["name"], b[2]["name"])
+        self.assertEqual(a[3]["name"], b[4]["name"])
+        callee = a[1]["evidence"]["symbol_correspondence"]
+        caller = a[3]["evidence"]["symbol_correspondence"]
+        self.assertEqual(callee["joins"][0]["rule"], "anchor-sequence-alignment")
+        self.assertEqual(caller["joins"][0]["rule"], "anchor-call-graph")
+        self.assertEqual(caller["joins"][0]["round"], 1)
+        # The caller was proposed in the foundational graph round but could
+        # only join when the callee's unequal-count interval was aligned.
+        self.assertEqual([p["round"] for p in caller["anchor_positions"]], [0, 1])
+        self.assertLess(caller["joins"][0]["evidence"][0]["similarity"]["score"], 0.9)
+        self.assertEqual(caller["callees"], [["us", a[1]["start"]]])
+
     def test_wrong_join_trap_refuses_near_twins_and_crossing_alignment(self):
         first_twin, second_twin = leaf(100), leaf(100, True)
         first_twin[8] ^= 1

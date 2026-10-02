@@ -219,7 +219,7 @@ def correspondence(
         cartridge_image = images[version]
         image = cartridge_image if isinstance(cartridge_image, bytes) else cartridge_image.image()
         index: dict[str, list[split.Function]] = defaultdict(list)
-        for f in ff:
+        for f in sorted(ff, key=lambda f: f.start):
             code = words(image[f.start : f.end])
             while len(code) > 2 and code[-1] == 0 and code[-2] != 0x03E00008:
                 code.pop()

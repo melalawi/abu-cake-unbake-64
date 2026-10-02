@@ -81,3 +81,15 @@ class SymbolRulesTests(unittest.TestCase):
         # Naming follows declared version order; correspondence does not.
         self.assertEqual(partitions[0], partitions[1])
         self.assertEqual(details[0], details[1])
+
+    def test_overlay_name_collisions_are_independent_of_row_iteration(self):
+        image = struct.pack(">4I", 0x03E00008, 0, 0x03E00008, 0)
+        inventories = {
+            v: [Function(v, "func_80001000", at, at + 8, 0x80001000, "func_80001000", "asm", ()) for at in (0, 8)]
+            for v in ("us", "eu")
+        }
+        kwargs = {"symbol_policy": SymbolPolicy(0.9, 0.1)}
+        images = dict.fromkeys(inventories, image)
+        names = correspondence(images, inventories, "us", **kwargs)
+        reversed_rows = {v: list(reversed(rows)) for v, rows in inventories.items()}
+        self.assertEqual(names, correspondence(images, reversed_rows, "us", **kwargs))
