@@ -202,6 +202,7 @@ def correspondence(
     symbol_evidence: dict[str, dict[int, dict[str, Any]]] | None = None,
     preserve_names: bool = False,
     loaded_spans: Mapping[str, list[Span]] | None = None,
+    assertions: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[int, str]]:
     """Establish body matches, then independent anchored symbol identity.
 
@@ -301,6 +302,32 @@ def correspondence(
         for key in rows:
             join(seed, key)
             positional.add(key)
+    asserted: dict[tuple[str, int], dict[str, Any]] = {}
+    for assertion in assertions or []:
+        keys = []
+        for placement in assertion["placements"]:
+            key = (placement["version"], placement["start"])
+            asserted_function = functions.get(key)
+            if asserted_function is None or asserted_function.end != placement["end"]:
+                raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed")
+            cartridge = images[key[0]]
+            image = cartridge if isinstance(cartridge, bytes) else cartridge.image()
+            if (
+                hashlib.sha256(image[asserted_function.start : asserted_function.end]).hexdigest()
+                != placement["body_sha256"]
+            ):
+                raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: bytes changed")
+            del image
+            keys.append(key)
+        roots = {root(key) for key in keys}
+        asserted_component = [key for key in functions if root(key) in roots]
+        if len({v for v, _ in asserted_component}) != len(asserted_component):
+            raise Held("setup", f"setup.symbol_assertion_conflict: {assertion['name']}: automatic evidence conflicts")
+        for key in keys:
+            if key in asserted and asserted[key]["name"] != assertion["name"]:
+                raise Held("setup", f"setup.symbol_assertion_conflict: {assertion['name']}: overlapping assertions")
+            join(keys[0], key)
+            asserted[key] = assertion
     from unbake.layout.symbol_identity import join_symbols
 
     details: dict[tuple[str, int], dict[str, Any]] = {}
@@ -323,7 +350,10 @@ def correspondence(
         version, start = rows[0]
         f = functions[version, start]
         repeated = len(indexes[version][signatures[version, start]]) > 1
-        name = f.name
+        forced = {asserted[key]["name"] for key in rows if key in asserted}
+        if len(forced) > 1:
+            raise Held("setup", "setup.symbol_assertion_conflict: automatic evidence combines asserted names")
+        name = next(iter(forced)) if forced else f.name
         if (
             not preserve_names and ((len(rows) == 1 and repeated) or re.fullmatch(r"func_[0-9A-Fa-f]+", name))
         ) or name in used:
@@ -334,7 +364,9 @@ def correspondence(
         for v, at in rows:
             names[v][at] = name
             reason = (
-                details[v, at]["reason"]
+                "user-assertion"
+                if (v, at) in asserted
+                else details[v, at]["reason"]
                 if (v, at) in symbolic
                 else "anchor-sequence"
                 if (v, at) in positional
@@ -348,6 +380,9 @@ def correspondence(
                 evidence.setdefault(v, {})[at] = reason
             if symbol_evidence is not None:
                 detail = details.get((v, at), {})
+                if (v, at) in asserted:
+                    detail["assertion"] = asserted[v, at]
+                    detail["reason"] = reason
                 if (v, at) in symbolic or not reasons[v, at].startswith("symbol-"):
                     detail["reason"] = reason
                 else:

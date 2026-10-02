@@ -37,8 +37,10 @@ Accept its digest to prove every version before work starts.
 Init and setup leave commits to you.
 
 Function symbols and executable bodies have separate identities. Unambiguous
-positions between matched anchors can share one symbol when mapped callers and
-callees agree, while each version retains its own body and assembly row.
+positions between matched anchors can share one symbol when all resolved
+callees agree. Incoming edges are compared between versions containing the
+already corresponding caller; unjoined callers supply no identity evidence.
+Each version retains its own body and assembly row.
 Correspondence runs to a fixpoint: stronger position and graph evidence is
 established first, then successful joins supply anchors for later rounds.
 Graph-free leaves require the policy similarity threshold and margin. Unequal
@@ -51,6 +53,42 @@ One C file can express those bodies with version conditionals.
 For a ready project, `unbake setup --replan-symbols` reviews correspondence on
 its retained boundaries. Confirm the printed digest to prove every ROM before
 publishing the name changes. Affected authored C requires review first.
+
+When automatic evidence is insufficient, `unbake split join --map joins.json`
+previews explicit correspondence assertions. Each entry supplies one symbol
+name, at least two placements pinned by version, integer ROM start/end and raw
+body SHA256, and nonempty correspondence evidence:
+
+```json
+[
+  {
+    "name": "update_state",
+    "placements": [
+      {"version": "us", "start": 4096, "end": 4104, "body_sha256": "<64 hexadecimal digits>"},
+      {"version": "eu", "start": 4128, "end": 4140, "body_sha256": "<64 hexadecimal digits>"}
+    ],
+    "evidence": {"source": "Reviewed version-specific implementation of update_state"}
+  }
+]
+```
+
+Review `build/setup/join-proposal.json`, then run the same command with `--apply`.
+The batch joins whole existing items and refuses duplicate versions, overlapping
+requests, stale bytes/boundaries, name collisions, crossings of immediate shared
+bounding anchors, and conflicting edges to already corresponding callers or
+callees present in both versions. Unknown transfers are recorded explicitly;
+a user assertion supplies identity without claiming an indirect target was
+proved. A refusal prevents the entire batch. Submit a corrected batch containing
+only valid requests to apply those requests in one transaction.
+
+Accepted assertions and their byte pins, supplied evidence and validation are
+stored in `docs/setup/layout.json`. Setup refresh retains them and symbol
+replanning seeds them before proposing further joins. Changed assertion bytes
+or boundaries refuse by name. Publication uses one isolated proof of every ROM
+and occurs only after all versions succeed. Independent body hashes, boundaries
+and assembly state remain per placement; affected authored C refuses before
+publication. Compiler candidate sets combine and old selection evidence is
+archived for the changed item.
 
 ## Work
 

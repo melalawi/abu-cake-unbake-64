@@ -50,6 +50,7 @@ def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[st
         symbol_evidence=details,
         preserve_names=True,
         loaded_spans={v: row["loaded_spans"] for v, row in layout["versions"].items()},
+        assertions=layout.get("symbol_assertions", []),
     )
     destinations: dict[str, set[str]] = defaultdict(set)
     placements = []
@@ -101,6 +102,7 @@ def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[st
             records.append(record)
         layout["versions"][v]["functions"] = records
         del image
+    layout["versions"] = {v: layout["versions"][v] for v in project.versions}
     layout["items"] = planner.symbol_items(layout["versions"])
     for item in layout["items"].values():
         for record in item["placements"].values():
@@ -172,6 +174,15 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None) -> list[str]
                 f"setup.symbol_authored_source: {source.relative_to(project.root)}: "
                 "changed identities require reviewed C before replanning",
             )
+    return publish(project, policy, replacements, report, inputs)
+
+
+def publish(
+    project: Project, policy: SetupPolicy, replacements: dict[str, str], report: dict[str, Any], inputs: dict[str, str]
+) -> list[str]:
+    """Prove one simultaneous symbol transaction and publish its layout evidence."""
+    directory = project.build / "setup"
+    directory.mkdir(parents=True, exist_ok=True)
     data = toml.loads((project.root / "config.toml").read_text())
     groups: dict[str, set[str]] = defaultdict(set)
     for v in project.versions:

@@ -54,6 +54,7 @@ class VersionLayout(TypedDict):
 
 
 class LayoutManifest(Identity):
+    symbol_assertions: NotRequired[list[dict[str, Any]]]
     names_from: str
     versions: dict[str, VersionLayout]
     inputs_sha256: dict[str, str]
