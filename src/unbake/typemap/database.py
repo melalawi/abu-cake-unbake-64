@@ -351,6 +351,8 @@ def validate_headers(project: Project, outputs: dict[Path, bytes | Path], policy
                     context = scratch / "expanded.c"
                     context.write_text(expanded)
                     if not getattr(policy, "m2c", None):
+                        if isinstance(policy, Policy):
+                            raise Held("solve", "policy.m2c: required shared context parser")
                         declarations.extract(expanded, {"kind": "declared"})
                         continue
                     run_tool(
