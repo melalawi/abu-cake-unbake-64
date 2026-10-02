@@ -48,7 +48,7 @@ class ProposalTests(unittest.TestCase):
             (),
             (),
             5,
-            1,
+            4,
         )
         self.initial_config = (self.project.root / "config.toml").read_bytes()
 
