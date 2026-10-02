@@ -1,11 +1,12 @@
 """Disjoint private pools replace exactly one load selector per slice."""
 
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.decomp.support import assemble
+from tests.decomp.support import LINKER, assemble
 from unbake.project_tools.elf import Object
 from unbake.project_tools.extract import instruction_symbols, pool_rows, raw_storage, unit_ranges
 from unbake.project_tools.layout import transfer_private, transfer_selectors
@@ -91,6 +92,51 @@ class PoolSliceTests(unittest.TestCase):
             self.assertEqual(
                 transfer_private(rebuilt, dict(start=0x20, end=0x38, address=0x80002000), bytes(image), slices), names
             )
+
+    def test_two_private_owners_link_with_local_section_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            objects = []
+            for number, name in enumerate(("alpha", "beta")):
+                obj = Object(
+                    assemble(
+                        root,
+                        name,
+                        f".set noreorder\n.text\n.globl {name}\n{name}:\n"
+                        "lui $at,%hi(literal)\nlwc1 $f0,%lo(literal)($at)\njr $ra\nnop\n"
+                        ".section .rdata\nliteral: .word 0x3f800000\n",
+                    )
+                )
+                address = 0x80003000 + 4 * number
+                image = bytearray(0x44)
+                image[0x20:0x30] = struct.pack(">4I", 0x3C018000, 0xC4200000 | address & 65535, 0x03E00008, 0)
+                image[0x40:0x44] = bytes.fromhex("3f800000")
+                names = transfer_private(
+                    obj,
+                    dict(start=0x20, end=0x30, address=0x80002000),
+                    bytes(image),
+                    [dict(start=0x40, end=0x44, address=address)],
+                )
+                rebuilt = Object(obj.path)
+                for table, symbols in rebuilt.symbols.items():
+                    first_global = rebuilt.sections[table][7]
+                    self.assertTrue(all(symbol["info"] >> 4 == 0 for symbol in symbols[:first_global]))
+                    self.assertTrue(all(symbol["info"] >> 4 != 0 for symbol in symbols[first_global:]))
+                    self.assertTrue(
+                        all(
+                            symbol["info"] >> 4 == 0
+                            for symbol in symbols
+                            if symbol["section"] == rebuilt.section(names[0])
+                        )
+                    )
+                objects.append(str(obj.path))
+            linked = subprocess.run(
+                [LINKER, "-r", "-o", str(root / "combined.o"), *objects], capture_output=True, text=True
+            )
+            self.assertEqual(linked.returncode, 0, linked.stderr)
+            combined = Object(root / "combined.o")
+            self.assertIsNotNone(combined.section(".unbake_pool_80003000"))
+            self.assertIsNotNone(combined.section(".unbake_pool_80003004"))
 
     def test_string_biased_table_and_literal_use_both_compiler_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

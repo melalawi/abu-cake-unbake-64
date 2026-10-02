@@ -81,7 +81,7 @@ def split_pool(obj: Object, section: str, base: int, slices: list[dict[str, Any]
                 struct.pack_into(">H", packed, number * 16 + 14, target)
         for target in sections:
             symbol_numbers[sym_index, target] = len(packed) // 16
-            packed.extend(struct.pack(">IIIBBH", 0, 0, 0, 0x13, 0, target))
+            packed.extend(struct.pack(">IIIBBH", 0, 0, 0, 0x03, 0, target))
         replace(obj, sym_index, packed)
 
     code = bytearray(obj.content(text))
@@ -150,6 +150,25 @@ def split_pool(obj: Object, section: str, base: int, slices: list[dict[str, Any]
             replace(obj, rel_index, data)
     replace(obj, text, code)
     replace(obj, index, b"")
+    # ELF requires local symbols before globals. New section symbols are local
+    # to this object; anonymous globals collide as soon as two owners link.
+    for sym_index in obj.symbols:
+        table_data = obj.content(sym_index)
+        entries = [table_data[at : at + 16] for at in range(0, len(table_data), 16)]
+        locals_ = [number for number, entry in enumerate(entries) if entry[12] >> 4 == 0]
+        globals_ = [number for number, entry in enumerate(entries) if entry[12] >> 4 != 0]
+        order = locals_ + globals_
+        numbers = {old: new for new, old in enumerate(order)}
+        for rel_index, header in enumerate(obj.sections):
+            if header[1] != 9 or header[6] != sym_index:
+                continue
+            relocations = bytearray(obj.content(rel_index))
+            for at in range(0, len(relocations), 8):
+                info = struct.unpack_from(">I", relocations, at + 4)[0]
+                struct.pack_into(">I", relocations, at + 4, numbers[info >> 8] << 8 | info & 255)
+            replace(obj, rel_index, relocations)
+        obj.sections[sym_index][7] = len(locals_)
+        replace(obj, sym_index, b"".join(entries[number] for number in order))
     obj.path.write_bytes(obj.data)
     # Text relocations now reference appended section symbols. Keep the parser's
     # symbol table in sync when another compiler section is split next.

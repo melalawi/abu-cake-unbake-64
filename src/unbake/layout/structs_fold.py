@@ -287,7 +287,12 @@ def _order_header(text: str, prefix: str, before: str = "") -> str:
 
 
 def fold(
-    records: list[Layout], headers: Any, *, versions: tuple[str, ...] | None = None, destination: Path | None = None
+    records: list[Layout],
+    headers: Any,
+    *,
+    versions: tuple[str, ...] | None = None,
+    destination: Path | None = None,
+    prove_headers: bool = True,
 ) -> list[Edit]:
     """Merge fields into existing include headers, returning edits without writing.
 
@@ -319,7 +324,6 @@ def fold(
     combined = "\n".join(texts.values())
     parser = Parser(combined)
     existing = parser.parse()
-    own_types = {name for record in records for name in (record.name, *record.aliases)}
 
     def opaque_pointer_fields(fields: tuple[Field, ...]) -> tuple[Field, ...]:
         rewritten = []
@@ -332,7 +336,6 @@ def fold(
                 and alias
                 and alias[1] not in ("struct", "union", "const", "volatile", "restrict", "__restrict")
                 and alias[1] not in parser.types
-                and alias[1] not in own_types
             ):
                 # An opaque alias can remain local to the source. The shared
                 # pointer field names its measured tag and needs no typedef.
@@ -356,10 +359,16 @@ def fold(
     gaps: dict[tuple[Path, int], tuple[int, dict[str, tuple[Field, int]]]] = {}
     requested: dict[tuple[str, str], tuple[int, str, int]] = {}
     additions: dict[str, Layout] = {}
+    promoted_aliases: dict[Path, set[tuple[str, str, str]]] = {}
     for record in records:
         candidates = [location for name in (record.name, *record.aliases) for location in locations.get(name, [])]
         candidates.sort(key=lambda location: location[0].name != "n64sdk.h")
         selected = next((location for location in candidates if _subset(record, location[1])), None)
+        if candidates:
+            alias_home, alias_target, _ = selected or candidates[0]
+            for alias in record.aliases:
+                if alias not in parser.types:
+                    promoted_aliases.setdefault(alias_home, set()).add((alias_target.kind, alias_target.name, alias))
         if selected is not None:
             continue
         selected = next(iter(candidates), None)
@@ -573,6 +582,15 @@ def fold(
         before_header = before_header[:position] + forward + before_header[position:]
         after = shared.append(before_header, new_declarations)
         edits.append(Edit(path, before, _order_header(after, prefix, before), tuple(versions)))
+    for path, aliases in promoted_aliases.items():
+        existing_edit = next((edit for edit in edits if edit.path == path), None)
+        before = texts[path]
+        after = existing_edit.after if existing_edit is not None else before
+        alias_declarations = "".join(f"typedef {kind} {tag} {alias};\n" for kind, tag, alias in sorted(aliases))
+        after = shared.append(after, alias_declarations)
+        if existing_edit is not None:
+            edits.remove(existing_edit)
+        edits.append(Edit(path, before, after, tuple(versions)))
     if edits:
         updated = dict(texts)
         for edit in edits:
@@ -618,7 +636,8 @@ def fold(
                     ", ".join(str(edit.path) for edit in edits),
                     "project compiler context required for header compile proof",
                 )
-            _prove_includers(project, edits)
+            if prove_headers:
+                _prove_includers(project, edits)
     return edits
 
 
