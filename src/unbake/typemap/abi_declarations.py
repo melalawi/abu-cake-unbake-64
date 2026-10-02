@@ -18,14 +18,21 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
     ordered = evidence.parameters(abi["registers"], types)
     if ordered is None and not any(reg.startswith("f") for reg in abi["registers"]):
         slots = [int(reg[5:]) // 4 if reg.startswith("stack") else int(reg[1:]) - 4 for reg in abi["registers"]]
-        required = [f"r{4 + slot}" if slot < 4 else f"stack{slot * 4}" for slot in range(max(slots, default=-1) + 1)]
-        holes = set(required) - set(abi["registers"])
-        if holes <= set(abi.get("argument_slots", [])):
-            for reg in sorted(holes):
-                params[reg] = {"state": "unknown", "type": None}
-                types[reg] = None
-                reasons.append(f"types.abi.unused_slot: {reg}: every mapped caller supplies the intervening O32 word")
-            ordered = evidence.parameters(required, types)
+        supplied = set(abi["registers"]) | set(abi.get("argument_slots", []))
+        count = max(slots, default=-1) + 1
+        # An unproved distant stack slot cannot justify filling the interval.
+        # Establish its cardinality from finite evidence before materializing it.
+        if count <= len(supplied):
+            required = [f"r{4 + slot}" if slot < 4 else f"stack{slot * 4}" for slot in range(count)]
+            holes = set(required) - set(abi["registers"])
+            if holes <= set(abi.get("argument_slots", [])):
+                for reg in sorted(holes):
+                    params[reg] = {"state": "unknown", "type": None}
+                    types[reg] = None
+                    reasons.append(
+                        f"types.abi.unused_slot: {reg}: every mapped caller supplies the intervening O32 word"
+                    )
+                ordered = evidence.parameters(required, types)
     unspecified = ordered is None
     if unspecified:
         reasons.append("types.abi.slots: parameter slots unresolved; declaration leaves the argument list unspecified")

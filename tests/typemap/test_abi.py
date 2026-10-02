@@ -59,6 +59,29 @@ class AbiTests(unittest.TestCase):
         self.assertEqual(record["abi_declaration"]["prototype"], "void caller(int *p);")
         self.assertIn("types.abi.declared", record["abi_declaration"]["reasons"][0])
 
+    def test_distant_unproved_stack_slot_leaves_arguments_unspecified(self):
+        registers = ["r4", "stack4294967292"]
+        record = {
+            "abi": {
+                "registers": registers,
+                "argument_slots": ["r4"],
+                "missing": [],
+                "conflicts": [],
+                "used_returns": [],
+                "call_sites": 2,
+                "return_known": True,
+                "void": True,
+            },
+            "params": [{"register": reg, "state": "unknown", "type": None} for reg in registers],
+            "return": {"type": "void"},
+        }
+        carrier = prototype("leaf", record, {})
+        self.assertEqual(carrier["prototype"], "void leaf();")
+        self.assertFalse(carrier["parameters_known"])
+        self.assertTrue(any("types.abi.slots" in reason for reason in carrier["reasons"]))
+        self.assertEqual(record["abi"]["registers"], registers)
+        self.assertTrue(all(param["type"] is None for param in record["params"]))
+
     def test_unused_slot_requires_evidence_from_every_call_site(self):
         record = {
             "abi": {

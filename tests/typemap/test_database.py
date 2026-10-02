@@ -307,6 +307,38 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "map.abi"):
             solve_(self.project)
 
+    def test_failed_abi_refinement_keeps_complete_original_map(self) -> None:
+        from unbake.typemap.abi_facts import refine
+        from unbake.typemap.mapping import Analysis, load_map
+
+        map_program(self.project)
+        path = self.project.build / "map/facts.json"
+        manifest = storage.read(path, "map.facts")
+        manifest.pop("abi_analysis_sha256")
+        storage.write(path, storage.encoded(manifest))
+        original = path.read_bytes()
+        shard = path.parent / manifest["shard"]
+        original_shard = shard.read_bytes()
+        run = Analysis.run
+        calls = 0
+
+        def analyze(analysis):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("failed ABI observation")
+            return run(analysis)
+
+        with (
+            patch.object(Analysis, "run", autospec=True, side_effect=analyze),
+            self.assertRaisesRegex(RuntimeError, "failed ABI observation"),
+        ):
+            refine(self.project, load_map(self.project))
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(shard.read_bytes(), original_shard)
+        self.assertFalse(list(path.parent.glob("abi-index-*")))
+        self.assertFalse(list(path.parent.glob(".facts-*")))
+
     def test_batch_feedback_maps_and_solves_once_for_all_exact_receipts(self) -> None:
         from unbake.typemap.mapping import refresh_map as map_
         from unbake.typemap.solver import solve as solve_
