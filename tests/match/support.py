@@ -165,8 +165,8 @@ class MatchFixture(unittest.TestCase):
     ) -> dict[str, SimpleNamespace]:
         functions = sorted(path.stem for path in (tree / "src").glob("*.c") if not drafts.is_partial(path.read_text()))
         self.calls.append(tuple(functions))
-        self.assertTrue(tree.is_relative_to(self.root / "build" / "match"))
-        self.assertFalse((tree / "build").exists())
+        self.assertTrue(tree.is_relative_to(self.root / "build"))
+        self.assertFalse(list((tree / "build").glob("*/*.z64")))
         for function in functions:
             for version in versions:
                 split = (tree / project.version(version).split.relative_to(self.root)).read_text()

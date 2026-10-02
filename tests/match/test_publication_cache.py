@@ -47,7 +47,7 @@ class PublicationCacheTests(MatchFixture):
             patch("unbake.cli.main.config.load", return_value=self.project),
             patch("unbake.cli.main.config.load_policy", return_value=self.policy),
             patch.object(data_symbols, "prepare", PREPARE),
-            patch.object(data_symbols, "edits", return_value=[]),
+            patch.object(data_symbols, "needs", return_value=[]),
             patch.object(build, "compile_object", wraps=COMPILE_OBJECT) as compiler,
             redirect_stdout(output),
             redirect_stderr(output),
@@ -85,7 +85,7 @@ class PublicationCacheTests(MatchFixture):
         for _ in range(2):
             output = self.cli("submit", str(source))
             self.assertEqual(self.object_requests, 2 * len(self.versions))
-            self.assertIn("alpha matched on VERSION us, eu", output)
+            self.assertIn("alpha matched on VERSION us, eu", output, output)
             self.assertEqual(trace.read_text().splitlines(), ["cc"])
             for version in self.versions:
                 current = build.current_generation(self.project, version)

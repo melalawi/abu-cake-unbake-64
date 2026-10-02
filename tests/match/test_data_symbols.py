@@ -4,11 +4,9 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
-from typing import cast
 
 from tests.decomp.support import assemble, fixture
 from unbake.match import data_symbols
-from unbake.project.config import Policy
 from unbake.project_tools.elf import Object
 
 
@@ -34,11 +32,10 @@ int alpha(void) {
             words = [0x3C08800F, 0x25088194]
             project, policy, _ = fixture(root, words, ("us", "eu"))
             for version in project.versions:
-                edits = data_symbols.edits(project, cast(Policy, policy), "alpha", version, obj)
-                self.assertEqual(len(edits), 1)
-                self.assertEqual(edits[0].versions, (version,))
-                self.assertIn("table = 0x800E8190;", edits[0].after)
-                self.assertNotIn("table", edits[0].before)
+                found = data_symbols.needs(project, "alpha", version, obj)
+                self.assertEqual(
+                    [(need.version, need.name, need.address) for need in found], [(version, "table", 0x800E8190)]
+                )
             self.assertEqual(data_symbols.placements(Object(obj), struct.pack(">II", *words), {"table"}), {})
 
     def test_disagreeing_references_and_changed_instructions_refuse_placement(self) -> None:
