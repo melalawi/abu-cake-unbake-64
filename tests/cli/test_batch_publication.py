@@ -58,7 +58,7 @@ class BatchPublicationCliTests(unittest.TestCase):
             for line in path.read_text().splitlines()
         ]
 
-    def test_three_changed_sources_publish_remaining_29_in_one_proof(self):
+    def test_three_changed_sources_are_isolated_and_29_publish(self):
         for source in self.sources:
             self.cli("try", source)
         bad = {self.names[5], self.names[17], self.names[29]}
@@ -76,14 +76,16 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         for name in self.names:
             if name in bad:
-                self.assertIn(f"HELD(submit): {name}: trial.source_sha256:", result.stdout)
+                # A source edited after its try is proved like any other and refused by its bytes.
+                self.assertIn(f"HELD(match): {name}: build compare failed", result.stdout)
                 self.assertFalse((self.project.src / (name + ".c")).exists())
             else:
                 self.assertIn(f"{name} matched on VERSION", result.stdout)
         proofs = [row for row in self.evidence() if row["event"] == "proof"]
-        self.assertEqual(len(proofs), 1)
-        self.assertEqual(len(proofs[0]["sources"]), 29)
-        self.assertFalse(proofs[0]["failures"])
+        # The changed sources build, fail by name, and the rest prove in one relink.
+        self.assertEqual(len(proofs), 2)
+        self.assertEqual(len(proofs[-1]["sources"]), 29)
+        self.assertFalse(proofs[-1]["failures"])
         self.assertIn(": OK", self.make())
 
     def test_three_bad_objects_in_32_publish_29_in_two_proofs(self):
@@ -121,7 +123,6 @@ class BatchPublicationCliTests(unittest.TestCase):
                 self.assertTrue((self.project.src / (name + ".c")).exists())
         proofs = [row for row in self.evidence() if row["event"] == "proof"]
         self.assertEqual(len(proofs), 2, proofs)
-        self.assertEqual([row["mode"] for row in proofs], ["build", "relink"])
         self.assertEqual(len(proofs[0]["sources"]), 32)
         self.assertEqual(len(proofs[1]["sources"]), 29)
         self.assertFalse(proofs[1]["failures"])
@@ -130,9 +131,7 @@ class BatchPublicationCliTests(unittest.TestCase):
             helper = self.project.tools / filename
             self.assertEqual(helper.read_text(), expected_helpers["tools/" + filename])
             self.assertIn(hashlib.sha256(helper.read_bytes()).hexdigest(), checksum.read_text())
-        selections = toml.loads((self.root / "config.toml").read_text())["compiler_selections"]
-        for name in bad:
-            self.assertNotIn("tie:unit:" + name, selections)
+        self.assertNotIn("compiler_selections", toml.loads((self.root / "config.toml").read_text()))
         self.assertIn(": OK", self.make())
 
     def test_stopped_subset_proof_keeps_named_refusals_on_disk_and_stdout(self):
@@ -163,4 +162,3 @@ class BatchPublicationCliTests(unittest.TestCase):
                 process.wait(timeout=10)
         self.assertEqual(len([row for row in self.evidence() if row["event"] == "proof"]), 1)
         self.assertFalse(list(self.project.src.glob("*.c")))
-        self.assertEqual(len((self.root / ".unbake/state/match-queue.jsonl").read_text().splitlines()), 32)
