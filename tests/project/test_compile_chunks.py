@@ -38,3 +38,36 @@ class CompileChunkTests(unittest.TestCase):
             for name in ("good_a", "good_b", "good_c"):
                 self.assertEqual((root / "obj" / (name + ".o")).read_bytes(), b"retained object")
                 self.assertTrue((root / "obj" / (name + ".built")).is_file())
+
+    def test_proof_batch_stops_at_first_diagnostic_and_cancels_other_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "src"
+            source.mkdir()
+            units = [source / (name + ".c") for name in ("bad", "queued")]
+            args = argparse.Namespace(
+                source=source,
+                output=root / "obj",
+                kind="cc",
+                batch=units,
+                recipe=root / "recipe",
+                cancel_file=root / "cancel",
+                version="us",
+            )
+            visited = []
+
+            def build(item, data):
+                visited.append((item.version, item.source))
+                raise ValueError("duplicate typedef")
+
+            with (
+                patch.object(compiler, "read_recipe", return_value={}),
+                patch.object(compiler, "compile_object", side_effect=build),
+            ):
+                with self.assertRaisesRegex(ValueError, "bad.c: duplicate typedef"):
+                    compiler.compile_batch(args)
+                self.assertTrue(args.cancel_file.exists())
+                args.version = "eu"
+                compiler.compile_batch(args)
+            self.assertEqual(visited, [("us", units[0])])
+            self.assertFalse(list(root.rglob("*.built")))

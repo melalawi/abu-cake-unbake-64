@@ -11,6 +11,7 @@ from pathlib import Path
 
 from unbake.layout import split
 from unbake.match import reporting
+from unbake.match.common import held
 from unbake.project import build, makefile
 from unbake.project.config import Policy, Project
 from unbake.project_tools import extract, layout
@@ -107,7 +108,16 @@ def prepare(
             return None
 
     changed = {v: changed_sources(original, staged, g, v) for v, g in generations.items()}
-    compiled = build.compile_versions(staged, policy, {v: (changed[v], g / "obj/src") for v, g in generations.items()})
+    compiled = build.compile_versions(
+        staged, policy, {v: (changed[v], g / "obj/src") for v, g in generations.items()}, stop_on_error=True
+    )
+    for version, failures in compiled.items():
+        if failures:
+            name, diagnostic = next(iter(failures.items()))
+            held(
+                f"submit.dependencies: VERSION {version}: {staged.src / (name + '.c')}: "
+                f"compile diagnostic: {diagnostic}"
+            )
 
     def compile_version(version: str) -> tuple[list[str], dict[str, list[str]]]:
         generation = generations[version]

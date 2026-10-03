@@ -225,7 +225,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.assertFalse(list(self.project.src.glob("*.c")))
         self.assertFalse(list(self.project.build.glob("submit-*")))
 
-    def test_compile_binding_and_byte_faults_share_one_proof_even_after_full_build(self):
+    def test_compile_diagnostic_aborts_incremental_proof_and_full_build_retains_attribution(self):
         for fallback in (False, True):
             with self.subTest(fallback=fallback):
                 if fallback:
@@ -238,8 +238,8 @@ class BatchPublicationCliTests(unittest.TestCase):
                     f"extern int missing(void); int {self.names[17]}(void) {{ return missing(); }}\n"
                 )
                 self.sources[29].write_text(f"int {self.names[29]}(void) {{ return 2; }}\n")
-                # The first pass publishes its survivors. Repeating the three
-                # refused inputs exercises the full-build branch on changed flags.
+                # A compile diagnostic stops the incremental proof. The forced
+                # Make fallback retains its existing attribution behaviour.
                 sources = [self.sources[i] for i in (5, 17, 29)] if fallback else self.sources
                 before = {json.dumps(row, sort_keys=True) for row in self.evidence()}
                 built = len(self.tools.built)
@@ -257,6 +257,14 @@ class BatchPublicationCliTests(unittest.TestCase):
                     )
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 rows = [row for row in self.evidence() if json.dumps(row, sort_keys=True) not in before]
+                if not fallback:
+                    self.assertIn("HELD(match): submit.dependencies:", result.stdout)
+                    self.assertTrue(any(f"VERSION {v}:" in result.stdout for v in self.project.versions))
+                    self.assertIn(self.names[5] + ".c", result.stdout)
+                    self.assertIn("invalid C", result.stdout)
+                    self.assertFalse([row for row in rows if row["event"] in {"proof", "attribution"}])
+                    self.assertFalse(list(self.project.src.glob("*.c")))
+                    continue
                 self.assertEqual(len(self.tools.built) - built, int(fallback))
                 proofs = [row for row in rows if row["event"] == "proof"]
                 self.assertEqual(len(proofs), 1, result.stdout + result.stderr)

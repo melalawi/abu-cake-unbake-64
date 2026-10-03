@@ -11,7 +11,7 @@ import sys
 import tempfile
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -209,7 +209,7 @@ def preprocess_object(project: Project, policy: Policy, source: Path, v: str) ->
 
 
 def compile_versions(
-    project: Project, policy: Policy, jobs: Mapping[str, tuple[Sequence[Path], Path]]
+    project: Project, policy: Policy, jobs: Mapping[str, tuple[Sequence[Path], Path]], *, stop_on_error: bool = False
 ) -> dict[str, dict[str, str]]:
     """Share object compile slots across versions, retaining small interpreter batches."""
     if policy.cores < 1:
@@ -229,22 +229,58 @@ def compile_versions(
     ]
     failures: dict[str, dict[str, str]] = {version: {} for version in jobs}
     if planned:
-        with ThreadPoolExecutor(max_workers=min(policy.cores, len(planned))) as pool:
-            futures = [
-                (v, pool.submit(compile_objects, project, policy, sources, v, out)) for v, sources, out in planned
-            ]
-            for version, future in futures:
-                failures[version].update(future.result())
+        with ExitStack() as stack:
+            cancel_file = None
+            if stop_on_error:
+                directory = planned[0][2]
+                directory.mkdir(parents=True, exist_ok=True)
+                temporary = stack.enter_context(tempfile.TemporaryDirectory(prefix=".cancel-", dir=directory))
+                cancel_file = Path(temporary) / "stop"
+
+            def compile_chunk(version: str, sources: Sequence[Path], out: Path) -> dict[str, str]:
+                if cancel_file is None:
+                    return compile_objects(project, policy, sources, version, out)
+                if cancel_file.exists():
+                    return {}
+                try:
+                    faults = compile_objects(project, policy, sources, version, out, cancel_file=cancel_file)
+                except BaseException:
+                    cancel_file.touch()
+                    raise
+                if faults:
+                    cancel_file.touch()
+                return faults
+
+            with ThreadPoolExecutor(max_workers=min(policy.cores, len(planned))) as pool:
+                futures = {pool.submit(compile_chunk, v, sources, out): v for v, sources, out in planned}
+                for future in as_completed(futures):
+                    version = futures[future]
+                    faults = future.result()
+                    failures[version].update(faults)
+                    if stop_on_error and faults:
+                        for pending in futures:
+                            pending.cancel()
+                        break
     return failures
 
 
-def compile_objects(project: Project, policy: Policy, sources: Sequence[Path], v: str, out: Path) -> dict[str, str]:
+def compile_objects(
+    project: Project,
+    policy: Policy,
+    sources: Sequence[Path],
+    v: str,
+    out: Path,
+    *,
+    cancel_file: Path | None = None,
+) -> dict[str, str]:
     """Compile project sources in one interpreter through the content cache; name each failure.
 
     Objects land at out/<stem>.o. The result maps each failed source stem to its diagnostic.
     """
     from unbake.project import toolchain
 
+    if cancel_file is not None and cancel_file.exists():
+        return {}
     project.version(v)
     for ident in {project.compiler_for(source).id for source in sources}:
         toolchain.verify(project.tools / ident, toolchain.specification(ident))
@@ -277,6 +313,7 @@ def compile_objects(project: Project, policy: Policy, sources: Sequence[Path], v
                 "0",
                 "--cache-root",
                 str(policy.cache_root),
+                *(["--cancel-file", str(cancel_file)] if cancel_file is not None else []),
                 "--batch",
                 *(str(root / path) for path in relative),
             ],
@@ -293,6 +330,8 @@ def compile_objects(project: Project, policy: Policy, sources: Sequence[Path], v
             failures[current] = match[2]
         elif current is not None and not line.startswith("HELD("):
             failures[current] += "\n" + line
+    if cancel_file is not None and cancel_file.exists():
+        return failures
     for path in relative:
         if path.stem not in failures and not (out / path.with_suffix(".o")).is_file():
             failures[path.stem] = (completed.stderr or completed.stdout).strip()[-400:] or "no object produced"

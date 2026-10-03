@@ -134,12 +134,17 @@ class Tools:
         for filename in ("undefined_funcs_auto.txt", "undefined_syms_auto.txt"):
             (generation / filename).write_text("")
 
-    def compile(self, project, policy, sources, version, out):
+    def compile(self, project, policy, sources, version, out, *, cancel_file=None):
         self.compiled.append((version, tuple(source.stem for source in sources)))
         failures = {}
         for source in sources:
+            if cancel_file is not None and cancel_file.exists():
+                break
             if "invalid C" in source.read_text():
                 failures[source.stem] = "invalid C"
+                if cancel_file is not None:
+                    cancel_file.touch()
+                    break
                 continue
             import re
 

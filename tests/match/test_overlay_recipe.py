@@ -165,7 +165,7 @@ class OverlayRecipeTests(MatchFixture):
                 self.assertRaisesRegex(RuntimeError, "captured"),
             ):
                 driver.compile_object(args, data)
-            self.assertEqual(len(commands), 1 if kind == "sn64" else 2)
+            self.assertEqual(len(commands), 1)
             for command in commands:
                 self.ordered(command, configured)
 

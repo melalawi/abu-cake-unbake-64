@@ -1,4 +1,14 @@
-#!/usr/bin/env python3
+"""Cache compatibility for the reviewed CPU-only driver optimization.
+
+The SHA is of the generated optimized driver, with its standalone imports.
+Only that exact revision may reuse the legacy fingerprint. Later edits use
+actual driver bytes until independently proved compatible.
+"""
+
+OPTIMIZED_SHA256 = "15d4f0e8cbe92bccc06f9d77ef8dc4c439732310120cad814cfbc596659cc1dc"
+
+# Preserve the original length-prefixed key input, not merely its SHA.
+LEGACY_DRIVER = r'''#!/usr/bin/env python3
 """Compile or assemble a content-keyed object with the declared project recipe."""
 
 from __future__ import annotations
@@ -16,9 +26,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TypedDict, cast
 
-from unbake.project.cache import Cache, key
-from unbake.project_tools.compile_identity import LEGACY_DRIVER, OPTIMIZED_SHA256
-from unbake.project_tools.host import resolve_tool
+from cache import Cache, key
+from host import resolve_tool
 
 Compiler = TypedDict("Compiler", {"kind": str, "cc": str, "cflags": list[str], "as": str})
 
@@ -102,41 +111,7 @@ def read_recipe(path: Path) -> Recipe:
 @lru_cache(maxsize=64)
 def tool_digest(paths: tuple[Path, ...]) -> str:
     """Fingerprint immutable build tools once per compiler process."""
-    driver = paths[0].read_bytes()
-    # This reviewed optimization preserves the old cache envelope. Any later
-    # driver edit falls back to fingerprinting its actual bytes.
-    if hashlib.sha256(driver).hexdigest() == OPTIMIZED_SHA256:
-        return key(LEGACY_DRIVER.encode(), *paths[1:])
     return key(*paths)
-
-
-def file_signature(path: Path) -> tuple[int, int, int, int, int]:
-    """Observe replacement and same-size edits before reusing file contents."""
-    stat = path.stat()
-    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
-
-
-@lru_cache(maxsize=4096)
-def dependency_digest(path: Path, signature: tuple[int, int, int, int, int]) -> str:
-    """Retain only digests, never the potentially large shared header bytes."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def dependency_hash(word: str) -> str:
-    path = Path(word)
-    return dependency_digest(path, file_signature(path))
-
-
-@lru_cache(maxsize=16)
-def manifest_pins(path: Path, signature: tuple[int, int, int, int, int]) -> dict[str, dict[str, str]]:
-    """Parse and group immutable compiler pins once, rather than per object."""
-    groups: dict[str, dict[str, str]] = {}
-    for line in path.read_text().splitlines():
-        fields = line.split(maxsplit=1)
-        if len(fields) == 2 and not line.startswith("#"):
-            name = fields[1].lstrip("*")
-            groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
-    return groups
 
 
 def codegen_flags(flags: list[str]) -> list[str]:
@@ -190,12 +165,6 @@ def dependency_paths(text: str) -> list[str]:
     )
 
 
-def preprocessed_dependencies(content: bytes, source: Path) -> list[str]:
-    """IDO's -E line markers name the same inputs as its separate -M rules."""
-    names = re.findall(rb'^#[ \t]*(?:line[ \t]+)?[0-9]+[ \t]+"([^"\n]+)"', content, re.M)
-    return list(dict.fromkeys([str(source), *(name.decode() for name in names if not name.startswith(b"<"))]))
-
-
 def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None:
     if data is None:
         data = read_recipe(args.recipe)
@@ -236,7 +205,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
         args.depfile.parent.mkdir(parents=True, exist_ok=True)
         dependencies = ["-MMD", "-MP", "-MF", str(args.depfile), "-MT", args.dep_target or str(out)]
     if sn64:
-        from unbake.project_tools.sn64_cc import partition_flags
+        from sn64_cc import partition_flags
 
         preprocess, codeflags = partition_flags(flags)
         if assembly:
@@ -262,7 +231,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
                 ]
             )
         if assembly:
-            from unbake.project_tools.resolve_external_branches import read_symbols, resolve
+            from resolve_external_branches import read_symbols, resolve
 
             symbols, units = read_symbols(args.symbols)
             content = resolve(content.decode(), args.source.stem, symbols, units).encode()
@@ -274,32 +243,24 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
     else:
         assert compiler is not None
         cc = compiler["cc"]
-        preprocess_flags = [f for f in flags if f != "-c"]
-        ido = compiler["kind"] == "ido"
-        # IDO's recompiled driver rejects -MD/-MF; -MDupdate calls an
-        # unimplemented fcntl. Its ordinary -E markers already list inputs.
-        # Retain -M only when the recipe explicitly suppresses those markers.
-        separate_dependencies = ido and "-P" in preprocess_flags
-        if args.depfile and separate_dependencies:
-            text = run([cc, *preprocess_flags, "-M", str(args.source)]).decode()
-        else:
-            text = ""
-        combined = ["-MD", "-MF", str(args.depfile)] if args.depfile and not ido else []
-        content = run([cc, *preprocess_flags, "-E", *combined, str(args.source)])
         if args.depfile:
-            words = (
-                dependency_paths(text)
-                if separate_dependencies
-                else preprocessed_dependencies(content, args.source)
-                if ido
-                else dependency_paths(args.depfile.read_text())
-            )
+            text = run([cc, *[f for f in flags if f != "-c"], "-M", str(args.source)]).decode()
             target = args.dep_target or str(out)
-            args.depfile.write_text(target + ": " + " ".join(words) + "\n")
+            args.depfile.write_text(target + ": " + " ".join(dependency_paths(text)) + "\n")
+        content = run([cc, *[f for f in flags if f != "-c"], "-E", str(args.source)])
 
     manifest = args.recipe.parent / "compiler.sha256"
-    pins = manifest_pins(manifest, file_signature(manifest)) if manifest.is_file() else {}
-    selected = pins.get(str(Path(compiler["cc"]).parent), {}) if ident and compiler is not None else {}
+    pins = {}
+    if manifest.is_file():
+        for line in manifest.read_text().splitlines():
+            fields = line.split(maxsplit=1)
+            if len(fields) == 2 and not line.startswith("#"):
+                pins[fields[1].lstrip("*")] = fields[0]
+    selected = {
+        name: digest
+        for name, digest in pins.items()
+        if ident and compiler is not None and str(Path(name).parent) == str(Path(compiler["cc"]).parent)
+    }
     driver_names = (
         (
             "compile.py",
@@ -347,7 +308,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
                 assert compiler is not None
                 from abumasn64.assemble import assemble
 
-                from unbake.project_tools.sn64_cc import gnu_as_flags
+                from sn64_cc import gnu_as_flags
 
                 if not assembly:
                     generated = work / "source.s"
@@ -377,7 +338,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
             else:
                 assert compiler is not None
                 run([compiler["cc"], *generation, "-c", str(source), "-o", str(destination)])
-                from unbake.project_tools.elf import Object
+                from elf import Object
 
                 Object(destination).trim_text()
 
@@ -391,7 +352,7 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
 
     if args.kind == "cc" and args.depfile and args.depfile.is_file():
         words = dependency_paths(args.depfile.read_text())
-        dependency_hashes = {str(Path(word)): dependency_hash(word) for word in words}
+        dependency_hashes = {str(Path(word)): hashlib.sha256(Path(word).read_bytes()).hexdigest() for word in words}
         out.with_suffix(".inputs.json").write_text(json.dumps(dependency_hashes, sort_keys=True))
 
 
@@ -399,10 +360,7 @@ def compile_batch(args: argparse.Namespace) -> None:
     """Compile a cold graph chunk in one interpreter, sequentially per Make job."""
     data = read_recipe(args.recipe)
     failures = []
-    cancel_file = getattr(args, "cancel_file", None)
     for source in args.batch:
-        if cancel_file is not None and cancel_file.exists():
-            break
         relative = source.relative_to(args.source)
         output = args.output / relative.with_suffix(".o")
         item = argparse.Namespace(**vars(args))
@@ -418,9 +376,6 @@ def compile_batch(args: argparse.Namespace) -> None:
             output.with_suffix(".built").touch()
         except (OSError, ValueError, KeyError) as error:
             failures.append(f"{source}: {error}")
-            if cancel_file is not None:
-                cancel_file.touch()
-                break
     if failures:
         raise ValueError("batch objects failed:\n" + "\n".join(failures))
 
@@ -434,7 +389,6 @@ def main() -> None:
     parser.add_argument("--version", required=True)
     parser.add_argument("--unit", required=True)
     parser.add_argument("--dep-target")
-    parser.add_argument("--cancel-file", type=Path)
     parser.add_argument("--batch", type=Path, nargs="+")
     args = parser.parse_args()
     try:
@@ -448,3 +402,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+'''

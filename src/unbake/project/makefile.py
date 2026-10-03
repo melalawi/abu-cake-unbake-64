@@ -205,6 +205,7 @@ def helpers(project: Project) -> dict[str, str]:
     names = [
         "extract.py",
         "compile.py",
+        "compile_identity.py",
         "elf.py",
         "layout.py",
         "rodata.py",
@@ -258,7 +259,7 @@ def render(project: Project) -> dict[str, str]:
         "DRIVERS": " ".join(
             "$(TOOLS)/" + name
             for name in (
-                ["compile.py", "elf.py", "host.py"]
+                ["compile.py", "compile_identity.py", "elf.py", "host.py"]
                 + (
                     [
                         "sn64_cc.py",

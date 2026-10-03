@@ -4,9 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.decomp.support import fixture
+from unbake.match import incremental
 from unbake.match.relink import retarget_rows
+from unbake.project import build, config, makefile
 from unbake.project_tools.extract import unit_ranges
 
 
@@ -67,3 +70,35 @@ class RetargetTests(unittest.TestCase):
             after = before.replace("[0x40, asm, nonmatchings/alpha]", "[0x44, c, alpha]")
             self.assertFalse(retarget_rows(project, generation, before, after))
             self.assertEqual([path.read_bytes() for path in files], snapshot)
+
+
+class CompileCancellationTests(unittest.TestCase):
+    def test_first_diagnostic_cancels_queued_versions_and_reports_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, policy, _ = fixture(Path(directory), versions=("us", "eu"), case=self)
+            policy.cores = 1
+            recipe = makefile.description(project)
+            (project.tools / "build.json").write_text(json.dumps(recipe))
+            sources = [project.src / f"unit{index}.c" for index in range(20)]
+            generations = {v: project.build / (v + ".proof") for v in project.versions}
+            splits = {v: project.version(v).split.read_text() for v in project.versions}
+            visited = []
+
+            def compile_chunk(selected, selected_policy, members, version, out, *, cancel_file):
+                self.assertFalse(cancel_file.exists())
+                visited.append((version, list(members)))
+                return {members[0].stem: "redefinition of M2C_UNK"}
+
+            with (
+                patch.object(incremental, "advance", return_value=True),
+                patch.object(incremental, "changed_sources", return_value=sources),
+                patch.object(build, "compile_objects", side_effect=compile_chunk),
+                self.assertRaises(config.Held) as refused,
+            ):
+                incremental.prepare(project, project, policy, generations, splits)
+            self.assertEqual(visited, [("us", sources[:10])])
+            self.assertEqual(refused.exception.phase, "match")
+            self.assertIn("submit.dependencies: VERSION us:", refused.exception.reason)
+            self.assertIn(str(sources[0]), refused.exception.reason)
+            self.assertIn("redefinition of M2C_UNK", refused.exception.reason)
+            self.assertFalse(list(generations["us"].rglob(".cancel-*")))
