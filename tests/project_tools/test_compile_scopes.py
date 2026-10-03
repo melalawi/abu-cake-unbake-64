@@ -91,6 +91,7 @@ class CompileScopeTests(unittest.TestCase):
         )
         self.assertNotIn("compile.py", makefile.compile_rules(project))
         self.assertNotIn("compiler.sha256", makefile.compile_rules(project))
+        self.assertIn("$(TOOLS)/extract.py", next(line for line in graph.splitlines() if line.startswith("$(ELF):")))
 
     def test_helper_edits_publish_graph_and_scoped_inputs_with_verified_pins(self):
         project, _ = fixture(self.root, case=self)
@@ -180,6 +181,47 @@ class CompileScopeTests(unittest.TestCase):
                     detach.assert_called_once_with(generation)
                 self.assertEqual({name for name, path in receipts.items() if not path.exists()}, expected)
                 self.assertTrue(link.is_symlink())
+
+    def test_sn64_receipts_bind_assembler_symbols_and_only_their_own_drivers(self):
+        cases = (
+            ("symbols", {"asm/first"}),
+            ("asbin", {"src/middle", "asm/first"}),
+            ("compile/drivers/sn64_cc.py.sha256", {"src/middle", "asm/first"}),
+            ("compile/drivers/abumasn64.sha256", {"src/middle", "asm/first"}),
+            ("compile/drivers/resolve_external_branches.py.sha256", {"asm/first"}),
+            ("default/cc", {"src/middle"}),
+            ("compile/drivers/elf.py.sha256", {"src/middle"}),
+            ("compile.py", set()),
+        )
+        for index, (changed, expected) in enumerate(cases):
+            with self.subTest(changed=changed):
+                root = self.root / str(index)
+                tools = root / "tools"
+                generation = root / "build/us.0"
+                for name, _ in cases:
+                    path = tools / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("")
+                    os.utime(path, ns=(100, 100))
+                recipe = {
+                    "default_compiler": "default",
+                    "units": {},
+                    "assembly_compiler": "default",
+                    "compilers": {"default": dict(kind="sn64", cc="tools/default/cc", **{"as": "policy:mips_as"})},
+                }
+                (tools / "build.json").write_text(json.dumps(recipe))
+                receipts = {}
+                for name in ("src/middle", "asm/first"):
+                    path = generation / "obj" / (name + ".built")
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"receipt")
+                    os.utime(path, ns=(150, 150))
+                    receipts[name] = path
+                os.utime(tools / changed, ns=(200, 200))
+                with patch.object(staging, "resolve_tool", return_value=str(tools / "asbin")) as resolve:
+                    staging.chunk_stale_sources(generation, tools, tools / "symbols")
+                    resolve.assert_called_once_with("policy:mips_as")
+                self.assertEqual({name for name, path in receipts.items() if not path.exists()}, expected)
 
     def test_missing_recipe_and_empty_generation_do_nothing(self):
         generation = self.root / "us.0"

@@ -20,6 +20,7 @@ from unbake.match.common import (
 from unbake.project import build, makefile
 from unbake.project.config import Project
 from unbake.project_tools.compile_identity import driver_names, selected_pins
+from unbake.project_tools.host import resolve_tool
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
 _OUTPUTS = frozenset({".git", "artifacts", ".unbake", ".splat", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
@@ -197,6 +198,15 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
                 name = fields[1].lstrip("*")
                 groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
     root = tools.parent
+    executables: dict[str, Path] = {}
+
+    def executable(value: str) -> Path:
+        if value not in executables:
+            executables[value] = (
+                root / value if "/" in value and not value.startswith("policy:") else Path(resolve_tool(value))
+            )
+        return executables[value]
+
     independent_objects(generation)
     for kind in ("src", "asm"):
         base = generation / "obj" / kind
@@ -224,7 +234,10 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
                 )
                 inputs.append(tools / "compile/units" / (unit + ".json"))
             if sn64:
-                inputs.append(tools / "compile/drivers/abumasn64.sha256")
+                assert compiler is not None
+                inputs.extend((tools / "compile/drivers/abumasn64.sha256", executable(compiler["as"])))
+            elif kind == "asm" and data.get("as"):
+                inputs.append(executable(data["as"]))
             if kind == "asm" and sn64:
                 inputs.append(symbols)
             if any(path.is_file() and path.stat().st_mtime_ns > receipt.stat().st_mtime_ns for path in inputs):

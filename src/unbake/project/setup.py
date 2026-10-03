@@ -110,10 +110,11 @@ def run(project: Project, policy: Policy | SetupPolicy, *, supply: Path | None =
                 resolve_tool(str(compiler.as_))
             except ValueError as error:
                 raise Held("setup", str(error)) from error
-    files = makefile.render(project)
-    files[".gitignore"] = hygiene.ignore_text(project)
     toolchain.ensure(project, policy, supply=supply)
     verify_compiler(project)
+    # Render after installation so cold projects declare every compiler companion.
+    files = makefile.render(project)
+    files[".gitignore"] = hygiene.ignore_text(project)
     receipts = []
     for name in project.versions:
         version = project.version(name)

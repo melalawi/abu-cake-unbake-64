@@ -139,7 +139,7 @@ $(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin $(OBJCOPY) $(TOOLS)/atomic.py
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/atomic.py --output $@ -- $(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
 
-$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py $(TOOLS)/elf.py $(TOOLS)/atomic.py $(LINK_RECIPE) $(BASEROM) $(BUILD)/unit-ranges.json $(LD)
+$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py $(TOOLS)/elf.py $(TOOLS)/extract.py $(TOOLS)/atomic.py $(LINK_RECIPE) $(BASEROM) $(BUILD)/unit-ranges.json $(LD)
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/layout.py --script $(LD_SCRIPT) --output $(BUILD)/@NAME@.link.ld --build $(BUILD) --ranges $(BUILD)/unit-ranges.json --recipe $(LINK_RECIPE) --version $(VERSION) --baserom $(BASEROM) --non-matching $(NON_MATCHING)
 	cd $(BUILD) && LC_ALL=C python3 $(abspath $(TOOLS))/atomic.py --output @NAME@.elf --output @NAME@.map -- $(LD) $$(cat @NAME@.link.flags) -T @NAME@.link.ld $(addprefix -T ,$(abspath $(LINK_SCRIPTS))) -Map @NAME@.map -o @NAME@.elf $(patsubst $(BUILD)/%,%,$(OBJECTS))
