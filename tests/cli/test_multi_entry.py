@@ -159,6 +159,9 @@ class MultiEntryCliTests(unittest.TestCase):
             patch.object(toolchain, "ensure"),
             patch.object(toolchain, "verify", return_value={}),
             patch.object(build, "compile_object", side_effect=compiled),
+            patch.object(
+                build, "compile_versions", side_effect=lambda project, policy, jobs, **_: {v: {} for v in jobs}
+            ),
             boundary(entries, output),
             boundary(declarations, output),
             boundary(staging, copy),
