@@ -277,10 +277,13 @@ class AtomicTests(unittest.TestCase):
                 ) as run:
                     self.assertEqual(compile.run(["cc"], cwd=directory), b"output")
                     run.assert_called_once_with(["cc"], **kwargs)
-        with (
-            patch.object(
-                compile.subprocess, "run", return_value=subprocess.CompletedProcess(["cc"], 1, b"out", b"err")
-            ),
-            self.assertRaisesRegex(ValueError, "cc exited 1: outerr"),
-        ):
-            compile.run(["cc"], cwd=self.root)
+        # A failure reports stderr; stdout (often preprocessed text) only when stderr is empty.
+        for stdout, stderr, message in ((b"out", b"err", "cc exited 1: err$"), (b"out", b"", "cc exited 1: out$")):
+            with (
+                self.subTest(stderr=stderr),
+                patch.object(
+                    compile.subprocess, "run", return_value=subprocess.CompletedProcess(["cc"], 1, stdout, stderr)
+                ),
+                self.assertRaisesRegex(ValueError, message),
+            ):
+                compile.run(["cc"], cwd=self.root)
