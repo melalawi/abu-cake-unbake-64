@@ -33,6 +33,7 @@ def _gnu_blank(view: str, blank: Any) -> str:
         result.append(view[at : match.start()] + blank(re.match(r"(?s).*", view[match.start() : end])))
         at = end
     view = "".join(result) + view[at:]
+    view = re.sub(r"\b(?:__inline__|__inline|__extension__|__restrict__|__restrict)\b", blank, view)
     view = re.sub(r"([{,(=]\s*)&&(?=\s*[A-Za-z_])", r"\1 &", view)
     return re.sub(r"\bgoto\s*\*", blank, view)
 
@@ -123,10 +124,32 @@ def _parse_context(prefix: str) -> tuple[list[Any], dict[str, bool]]:
     return list(tree.ext), dict(parser._scope_stack[0])
 
 
+class _SourceParser(c_parser.CParser):  # type: ignore[misc]
+    """Represent GNU statement expressions as scoped compound expression nodes."""
+
+    def _parse_assignment_expression(self) -> Any:
+        # pycparser's assignment-level GNU shortcut returns before consuming
+        # postfix operators. Parse compounds at the primary-expression boundary.
+        node = self._parse_conditional_expression()
+        if self._is_assignment_op():
+            operator = self._advance().value
+            right = self._parse_assignment_expression()
+            return c_ast.Assignment(operator, node, right, node.coord)
+        return node
+
+    def _parse_primary_expression(self) -> Any:
+        if self._peek_type() == "LPAREN" and self._peek_type(2) == "LBRACE":
+            self._advance()
+            node = self._parse_compound_statement()
+            self._expect("RPAREN")
+            return node
+        return super()._parse_primary_expression()
+
+
 def _parse(prefix: str, view: str, cache_root: Path | None = None) -> c_ast.FileAST:
     """Parse VIEW after PREFIX with source coordinates as if both were one text."""
     declarations, scope = _context(prefix, cache_root)
-    parser = c_parser.CParser()
+    parser = _SourceParser()
     parser._scope_stack = [dict(scope)]
     parser.clex.input("\n" * prefix.count("\n") + view, "")
     parser._tokens = c_parser._TokenStream(parser.clex)
@@ -159,6 +182,7 @@ def edits(
     preprocess: Callable[[], View] | None = None,
     source_path: Path | None = None,
     source_line_offset: int = 0,
+    source_text: str | None = None,
 ) -> dict[tuple[int, int], str]:
     """Use C namespaces and expression types; preserve comments, strings and value identifiers."""
     records = {record.name: record for record in (parser.layout(item) for item in parser.aggregates if item.name)}
@@ -215,7 +239,11 @@ def edits(
     # parser deliberately excludes directives from its declaration token stream.
     from unbake.layout.structs_parser import _TOKEN
 
-    tokens = {token.start(): token for token in _TOKEN.finditer(parser.source) if not token[0].startswith(("/*", "//"))}
+    tokens = {
+        token.start(): token
+        for token in _TOKEN.finditer(source_text if source_text is not None else parser.source)
+        if not token[0].startswith(("/*", "//"))
+    }
     replacements: dict[tuple[int, int], str] = {}
     expanded_edits: dict[int, str] = {}
     spellings = expanded.text.splitlines() if expanded is not None else []
@@ -279,6 +307,14 @@ def edits(
         return node
 
     def expression(node: Any) -> Any:
+        if isinstance(node, c_ast.Compound) and node.block_items:
+            scopes.append(
+                {item.name: item.type for item in node.block_items if isinstance(item, c_ast.Decl) and item.name}
+            )
+            try:
+                return expression(node.block_items[-1])
+            finally:
+                scopes.pop()
         if isinstance(node, c_ast.ID):
             return next((scope[node.name] for scope in reversed(scopes) if node.name in scope), None)
         if isinstance(node, c_ast.Cast):

@@ -82,8 +82,8 @@ class RewriteViewTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, r"/source.c:1:.*-fdebug-cpp"):
             rewrite_view.decode("int f(void) {return 0;}", "", "/source.c")
 
-    def rewrite(self, source, view):
-        parser = Parser(source)
+    def rewrite(self, source, view, layout_source=None):
+        parser = Parser(source if layout_source is None else layout_source)
         parser.parse()
         context = "typedef struct Canon {int value;} Canon;"
         replacements = type_rewrite.edits(
@@ -92,6 +92,7 @@ class RewriteViewTests(unittest.TestCase):
             {"Old": ("Canon", layouts(context)[0])},
             preprocess=Mock(return_value=view),
             source_path=Path("/source.c"),
+            source_text=source,
         )
         for (start, end), target in sorted(replacements.items(), reverse=True):
             source = source[:start] + target + source[end:]
@@ -130,7 +131,8 @@ class RewriteViewTests(unittest.TestCase):
             "#define TYPE Old\ntypedef struct Old {int old;} Old;\nint f(TYPE *p) {int Old=1; return p->old+Old;}\n"
         )
         view = expanded(source, extras={"TYPE": [("Old", "/source.c", 1, 14)]})
-        result = self.rewrite(source, view)
+        selected = source.replace("#define TYPE Old", " " * len("#define TYPE Old"))
+        result = self.rewrite(source, view, layout_source=selected)
         self.assertIn("#define TYPE Canon", result)
         self.assertIn("int Old=1; return p->value+Old;", result)
         self.assertIn("f(TYPE *p)", result)

@@ -340,7 +340,7 @@ def _layout_names(
             roots = source_views.header_includes(project, headers, Path(temporary))
             context_project = replace(project, include=roots, overlay_roots=roots)
             return rewrite_view.prepare(
-                context_project, policy, parser.source, version, source_path or project.src / f"{function}.c"
+                context_project, policy, text, version, source_path or project.src / f"{function}.c"
             )
 
     for index, parser in enumerate(parsers):
@@ -365,6 +365,7 @@ def _layout_names(
             preprocess=partial(expanded_context, parser, versions[index]),
             source_path=source_path or project.src / f"{function}.c",
             source_line_offset=source_line_offset,
+            source_text=text,
         )
         for span, target in planned.items():
             if span in replacements and replacements[span] != target:

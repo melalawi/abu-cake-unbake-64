@@ -227,6 +227,27 @@ class DeclarationTests(MatchFixture):
         self.assertTrue(all(tree == trees[0] for tree in trees))
         self.assertFalse(trees[0][0].exists())
 
+    def test_version_selected_parser_keeps_original_macros_for_rewrite_preprocessing(self):
+        from unbake.match import rewrite_view
+
+        root = self.project.include[0]
+        (root / "canonical.h").write_text("typedef struct Canon {int value;} Canon;\n")
+        source = (
+            "#define ACCESS(p) ((p)->old)\ntypedef struct Old {int old;} Old;\nint alpha(Old *p) {return ACCESS(p);}\n"
+        )
+        # Branch selection deliberately hides directives in the layout view.
+        selected = source.replace("#define ACCESS(p) ((p)->old)", " " * len("#define ACCESS(p) ((p)->old)"))
+        headers = Headers.read(self.project)
+        parser = headers.parse(selected)[0]
+        # Here the boundary contract, rather than expansion itself, is checked:
+        # preserve all offsets in a mocked expanded view of the selected body.
+        from tests.match.test_rewrite_view import expanded
+
+        view = expanded(selected, filename=str(self.project.src / "alpha.c"))
+        with patch.object(rewrite_view, "prepare", return_value=view) as preprocess:
+            declarations._layout_names(self.project, self.policy, "alpha", source, [parser], self.versions, headers)
+        self.assertEqual(preprocess.call_args.args[2], source)
+
     def test_rewrite_context_contains_promoted_type_components(self):
         root = self.project.include[0]
         (root / "canonical.h").write_text("typedef struct Canon {int value;} Canon;\n")

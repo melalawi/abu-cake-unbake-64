@@ -138,6 +138,20 @@ class TypeRewriteTests(unittest.TestCase):
         self.assertIn("table[id]->owned & 1", result)
         self.assertIn("extern Canon *table[];", result)
 
+    def test_gnu_inline_and_restrict_qualifiers_preserve_source_spelling(self):
+        context = "typedef struct Canon {int value;} Canon;"
+        source = (
+            "typedef struct Old {int old;} Old;\nstatic __inline__ int alpha(Old *__restrict__ p) {return p->old;}\n"
+        )
+        result = self.rewrite(source, context)
+        self.assertIn("static __inline__ int alpha(Canon *__restrict__ p) {return p->value;}", result)
+
+    def test_statement_expression_local_scope_and_result_type_follow_member_edits(self):
+        context = "typedef struct Canon {int value;} Canon;"
+        source = "typedef struct Old {int old;} Old;\nint alpha(Old *p) {return ({Old *q=p; q;})->old;}\n"
+        result = self.rewrite(source, context)
+        self.assertIn("return ({Canon *q=p; q;})->value;", result)
+
     def test_gnu_label_tables_and_attributes_parse(self):
         context = "typedef struct Canon { int value; } Canon;"
         source = (
