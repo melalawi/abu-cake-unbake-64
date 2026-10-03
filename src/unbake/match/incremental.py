@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+from collections.abc import Set
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -95,7 +96,13 @@ def changed_sources(original: Project, staged: Project, generation: Path, versio
 
 
 def prepare(
-    original: Project, staged: Project, policy: Policy, generations: dict[str, Path], splits: dict[str, str]
+    original: Project,
+    staged: Project,
+    policy: Policy,
+    generations: dict[str, Path],
+    splits: dict[str, str],
+    *,
+    submitted: Set[str] = frozenset(),
 ) -> dict[str, list[str]] | None:
     """Compile changed units and prove retained objects, or defer structural edits to Make."""
     # Changed global flags need the ordinary dependency graph, including assembly.
@@ -109,7 +116,10 @@ def prepare(
 
     changed = {v: changed_sources(original, staged, g, v) for v, g in generations.items()}
     compiled = build.compile_versions(
-        staged, policy, {v: (changed[v], g / "obj/src") for v, g in generations.items()}, stop_on_error=True
+        staged,
+        policy,
+        {v: ([p for p in changed[v] if p.stem not in submitted], g / "obj/src") for v, g in generations.items()},
+        stop_on_error=True,
     )
     for version, failures in compiled.items():
         if failures:
@@ -118,6 +128,16 @@ def prepare(
                 f"submit.dependencies: VERSION {version}: {staged.src / (name + '.c')}: "
                 f"compile diagnostic: {diagnostic}"
             )
+
+    # Only published prerequisites cancel the pool. Submitted sources must all
+    # finish so their diagnostics can be held while successful objects prove.
+    candidates = build.compile_versions(
+        staged,
+        policy,
+        {v: ([p for p in changed[v] if p.stem in submitted], g / "obj/src") for v, g in generations.items()},
+    )
+    for version, failures in candidates.items():
+        compiled[version].update(failures)
 
     def compile_version(version: str) -> tuple[list[str], dict[str, list[str]]]:
         generation = generations[version]

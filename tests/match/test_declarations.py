@@ -24,6 +24,92 @@ class DeclarationTests(MatchFixture):
             mock.start()
             self.addCleanup(mock.stop)
 
+    def test_fold_removes_shared_forward_typedef_and_keeps_distinct_declarators(self) -> None:
+        for kind in ("struct", "union"):
+            with self.subTest(kind=kind):
+                header = self.project.include[0] / "canonical.h"
+                header.write_text(
+                    f"typedef {kind} Record {{int value;}} Record;\ntypedef struct Canon {{int a; int b;}} Canon;\n"
+                )
+                source = (
+                    "typedef struct Local {int a; int b;} Local;\n"
+                    f"typedef {kind} Record Record, Other, *RecordPtr;\n"
+                    f"{kind} Record;\n"
+                    "typedef struct Private Private;\n"
+                    "Record *alpha(Local *p, Other *r, RecordPtr q, Private *x) {return r;}\n"
+                )
+                folded = declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "alpha",
+                    source,
+                    self.versions,
+                    prove_headers=False,
+                )
+                self.assertNotIn(f"typedef {kind} Record Record", folded.source)
+                self.assertNotIn("typedef struct Local", folded.source)
+                self.assertIn(f"typedef {kind} Record Other;", folded.source)
+                self.assertIn(f"typedef {kind} Record *RecordPtr;", folded.source)
+                self.assertIn(f"{kind} Record;", folded.source)
+                self.assertIn("typedef struct Private Private;", folded.source)
+                self.assertIn('#include "canonical.h"', folded.source)
+
+    def test_forward_typedef_for_a_moved_layout_is_removed_only_once(self) -> None:
+        from pycparser import c_parser
+
+        from tests.preprocessor import expand
+
+        header = self.project.include[0] / "canonical.h"
+        header.write_text("typedef struct Canon {int value;} Canon;\n")
+        source = (
+            "typedef struct Canon {int value;} Canon;\n"
+            "typedef struct Canon Canon, Alias, *Ptr;\n"
+            "int alpha(Canon *p) {return p->value;}\n"
+        )
+        folded = declarations.fold_source(
+            self.project,
+            self.policy,
+            Headers.read(self.project),
+            "alpha",
+            source,
+            self.versions,
+            prove_headers=False,
+        )
+        self.assertIn("int alpha(Canon *p) {return p->value;}", folded.source)
+        c_parser.CParser().parse(expand(folded.source, self.project.include))
+
+    def test_standalone_shared_forward_alias_is_removed_without_local_layouts(self) -> None:
+        (self.project.include[0] / "record.h").write_text("typedef struct Record Record; struct Record {int value;};\n")
+        folded = declarations.fold_source(
+            self.project,
+            self.policy,
+            Headers.read(self.project),
+            "alpha",
+            "typedef struct Record Record; Record *alpha(Record *p) {return p;}",
+            self.versions,
+            prove_headers=False,
+        )
+        self.assertNotIn("typedef struct Record Record;", folded.source)
+        self.assertIn('#include "record.h"', folded.source)
+        self.assertEqual(folded.headers, [])
+
+    def test_conflicting_or_qualified_forward_alias_is_preserved_for_preflight(self) -> None:
+        (self.project.include[0] / "record.h").write_text("typedef struct Record Record; struct Record {int value;};\n")
+        for alias in ("typedef struct Other Record;", "typedef const struct Record Record;"):
+            with self.subTest(alias=alias):
+                folded = declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "alpha",
+                    alias + " Record *alpha(Record *p) {return p;}",
+                    self.versions,
+                    prove_headers=False,
+                )
+                self.assertIn(alias, folded.source)
+                self.assertEqual(folded.headers, [])
+
     def test_version_rewrites_share_one_effective_header_tree(self) -> None:
         prefix = "typedef struct Canon {int value;} Canon;\n"
         header = self.project.include[0] / "canonical.h"

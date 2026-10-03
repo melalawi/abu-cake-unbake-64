@@ -95,10 +95,44 @@ class CompileCancellationTests(unittest.TestCase):
                 patch.object(build, "compile_objects", side_effect=compile_chunk),
                 self.assertRaises(config.Held) as refused,
             ):
-                incremental.prepare(project, project, policy, generations, splits)
+                incremental.prepare(project, project, policy, generations, splits, submitted={"unit19"})
             self.assertEqual(visited, [("us", sources[:10])])
             self.assertEqual(refused.exception.phase, "match")
             self.assertIn("submit.dependencies: VERSION us:", refused.exception.reason)
             self.assertIn(str(sources[0]), refused.exception.reason)
             self.assertIn("redefinition of M2C_UNK", refused.exception.reason)
             self.assertFalse(list(generations["us"].rglob(".cancel-*")))
+
+    def test_submitted_compile_failures_return_source_faults_on_every_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, policy, _ = fixture(Path(directory), versions=("us", "eu"), case=self)
+            (project.tools / "build.json").write_text(json.dumps(makefile.description(project)))
+            source = project.src / "alpha.c"
+            generations = {v: project.build / (v + ".proof") for v in project.versions}
+            splits = {v: project.version(v).split.read_text() for v in project.versions}
+            for generation in generations.values():
+                generation.mkdir(parents=True, exist_ok=True)
+                (generation / "symbol-addresses.txt").write_text("")
+                (generation / f"{project.name}.ld").write_text("")
+
+            def compile_versions(selected, selected_policy, jobs, *, stop_on_error=False):
+                self.assertIs(selected, project)
+                self.assertIs(selected_policy, policy)
+                self.assertEqual(set(jobs), set(project.versions))
+                for version, (sources, out) in jobs.items():
+                    self.assertEqual(list(sources), [] if stop_on_error else [source])
+                    self.assertEqual(out, generations[version] / "obj/src")
+                return {v: {} if stop_on_error else {"alpha": f"broken on {v}"} for v in jobs}
+
+            with (
+                patch.object(incremental, "advance", return_value=True),
+                patch.object(incremental, "changed_sources", return_value=[source]),
+                patch.object(build, "compile_versions", side_effect=compile_versions) as compile_pool,
+                patch.object(incremental, "Object") as objects,
+            ):
+                faults = incremental.prepare(project, project, policy, generations, splits, submitted={"alpha"})
+            self.assertEqual(
+                faults, {"alpha": ["us: compile diagnostic: broken on us", "eu: compile diagnostic: broken on eu"]}
+            )
+            self.assertEqual(compile_pool.call_count, 2)
+            objects.assert_not_called()

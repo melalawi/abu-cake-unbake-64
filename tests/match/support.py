@@ -163,6 +163,7 @@ class MatchFixture(unittest.TestCase):
         patch("unbake.match.data_symbols.prepare", return_value=[]).start()
         patch("unbake.match.staging.helper_edits", return_value=[]).start()
         patch.object(build, "compile_object", return_value=Path("unused.o")).start()
+        patch.object(build, "compile_objects", return_value={}).start()
         patch.object(build, "build", self.build, create=True).start()
         patch.object(build, "relink", self.build, create=True).start()
         patch.object(build, "current_generation", self.current, create=True).start()

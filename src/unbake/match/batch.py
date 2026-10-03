@@ -126,7 +126,14 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                         (generations[version] / "obj/src" / (candidate.function + ".built")).unlink(missing_ok=True)
             with reporting.phase("proof", sources=len(candidates)):
                 extracted = {v: staged.version(v).split.read_text() for v in versions}
-                faults = incremental.prepare(project, staged, policy, generations, base.splits)
+                faults = incremental.prepare(
+                    project,
+                    staged,
+                    policy,
+                    generations,
+                    base.splits,
+                    submitted={candidate.function for candidate in candidates},
+                )
                 if faults is not None:
                     for name, reasons in attribution.diagnose(
                         staged,
@@ -841,6 +848,20 @@ def _type_preflight(
             if candidate.matched
         ],
     )
+    # Declaration acceptance is weaker than the project's actual C compiler
+    # (notably GCC 2.8.1's duplicate typedef rules). Compile every surviving
+    # folded source on one containing version before preparing the long proof.
+    jobs: dict[str, list[Path]] = {}
+    for candidate in candidates:
+        if candidate.function not in refused:
+            jobs.setdefault(candidate.versions[0], []).append(project.src / f"{candidate.function}.c")
+    with workspace.temporary(project, prefix="type-preflight-", directory=project.build) as temporary:
+        compiled = build.compile_versions(
+            project, policy, {v: (sources, Path(temporary) / v) for v, sources in jobs.items()}
+        )
+    for version, failures in compiled.items():
+        for function, diagnostic in failures.items():
+            refused[function] = f"VERSION {version}: compile diagnostic: {diagnostic}"
     for function, reason in refused.items():
         receipts.append(f"HELD(types): {function}: {reason}; batch source was not published")
     return [candidate for candidate in candidates if candidate.function not in refused]

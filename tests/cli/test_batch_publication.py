@@ -225,7 +225,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.assertFalse(list(self.project.src.glob("*.c")))
         self.assertFalse(list(self.project.build.glob("submit-*")))
 
-    def test_compile_diagnostic_aborts_incremental_proof_and_full_build_retains_attribution(self):
+    def test_preflight_compile_hold_and_proof_faults_preserve_survivors(self):
         for fallback in (False, True):
             with self.subTest(fallback=fallback):
                 if fallback:
@@ -238,8 +238,7 @@ class BatchPublicationCliTests(unittest.TestCase):
                     f"extern int missing(void); int {self.names[17]}(void) {{ return missing(); }}\n"
                 )
                 self.sources[29].write_text(f"int {self.names[29]}(void) {{ return 2; }}\n")
-                # A compile diagnostic stops the incremental proof. The forced
-                # Make fallback retains its existing attribution behaviour.
+                # A known compile fault is held before either proof path.
                 sources = [self.sources[i] for i in (5, 17, 29)] if fallback else self.sources
                 before = {json.dumps(row, sort_keys=True) for row in self.evidence()}
                 built = len(self.tools.built)
@@ -257,22 +256,15 @@ class BatchPublicationCliTests(unittest.TestCase):
                     )
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 rows = [row for row in self.evidence() if json.dumps(row, sort_keys=True) not in before]
-                if not fallback:
-                    self.assertIn("HELD(match): submit.dependencies:", result.stdout)
-                    self.assertTrue(any(f"VERSION {v}:" in result.stdout for v in self.project.versions))
-                    self.assertIn(self.names[5] + ".c", result.stdout)
-                    self.assertIn("invalid C", result.stdout)
-                    self.assertFalse([row for row in rows if row["event"] in {"proof", "attribution"}])
-                    self.assertFalse(list(self.project.src.glob("*.c")))
-                    continue
+                self.assertIn(f"HELD(types): {self.names[5]}: VERSION", result.stdout)
+                self.assertIn("invalid C", result.stdout)
                 self.assertEqual(len(self.tools.built) - built, int(fallback))
                 proofs = [row for row in rows if row["event"] == "proof"]
                 self.assertEqual(len(proofs), 1, result.stdout + result.stderr)
                 self.assertEqual(bool([row for row in rows if row["event"] == "compile"]), not fallback)
                 attribution = [row for row in rows if row["event"] == "attribution"]
                 culprits = attribution[0]["culprits"]
-                self.assertEqual(set(culprits), {self.names[i] for i in (5, 17, 29)})
-                self.assertIn("compile diagnostic", "; ".join(culprits[self.names[5]]))
+                self.assertEqual(set(culprits), {self.names[i] for i in (17, 29)})
                 self.assertTrue(
                     any(
                         "undefined reference to" in reason and "missing" in reason
@@ -281,6 +273,29 @@ class BatchPublicationCliTests(unittest.TestCase):
                 )
                 self.assertIn("produced", "; ".join(culprits[self.names[29]]))
                 self.assertIn(": OK", self.make())
+
+    def test_late_candidate_compile_failure_is_held_and_other_sources_publish(self):
+        self.sources[5].write_text(f"int {self.names[5]}(void) {{ invalid C; }}\n")
+        with patch.object(
+            batch, "_type_preflight", side_effect=lambda project, policy, candidates, receipts: candidates
+        ):
+            result = self.run_cli(
+                [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, self.sources)],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"HELD(match): {self.names[5]}:", result.stdout)
+        self.assertIn("compile diagnostic", result.stdout)
+        self.assertNotIn("submit.dependencies", result.stdout)
+        self.assertFalse((self.project.src / self.sources[5].name).exists())
+        for index, source in enumerate(self.sources):
+            if index != 5:
+                self.assertIn(f"{source.stem} matched on VERSION", result.stdout)
+                self.assertTrue((self.project.src / source.name).is_file())
+        self.assertIn(": OK", self.make())
 
     def test_folded_port_and_next_batch_reuse_every_extraction(self):
         first = self.sources[0]

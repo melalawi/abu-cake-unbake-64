@@ -335,3 +335,56 @@ class MockProofTests(unittest.TestCase):
             case = test_incremental.RetargetTests()
             case.test_folded_entries_transfer_and_restore_without_extraction()
             case.test_changed_placement_refuses_without_writing_retained_files()
+
+
+class TypePreflightTests(unittest.TestCase):
+    def test_compile_every_surviving_folded_candidate_once_in_containing_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = SimpleNamespace(src=root / "src", build=root / "build")
+            project.build.mkdir()
+            members = [
+                batch.Candidate("good", root / "good.c", b"", "", ("us", "eu"), True),
+                batch.Candidate("broken", root / "broken.c", b"", "", ("eu", "us"), True),
+                batch.Candidate("draft", root / "draft.c", b"", "", ("us",), False),
+                batch.Candidate("declaration", root / "declaration.c", b"", "", ("us",), True),
+            ]
+            policy = object()
+            receipts = []
+            outputs = []
+
+            def compile_versions(selected, selected_policy, jobs):
+                self.assertIs(selected, project)
+                self.assertIs(selected_policy, policy)
+                self.assertEqual(
+                    {v: list(paths) for v, (paths, _) in jobs.items()},
+                    {
+                        "us": [project.src / "good.c", project.src / "draft.c"],
+                        "eu": [project.src / "broken.c"],
+                    },
+                )
+                outputs.extend(out for _, out in jobs.values())
+                return {"us": {}, "eu": {"broken": "redefinition of Record\nprevious declaration"}}
+
+            with (
+                patch(
+                    "unbake.typemap.declarations.validate_sources", return_value={"declaration": "bad declaration"}
+                ) as validate,
+                patch.object(batch.build, "compile_versions", side_effect=compile_versions) as compile_pool,
+            ):
+                passing = batch._type_preflight(project, policy, members, receipts)
+            self.assertEqual(passing, [members[0], members[2]])
+            self.assertEqual(
+                validate.call_args.args[2],
+                [(c.function, project.src / f"{c.function}.c", c.versions) for c in members if c.matched],
+            )
+            compile_pool.assert_called_once()
+            self.assertEqual(
+                receipts,
+                [
+                    "HELD(types): declaration: bad declaration; batch source was not published",
+                    "HELD(types): broken: VERSION eu: compile diagnostic: redefinition of Record\n"
+                    "previous declaration; batch source was not published",
+                ],
+            )
+            self.assertTrue(all(not out.exists() for out in outputs))

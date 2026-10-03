@@ -16,6 +16,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_parser import Parser
+from unbake.layout.structs_types import Aggregate
 from unbake.match import pool_literals, reporting, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
@@ -35,12 +36,53 @@ def final_source(
 ) -> str:
     """Move local aggregate definitions to their shared homes and remove draft markers."""
     records = [record for parser in parsers for record in _records(parser)]
+    names = {name for record in records for name in (record.name, *record.aliases)}
     includes: set[str] = set()
     replacements: list[tuple[int, int, str]] = []
     for parser in parsers:
         selected, removed = scalar_edits(project, parser, headers)
         includes.update(selected)
         replacements.extend(removed)
+    # A forward alias has no local layout, so it is absent from records.
+    # Folding another layout can import its shared home and expose a duplicate
+    # typedef that older compilers reject. Retire compatible shared aliases as
+    # well, preserving distinct aliases and pointer/array declarators.
+    shared_parser = headers.parser()
+    for parser in parsers:
+        for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
+            local = Parser(parser.source[start:end])
+            if local.peek() != "typedef":
+                continue
+            local.take()
+            members = local.declaration(typedef=True)
+            if any(
+                isinstance(member.base, Aggregate) and (member.base.complete or member.base.name in names)
+                for member in members
+            ):
+                continue
+            retained = []
+            for member in members:
+                target = headers.types.get(member.name)
+                if (
+                    isinstance(member.base, Aggregate)
+                    and isinstance(target, tuple)
+                    and isinstance(target[0], Aggregate)
+                    and local.type_name(member.base, member.operations) == shared_parser.type_name(*target)
+                    and member.name in headers.homes
+                    and not re.search(r"\b(?:const|volatile|restrict|__restrict)\b", member.declaration)
+                ):
+                    alias_home = headers.homes[member.name]
+                    includes.add(
+                        next(
+                            alias_home.relative_to(root).as_posix()
+                            for root in project.include
+                            if alias_home.is_relative_to(root)
+                        )
+                    )
+                else:
+                    retained.append(member)
+            if len(retained) != len(members):
+                replacements.append((start, end, "\n".join("typedef " + member.declaration for member in retained)))
     if records:
         added = {edit.path for edit in edits if edit.path not in headers.texts}
         spans: list[tuple[int, int]] = []
@@ -51,7 +93,6 @@ def final_source(
             includes.add(
                 next(home.relative_to(root).as_posix() for root in project.include if home.is_relative_to(root))
             )
-        names = {name for record in records for name in (record.name, *record.aliases)}
         for declaration in (item for parser in parsers for item in parser.declarations):
             base = declaration.base
             name = base if isinstance(base, str) else base.name
