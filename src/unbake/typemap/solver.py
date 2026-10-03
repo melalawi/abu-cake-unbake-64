@@ -17,6 +17,7 @@ class Constraints:
         self.parents: dict[str, str] = {}
         self.sizes: dict[str, int] = {}
         self.seeds: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+        self.machine_seeds: dict[str, dict[str, set[tuple[Any, ...]]]] = defaultdict(lambda: defaultdict(set))
         self.users: dict[str, set[str]] = defaultdict(set)
         self.facts: list[dict[str, Any]] = []
         self.resolved: dict[str, dict[str, Any]] = {}
@@ -56,8 +57,13 @@ class Constraints:
                 for key in ("kind", "function", "version", "instruction", "rom_offset", "common_base")
                 if key in evidence
             }
-        if evidence not in self.seeds[node][type_]:
-            self.seeds[node][type_].append(evidence)
+            key = tuple(sorted(evidence.items()))
+            if key in self.machine_seeds[node][type_]:
+                return
+            self.machine_seeds[node][type_].add(key)
+        elif evidence in self.seeds[node][type_]:
+            return
+        self.seeds[node][type_].append(evidence)
 
     def root(self, node: str) -> str:
         root = node
@@ -78,12 +84,12 @@ class Constraints:
         for members in groups.values():
             seeds: dict[str, list[dict[str, Any]]] = defaultdict(list)
             users: set[str] = set()
-            seed_seen: dict[str, set[str]] = defaultdict(set)
+            seed_seen: dict[str, set[Any]] = defaultdict(set)
             for current in members:
                 users.update(self.users.get(current, ()))
                 for type_, provenance in self.seeds.get(current, {}).items():
                     for p in provenance:
-                        key = json.dumps(p, sort_keys=True)
+                        key = tuple(sorted(p.items())) if p.get("kind") == "machine" else json.dumps(p, sort_keys=True)
                         if key not in seed_seen[type_]:
                             seed_seen[type_].add(key)
                             seeds[type_].append(p)
@@ -133,7 +139,11 @@ def origin_node(value: dict[str, Any], addresses: dict[int, list[str]]) -> str |
 
 def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) -> dict[str, Any]:
     records: dict[str, Any] = {}
-    for seed in seeds:
+    index = 0
+    while index < len(seeds):
+        seed = seeds[index]
+        index += 1
+        conflicts_before = len(graph.facts)
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
@@ -170,6 +180,19 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     records[name] = {**previous, "declaration_conflict": True}
                     continue
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
+        shared = seed[key]
+        if isinstance(shared, declarations.ProvenStructs) and len(graph.facts) == conflicts_before:
+            # An uninterrupted run of identical layouts only replaces provenance.
+            # Keep the first merge (confidence/conflict handling) and the last
+            # receipt. A conflicting run retains every diagnostic as before.
+            last = index
+            while last < len(seeds):
+                following = seeds[last][key]
+                if not isinstance(following, declarations.ProvenStructs) or following.template is not shared.template:
+                    break
+                last += 1
+            if last > index:
+                index = last - 1
     return records
 
 
@@ -180,6 +203,10 @@ def infer(
     *,
     constraint_log: storage.FactLog | None = None,
 ) -> dict[str, Any]:
+    # Sharded mappings decode a complete body on each lookup. Inference revisits
+    # callees and callers repeatedly, so load this immutable snapshot once.
+    if not isinstance(facts["functions"], dict):
+        facts = {**facts, "functions": dict(facts["functions"].items())}
     graph = Constraints(constraint_log)
     aliases = {name: type_ for seed in seeds for name, type_ in seed["aliases"].items()}
     functions = _merge_records(seeds, "functions", graph)
@@ -536,6 +563,7 @@ def infer(
     # Closure owns the surviving evidence. Construction indices and discarded
     # lower-confidence seeds are no longer needed during rendering/publication.
     graph.seeds.clear()
+    graph.machine_seeds.clear()
     graph.parents.clear()
     graph.sizes.clear()
     conflicts.extend(
@@ -722,6 +750,12 @@ def infer(
         for name, row in inferred_structs.items()
         if row["state"] != "known"
     )
+    type_users: dict[str, set[str]] = defaultdict(set)
+    visited_states: set[int] = set()
+    for state in graph.resolved.values():
+        if state["type"] is not None and id(state) not in visited_states:
+            visited_states.add(id(state))
+            type_users[state["type"]].update(state["users"])
     for name, record in structs.items():
         # Matched sources include generated headers. Their parsed declarations
         # do not supersede current map-derived bounds and source bindings.
@@ -749,14 +783,7 @@ def infer(
                 "generated": True,
             }
             continue
-        users = sorted(
-            {
-                user
-                for node, state in graph.resolved.items()
-                if state["type"] in (record["type"], record["type"] + " *")
-                for user in state["users"]
-            }
-        )
+        users = sorted(type_users[record["type"]] | type_users[record["type"] + " *"])
         output_structs[name] = {
             **record,
             "state": "conflict" if record.get("declaration_conflict") else "known",

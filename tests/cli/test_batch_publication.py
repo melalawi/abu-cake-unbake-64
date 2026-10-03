@@ -10,7 +10,7 @@ from unittest.mock import patch
 import toml
 
 from tests.cli import test_publication_boundary as fixture
-from unbake.match import incremental
+from unbake.match import batch, incremental
 from unbake.project import config, makefile
 
 
@@ -55,6 +55,28 @@ class BatchPublicationCliTests(unittest.TestCase):
             for path in (self.root / ".unbake/state/publications").glob("*.jsonl")
             for line in path.read_text().splitlines()
         ]
+
+    def test_declaration_refusal_precedes_rom_proof_and_publication(self):
+        source = self.sources[0]
+        generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
+        with (
+            patch("unbake.typemap.declarations.validate_sources", return_value={source.stem: "types.declaration: bad"}),
+            patch.object(incremental, "prepare") as proof,
+            patch.object(batch, "_commit") as commit,
+        ):
+            result = self.run_cli(
+                [str(self.script), "--project", str(self.root), "submit", "--batch", str(source)],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("types.declaration: bad", result.stdout + result.stderr)
+        proof.assert_not_called()
+        commit.assert_not_called()
+        self.assertFalse((self.project.src / source.name).exists())
+        self.assertEqual(generations, {v: self.project.build_link(v).resolve() for v in self.project.versions})
 
     def test_second_batch_reuses_published_objects_and_links_once(self):
         self.cli("submit", self.sources[0])

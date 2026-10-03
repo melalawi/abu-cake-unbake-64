@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tempfile
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -171,11 +172,12 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         for record in value["functions"].values()
         if record.get("abi_declaration", {}).get("prototype")
     )
-    validate_headers(project, outputs, policy, abi_context=abi_context)
+    validated: set[str] = set()
+    validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated)
     variants = [record.get("abi_declaration", {}).get("variants", {}) for record in value["functions"].values()]
     for register in sorted({reg for choices in variants for reg in choices}):
         selected = "\n".join(choices[register]["prototype"] for choices in variants if register in choices)
-        validate_headers(project, outputs, policy, abi_context=abi_context + "\n" + selected)
+        validate_headers(project, outputs, policy, abi_context=abi_context + "\n" + selected, validated=validated)
     value["rendered_sha256"] = {
         str(path.relative_to(project.root)): storage.digest(content)
         for path, content in outputs.items()
@@ -202,18 +204,22 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 changed.add(f"{kind}:{name}")
     marks = redrafts(project)
     if previous:
+        dependants: dict[str, set[str]] = defaultdict(set)
         for function, neighbours in value["dependencies"].items():
-            reasons = []
-            for entity in sorted(changed):
-                kind, name = entity.split(":", 1)
-                record = value[kind].get(name, {})
-                old = previous.get(kind, {}).get(name, {})
-                if (
-                    (kind == "functions" and name in (function, *neighbours))
-                    or function in record.get("users", [])
-                    or function in old.get("users", [])
-                ):
-                    reasons.append(entity)
+            for name in (function, *neighbours):
+                dependants[name].add(function)
+        affected: dict[str, list[str]] = defaultdict(list)
+        for entity in sorted(changed):
+            kind, name = entity.split(":", 1)
+            record = value[kind].get(name, {})
+            old = previous.get(kind, {}).get(name, {})
+            users = set(record.get("users", [])) | set(old.get("users", []))
+            if kind == "functions":
+                users.update(dependants.get(name, ()))
+            for function in users:
+                if function in value["dependencies"]:
+                    affected[function].append(entity)
+        for function, reasons in affected.items():
             if reasons:
                 marks[function] = {
                     "function": function,
@@ -346,7 +352,12 @@ def feedback(
 
 
 def validate_headers(
-    project: Project, outputs: dict[Path, bytes | Path], policy: Policy | None, *, abi_context: str = ""
+    project: Project,
+    outputs: dict[Path, bytes | Path],
+    policy: Policy | None,
+    *,
+    abi_context: str = "",
+    validated: set[str] | None = None,
 ) -> None:
     """Parse the staged shared context before any revision or header is published."""
     from dataclasses import replace
@@ -355,6 +366,8 @@ def validate_headers(
     from unbake.decomp.trial_compile import run_tool
     from unbake.typemap import declarations
 
+    if validated is None:
+        validated = set()
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".type-context-", dir=project.build) as temporary:
         scratch = Path(temporary)
@@ -382,15 +395,24 @@ def validate_headers(
                         for content in outputs.values()
                         if isinstance(content, bytes)
                     )
-                    declarations.extract(text + "\n" + abi_context, {"kind": "declared"})
+                    context_text = text + "\n" + abi_context
+                    key = storage.digest(context_text.encode())
+                    if key not in validated:
+                        declarations.extract(context_text, {"kind": "declared"})
+                        validated.add(key)
                 else:
                     expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
+                    context_text = expanded + "\n" + abi_context
+                    key = storage.digest(context_text.encode())
+                    if key in validated:
+                        continue
                     context = scratch / "expanded.c"
-                    context.write_text(expanded + "\n" + abi_context)
+                    context.write_text(context_text)
                     if not getattr(policy, "m2c", None):
                         if isinstance(policy, Policy):
                             raise Held("solve", "policy.m2c: required shared context parser")
-                        declarations.extract(expanded + "\n" + abi_context, {"kind": "declared"})
+                        declarations.extract(context_text, {"kind": "declared"})
+                        validated.add(key)
                         continue
                     run_tool(
                         [
@@ -404,6 +426,7 @@ def validate_headers(
                         project.root,
                         "solve",
                     )
+                    validated.add(key)
             except Held as error:
                 raise Held(
                     "solve", f"types.header_parse: {version}: shared/typemap.h, shared/prototypes.h: {error.reason}"

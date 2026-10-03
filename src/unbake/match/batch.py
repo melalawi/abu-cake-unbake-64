@@ -108,6 +108,11 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             if not candidates:
                 return receipts
             _materialize(staged, base, candidates)
+            with reporting.phase("type_preflight", sources=len(candidates)):
+                candidates = _type_preflight(staged, policy, candidates, receipts)
+            if not candidates:
+                return receipts
+            _materialize(staged, base, candidates)
             generations: dict[str, Path] = {}
             versions = list(project.versions)
             for version in versions:
@@ -770,15 +775,35 @@ def _commit(
             raise
 
 
+def _type_preflight(
+    project: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]
+) -> list[Candidate]:
+    from unbake.typemap.declarations import validate_sources
+
+    refused = validate_sources(
+        project,
+        policy,
+        [
+            (candidate.function, project.src / f"{candidate.function}.c", candidate.versions)
+            for candidate in candidates
+            if candidate.matched
+        ],
+    )
+    for function, reason in refused.items():
+        receipts.append(f"HELD(types): {function}: {reason}; batch source was not published")
+    return [candidate for candidate in candidates if candidate.function not in refused]
+
+
 def _feedback(project: Project, policy: Policy, candidates: list[Candidate], previous: dict[str, Path]) -> list[str]:
     """Feed every proved layout back to solve once for the whole batch."""
     entries = []
+    owners_by_version = {version: split.owners_by_alias(project, version) for version in project.versions}
     for candidate in candidates:
         if not candidate.matched:
             continue
         targets = {}
         for version in candidate.versions:
-            owners = split.owners_by_alias(project, version).get(candidate.function, [])
+            owners = owners_by_version[version].get(candidate.function, [])
             target = previous[version] / "obj" / "asm" / (owners[0].path + ".o") if owners else None
             if target is not None and target.is_file():
                 targets[version] = hashlib.sha256(target.read_bytes()).hexdigest()

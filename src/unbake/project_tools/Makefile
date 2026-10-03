@@ -78,7 +78,12 @@ ifneq ($(filter-out setup clean distclean,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),a
 include $(BUILD)/.split.mk
 endif
 
-$(BUILD)/.split.mk: $(wildcard $(SRC)/*.c) $(BASEROM) $(SPLIT) $(SYMBOLS) $(TOOLS)/extract.py $(TOOLS)/rodata.py $(RECIPE)
+# Partial builds select guarded C rows during extraction. Matching builds use
+# the split alone for ownership; editing C only invalidates its object receipt.
+ifeq ($(NON_MATCHING),1)
+$(BUILD)/.split.mk: $(wildcard $(SRC)/*.c)
+endif
+$(BUILD)/.split.mk: $(BASEROM) $(SPLIT) $(SYMBOLS) $(TOOLS)/extract.py $(TOOLS)/rodata.py $(RECIPE)
 	@mkdir -p $(BUILD)
 	python3 $(TOOLS)/extract.py --split $(SPLIT) --symbols $(SYMBOLS) --baserom $(BASEROM) --build $(BUILD) --asm $(ASM) --src $(SRC) --name @NAME@ --splat $(SPLAT) --recipe $(RECIPE) --non-matching $(NON_MATCHING)
 

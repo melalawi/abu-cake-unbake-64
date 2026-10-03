@@ -1,6 +1,7 @@
 """Signatures seed value-flow constraints; offsets and local names do not."""
 
 import unittest
+from collections import UserDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,6 +30,25 @@ def solve(programs: dict, source: str) -> dict:
 
 
 class SolverTests(unittest.TestCase):
+    def test_sharded_bodies_are_read_once_during_caller_inference(self) -> None:
+        class Reads(UserDict):
+            def __getitem__(self, key):
+                counts[key] = counts.get(key, 0) + 1
+                return super().__getitem__(key)
+
+        counts = {}
+        machine = facts(
+            {
+                "caller": (0x80001000, [0x0C000800, 0, 0x0C000800, 0, 0x03E00008, 0]),
+                "leaf": (0x80002000, [0x03E00008, 0]),
+            }
+        )
+        seeds = [extract("int leaf(int value);", {"kind": "declared"})]
+        expected = infer(SimpleNamespace(), machine, seeds)
+        actual = infer(SimpleNamespace(), {**machine, "functions": Reads(machine["functions"])}, seeds)
+        self.assertEqual(actual, expected)
+        self.assertEqual(counts, {"caller": 1, "leaf": 1})
+
     def test_array_and_pointer_declarators_are_valid_c(self) -> None:
         self.assertEqual(declarator("unsigned char[4]", "arg0"), "unsigned char arg0[4]")
         self.assertEqual(declarator("int[3][4]", "matrix"), "int matrix[3][4]")

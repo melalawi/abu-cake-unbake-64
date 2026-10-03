@@ -90,10 +90,11 @@ def feedback_many(
     policy: Policy | None = None,
 ) -> None:
     proofs = []
+    owners_by_version = {version: split.owners_by_alias(project, version) for version in project.versions}
     for function, source, versions, targets in entries:
         rom_targets = {}
         for version in versions:
-            owners = [row for row in split.functions(project, version) if function in row.aliases]
+            owners = owners_by_version[version].get(function, [])
             if len(owners) != 1:
                 raise Held("types", f"types.feedback.target_sha256: {function}: ambiguous owner in {version}")
             rom_targets[version] = digest(split.words(project, owners[0]))
