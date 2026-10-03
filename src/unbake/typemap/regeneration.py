@@ -10,17 +10,52 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from unbake.project.cache import Cache, key, parsed, remembered
+from unbake.project.cache import Cache, key, remembered
 from unbake.project.config import Policy, Project
 from unbake.typemap import header_names, split, storage
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
-    def make(output: Path) -> None:
-        output.write_bytes(storage.encoded(compute()))
+    def load() -> bytes:
+        def make(output: Path) -> None:
+            output.write_bytes(storage.encoded(compute()))
 
-    path = cache.produce(kind, content_key, make)
-    return parsed(kind, path, lambda: json.loads(path.read_bytes()))
+        return cache.produce(kind, content_key, make).read_bytes()
+
+    # Retain immutable bytes, so mutations to a decoded result cannot poison reuse.
+    content = remembered("typemap-artifact." + kind, (str(cache.root), content_key), load, keep=32768)
+    return json.loads(content)
+
+
+class Certificates:
+    """Immutable atomic batches replace one filesystem artifact per declaration.
+
+    Concurrent publishers add independent batches; neither can overwrite the
+    other's certificates. A failed validation never writes its pending batch.
+    """
+
+    def __init__(self, cache: Cache, environment: str) -> None:
+        self.cache = cache
+        self.directory = cache.root / "typemap-certificates" / environment
+        self.known: set[str] | None = None
+
+    def contains(self, content_key: str) -> bool:
+        if self.known is None:
+            self.known = set()
+            for path in sorted(self.directory.glob("*.json")):
+                self.known.update(json.loads(path.read_bytes()))
+        return content_key in self.known
+
+    def add(self, keys: set[str]) -> None:
+        if not keys:
+            return
+        self.contains("")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        content = storage.encoded(sorted(keys))
+        storage.write(self.directory / (storage.digest(content) + ".json"), content)
+        if self.known is None:
+            self.known = set()
+        self.known.update(keys)
 
 
 def environment(project: Project, policy: Policy | None) -> str:
@@ -48,6 +83,7 @@ class Session:
         self.project, self.policy = project, policy
         self.cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
         self.environment = environment(project, policy)
+        self.certificates = Certificates(self.cache, self.environment)
         self.authored = {
             path: path.read_text()
             for root in project.include
@@ -67,6 +103,7 @@ class Session:
             *(part for path, text in {**self.authored, **self.sources}.items() for part in (str(path), text)),
         )
         self.reserved: set[str] = set()
+        self._rewrite_contexts: dict[tuple[int, int], tuple[dict[str, str], frozenset[str], str, frozenset[str]]] = {}
 
     def source_names(self, consumers: dict[Path, set[str]]) -> set[str]:
         def compute() -> Any:
@@ -85,7 +122,19 @@ class Session:
         return self.reserved
 
     def rewrite(self, text: str, replacements: dict[str, str], blocked: set[str]) -> str:
-        content_key = key(self.environment, text, storage.encoded(replacements), storage.encoded(sorted(blocked)))
+        index = id(replacements), id(blocked)
+        context = self._rewrite_contexts.get(index)
+        if context is None or context[0] != replacements or context[1] != blocked:
+            frozen = frozenset(blocked)
+            context_key = key(self.environment, storage.encoded(replacements), storage.encoded(sorted(frozen)))
+            context = dict(replacements), frozen, context_key, frozenset(replacements) | frozen
+            self._rewrite_contexts[index] = context
+        identifiers = re.findall(r"\b[A-Za-z_]\w*\b", text)
+        if context[3].isdisjoint(identifiers) and not any(map(header_names.placeholder, identifiers)):
+            # No declaration token can change. The staged publication parser
+            # still validates syntax, including declarations that need no rewrite.
+            return text
+        content_key = key(context[2], text)
         return str(
             artifact(
                 self.cache, "typemap-rewrite", content_key, lambda: header_names.rewrite(text, replacements, blocked)
@@ -98,7 +147,12 @@ class Session:
         def make(output: Path) -> None:
             output.write_bytes(split.guarded(path, text))
 
-        return self.cache.produce("typemap-header", content_key, make).read_bytes()
+        return remembered(
+            "typemap-guarded",
+            (str(self.cache.root), content_key),
+            lambda: self.cache.produce("typemap-header", content_key, make).read_bytes(),
+            keep=32768,
+        )
 
     def layout(
         self, contents: dict[Path, str], rendered: dict[Path, str], root: Path, aliases: dict[str, str]
@@ -207,20 +261,17 @@ def validation_inputs(
     graph_key = key(*(part for path, data in contents.items() for part in (str(path), data)))
 
     def graph() -> tuple[dict[Path, set[Path]], dict[str, set[Path]]]:
+        paths = {str(path): path for path in contents}
+        roots = tuple(map(str, project.include))
         edges: dict[Path, set[Path]] = {}
         for path, data in contents.items():
             edges[path] = set()
             for name in re.findall(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', data.decode(), re.M):
-                target = next(
-                    (
-                        p
-                        for p in (path.parent / name, *(root / name for root in project.include))
-                        if Path(os.path.abspath(p)) in contents
-                    ),
-                    None,
-                )
-                if target is not None:
-                    edges[path].add(Path(os.path.abspath(target)))
+                for root in (os.path.dirname(str(path)), *roots):
+                    target = paths.get(os.path.abspath(os.path.join(root, name)))
+                    if target is not None:
+                        edges[path].add(target)
+                        break
         closures = {}
         for path in contents:
             seen: set[Path] = set()

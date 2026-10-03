@@ -1,6 +1,5 @@
 """Content-keyed reuse: atomic file artifacts across projects, parsed inputs within a process."""
 
-import copy
 import hashlib
 import json
 import os
@@ -153,12 +152,12 @@ _serialized: dict[str, tuple[Any, bytes]] = {}
 def serialized(kind: str, value: Any) -> bytes:
     """Encode a mutable JSON value only when it differs from the retained snapshot.
 
-    Own the snapshot: edits to the caller's dictionaries must never hit stale bytes.
-    JSON uses the C encoder rather than millions of Python stream writes.
+    Only bytes escape this cache. Decode the C encoder's bytes to retain an
+    independent comparison snapshot without recursively copying Python objects.
     """
     previous = _serialized.get(kind)
     if previous is not None and previous[0] == value:
         return previous[1]
     content = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    _serialized[kind] = copy.deepcopy(value), content
+    _serialized[kind] = json.loads(content), content
     return content

@@ -435,11 +435,11 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             session=session,
         )
     for path, content in outputs.items():
-        relative = str(path.relative_to(project.root))
+        relative = storage.relative(project, path)
         if isinstance(content, bytes) and relative in value.get("inputs_sha256", {}):
             value["inputs_sha256"][relative] = storage.digest(content)
     value["rendered_sha256"] = {
-        str(path.relative_to(project.root)): storage.digest(content)
+        storage.relative(project, path): storage.digest(content)
         for path, content in outputs.items()
         if isinstance(content, bytes)
     }
@@ -654,8 +654,11 @@ def validate_headers(
 
     from unbake.decomp.draft_context import preprocess_context
     from unbake.decomp.trial_compile import run_tool
-    from unbake.project.cache import Cache, key
+    from unbake.project.cache import Cache, key, remembered
     from unbake.typemap import declarations
+
+    def remembered_digest(data: bytes) -> str:
+        return remembered("typemap-validation-digest", data, lambda: storage.digest(data), keep=32768)
 
     cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
     environment = session.environment if session is not None else regeneration.environment(project, policy)
@@ -677,30 +680,39 @@ def validate_headers(
     )
     if cache.get("typemap-validation", bundle_key) is not None:
         return
-    contents, closures, abi = regeneration.validation_inputs(project, outputs, abi_context, authored=authored)
-    digests = {path: storage.digest(data) for path, data in contents.items()}
+    try:
+        contents, closures, abi = regeneration.validation_inputs(project, outputs, abi_context, authored=authored)
+    except Held as error:
+        raise Held("solve", f"types.header_parse: {error.reason}") from error
+    digests = {path: remembered_digest(data) for path, data in contents.items()}
+    certificates = session.certificates if session is not None else regeneration.Certificates(cache, environment)
     if validated is None:
         validated = set()
+    rows: list[tuple[str, set[Path], str]] = []
+
+    def signature(name: str, inputs: set[Path]) -> str:
+        pinned = sorted((str(dep), digests[dep]) for dep in inputs)
+        return remembered(
+            "typemap-validation-signature",
+            (environment, name, tuple(pinned)),
+            lambda: key(environment, name, *(part for pair in pinned for part in pair)),
+            keep=32768,
+        )
+
+    for path, closure in closures.items():
+        if path not in outputs:
+            continue
+        # Include-only indexes observe authored prerequisites; generated leaves
+        # each carry their own certificates.
+        body = re.sub(r"^[ \t]*#[^\n]*|/\*.*?\*/|//[^\n]*", "", contents[path].decode(), flags=re.M | re.S)
+        inputs = closure if body.strip() else {path, *(dep for dep in closure if dep not in outputs)}
+        rows.append((signature(str(path), inputs), closure, ""))
+    rows.extend((signature(text, closure), closure, text) for text, closure in abi)
     for version in project.versions:
         pending: dict[str, tuple[set[Path], str]] = {}
-        for path, closure in closures.items():
-            if path not in outputs:
-                continue
-            # Include-only indexes add no declarations. Generated leaves carry
-            # their own validation keys, so the index observes only itself and
-            # the authored headers no generated leaf validates.
-            body = re.sub(r"^[ \t]*#[^\n]*|/\*.*?\*/|//[^\n]*", "", contents[path].decode(), flags=re.M | re.S)
-            inputs = closure if body.strip() else {path, *(dep for dep in closure if dep not in outputs)}
-            content_key = key(
-                environment, version, str(path), *(part for dep in sorted(inputs) for part in (str(dep), digests[dep]))
-            )
-            if content_key not in validated and cache.get("typemap-validated", content_key) is None:
-                pending[content_key] = closure, ""
-        for text, closure in abi:
-            content_key = key(
-                environment, version, text, *(part for dep in sorted(closure) for part in (str(dep), digests[dep]))
-            )
-            if content_key not in validated and cache.get("typemap-validated", content_key) is None:
+        for input_key, closure, text in rows:
+            content_key = version + ":" + input_key
+            if content_key not in validated and not certificates.contains(content_key):
                 pending[content_key] = closure, text
         if not pending:
             continue
@@ -713,8 +725,9 @@ def validate_headers(
             for root, staged_root in zip(project.include, roots, strict=True):
                 staged_root.mkdir()
                 for path in selected:
-                    if path.is_relative_to(root):
-                        staged = staged_root / path.relative_to(root)
+                    prefix = str(root) + os.sep
+                    if str(path).startswith(prefix):
+                        staged = staged_root / str(path)[len(prefix) :]
                         staged.parent.mkdir(parents=True, exist_ok=True)
                         staged.write_bytes(contents[path])
             staged_project = replace(project, include=tuple(roots))
@@ -735,10 +748,10 @@ def validate_headers(
                 entry_points.extend(sorted(selected - covered))
             source.write_text(
                 "".join(
-                    f'#include "{path.relative_to(root).as_posix()}"\n'
+                    f'#include "{str(path)[len(str(root)) + 1 :]}"\n'
                     for path in entry_points
                     for root in project.include
-                    if path.is_relative_to(root)
+                    if str(path).startswith(str(root) + os.sep)
                 )
             )
             assembly = scratch / "validate.s"
@@ -771,13 +784,8 @@ def validate_headers(
                             raise Held("solve", "policy.m2c: required shared context parser")
                         declarations.extract(context_text, {"kind": "declared"})
                     validated.add(context_key)
-                for content_key in pending:
-
-                    def mark(path: Path) -> None:
-                        path.write_bytes(b"validated\n")
-
-                    cache.produce("typemap-validated", content_key, mark)
-                    validated.add(content_key)
+                certificates.add(set(pending))
+                validated.update(pending)
             except Held as error:
                 raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
 

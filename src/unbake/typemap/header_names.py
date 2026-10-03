@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -179,48 +180,52 @@ def source_names(
     from unbake.typemap.declarations import clean
 
     supplied = texts
-    canonical: dict[Path, Path] = {}
+    canonical: dict[str, str] = {}
 
-    def resolved(path: Path) -> Path:
+    def resolved(path: str) -> str:
         if path not in canonical:
-            canonical[path] = path.resolve()
+            canonical[path] = os.path.realpath(path)
         return canonical[path]
 
-    texts = {resolved(path): text for path, text in (texts or {}).items()}
-    edges: dict[Path, set[Path]] = {}
-    prototypes = resolved(project.include[0] / "shared/prototypes.h")
-    header = resolved(header)
-    generated_roots = tuple(header.parent / name for name in ("types", "decls", "consumers"))
+    source_texts = {resolved(str(path)): text for path, text in (texts or {}).items()}
+    edges: dict[str, set[str]] = {}
+    include_roots = tuple(map(str, project.include))
+    prototypes = resolved(str(project.include[0] / "shared/prototypes.h"))
+    target_header = resolved(str(header))
+    generated_roots = tuple(
+        os.path.join(os.path.dirname(target_header), name) for name in ("types", "decls", "consumers")
+    )
+    generated_prefixes = tuple(root + os.sep for root in generated_roots)
+    special = {target_header, prototypes, *generated_roots}
     cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+    generator = key(Path(__file__))
 
-    def imports(path: Path) -> set[Path]:
+    def imports(path: str) -> set[str]:
         path = resolved(path)
         if path not in edges:
-            if path not in texts:
-                texts[path] = path.read_text() if path.is_file() else ""
-            text = texts[path]
-            edges[path] = {header} if path == prototypes else set()
+            if path not in source_texts:
+                source_texts[path] = Path(path).read_text() if os.path.isfile(path) else ""
+            text = source_texts[path]
+            edges[path] = {target_header} if path == prototypes else set()
             for name in _INCLUDE.findall(re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)):
-                candidates = [path.parent / name, *(root / name for root in project.include)]
-                target = next(
-                    (
-                        resolved(item)
-                        for item in candidates
-                        if item.is_file()
-                        or resolved(item) in (header, prototypes)
-                        or any(resolved(item).is_relative_to(root) for root in generated_roots)
-                    ),
-                    None,
-                )
-                if target is not None:
-                    edges[path].add(target)
+                for root in (os.path.dirname(path), *include_roots):
+                    candidate = os.path.join(root, name)
+                    target = resolved(candidate)
+                    if (
+                        target in source_texts
+                        or target in special
+                        or target.startswith(generated_prefixes)
+                        or os.path.isfile(candidate)
+                    ):
+                        edges[path].add(target)
+                        break
         return edges[path]
 
     def uses_header(path: Path) -> bool:
-        pending, seen = [resolved(path)], set()
+        pending, seen = [resolved(str(path))], set()
         while pending:
             current = pending.pop()
-            if current == header or any(current.is_relative_to(root) for root in generated_roots):
+            if current == target_header or current in generated_roots or current.startswith(generated_prefixes):
                 return True
             if current not in seen:
                 seen.add(current)
@@ -229,14 +234,14 @@ def source_names(
 
     names: set[str] = set()
     sources = (
-        (path for path in supplied if path.is_relative_to(project.src) and path.suffix == ".c")
+        (path for path in supplied if str(path).startswith(str(project.src) + os.sep) and path.suffix == ".c")
         if supplied is not None
         else project.src.rglob("*.c")
     )
     for path in sorted(sources):
         if not uses_header(path):
             continue
-        text = texts[resolved(path)]
+        text = source_texts[resolved(str(path))]
         views = {text}
         if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
             if policy is None:
@@ -251,7 +256,7 @@ def source_names(
         owned: set[str] = set()
         for view in views:
             content = clean(declaration_source(view))
-            content_key = key(Path(__file__), content)
+            content_key = key(generator, content)
 
             def compute(output: Path, content: str = content, path: Path = path) -> None:
                 parser = _Declarations(content)

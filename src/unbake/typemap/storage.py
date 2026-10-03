@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -119,13 +120,31 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     return {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
 
 
+@lru_cache(maxsize=32)
+def _generated_paths(root: Path) -> tuple[frozenset[str], tuple[str, ...]]:
+    shared = root / "shared"
+    directories = tuple(str(shared / name) for name in ("types", "decls", "consumers"))
+    exact = frozenset((str(shared / "typemap.h"), str(shared / "prototypes.h"), *directories))
+    return exact, tuple(name + os.sep for name in directories)
+
+
 def generated(project: Project, path: Path) -> bool:
     if not project.include:
         return False
-    shared = project.include[0] / "shared"
-    return path in (shared / "typemap.h", shared / "prototypes.h") or any(
-        path.is_relative_to(shared / directory) for directory in ("types", "decls", "consumers")
-    )
+    exact, prefixes = _generated_paths(project.include[0])
+    name = str(path)
+    return name in exact or name.startswith(prefixes)
+
+
+def relative(project: Project, path: Path) -> str:
+    """Use already normalized project paths without scanning pathlib ancestors."""
+    name, root = str(path), str(project.root)
+    if name == root:
+        return "."
+    prefix = root + os.sep
+    if name.startswith(prefix):
+        return name[len(prefix) :]
+    return str(path.relative_to(project.root))
 
 
 class FactLog:

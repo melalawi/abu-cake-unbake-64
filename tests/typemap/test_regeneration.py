@@ -11,7 +11,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.project import cache
 from unbake.project.config import Held
-from unbake.typemap import database, regeneration, split, storage
+from unbake.typemap import database, header_names, regeneration, split, storage
 
 
 class RegenerationTests(unittest.TestCase):
@@ -409,3 +409,153 @@ class RegenerationTests(unittest.TestCase):
         selections, parser = self.validate(outputs)
         self.assertEqual(parser.call_count, 1)
         self.assertIn("external.h", selections[0])
+
+    def test_artifacts_retain_only_bytes_and_isolate_mutated_results(self):
+        store = cache.Cache(self.policy.cache_root)
+        identity = cache.key("artifact")
+        first = regeneration.artifact(store, "fixture", identity, lambda: {"items": [{"x": 1}]})
+        first["items"][0]["x"] = 9
+        for fresh_process in (False, True):
+            with self.subTest(fresh_process=fresh_process):
+                context = (
+                    patch.object(cache, "_remembered", {}) if fresh_process else patch.object(cache, "_parsed", {})
+                )
+                with context:
+                    actual = regeneration.artifact(store, "fixture", identity, lambda: self.fail("artifact recomputed"))
+                self.assertEqual(actual, {"items": [{"x": 1}]})
+        with patch.object(store, "get", side_effect=AssertionError("artifact rehashed")):
+            self.assertEqual(regeneration.artifact(store, "fixture", identity, lambda: None), {"items": [{"x": 1}]})
+
+    def test_certificates_add_atomic_batches_and_merge_independent_publishers(self):
+        store = cache.Cache(self.policy.cache_root)
+        environment = cache.key("certificates")
+        first, other = (regeneration.Certificates(store, environment) for _ in range(2))
+        self.assertFalse(first.contains("missing"))
+        self.assertFalse(other.contains("missing"))
+        first.add({"us:one", "us:two"})
+        other.add({"eu:three"})
+        merged = regeneration.Certificates(store, environment)
+        for name in ("us:one", "us:two", "eu:three"):
+            with self.subTest(name=name):
+                self.assertTrue(merged.contains(name))
+        self.assertFalse(merged.contains("us:three"))
+        self.assertFalse(regeneration.Certificates(store, cache.key("different-env")).contains("us:one"))
+        self.assertEqual(len(list(first.directory.iterdir())), 2)
+        # add() may be the first operation on a fresh store.
+        fresh = regeneration.Certificates(store, environment)
+        fresh.add({"us:four"})
+        self.assertTrue(fresh.contains("us:one"))
+        for row in first.directory.iterdir():
+            self.assertTrue(row.name.endswith(".json"))
+
+    def test_failed_certificate_write_keeps_existing_batches_and_memory(self):
+        store = regeneration.Certificates(cache.Cache(self.policy.cache_root), cache.key("certificate-failure"))
+        store.add({"previous"})
+        with patch.object(storage.os, "replace", side_effect=OSError("failed replace")), self.assertRaises(OSError):
+            store.add({"pending"})
+        self.assertTrue(store.contains("previous"))
+        self.assertFalse(store.contains("pending"))
+        self.assertEqual(len(list(store.directory.iterdir())), 1)
+
+    def test_validation_batches_all_leaves_and_reuses_certificates_in_fresh_session(self):
+        outputs = self.validation_fixture()
+        selections, parser = self.validate(outputs)
+        self.assertEqual((len(selections), parser.call_count), (1, 1))
+        batches = list((self.policy.cache_root / "typemap-certificates").rglob("*.json"))
+        self.assertEqual(len(batches), len(self.project.versions))
+        self.assertFalse((self.policy.cache_root / "typemap-validated").exists())
+        # A new unrelated declaration changes the whole bundle, but only that
+        # declaration should be staged after reloading persisted certificates.
+        outputs[self.root / "shared/decls/new.h"] = b"extern int new(void);"
+        with patch.object(cache, "_remembered", {}):
+            selections, parser = self.validate(outputs)
+        self.assertEqual(parser.call_count, 1)
+        self.assertIn("shared/decls/new.h", selections[0])
+        for name in ("shared/decls/f.h", "shared/decls/g.h"):
+            self.assertNotIn(name, selections[0])
+
+    def test_rewrite_skips_unaffected_tokens_and_observes_in_place_context_changes(self):
+        session = regeneration.Session(self.project, self.policy)
+        replacements, blocked = {"Alias": "int"}, {"Local"}
+        with patch.object(header_names, "rewrite", wraps=header_names.rewrite) as rewrite:
+            self.assertEqual(session.rewrite("int f(int arg);", replacements, blocked), "int f(int arg);")
+            self.assertEqual(rewrite.call_count, 0)
+            for target in ("int", "short"):
+                with self.subTest(target=target):
+                    replacements["Alias"] = target
+                    self.assertEqual(session.rewrite("Alias f(void);", replacements, blocked), target + " f(void);")
+            self.assertEqual(session.rewrite("typedef int Extra;", replacements, blocked), "typedef int Extra;")
+            blocked.add("Extra")
+            self.assertEqual(session.rewrite("typedef int Extra;", replacements, blocked), "")
+            self.assertEqual(session.rewrite("typedef int M2C_UNK32;", {}, set()), "")
+
+    def test_generated_path_prefixes_respect_component_boundaries(self):
+        cases = [
+            ("shared/typemap.h", True),
+            ("shared/prototypes.h", True),
+            ("shared/types/a.h", True),
+            ("shared/types/nested/a.h", True),
+            ("shared/decls/a.h", True),
+            ("shared/consumers/a.h", True),
+            ("shared/types", True),
+            ("shared/types_extra/a.h", False),
+            ("shared/decls_extra/a.h", False),
+            ("shared/consumers_extra/a.h", False),
+            ("shared/typemap.h.old", False),
+            ("other/shared/types/a.h", False),
+        ]
+        for name, expected in cases:
+            with (
+                self.subTest(name=name),
+                patch.object(Path, "is_relative_to", side_effect=AssertionError("ancestor scan")),
+            ):
+                self.assertEqual(storage.generated(self.project, self.root / name), expected)
+        self.assertFalse(storage.generated(replace(self.project, include=()), self.root / "shared/types/a.h"))
+        sibling = self.root.with_name(self.root.name + "_extra") / "shared/types/a.h"
+        self.assertFalse(storage.generated(self.project, sibling))
+
+    def test_project_relative_strings_preserve_relative_to_results(self):
+        for relative in (".", "include/shared/types/a.h", "src/f.c"):
+            with self.subTest(relative=relative):
+                path = self.project.root / relative
+                self.assertEqual(storage.relative(self.project, path), str(path.relative_to(self.project.root)))
+        with self.assertRaises(ValueError):
+            storage.relative(self.project, self.project.root.with_name("outside") / "f.c")
+
+    def test_source_ownership_transitive_cycles_virtual_leaves_and_prefix_boundaries(self):
+        bridge = self.root / "bridge.h"
+        other = self.root / "other.h"
+        bridge.write_text('#include "other.h"\n')
+        other.write_text('#include "bridge.h"\n#include "shared/types/missing.h"\n')
+        cases = [
+            ("transitive", "bridge.h", {"Owned"}),
+            ("generated", "shared/decls/missing.h", {"Owned"}),
+            ("prototype", "shared/prototypes.h", {"Owned"}),
+            ("sibling", "shared/types_extra/missing.h", set()),
+            ("unrelated", "missing.h", set()),
+        ]
+        for name, include, expected in cases:
+            with self.subTest(name=name):
+                source = self.project.src / "f.c"
+                source.write_text(f'#include "{include}"\ntypedef int Owned;\n')
+                texts = {p: p.read_text() for p in (source, bridge, other)}
+                consumers = {}
+                with patch.object(Path, "is_relative_to", side_effect=AssertionError("ancestor scan")):
+                    names = header_names.source_names(
+                        self.project, self.root / "shared/typemap.h", self.policy, consumers=consumers, texts=texts
+                    )
+                self.assertEqual(names, expected)
+                self.assertEqual(consumers.get(source, set()), expected)
+
+    def test_serialized_snapshots_share_no_mutable_objects_with_the_caller(self):
+        for value in ({"a": [{"b": 1}]}, [{"a": [1]}]):
+            with self.subTest(value=value), patch.object(cache, "_serialized", {}):
+                before = cache.serialized("independent", value)
+                snapshot = cache._serialized["independent"][0]
+                self.assertIsNot(snapshot, value)
+                if isinstance(value, dict):
+                    value["a"][0]["b"] = 2
+                else:
+                    value[0]["a"].append(2)
+                self.assertEqual(cache.json.loads(before), snapshot)
+                self.assertNotEqual(cache.serialized("independent", value), before)
