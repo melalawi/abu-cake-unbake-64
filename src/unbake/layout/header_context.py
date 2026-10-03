@@ -14,6 +14,7 @@ from unbake.layout.structs_identity import Index
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
 from unbake.project.config import Held
+from unbake.project.headers import include_headers
 
 
 def context(contents: dict[Path, str], *, root: Path | None = None) -> tuple[dict[Path, str], Parser, list[Layout]]:
@@ -172,7 +173,7 @@ class Headers:
 
     @classmethod
     def read(cls, project: Any) -> Headers:
-        texts = {path: path.read_text() for root in project.include for path in sorted(Path(root).rglob("*.h"))}
+        texts = {path: path.read_text() for path, _ in include_headers(project)}
         return cls(texts, root=getattr(project, "root", None))
 
     def seeded(self, text: str) -> Parser:

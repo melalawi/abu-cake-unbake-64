@@ -38,7 +38,7 @@ class DumpPreprocessingTests(unittest.TestCase):
                     with self.subTest(kind=kind, guarded=guarded):
                         original = "#ifdef NON_MATCHING\n" + body + "#endif\n" if guarded else body
                         source.write_text(original)
-                        project = NS(root=work, compiler_for=lambda _, kind=kind: NS(kind=kind, cc=cpp))
+                        project = NS(root=work, include=(), compiler_for=lambda _, kind=kind: NS(kind=kind, cc=cpp))
                         with (
                             patch("unbake.project.makefile.flags", return_value=[]),
                             patch("unbake.project.makefile.recipe", return_value=NS(cpp=cpp, cppflags=["-P"])),

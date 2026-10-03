@@ -13,6 +13,7 @@ from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untype
 from unbake.decomp.draft_context import ordered_headers
 from unbake.layout.structs_parser import Parser
 from unbake.project.config import Held, Policy, Project
+from unbake.project.headers import include_headers
 from unbake.typemap import storage
 
 
@@ -27,12 +28,7 @@ def clean(source: str, *, line_markers: bool = False) -> str:
 def headers(
     project: Project, policy: Policy | None, version: str, extra: Path | None = None, *, line_markers: bool = False
 ) -> str:
-    contents = {
-        path: path.read_text()
-        for root in project.include
-        for path in sorted(root.rglob("*.h"))
-        if not storage.generated(project, path)
-    }
+    contents = {path: path.read_text() for path, _ in include_headers(project) if not storage.generated(project, path)}
     if extra is None:
         from unbake.project.cache import remembered
 

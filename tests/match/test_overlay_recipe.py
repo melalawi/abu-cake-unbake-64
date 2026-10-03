@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
-from unbake.decomp import explain, work
+from unbake.decomp import explain, m2c, work
 from unbake.layout.header_context import Headers
 from unbake.match import batch_fold, declarations, source_views
 from unbake.project import build, makefile
@@ -49,6 +49,56 @@ class OverlayRecipeTests(MatchFixture):
         self.assertNotIn("include/types.h", work.overlay_data(self.project, source)["edits"])
         (self.project.include[0] / "new.h").write_text("typedef int New;\n")
         work.overlay_data(self.project, source)
+
+    def test_header_discovery_shadows_original_and_keeps_sparse_fallback(self):
+        source = self.proposal()
+        root = self.project.include[0]
+        (root / "record.h").write_text("struct Current { int value; };\n")
+        overlay = source.parent / "overlay/include"
+        (overlay / "record.h").write_text("struct Current { short value; };\n")
+        (overlay / "types.h").unlink()
+        configured = work.overlay_project(self.project, source.parent)
+        expected = {
+            root / "types.h": "typedef int word;\n",
+            overlay / "record.h": "struct Current { short value; };\n",
+            overlay / "proposal.h": "#define PROPOSAL 1\n",
+        }
+        discovered = m2c._headers(configured)
+        self.assertEqual({path: path.read_text() for path, _ in discovered}, expected)
+        context = Headers.read(configured)
+        self.assertEqual(context.texts, expected)
+        self.assertEqual([(record.name, record.size) for record in context.records], [("Current", 2)])
+        self.assertIn('#include "record.h"', m2c._context(discovered, set(expected)))
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+
+        with boundary(typed, output):
+            expanded = typed.headers(configured, self.policy, "us")
+        self.assertEqual(expanded.count("struct Current"), 1)
+        self.assertIn("short value", expanded)
+        self.assertNotIn("int value", expanded)
+        self.assertIn("typedef int word", expanded)
+
+    def test_declaration_preprocessor_retains_only_lines_selected_by_overlay(self):
+        self.proposal()
+        headers = Headers.read(self.project)
+        headers.texts[self.project.include[0] / "proposal.h"] = "#define PROPOSAL 1\n"
+        text = (
+            '#include "proposal.h"\n#if PROPOSAL\n'
+            "struct Included {int value;};\n#else\nstruct Excluded {short value;};\n#endif\n"
+        )
+        self.assertEqual(source_views._preprocessed_lines(self.project, self.policy, text, "us", headers), {2})
+        parsers = source_views.parsers(self.project, self.policy, text, self.versions, headers)
+        self.assertEqual(
+            [[record.name for record in parser.parse()] for parser in parsers], [["Included"], ["Included"]]
+        )
+        headers.texts[self.project.include[0] / "proposal.h"] = "#define PROPOSAL 0\n"
+        self.assertEqual(source_views._preprocessed_lines(self.project, self.policy, text, "us", headers), {4})
+        parsers = source_views.parsers(self.project, self.policy, text, self.versions, headers)
+        self.assertEqual(
+            [[record.name for record in parser.parse()] for parser in parsers], [["Excluded"], ["Excluded"]]
+        )
+        self.assertFalse((self.project.include[0] / "proposal.h").exists())
 
     def ordered(self, command, configured):
         overlay = "-I" + str(configured.include[0])

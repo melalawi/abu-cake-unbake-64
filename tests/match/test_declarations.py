@@ -50,12 +50,15 @@ class DeclarationTests(MatchFixture):
         for edit in edits:
             edit.path.parent.mkdir(parents=True, exist_ok=True)
             edit.path.write_text(edit.after)
-        subprocess.run(
-            ["cc", "-std=c89", "-fsyntax-only", "-I", str(self.root / "include"), str(self.src / "alpha.c")],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        from pycparser import c_parser
+
+        from tests.preprocessor import expand
+
+        expanded = expand((self.src / "alpha.c").read_text(), (self.root / "include",))
+        c_parser.CParser().parse(expanded)
+        holder = next(record for record in layouts(expanded) if record.name == "Holder")
+        self.assertEqual((holder.size, holder.alignment), (16, 4))
+        self.assertEqual([(field.offset, field.size) for field in holder.fields], [(0, 12), (12, 4)])
 
     def test_local_scalar_and_callback_aliases_move_with_promoted_fields(self) -> None:
         text = (

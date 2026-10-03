@@ -29,9 +29,10 @@ class MatchFixture(unittest.TestCase):
         from tests.preprocessor import output
         from tests.process_fakes import boundary
         from unbake.layout import structs
+        from unbake.match import source_views
         from unbake.typemap import declarations
 
-        for mock in (boundary(structs, output), boundary(declarations, output)):
+        for mock in (boundary(structs, output), boundary(declarations, output), boundary(source_views, output)):
             mock.start()
             self.addCleanup(mock.stop)
         from tests.process_fakes import boundary, copy

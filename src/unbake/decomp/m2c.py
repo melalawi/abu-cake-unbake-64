@@ -28,23 +28,16 @@ from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
 from unbake.project.config import Held, Policy, Project
+from unbake.project.headers import include_headers
 
 
 def _headers(project: Project) -> list[tuple[Path, str]]:
     if not project.include:
         raise Held("m2c", "paths.include is missing or empty")
-    headers = []
-    seen = set()
     for directory in project.include:
-        directory = Path(directory)
-        if not directory.is_dir():
+        if not Path(directory).is_dir():
             raise Held("m2c", f"paths.include directory {directory} is missing")
-        for path in sorted(directory.rglob("*.h")):
-            resolved = path.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            headers.append((resolved, path.relative_to(directory).as_posix()))
+    headers = include_headers(project)
     if not headers:
         raise Held("m2c", f"paths.include {project.include}: project headers are missing")
     return headers

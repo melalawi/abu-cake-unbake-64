@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 
-def expand(source, roots=(), macros=None, *, markers=False):
+def expand(source, roots=(), macros=None, *, markers=False, origin="<stdin>", directives_only=False):
     macros = dict(macros or {})
 
     def read(text, home, origin="<stdin>"):
@@ -53,13 +53,15 @@ def expand(source, roots=(), macros=None, *, markers=False):
                         result.append(f'# {line_number + 1} "{origin}"')
                 continue
             if active[-1]:
-                for key, value in macros.items():
+                if markers:
+                    result.append(f'# {line_number} "{origin}"')
+                for key, value in () if directives_only else macros.items():
                     if re.fullmatch(r"\w+", key):
                         line = re.sub(r"\b" + re.escape(key) + r"\b", lambda _, value=value: value, line)
                 result.append(line)
         return "\n".join(result) + "\n"
 
-    return read(source, Path.cwd())
+    return read(source, Path.cwd(), origin)
 
 
 def output(command, **kwargs):
@@ -76,5 +78,12 @@ def output(command, **kwargs):
     for index, flag in enumerate(command):
         if flag == "-include":
             source = (cwd / command[index + 1]).read_text() + "\n" + source
-    result = expand(source, roots, macros, markers="-P" not in command)
+    result = expand(
+        source,
+        roots,
+        macros,
+        markers="-P" not in command,
+        origin=command[-1] if "input" not in kwargs else "<stdin>",
+        directives_only="-fdirectives-only" in command,
+    )
     return subprocess.CompletedProcess(command, 0, result, "")

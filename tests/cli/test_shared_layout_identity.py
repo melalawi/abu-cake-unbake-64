@@ -149,5 +149,13 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn("rename Other -> First", output)
         published = (self.project.src / source.name).read_text()
         self.assertIn("((struct First *)0)->data", published)
-        self.assertFalse((self.project.include[0] / "shared/alpha.h").exists())
+        generated = (self.project.include[0] / "shared/alpha.h").read_text()
+        self.assertIn("typedef char Bytes[4];", generated)
+        self.assertEqual(Parser(generated).parse(), [])
+        self.assertIn('#include "shared/bytes.h"', published)
+        self.assertIn('#include "shared/alpha.h"', published)
+        self.assertNotIn("typedef", published)
+        self.assertEqual(
+            shared.read_text(), "#ifndef BYTES_H\n#define BYTES_H\nstruct First {char data[4];};\n#endif\n"
+        )
         self.assertIn(": OK", self.make())

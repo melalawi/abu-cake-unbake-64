@@ -1,4 +1,4 @@
-"""Configured m2c invocation and context, using an executable fixture."""
+"""Configured m2c invocation and context with a mocked tool boundary."""
 
 import json
 import sys
@@ -151,6 +151,14 @@ class M2cTests(unittest.TestCase):
         self.assertLess(initial_context.index("typedef int s32"), initial_context.index("struct Value"))
         self.assertNotIn("struct Value", context)
         self.assertNotIn("struct Value", source.read_text())
+
+    def test_ambiguous_headers_without_overlay_are_held(self) -> None:
+        other = self.project.root / "other-include"
+        other.mkdir()
+        (other / "types.h").write_text("typedef short s32;\n")
+        project = replace(self.project, include=(*self.project.include, other))
+        with self.assertRaisesRegex(Held, "paths.include has ambiguous header types.h"):
+            m2c.draft(project, cast(Policy, self.policy), "alpha", "us", self.scratch)
 
     def test_missing_context_include_is_named(self) -> None:
         (self.project.include[0] / "types.h").write_text('#include "missing.h"\n', encoding="utf-8")

@@ -105,7 +105,7 @@ class MakefileTests(unittest.TestCase):
         rendered = makefile.render(project)
         self.assertIn("tools/sn64_cc.py", rendered)
         self.assertIn("tools/resolve_external_branches.py", rendered)
-        self.assertEqual(makefile.flags(project, "us", "src/middle.c"), ("-O2", "-Iinclude", "-DVERSION_US=1"))
+        self.assertEqual(makefile.flags(project, "us", "src/middle.c"), ("-Iinclude", "-O2", "-DVERSION_US=1"))
         self.assertNotIn("unbake", rendered["Makefile"].replace(str(self.root), "PROJECT"))
         self.assertNotIn("toolkit", rendered["Makefile"])
         self.assertIn("BUILD ?= build/$(VERSION)", rendered["Makefile"])
