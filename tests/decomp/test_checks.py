@@ -135,6 +135,28 @@ class ChecksTest(unittest.TestCase):
                 0,
             ),
             ("device initializer", "void f(void) { volatile u32 *p = (volatile u32 *)0xA4600010; *p = 2; }", 0),
+            (
+                "nested device alias uses declaration scope",
+                "void f(void) { volatile u32 *p; volatile u32 *q; "
+                "p=(volatile u32 *)0xA4600010; if (*p) { q=p; while (*q) {} } }",
+                0,
+            ),
+            (
+                "plain shadow cannot qualify outer pointer",
+                "void f(void) { volatile u32 *p=(volatile u32 *)0xA4600010; volatile u32 *q; "
+                "if (*p) { u32 *q; q=p; } }",
+                1,
+            ),
+            (
+                "ordinary reassignment invalidates alias",
+                "void f(void) { volatile u32 *p=(volatile u32 *)0xA4600010; volatile u32 *q; q=p; p=memory; }",
+                2,
+            ),
+            (
+                "ordinary field assignment is not pointer reassignment",
+                "void f(void) { volatile u32 *p=(volatile u32 *)0xA4600010; object->p=memory; }",
+                0,
+            ),
             ("local dead stores", "void f(void) { volatile int ret; ret = 1; }", 1),
             ("volatile field", "struct S { volatile int field; };", 1),
             ("aggregate scheduling cast", "state = ((volatile struct Screen *)p)->rows[row].state;", 1),

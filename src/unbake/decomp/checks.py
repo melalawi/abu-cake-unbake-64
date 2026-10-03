@@ -154,9 +154,36 @@ def volatile_tokens(code: str) -> list[re.Match[str]]:
     # A pointer to a literal device address, and aliases of that pointer, qualify
     # the pointed-to device rather than introducing volatile local storage.
     devices: list[tuple[str, int, int]] = []
+    declarations = []
+    for index, word in enumerate(words):
+        if word != "*" or not index or not re.fullmatch(r"[A-Za-z_]\w*|\*", words[index - 1]):
+            continue
+        name = index + 1
+        while name < len(words) and words[name] in ("volatile", "const", "restrict"):
+            name += 1
+        if (
+            name + 1 < len(words)
+            and re.fullmatch(r"[A-Za-z_]\w*", words[name])
+            and words[name + 1] in (";", "=", ",", "[")
+        ):
+            declarations.append((words[name], name, *syntax.scope(name)))
+
+    def binding(name: str, index: int) -> tuple[str, int, int]:
+        scopes = [(lo, hi) for value, at, lo, hi in declarations if value == name and at <= index and lo < index < hi]
+        lo, hi = max(scopes, default=syntax.scope(index))
+        return name, lo, hi
+
+    declarators = {at for _, at, _, _ in declarations}
     assignments = [
-        i for i, word in enumerate(words) if word == "=" and i and re.fullmatch(r"[A-Za-z_]\w*", words[i - 1])
+        i
+        for i, word in enumerate(words)
+        if word == "="
+        and i
+        and re.fullmatch(r"[A-Za-z_]\w*", words[i - 1])
+        and (i < 2 or words[i - 2] not in (".", "->"))
+        and (i < 2 or words[i - 2] != "*" or i - 1 in declarators)
     ]
+    literals = set()
     for index in assignments:
         start = index + 1
         opening = start
@@ -170,31 +197,40 @@ def volatile_tokens(code: str) -> list[re.Match[str]]:
                     address = int(words[value].rstrip("uUlL"), 16)
                     if 0xA4000000 <= address < 0xA8000000:
                         allowed.update(range(opening, closing))
-                        lo, hi = syntax.scope(index)
-                        devices.append((words[index - 1], lo, hi))
+                        literals.add(index)
+                        devices.append(binding(words[index - 1], index))
                 break
             opening += 1
     for _ in assignments:
         changed = False
         for index in assignments:
             value = index + 1
-            if (
-                value + 1 < len(words)
-                and words[value + 1] == ";"
-                and any(name == words[value] and lo < index < hi for name, lo, hi in devices)
-            ):
-                lo, hi = syntax.scope(index)
-                alias = (words[index - 1], lo, hi)
+            if value + 1 < len(words) and words[value + 1] == ";" and binding(words[value], index) in devices:
+                alias = binding(words[index - 1], index)
                 if alias not in devices:
                     devices.append(alias)
                     changed = True
         if not changed:
             break
+    # One unrelated assignment invalidates a device alias and its dependants.
+    # A device assignment in a nested block refers to the declared pointer's
+    # scope, while a shadow declaration remains a different binding.
+    for _ in assignments:
+        invalid: set[tuple[str, int, int]] = set()
+        for index in assignments:
+            target = binding(words[index - 1], index)
+            value = index + 1
+            is_alias = value + 1 < len(words) and words[value + 1] == ";" and binding(words[value], index) in devices
+            if target in devices and index not in literals and not is_alias:
+                invalid.add(target)
+        if not invalid:
+            break
+        devices = [device for device in devices if device not in invalid]
     for index, word in enumerate(words):
         if word != "volatile":
             continue
         tail = re.match(r"\s*(?:[A-Za-z_]\w*\s+)*\*\s*([A-Za-z_]\w*)", code[syntax.tokens[index].end() :])
-        if tail and any(name == tail[1] and lo < index < hi for name, lo, hi in devices):
+        if tail and binding(tail[1], index + 1) in devices:
             allowed.add(index)
         # A function return qualifier is not a storage declaration.
         if re.match(r"\s*(?:[A-Za-z_]\w*\s+)+[A-Za-z_]\w*\s*\(", code[syntax.tokens[index].end() :]):
