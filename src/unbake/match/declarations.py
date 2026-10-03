@@ -84,6 +84,10 @@ def _local_typedefs(
 ) -> tuple[Headers, list[Edit], set[tuple[int, int]]]:
     """Move local scalar and callback aliases needed by promoted fields with them."""
     wanted = set(re.findall(r"\b\w+\b", " ".join(field.declaration for record in records for field in record.fields)))
+    # Aggregate aliases are emitted with their layouts by fold(), after the
+    # necessary tag forwards. A resolved alias can spell `typedef T T;` here;
+    # promoting it as a scalar would put it before T's first declaration.
+    aggregate_aliases = {name for record in records for name in record.aliases}
     declarations: dict[str, str] = {}
     spans: dict[str, set[tuple[int, int]]] = {}
     for parser in parsers:
@@ -94,7 +98,7 @@ def _local_typedefs(
                 continue
             local.take()
             for member in local.declaration(typedef=True):
-                if member.name in headers.types or not isinstance(member.base, str):
+                if member.name in headers.types or member.name in aggregate_aliases or not isinstance(member.base, str):
                     continue
                 declaration = "typedef " + member.declaration
                 if member.name in declarations and declarations[member.name] != declaration:

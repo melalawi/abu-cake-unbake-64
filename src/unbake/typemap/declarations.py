@@ -639,6 +639,7 @@ class _PublishedDeclarations:
 
     def __init__(self) -> None:
         self.prefixes: dict[str, tuple[str, dict[str, bool], dict[str, Any]]] = {}
+        self.prefix_errors: dict[str, tuple[str, str]] = {}
         self.sources: dict[tuple[str, str], dict[str, Any]] = {}
 
     def extract(
@@ -650,11 +651,24 @@ class _PublishedDeclarations:
             prefix, marker, suffix = text.partition(_BOUNDARY + "\n")
             if not marker:
                 raise Held("solve", "types.declaration: missing preprocessor source boundary")
+        if prefix in self.prefix_errors:
+            phase, reason = self.prefix_errors[prefix]
+            raise Held(phase, reason)
         cached = self.prefixes.get(prefix)
         if cached is None:
             cleaned = clean(prefix, line_markers=True)
             parser = c_parser.CParser()
-            seed = extract(cleaned, {}, definitions=True, owned_source=Path("__unbake_header_prefix__"), _parser=parser)
+            try:
+                seed = extract(
+                    cleaned, {}, definitions=True, owned_source=Path("__unbake_header_prefix__"), _parser=parser
+                )
+            except Held as error:
+                # The exact prefix fails independently of every source suffix.
+                # Preflight must retain each source's verdict without parsing
+                # the same broken headers hundreds of times. Store only text,
+                # never tracebacks that retain a partially parsed header AST.
+                self.prefix_errors[prefix] = error.phase, error.reason
+                raise
             seed["layout_source"] = cleaned
             cached = cleaned, parser._scope_stack[0].copy(), seed
             self.prefixes[prefix] = cached

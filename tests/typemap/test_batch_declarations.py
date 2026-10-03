@@ -4,10 +4,44 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from unbake.project.config import Held
 from unbake.typemap import declarations, storage
 
 
 class BatchDeclarationsTests(unittest.TestCase):
+    def test_failed_prefix_is_parsed_once_without_retaining_exception_frames(self):
+        prefix = "typedef Missing Missing;\n"
+        with self.assertRaises(Held) as expected:
+            declarations.extract(prefix, {}, definitions=True, owned_source=Path("__unbake_header_prefix__"))
+        batch = declarations._PublishedDeclarations()
+        errors = []
+        with patch.object(
+            declarations.c_parser.CParser, "parse", autospec=True, side_effect=declarations.c_parser.CParser.parse
+        ) as parse:
+            for name in ("alpha", "beta", "gamma"):
+                with self.assertRaises(Held) as actual:
+                    batch.extract((prefix, f"int {name}(void) {{ return 0; }}"), {"function": name}, Path(name + ".c"))
+                self.assertEqual(
+                    (actual.exception.phase, actual.exception.reason),
+                    (expected.exception.phase, expected.exception.reason),
+                )
+                errors.append(actual.exception)
+            self.assertEqual(parse.call_count, 1)
+        self.assertEqual(len({id(error) for error in errors}), 3)
+        self.assertEqual(batch.prefix_errors, {prefix: (expected.exception.phase, expected.exception.reason)})
+        # A different (repaired) prefix remains eligible in the same batch.
+        actual = batch.extract(("typedef int Missing;\n", "Missing delta(void) { return 1; }"), {}, Path("delta.c"))
+        self.assertIn("delta", actual["functions"])
+
+    def test_source_declaration_errors_do_not_poison_a_valid_prefix(self):
+        batch = declarations._PublishedDeclarations()
+        prefix = "typedef int Word;\n"
+        with self.assertRaises(Held):
+            batch.extract((prefix, "Missing alpha(void);"), {}, Path("alpha.c"))
+        actual = batch.extract((prefix, "Word beta(void) { return 1; }"), {}, Path("beta.c"))
+        self.assertIn("beta", actual["functions"])
+        self.assertEqual(batch.prefix_errors, {})
+
     def compare(self, batch, prefix, suffix, name):
         source = Path(name + ".c")
         provenance = {"kind": "proven", "function": name, "version": "us"}

@@ -92,6 +92,57 @@ class DeclarationTests(MatchFixture):
             edit.path.parent.mkdir(parents=True, exist_ok=True)
             edit.path.write_text(edit.after)
 
+    def test_resolved_aggregate_aliases_are_emitted_after_tag_forwards(self) -> None:
+        from pycparser import c_parser
+
+        from tests.preprocessor import expand
+        from unbake.layout.header_context import Headers
+
+        for kind in ("struct", "union"):
+            with self.subTest(kind=kind):
+                # The shared name is occupied by a different layout, forcing an
+                # owner name. Alias and its chain collapse to that same name.
+                header = self.root / "include" / "occupied.h"
+                header.write_text(f"typedef {kind} Local {{ float other; }} Local;\n")
+                text = (
+                    f"typedef {kind} Local Local;\n"
+                    f"{kind} Local {{ int value; }};\n"
+                    "typedef Local Alias;\n"
+                    "typedef Alias Chained;\n"
+                    "struct Holder { Chained *entry; };\n"
+                    "int alpha(struct Holder *p) { return p->entry->value; }\n"
+                )
+                folded = declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "alpha",
+                    text,
+                    self.versions,
+                    prove_headers=False,
+                )
+                generated = next(edit.after for edit in folded.headers if edit.path.name == "alpha.h")
+                self.assertNotIn("typedef Local_alpha Local_alpha;", generated)
+                self.assertIn(f"typedef {kind} Local_alpha Local_alpha;", generated)
+                for edit in folded.headers:
+                    edit.path.parent.mkdir(parents=True, exist_ok=True)
+                    edit.path.write_text(edit.after)
+                # A new source sees a valid shared context, just as the next
+                # unrelated exact candidate in a submit batch does.
+                expanded = expand(folded.source, self.project.include)
+                c_parser.CParser().parse(expanded)
+                declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "beta",
+                    "typedef struct Other {int value;} Other;\nint beta(Other *p) {return p->value;}\n",
+                    self.versions,
+                    prove_headers=False,
+                )
+                for edit in folded.headers:
+                    edit.path.unlink()
+
     def test_forward_typedef_spans_preserve_externs_and_function_body(self) -> None:
         for kind in ("struct", "union"):
             with self.subTest(kind=kind):
