@@ -17,7 +17,7 @@ import unbake.decomp.needs as needs
 from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
 from unbake.layout import split as layout_split
-from unbake.project import build, makefile
+from unbake.project import build, makefile, setup
 from unbake.project.config import Compiler, Held, Policy, Project, Version
 from unbake.report import progress
 
@@ -151,6 +151,7 @@ class MatchFixture(unittest.TestCase):
             permuter_archive=tools / "permuter.tar",
             permuter_sha256="c" * 64,
         )
+        setup.publish_files(self.project, makefile.helpers(self.project))
         self.store = drafts.Store(self.policy, self.project)
         (self.root / "Makefile").write_text("all:\n\ttrue\n")
         self.calls: list[tuple[str, ...]] = []

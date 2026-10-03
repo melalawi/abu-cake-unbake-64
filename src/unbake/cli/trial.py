@@ -9,7 +9,7 @@ from unbake.decomp import checks, fuzzy_bar, trial
 from unbake.decomp.commands import prefix
 from unbake.decomp.trial_target import owning_versions
 from unbake.match.batch import FOLDED_RULES
-from unbake.project.config import Policy, Project, Unfinished, load_policy
+from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 
 
 def register(phases: Subparsers) -> None:
@@ -39,9 +39,16 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             on_refusal=True,
         )
         return True
-    result = trial.retain_draft(
-        project, policy, args.source, args.scratch, versions=None, flags=args.flags, overlay_root=args.overlay_root
-    )
+    try:
+        result = trial.retain_draft(
+            project, policy, args.source, args.scratch, versions=None, flags=args.flags, overlay_root=args.overlay_root
+        )
+    except Held as error:
+        if error.phase == "gbi" and error.next_action is None:
+            error.next_action = f"Edit {args.source}. Then run " + shlex.join(
+                [*prefix(project), "try", str(args.source), "--scratch", str(args.scratch)]
+            )
+        raise
     if hasattr(result, "compares"):
         verdict = fuzzy_bar.evaluate(
             result.compares, owning_versions(project, result.function, None), result.preconditions

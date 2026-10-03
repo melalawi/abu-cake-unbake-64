@@ -270,10 +270,25 @@ class IndexedStagingTests(unittest.TestCase):
             tools.mkdir()
             recipe = tools / "build.json"
             symbols = root / "symbols.txt"
-            recipe.write_text("{}")
+            recipe.write_text(
+                json.dumps(
+                    {
+                        "units": {},
+                        "default_compiler": "fixture",
+                        "assembly_compiler": None,
+                        "compilers": {"fixture": {"kind": "ido", "cc": "tools/fixture/cc"}},
+                    }
+                )
+            )
             symbols.write_text("symbols")
-            os.utime(recipe, ns=(100, 100))
-            os.utime(symbols, ns=(200, 200))
+            driver = tools / "compile/drivers/codegen.py.sha256"
+            driver.parent.mkdir(parents=True)
+            driver.write_text("scoped generator")
+            assembly = tools / "compile" / root.name / "assembly.json"
+            assembly.parent.mkdir(parents=True)
+            assembly.write_text("{}")
+            os.utime(driver, ns=(100, 100))
+            os.utime(assembly, ns=(200, 200))
             names = [("src/old", 99), ("src/new", 150), ("asm/old", 150), ("asm/new", 250), ("assets/a.bin", 1)]
             (root / ".split.mk").write_text(
                 "C_OBJECTS := " + " ".join(f"$(BUILD)/obj/{name}.o" for name, _ in names) + "\n"

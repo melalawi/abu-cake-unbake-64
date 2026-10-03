@@ -180,7 +180,7 @@ class NextLinesTests(MainCase):
 
     def test_source_rule_receipt_keeps_edit_action_and_required_scratch(self):
         self.source.write_text("void alpha(void) { p->words.w0 = 0xE7000000; }\n")
-        with patch("unbake.decomp.trial.retain_draft") as compile:
+        with patch("unbake.decomp.trial.trial_inputs") as compile:
             code, out, error = self.run_main(self.args("try", str(self.source)))
         self.assertEqual((code, error), (1, ""))
         compile.assert_not_called()

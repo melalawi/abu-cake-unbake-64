@@ -252,9 +252,17 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
         return executables[value]
 
     independent_objects(generation)
+    indexed = object_paths(generation) if (generation / ".split.mk").is_file() else None
     for kind in ("src", "asm"):
         base = generation / "obj" / kind
-        for receipt in base.rglob("*.built"):
+        receipts = (
+            ((generation / obj).with_suffix(".built") for obj in indexed if obj.parts[1] == kind)
+            if indexed is not None
+            else base.rglob("*.built")
+        )
+        for receipt in receipts:
+            if not receipt.is_file():
+                continue
             if receipt.is_symlink():
                 continue
             unit = receipt.relative_to(base).with_suffix("").as_posix()

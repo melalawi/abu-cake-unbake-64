@@ -24,12 +24,16 @@ class HelperFreshnessTests(unittest.TestCase):
             write_rendered(project)
             recipe = project.tools / "build.json"
             before = recipe.read_bytes()
+            settings = {path: path.read_bytes() for path in (project.tools / "compile").rglob("*.json")}
             (project.root / "config.toml").write_text(
                 (project.root / "config.toml").read_text().replace("asflags = []", 'asflags = ["--changed"]')
             )
             self.assertNotEqual(json.loads(before), makefile.description(project))
             setup.refresh_helpers(project)
             self.assertEqual(recipe.read_bytes(), before)
+            self.assertEqual({path: path.read_bytes() for path in settings}, settings)
+            for relative, content in makefile.driver_settings(project).items():
+                self.assertEqual((project.root / relative).read_text(), content)
 
     def test_refresh_and_refusal_table(self):
         for state in ("current", "changed", "missing"):

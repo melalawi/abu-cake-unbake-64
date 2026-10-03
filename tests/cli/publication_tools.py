@@ -12,7 +12,7 @@ from unbake.decomp import drafts, trial, trial_compile
 from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.layout import entries, structs
 from unbake.match import relink, staging
-from unbake.project import build, hygiene, toolchain
+from unbake.project import build, hygiene, setup, toolchain
 from unbake.project_tools import extract
 from unbake.report import progress
 from unbake.typemap import declarations
@@ -25,6 +25,7 @@ class Tools:
         self.case = case
         case.project.tools.mkdir(parents=True, exist_ok=True)
         (case.project.tools / "compiler.sha256").write_text("")
+        setup.refresh_helpers(case.project)
         self.bad = set()
         self.proof_hook = None
         self.built = []

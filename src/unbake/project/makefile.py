@@ -206,7 +206,8 @@ def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
         raise Held("build", str(error)) from error
 
 
-def helpers(project: Project) -> dict[str, str]:
+def helper_sources(project: Project) -> dict[str, str]:
+    """Render implementation helpers without changing build recipe provenance."""
     tools = relative(project, project.tools)
     names = [
         "atomic.py",
@@ -243,6 +244,12 @@ def helpers(project: Project) -> dict[str, str]:
         super().__init__(f"HELD({phase}): {reason}")""",
     )
     files[tools + "/cache.py"] = cache_source
+    return files
+
+
+def helpers(project: Project) -> dict[str, str]:
+    tools = relative(project, project.tools)
+    files = helper_sources(project)
     files[tools + "/build.json"] = json.dumps(description(project), sort_keys=True, indent=2) + "\n"
     data = description(project)
     files[tools + "/link.json"] = json.dumps({"resident_mappings": data["resident_mappings"]}, sort_keys=True) + "\n"
@@ -290,7 +297,15 @@ def compile_settings(project: Project) -> dict[str, str]:
         flags = direct if direct is not None else data["unit_cflags"].get(Path(unit).stem, [])
         settings = dict(compiler=data["units"].get(Path(unit).stem, data["default_compiler"]), flags=flags)
         files[f"{tools}/compile/units/{unit}.json"] = json.dumps(settings, sort_keys=True) + "\n"
-    if any(compiler["kind"] == "sn64" for compiler in data["compilers"].values()):
+    files.update(driver_settings(project))
+    return files
+
+
+def driver_settings(project: Project) -> dict[str, str]:
+    """Render scoped generator identities independently of compiler settings."""
+    tools = relative(project, project.tools)
+    files = {}
+    if any(compiler.kind == "sn64" for compiler in project.compilers.values()):
         import abumasn64
 
         assert abumasn64.__file__ is not None

@@ -408,7 +408,7 @@ def catalogue(project: Project, policy: Policy, unit: Path, version: str, source
         if re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", path.read_text(), re.M)
     ]
     if not headers:
-        raise Held("gbi", "SDK macro recovery: no project SDK macro definitions")
+        raise Held("gbi", "SDK macro recovery: raw-gfx/local-gbi-macro requires project SDK macro definitions")
     directives = []
     for line in source.splitlines():
         included = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
