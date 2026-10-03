@@ -214,6 +214,24 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
         raise Held("solve", f"types.header_parse: compatible declarator: {error}") from error
 
 
+def callback_renames(local: dict[str, str], shared: dict[str, str], owner: str) -> dict[str, str]:
+    """Give incompatible local callbacks a distinct provider before layout promotion."""
+    aliases = {**shared, **local}
+    occupied = set(aliases)
+    result = {}
+    for name, type_ in local.items():
+        if name not in shared or "(" not in type_:
+            continue
+        if type_identity(type_, aliases) == type_identity(shared[name], shared):
+            continue
+        target = name + "_" + owner
+        while target in occupied:
+            target += "_"
+        occupied.add(target)
+        result[name] = target
+    return result
+
+
 def resolve(type_: str, replacements: dict[str, str]) -> str:
     """Expand type aliases without treating tag names as typedef uses."""
 

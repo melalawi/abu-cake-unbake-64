@@ -143,6 +143,7 @@ def edits(
     tag_only: set[str] | None = None,
     *,
     cache_root: Path | None = None,
+    typedef_renames: dict[str, str] | None = None,
 ) -> dict[tuple[int, int], str]:
     """Use C namespaces and expression types; preserve comments, strings and value identifiers."""
     records = {record.name: record for record in (parser.layout(item) for item in parser.aggregates if item.name)}
@@ -153,7 +154,7 @@ def edits(
         or (records.get(name) is not None and records[name].fields != evidence.fields)
         for name, (target, evidence) in resolution.items()
     )
-    if not changed:
+    if not changed and not typedef_renames:
         return {}
 
     def blank(match: re.Match[str]) -> str:
@@ -282,7 +283,9 @@ def edits(
     class Rewrite(c_ast.NodeVisitor):  # type: ignore[misc]
         def visit_Typedef(self, node: Any) -> None:
             aliases[node.name] = node.type
-            if node.name in resolution:
+            if node.name in (typedef_renames or {}):
+                replace(node, node.name, (typedef_renames or {})[node.name])
+            elif node.name in resolution:
                 replace(node, node.name, resolution[node.name][0])
                 # An anonymous aggregate is recorded under its typedef name.
                 inner = node.type.type if isinstance(node.type, c_ast.TypeDecl) else None
@@ -297,7 +300,9 @@ def edits(
             self.generic_visit(node)
 
         def visit_IdentifierType(self, node: Any) -> None:
-            if len(node.names) == 1 and node.names[0] in resolution:
+            if len(node.names) == 1 and node.names[0] in (typedef_renames or {}):
+                replace(node, node.names[0], (typedef_renames or {})[node.names[0]])
+            elif len(node.names) == 1 and node.names[0] in resolution:
                 name = node.names[0]
                 target, evidence = resolution[name]
                 spelling = f"{evidence.kind} {target}" if target in bare_tags else target

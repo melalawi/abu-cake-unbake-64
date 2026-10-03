@@ -75,6 +75,15 @@ class SplitTests(unittest.TestCase):
                 self.assertNotIn("extern int api", generated)
                 self.assertEqual(expanded(outputs, "shared/decls/api.h").count(spelling), 1)
 
+    def test_callback_collision_names_are_deterministic_and_avoid_existing_providers(self):
+        for shared, expected in (
+            ({"Callback": "int (*)(int)"}, {}),
+            ({"Callback": "float (*)(int)"}, {"Callback": "Callback_owner"}),
+            ({"Callback": "struct Callback", "Callback_owner": "int"}, {"Callback": "Callback_owner_"}),
+        ):
+            with self.subTest(shared=shared):
+                self.assertEqual(header_names.callback_renames({"Callback": "int (*)(int)"}, shared, "owner"), expected)
+
     def test_callback_compatibility_uses_structure(self):
         rows = (
             ("s32 (*)(s32 value, void *p)", "signed int (*)(signed int, void *)", True),

@@ -18,7 +18,7 @@ from unbake.layout.structs_types import Aggregate
 from unbake.match import imports, pool_literals, reporting, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
-from unbake.typemap.header_names import alias_types, type_identity
+from unbake.typemap.header_names import alias_types, callback_renames, type_identity
 
 
 def preflight(project: Project, policy: Policy, pending: list[needs.Need]) -> list[Edit]:
@@ -311,13 +311,18 @@ def _layout_names(
     def typed_context(version: str) -> str:
         return source_views.typed_context(project, policy, headers, version)
 
+    shared_aliases = {name: type_ for value in headers.texts.values() for name, type_ in alias_types(value).items()}
     for index, parser in enumerate(parsers):
+        local_aliases = {}
+        for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
+            local_aliases.update(alias_types(parser.source[start:end]))
+        callbacks = callback_renames(local_aliases, shared_aliases, function)
         # Validate canonical scalar names before rewriting any aggregate alias.
         scalar_edits(project, parser, headers)
         records = _records(parser)
         resolution = headers.index.resolve([record for record in records if record.name not in sdk], function)
         resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
-        if not resolution:
+        if not resolution and not callbacks:
             continue
         planned = type_rewrite.edits(
             parser,
@@ -325,6 +330,7 @@ def _layout_names(
             resolution,
             tag_only,
             cache_root=policy.cache_root,
+            typedef_renames=callbacks,
         )
         for span, target in planned.items():
             if span in replacements and replacements[span] != target:

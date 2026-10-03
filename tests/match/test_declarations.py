@@ -24,6 +24,39 @@ class DeclarationTests(MatchFixture):
             mock.start()
             self.addCleanup(mock.stop)
 
+    def test_promoted_callback_collision_keeps_consumer_specific_provider(self):
+        rows = (
+            ("typedef struct Callback {int value;} Callback;", True),
+            ("typedef float (*Callback)(float);", True),
+            ("typedef signed int (*Callback)(signed int);", False),
+        )
+        for shared, renamed in rows:
+            with self.subTest(shared=shared):
+                (self.project.include[0] / "callback.h").write_text(shared)
+                source = (
+                    "typedef int (*Callback)(int);\n"
+                    "struct Holder {Callback callback;};\n"
+                    "int alpha(struct Holder *p) {Callback local=p->callback; return local(1);}\n"
+                )
+                folded = declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "alpha",
+                    source,
+                    self.versions,
+                    prove_headers=False,
+                )
+                generated = "\n".join(edit.after for edit in folded.headers)
+                if renamed:
+                    self.assertIn("*Callback_alpha)", generated)
+                    self.assertIn("Callback_alpha local", folded.source)
+                    self.assertNotIn('#include "callback.h"', generated)
+                else:
+                    self.assertNotIn("*Callback_alpha)", generated)
+                    self.assertNotIn("typedef int (*Callback)", folded.source)
+                    self.assertIn('#include "callback.h"', generated)
+
     def test_fold_retires_compatible_callback_typedefs_and_keeps_other_members(self):
         rows = (
             ("int (*Handler)(int named)", "signed int (*Handler)(signed int)", True),
@@ -44,7 +77,10 @@ class DeclarationTests(MatchFixture):
                     self.versions,
                     prove_headers=False,
                 )
-                self.assertEqual("*Handler)" not in folded.source, compatible)
+                if compatible:
+                    self.assertNotIn("*Handler)", folded.source)
+                else:
+                    self.assertIn("*Handler_alpha)", folded.source)
                 self.assertIn("*Other)", folded.source)
                 if compatible:
                     self.assertIn('#include "callback.h"', folded.source)
