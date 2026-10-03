@@ -332,7 +332,7 @@ def _layout_names(
             renamed_members(field.fields, target.fields, before, after)
 
     def typed_context(version: str) -> str:
-        return source_views.typed_context(project, policy, headers, version)
+        return source_views.typed_context(project, policy, headers, version, source_context=True)
 
     shared_aliases = {name: type_ for value in headers.texts.values() for name, type_ in alias_types(value).items()}
     def expanded_context(parser: Parser, version: str) -> rewrite_view.View:

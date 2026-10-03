@@ -207,7 +207,9 @@ class DeclarationTests(MatchFixture):
         parsers = [headers.parse(source)[0] for _ in self.versions]
         trees = []
 
-        def typed(project, policy, version):
+        def typed(project, policy, version, *, extra=None):
+            self.assertIsNotNone(extra)
+            self.assertEqual(extra.read_text(), "")
             trees.append(project.include)
             self.assertTrue((project.include[0] / "canonical.h").is_file())
             return prefix

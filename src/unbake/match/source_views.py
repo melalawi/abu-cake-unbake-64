@@ -49,7 +49,9 @@ def parsers(
     return result
 
 
-def typed_context(project: Project, policy: Policy, headers: Headers, version: str) -> str:
+def typed_context(
+    project: Project, policy: Policy, headers: Headers, version: str, *, source_context: bool = False
+) -> str:
     """Reuse preprocessing for an effective header set and selected version."""
     from unbake.project.cache import remembered
     from unbake.typemap.declarations import headers as typed_headers
@@ -62,12 +64,18 @@ def typed_context(project: Project, policy: Policy, headers: Headers, version: s
         policy.cppflags,
         project.compilers[project.default_compiler].cflags,
         project.version(version).macros,
+        source_context,
     )
 
     def compute() -> str:
         with tempfile.TemporaryDirectory(prefix="match-types-") as temporary:
             roots = header_includes(project, headers, Path(temporary))
             local = replace(project, include=roots, overlay_roots=roots)
+            if source_context:
+                # Source context includes promoted components excluded from header-only evidence.
+                source = Path(temporary) / "rewrite-context.c"
+                source.write_text("")
+                return typed_headers(local, policy, version, extra=source)
             return typed_headers(local, policy, version)
 
     cached: dict[tuple[Any, ...], str] = headers.__dict__.setdefault("_typed_contexts", {})
