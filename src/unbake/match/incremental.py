@@ -16,7 +16,7 @@ from unbake.match.common import held
 from unbake.project import build, makefile
 from unbake.project.config import Policy, Project
 from unbake.project_tools import extract, layout
-from unbake.project_tools.compile import dependency_paths
+from unbake.project_tools.codegen import dependency_paths
 from unbake.project_tools.elf import Object
 
 
