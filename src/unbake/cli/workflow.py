@@ -12,7 +12,7 @@ from unbake.layout import split
 from unbake.project.config import Held, Policy, Project, load_policy
 
 
-def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> tuple[str, str]:
+def select(project: Project, policy: Policy, *, exclude: Path | None = None, new: bool = False) -> tuple[str, str]:
     excluded = exclusions.load(project, exclude)
 
     def draft_command(subject: str) -> str:
@@ -42,10 +42,12 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
         if error.reason.startswith("types."):
             return command(project.root, "solve"), error.reason
         raise
-    redrafts = type_context.redrafts(project)
+    redrafts = {} if new else type_context.redrafts(project)
     occupied = {name for row in Ledger(project, policy).open() for name in (row["function"], *row["names"].values())}
     store = drafts.Store(policy, project)
     actions = []
+    drafted: set[str] = set()
+    inventory: list[split.Function] | None = None
     # Editable current work takes precedence over another fresh draft.
     for path in sorted(project.drafts.glob("*/manifest.json")):
         manifest = json.loads(path.read_bytes())
@@ -61,11 +63,12 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
         source = project.root / manifest["source"]
         if not source.resolve().is_relative_to(project.drafts.resolve()) or not source.is_file():
             continue
-        owners = [
-            r
-            for r in [row for version in project.versions for row in split.functions(project, version)]
-            if subject in r.aliases
-        ]
+        drafted.add(subject)
+        if new:
+            continue
+        if inventory is None:
+            inventory = [row for version in project.versions for row in split.functions(project, version)]
+        owners = [row for row in inventory if subject in row.aliases]
         if not owners or all(row.kind == "c" for row in owners):
             continue
         if subject in redrafts:
@@ -97,6 +100,8 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
         _, action, reason = min(actions)
         return action, reason
     rows = [row for row in plan.actionable(project, policy) if not excluded.intersection(row.aliases)]
+    if new:
+        rows = [row for row in rows if row.draft is None and not drafted.intersection(row.aliases)]
     if rows:
         row = rows[0]
         reason = f"{row.function}: supported compiler and complete function boundary on {', '.join(row.versions)}; "
@@ -106,6 +111,12 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
             else f"smallest supported draft ({row.size} bytes)"
         )
         return draft_command(row.function), reason
-    if any(not excluded.intersection(row.aliases) for row in plan.ranked(project, policy)):
+    if any(
+        not excluded.intersection(row.aliases)
+        and (not new or (row.draft is None and not drafted.intersection(row.aliases)))
+        for row in plan.ranked(project, policy)
+    ):
         raise Held("next", "next.project: remaining items need boundary, ownership or claim resolution")
+    if new:
+        return "No undrafted items.", "--new found no remaining supported undrafted functions"
     return "No unfinished items.", "all supported functions are matched or explicitly excluded"

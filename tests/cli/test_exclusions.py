@@ -78,17 +78,19 @@ class ExclusionTests(MainCase):
         )
         (draft / "alpha.c").write_text("int alpha(void) { return 0; }")
         rows = [
-            SimpleNamespace(function=n, aliases=(n,), versions=("us",), score=None, size=16) for n in ("alpha", "beta")
+            SimpleNamespace(function=n, aliases=(n,), versions=("us",), score=None, size=16, draft=None)
+            for n in ("alpha", "beta")
         ]
         with (
             patch("unbake.decomp.type_context.required", return_value=("d" * 64, "")),
             patch("unbake.decomp.type_context.redrafts", return_value={"alpha": {}}),
             patch("unbake.cli.workflow.plan.actionable", return_value=rows),
         ):
-            code, out, _ = self.run_main(self.args("next", "--exclude", str(path)))
-        self.assertEqual(code, 0)
-        self.assertIn("draft beta --exclude", out)
-        self.assertNotIn("draft alpha", out)
+            for mode in ((), ("--new",)):
+                code, out, _ = self.run_main(self.args("next", *mode, "--exclude", str(path)))
+                self.assertEqual(code, 0)
+                self.assertIn("draft beta --exclude", out)
+                self.assertNotIn("draft alpha", out)
 
     def test_empty_override_replaces_project_manifest(self):
         self.manifest({"schema": 1, "functions": ["alpha"]})

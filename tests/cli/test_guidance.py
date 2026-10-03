@@ -32,6 +32,20 @@ class GuidanceTests(MainCase):
         action = out.split("Next: ", 1)[1].strip()
         self.assertEqual(shlex.split(action), ["unbake", "--project", str(self.root), "--policy", str(policy), "solve"])
 
+    def test_next_new_reaches_selector_and_names_selection_mode(self) -> None:
+        with patch("unbake.cli.workflow.select", return_value=("unbake draft beta", "ranked beta")) as select:
+            code, out, error = self.run_main(self.args("next", "--new"))
+        self.assertEqual((code, error), (0, ""))
+        self.assertTrue(select.call_args.kwargs["new"])
+        self.assertIn("OK(next): --new: ranked beta", out)
+        self.assertIn("Next: unbake", out)
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit) as exited:
+            main(["next", "--help"])
+        self.assertEqual(exited.exception.code, 0)
+        self.assertIn("--new", output.getvalue())
+        self.assertIn("undrafted", output.getvalue())
+
     def test_ready_next_does_not_create_an_absent_policy(self) -> None:
         path = self.directory / "absent-operator/policy.toml"
         with patch.dict(os.environ, UNBAKE_POLICY=str(path)):

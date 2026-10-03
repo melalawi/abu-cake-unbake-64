@@ -5,6 +5,7 @@ Tools to help unbake a cake!
 Install with `python3 -m pip install git+https://github.com/melalawi/abu-cake-unbake-64`.
 Python 3.11 or later is required along with make and MIPS binutils.
 Set tool paths and build limits in `~/.config/unbake/policy.toml`.
+Set `cache_root = "/absolute/path/to/cache"` in that policy for reusable host build artifacts.
 Setup prints the policy path and names missing fields.
 
 Run `unbake init NAME` and put your ROM dumps in the printed folder.
@@ -14,7 +15,7 @@ Init and setup leave commits to you.
 Function items span versions and C can use version conditionals.
 
 Run `unbake map` then `unbake solve` to build the shared type context.
-Follow `unbake next` through draft then try then submit.
+Follow `unbake next` through draft then try then submit; use `unbake next --new` for undrafted functions.
 Try measures every containing version.
 Submit folds shared declarations and proves the cartridges before publication.
 Use `unbake submit --batch SOURCE...` to prove several sources together.

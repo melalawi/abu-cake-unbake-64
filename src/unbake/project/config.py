@@ -1,5 +1,6 @@
 """Required project facts and host process policy."""
 
+import json
 import math
 import os
 import re
@@ -538,7 +539,13 @@ def _load_policy(path: Path | None, *, stage: str, create_template: bool) -> Pol
     data = {**_read(POLICY_PATH), **_read(path)}
 
     def value(field: str) -> Any:
-        return _required(data, field, "policy." + field)
+        try:
+            return _required(data, field, "policy." + field)
+        except Held as error:
+            if field == "cache_root":
+                example = "cache_root = " + json.dumps(str(path.parent / "cache"), ensure_ascii=False)
+                raise Held("config", f"{error.reason}; in {path}; add {example}") from error
+            raise
 
     def host_path(field: str) -> Path:
         return _path(value(field), "policy." + field, None)

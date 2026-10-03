@@ -1,5 +1,7 @@
 """One reasoned action from current type, draft and trial evidence."""
 
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
@@ -59,3 +61,32 @@ class WorkflowTests(MatchFixture):
             action, reason = workflow.select(self.project, self.policy)
         self.assertTrue(action.endswith(" draft alpha"), action)
         self.assertIn("redraft required", reason)
+
+    def test_new_skips_redrafts_editable_and_retained_drafts_in_rank_order(self) -> None:
+        self.types()
+        source = self.editable()
+        rows = [
+            SimpleNamespace(function=name, aliases=(name,), versions=self.versions, size=16, score=None, draft=draft)
+            for name, draft in (("alpha", None), ("retained", source), ("beta", None), ("gamma", None))
+        ]
+        with (
+            patch.object(workflow.type_context, "redrafts", return_value={"alpha": {}}),
+            patch.object(workflow.plan, "actionable", return_value=rows),
+        ):
+            action, _ = workflow.select(self.project, self.policy)
+            self.assertTrue(action.endswith(" draft alpha"), action)
+            for _ in range(2):
+                action, _ = workflow.select(self.project, self.policy, new=True)
+                self.assertTrue(action.endswith(" draft beta"), action)
+            with patch.object(workflow.type_context, "redrafts", return_value={}):
+                action, _ = workflow.select(self.project, self.policy)
+                self.assertIn(" try ", action)
+        with (
+            patch.object(workflow.plan, "actionable", return_value=rows[:2]),
+            patch.object(workflow.plan, "ranked", return_value=rows[:2]),
+        ):
+            action, reason = workflow.select(self.project, self.policy, new=True)
+            self.assertEqual(action, "No undrafted items.")
+            self.assertIn("undrafted", reason)
+        self.assertTrue(Path(source).is_file())
+        self.assert_untouched()

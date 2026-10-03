@@ -178,6 +178,19 @@ class ConfigTests(unittest.TestCase):
         ):
             config.load_policy()
 
+    def test_missing_cache_root_names_policy_and_valid_example(self) -> None:
+        path = write_policy(self.directory)
+        path.write_text(
+            "\n".join(line for line in path.read_text().splitlines() if not line.startswith("cache_root ="))
+        )
+        with self.assertRaises(config.Held) as refused:
+            config.load_policy(path)
+        self.assertIn(str(path), refused.exception.reason)
+        example = refused.exception.reason.split("; add ", 1)[1]
+        self.assertTrue(Path(tomllib.loads(example)["cache_root"]).is_absolute())
+        path.write_text(path.read_text() + "\n" + example + "\n")
+        self.assertEqual(config.load_policy(path).cache_root, path.parent / "cache")
+
     def test_missing_machine_policy_keys_are_named(self) -> None:
         path = write_policy(self.directory)
         original = path.read_text()

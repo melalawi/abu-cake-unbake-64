@@ -27,16 +27,33 @@ class ExtractedText:
     data: tuple[tuple[int, int], ...]
 
 
+def _text_data(text: str) -> tuple[tuple[int, int], ...]:
+    """Explicit disassembler data evidence, independent of decodable ROM words."""
+    labels = list(re.finditer(r"^(glabel|dlabel)\s+([A-Za-z_]\w*)", text, re.M))
+    data = []
+    for index, label in enumerate(labels):
+        stop = labels[index + 1].start() if index + 1 < len(labels) else len(text)
+        for word in re.finditer(
+            r"/\*\s*([\da-fA-F]+)\s+[\da-fA-F]{8}\s+[\da-fA-F]{8}\s*\*/\s*([^\n]+)",
+            text[label.end() : stop],
+        ):
+            if label[1] == "dlabel" or word[2].lstrip().startswith("."):
+                offset = int(word[1], 16)
+                data.append((offset, offset + 4))
+    return tuple(sorted(set(data)))
+
+
 def extracted_text(project: AsmProject, version: str, paths: Sequence[Path] | None = None) -> ExtractedText:
     """Read the function boundaries emitted by Splat's disassembler."""
     root = project.asm / version
     functions = []
-    data = []
+    data: list[tuple[int, int]] = []
     for path in sorted(root.rglob("*.s") if paths is None else paths):
         text = read(path)
         if not re.search(r"\.section\s+\.text|^\.text\b", text, re.M):
             continue
-        labels = list(re.finditer(r"^(?:glabel|dlabel)\s+([A-Za-z_]\w*)", text, re.M))
+        data.extend(_text_data(text))
+        labels = list(re.finditer(r"^(glabel|dlabel)\s+([A-Za-z_]\w*)", text, re.M))
         for index, label in enumerate(labels):
             end = labels[index + 1].start() if index + 1 < len(labels) else len(text)
             words = re.findall(
@@ -45,16 +62,15 @@ def extracted_text(project: AsmProject, version: str, paths: Sequence[Path] | No
             )
             if not words:
                 continue
-            for offset, _, emitted in words:
-                if emitted.lstrip().startswith("."):
-                    data.append((int(offset, 16), int(offset, 16) + 4))
             start = int(words[0][0], 16)
             stop = int(words[-1][0], 16) + 4
             address = int(words[0][1], 16)
+            if label[1] == "dlabel" or all(emitted.lstrip().startswith(".") for _, _, emitted in words):
+                continue
             functions.append(
                 Function(
                     version,
-                    label[1],
+                    label[2],
                     start,
                     stop,
                     address,
@@ -64,7 +80,7 @@ def extracted_text(project: AsmProject, version: str, paths: Sequence[Path] | No
                 )
             )
     functions.sort(key=lambda function: function.start)
-    if not functions:
+    if not functions and not data:
         raise Held("init", f"VERSION {version}: splat emitted no function boundaries in {root}")
     if any(left.end > right.start for left, right in pairwise(functions)):
         raise Held("init", f"VERSION {version}: overlapping splat function boundaries")
@@ -327,25 +343,43 @@ def functions(project: Project, v: str) -> list[Function]:
     from unbake.project.cache import parsed
 
     version = project.version(v)
-    return list(
-        parsed("split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v, share=True)
+    rows = parsed(
+        "split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v, share=True
     )
+    asm = getattr(project, "asm", None)
+    if asm is None:
+        return list(rows)
+    output = []
+    for row in rows:
+        path = asm / v / (row.path + ".s")
+        # Old layouts can still call explicitly emitted data an asm row. Keep
+        # that interval out of every function consumer, without editing YAML.
+        if row.kind == "asm" and path.is_file():
+
+            def text_data(path: Path = path) -> tuple[tuple[int, int], ...]:
+                return _text_data(read(path))
+
+            data = parsed("split.text_data", path, text_data)
+            if any(start < row.end and row.start < stop for start, stop in data):
+                continue
+        output.append(row)
+    return output
 
 
 def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
     """Function rows keyed by every row stem and symbol alias, shared read-only."""
-    from unbake.project.cache import parsed
+    from unbake.project.cache import remembered
 
-    version = project.version(v)
+    rows = functions(project, v)
 
     def build() -> dict[str, list[Function]]:
         index: dict[str, list[Function]] = {}
-        for row in functions(project, v):
+        for row in rows:
             for alias in row.aliases:
                 index.setdefault(alias, []).append(row)
         return index
 
-    return parsed("split.aliases", (version.split, version.symbols), build, extra=v, share=True)
+    return remembered("split.aliases", tuple(rows), build, keep=16)
 
 
 def holding_versions(

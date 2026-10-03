@@ -54,6 +54,9 @@ def make_parser() -> argparse.ArgumentParser:
     ):
         command.register(phases)
     next_parser = phases.add_parser("next", phase="next", help="Show the next required project action.")
+    next_parser.add_argument(
+        "--new", action="store_true", help="Skip existing drafts and select the best undrafted function."
+    )
     next_parser.add_argument("--exclude", type=Path, metavar="FILE", help="Override the project exclusion manifest.")
     return parser
 

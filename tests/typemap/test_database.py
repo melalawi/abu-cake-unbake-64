@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
+from unbake.decomp import plan
+from unbake.layout import split
 from unbake.project.config import Held
 from unbake.typemap import clear_redraft, context, feedback, feedback_many, load, map_program, redrafts, solve, storage
 
@@ -26,6 +28,39 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(database["functions"]["alpha"]["state"], "known")
         self.assertIn("shared/prototypes.h", context(self.project))
         self.assertNotIn("typedef", (self.project.include[0] / "shared/typemap.h").read_text())
+
+    def test_disassembled_data_never_enters_function_map_or_actionable_pool(self) -> None:
+        for version in self.project.versions:
+            path = self.project.asm / version / "nonmatchings/alpha.s"
+            # These bytes decode as a complete return, but Splat emitted data.
+            address = 0x80001000 if version == "us" else 0x80202000
+            path.write_text(
+                ".section .text\nglabel alpha\n"
+                f"/* 40 {address:08X} 24020001 */ .word 0x24020001\n"
+                f"/* 44 {address + 4:08X} 03E00008 */ .word 0x03E00008\n"
+                f"/* 48 {address + 8:08X} 00000000 */ .word 0\n"
+            )
+            measured = split.extracted_text(self.project, version, [path])
+            self.assertEqual(measured.functions, [])
+            self.assertEqual(measured.data, ((64, 68), (68, 72), (72, 76)))
+            self.assertNotIn("alpha", split.owners_by_alias(self.project, version))
+        mapped = map_program(self.project)
+        self.assertNotIn("alpha", mapped["functions"])
+        self.assertNotIn("alpha", {row.function for row in plan.actionable(self.project, self.policy)})
+        for version in self.project.versions:
+            path = self.project.asm / version / "nonmatchings/alpha.s"
+            path.write_text(
+                path.read_text()
+                .replace(".word 0x24020001", "addiu $v0, $zero, 1")
+                .replace(".word 0x03E00008", "jr $ra")
+                .replace(".word 0", "nop")
+            )
+        self.assertIn("alpha", map_program(self.project)["functions"])
+        self.assertIn("alpha", split.owners_by_alias(self.project, "us"))
+        for version in self.project.versions:
+            path = self.project.asm / version / "nonmatchings/alpha.s"
+            path.write_text(path.read_text().replace("glabel", "dlabel"))
+        self.assertNotIn("alpha", map_program(self.project)["functions"])
 
     def test_changed_header_and_map_refuse_stale_database(self) -> None:
         map_program(self.project)
