@@ -25,6 +25,7 @@ class VolatileRewriteTests(unittest.TestCase):
             ("alias", "typedef volatile unsigned int V;", "typedef          unsigned int V;"),
             ("global", "extern volatile int state;", None),
             ("array global", "extern volatile char data[];", None),
+            ("conditional global", "#if X\nextern volatile int state;\n#endif", None),
             ("function return", "volatile int f(void) {}", None),
             ("query", "int pad[sizeof(volatile int)];", None),
             ("device", "void f(void) { volatile int *p=(volatile int *)0xA4600010; *p=1; }", None),
@@ -48,6 +49,10 @@ class VolatileRewriteTests(unittest.TestCase):
             ("extern volatile int f(void);", []),
             ("extern volatile int x=1;", []),
             ("#if X\nextern volatile int x;\n#endif", []),
+            (
+                "extern volatile int x; void f(void) {\n#if X\nx=1;\n#endif\n}",
+                ["extern volatile int x;"],
+            ),
             ("/* extern volatile int x; */", []),
         ]
         for source, expected in cases:
@@ -230,3 +235,18 @@ class VolatileRewriteTests(unittest.TestCase):
             self.assertRaisesRegex(Held, "local-include.*unresolved.h"),
         ):
             batch_fold._folded(None, None, None, candidate)
+
+    def test_conditional_externs_are_held_and_never_dequalified_or_promoted(self):
+        source = "#if X\nextern volatile int shared;\n#endif\nvoid f(void) {}"
+        with (
+            patch("unbake.decomp.gbi_proof.preserve") as proof,
+            patch("unbake.typemap.declaration_evidence.validate_symbols") as validate,
+        ):
+            actual, evidence = rewrite.proven(
+                None, None, Path("f.c"), source, Headers({}, root=Path("project")), ("us",)
+            )
+        self.assertEqual(actual, source)
+        self.assertFalse(evidence)
+        self.assertTrue([finding for finding in checks.run(actual) if finding.rule == "volatile-storage"])
+        proof.assert_not_called()
+        validate.assert_not_called()

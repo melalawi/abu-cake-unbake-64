@@ -19,18 +19,24 @@ from unbake.project.config import Held, Policy, Project
 BOUNDARY = "/* unbake declaration evidence boundary */\n"
 
 
-def externs(source: str) -> list[tuple[int, int]]:
-    """Locate unconditional file-scope extern objects using balanced C tokens."""
+def externs(source: str, *, conditional: bool = False) -> list[tuple[int, int]]:
+    """Locate file-scope extern objects, preserving conditional declaration scope."""
     code = checks._code(source)
-    # Moving a conditionally declared object to an unconditional header changes
-    # its availability. Leave such input to the ordinary refusal path.
-    if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", code, re.M):
-        return []
+    directives = list(re.finditer(r"^[ \t]*#\s*(if|ifdef|ifndef|endif)\b", code, re.M))
     syntax = checks._Syntax(code)
     result = []
     depth = 0
     for index, word in enumerate(syntax.words):
         if word == "extern" and depth == 0:
+            level = sum(
+                -1 if directive[1] == "endif" else 1
+                for directive in directives
+                if directive.start() < syntax.tokens[index].start()
+            )
+            # A conditional inside a function does not condition earlier globals.
+            # Conditional externs remain qualified in the source and are held.
+            if level and not conditional:
+                continue
             end = index + 1
             while end < len(syntax.words) and syntax.words[end] != ";":
                 end += 1
@@ -49,7 +55,7 @@ def candidate(source: str) -> tuple[str, tuple[str, ...]]:
     if not marker:
         prefix, body = "", source
     code = checks._code(body)
-    protected = externs(body)
+    protected = externs(body, conditional=True)
     refused = checks.volatile_tokens(code)
     patterns = tuple(
         dict.fromkeys(checks.message(checks._finding("volatile-storage", body, token)) for token in refused)
