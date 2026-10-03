@@ -137,19 +137,7 @@ class Layout:
         self, text: str, *, blocked: set[str] | None = None, blocked_tags: set[str] | None = None
     ) -> set[Path]:
         """Select body/signature type names, then let header includes close them."""
-        selected = set()
-        pending = re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))
-        seen = set()
-        while pending:
-            name = pending.pop()
-            if name in seen:
-                continue
-            seen.add(name)
-            if name not in (blocked or set()):
-                selected.update(self.providers.get(name, set()))
-            if name not in (blocked_tags or set()):
-                selected.update(self.tags.get(name, set()))
-            pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", self.aliases.get(name, "")))
+        selected = required_providers(text, self.providers, self.tags, self.aliases, blocked, blocked_tags)
         return {self.homes[path] for path in selected}
 
     def consumer(self, path: Path, text: str) -> bytes:
@@ -160,6 +148,32 @@ class Layout:
         return self.render(
             path, "\n".join(self.include(home) for home in sorted(set(self.headers) - (excluded or set())))
         )
+
+
+def required_providers(
+    text: str,
+    providers: dict[str, set[Path]],
+    tags: dict[str, set[Path]],
+    aliases: dict[str, str],
+    blocked: set[str] | None = None,
+    blocked_tags: set[str] | None = None,
+) -> set[Path]:
+    """Resolve one consumer's names; both generation and imported C use this closure."""
+    selected: set[Path] = set()
+    code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', " ", declaration_source(text))
+    pending = re.findall(r"\b[A-Za-z_]\w*\b", code)
+    seen = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        if name not in (blocked or set()):
+            selected.update(providers.get(name, set()))
+        if name not in (blocked_tags or set()):
+            selected.update(tags.get(name, set()))
+        pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", aliases.get(name, "")))
+    return selected
 
 
 def guarded(path: Path, text: str) -> bytes:

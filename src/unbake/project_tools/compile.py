@@ -51,7 +51,7 @@ def run(command: list[str], *, cwd: Path | None = None) -> bytes:
         result = subprocess.run(command, capture_output=True, cwd=cwd)
     if result.returncode:
         raise ValueError(
-            f"{command[0]} exited {result.returncode}: " + (result.stdout + result.stderr).decode(errors="replace")
+            f"{command[0]} exited {result.returncode}: " + (result.stderr or result.stdout).decode(errors="replace")
         )
     return result.stdout
 

@@ -146,3 +146,16 @@ class HeaderDeclarationsTests(unittest.TestCase):
         self.assertEqual(parsed.typedefs, {"TagAlias", "TagPointer", "ChoiceAlias"})
         self.assertEqual(parsed.uses, {"Field", "Payload"})
         self.assertEqual(parsed.exports, {"Tag", "Choice"})
+
+
+class DeclaredNamesTests(unittest.TestCase):
+    def test_file_scope_prototypes_and_globals_are_owned_without_extern(self):
+        for source, expected in (
+            ("void osCall(int);", {"osCall"}),
+            ("static int storage;", {"storage"}),
+            ("int alpha(void) {int local; return 1;}", {"alpha"}),
+            ("typedef int Word;", set()),
+            ("struct Record {int member;};", set()),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(declarations(source).declared, expected)

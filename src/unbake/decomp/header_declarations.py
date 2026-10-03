@@ -36,6 +36,7 @@ class Declarations:
     tags: set[str] = field(default_factory=set)
     complete_uses: set[str] = field(default_factory=set)
     complete_alias_uses: set[str] = field(default_factory=set)
+    declared: set[str] = field(default_factory=set)
 
 
 class Parser:
@@ -168,6 +169,8 @@ class Parser:
                 self.result.typedefs.add(name)
             elif external and "extern" in storage:
                 self.result.exports.add(name)
+            if external and "typedef" not in storage and name:
+                self.result.declared.add(name)
             if self.peek() in (":", "="):
                 self.take()
                 self.skip({",", ";"})
@@ -204,4 +207,5 @@ def declarations(source: str) -> Declarations:
         set(parsed.tags),
         set(parsed.complete_uses),
         set(parsed.complete_alias_uses),
+        set(parsed.declared),
     )

@@ -474,7 +474,7 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
         outcomes: list[tuple[Candidate, list[SymbolNeed] | str]] = []
         for candidate in members:
             if candidate.function in failures:
-                reason = failures[candidate.function].splitlines()[0][:300]
+                reason = failures[candidate.function].strip()
                 outcomes.append((candidate, f"submit.data_symbols: VERSION {version}: compile: {reason}"))
                 continue
             try:

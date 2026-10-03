@@ -17,7 +17,7 @@ from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
-from unbake.match import pool_literals, reporting, source_views, type_rewrite
+from unbake.match import imports, pool_literals, reporting, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
 
@@ -193,6 +193,7 @@ def fold_source(
     prove_headers: bool = True,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
+    text = imports.resolve(project, headers, text, function)
     text = pool_literals.lower(project, function, text, versions)
     parsers = source_views.parsers(project, policy, text, versions, headers)
     text, tag_only = _layout_names(project, policy, function, text, parsers, versions, headers)
@@ -216,6 +217,7 @@ def fold_source(
         include = destination.relative_to(project.include[0]).as_posix()
         if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', final, re.M):
             final = f'#include "{include}"\n' + final
+    final = imports.resolve(project, context, final, function, edits=tuple(edits))
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
         group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)

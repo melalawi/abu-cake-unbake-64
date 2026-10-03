@@ -189,7 +189,7 @@ def _run(command: list[str], root: Path) -> bytes:
         raise Held(
             "compile",
             f"{command[0]} exited {completed.returncode}: "
-            + (completed.stdout + completed.stderr).decode(errors="replace"),
+            + (completed.stderr or completed.stdout).decode(errors="replace"),
         )
     return completed.stdout
 
