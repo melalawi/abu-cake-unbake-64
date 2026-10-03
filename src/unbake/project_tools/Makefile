@@ -125,7 +125,7 @@ $(BUILD)/obj/src/%.built: $(SRC)/%.c | verify
 	python3 $(TOOLS)/atomic.py --touch $@
 
 $(BUILD)/obj/src/%.o: $(BUILD)/obj/src/%.built
-	@test -f $@
+	$(if $(realpath $@),,$(error HELD(compile): missing $@; remove $(@:.o=.built) and rebuild))
 
 $(BUILD)/obj/asm/%.built: $(ASM)/%.s | verify
 	@mkdir -p $(@D)
@@ -133,7 +133,7 @@ $(BUILD)/obj/asm/%.built: $(ASM)/%.s | verify
 	python3 $(TOOLS)/atomic.py --touch $@
 
 $(BUILD)/obj/asm/%.o: $(BUILD)/obj/asm/%.built
-	@test -f $@
+	$(if $(realpath $@),,$(error HELD(compile): missing $@; remove $(@:.o=.built) and rebuild))
 
 $(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin $(OBJCOPY) $(TOOLS)/atomic.py
 	@mkdir -p $(@D)
