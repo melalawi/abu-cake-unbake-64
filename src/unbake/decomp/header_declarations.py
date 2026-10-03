@@ -28,6 +28,33 @@ def declaration_source(source: str) -> str:
     return re.sub(r"^[ \t]*#(?:\\\n|[^\n])*", blank, source, flags=re.M)
 
 
+def attribute_source(source: str) -> str:
+    """Hide balanced GCC attribute clauses while preserving all source offsets."""
+    tokens = list(re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', source))
+    edits = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if token[0] not in ("__attribute__", "__attribute"):
+            continue
+        if index >= len(tokens) or tokens[index][0] != "(":
+            raise Held("m2c", "header declaration: expected ( after attribute")
+        depth = 0
+        while index < len(tokens):
+            end = tokens[index]
+            depth += (end[0] == "(") - (end[0] == ")")
+            index += 1
+            if not depth:
+                edits.append((token.start(), end.end()))
+                break
+        else:
+            raise Held("m2c", "header declaration: unclosed attribute")
+    for start, end in reversed(edits):
+        source = source[:start] + re.sub(r"[^\n]", " ", source[start:end]) + source[end:]
+    return source
+
+
 @dataclass
 class Declarations:
     typedefs: set[str] = field(default_factory=set)
@@ -48,7 +75,7 @@ class Parser:
     """
 
     def __init__(self, source: str) -> None:
-        source = re.sub(r"\\\n", "", declaration_source(source))
+        source = re.sub(r"\\\n", "", attribute_source(declaration_source(source)))
         self.tokens = re.findall(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S', source)
         self.index = 0
         self.result = Declarations()

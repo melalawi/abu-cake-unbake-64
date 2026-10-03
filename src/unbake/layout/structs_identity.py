@@ -72,6 +72,24 @@ class Index:
     def resolve(self, records: list[Layout], owner: str) -> dict[str, tuple[str, Layout]]:
         """Reuse an equal shared layout; a conflicting name takes its owning function and size."""
         names = ChainMap({name: item for item in records for name in (item.name, *item.aliases)}, self.names)
+        preferred: dict[str, set[str]] = {}
+
+        def pointees(local: tuple[Field, ...], shared: tuple[Field, ...]) -> None:
+            for field, target in zip(local, shared, strict=True):
+                left = re.findall(r"\b(?:struct|union)\s+(\w+)", field.type)
+                right = re.findall(r"\b(?:struct|union)\s+(\w+)", target.type)
+                for before, after in zip(left, right, strict=True):
+                    if before in names and after in self.names:
+                        preferred.setdefault(before, set()).add(after)
+                pointees(field.fields, target.fields)
+
+        # A reused parent fixes the C tag of each of its pointees. Choose that
+        # provider for an equal local child instead of an unrelated equal layout.
+        for item in records:
+            candidates = self.available.get(identity(item, names), [])
+            if candidates:
+                parent = min(candidates, key=lambda candidate: (candidate.name != item.name, candidate.name))
+                pointees(item.fields, parent.fields)
         occupied = set(self.names)
         result: dict[str, tuple[str, Layout]] = {}
         requested: dict[str, tuple[str, Layout]] = {}
@@ -79,7 +97,11 @@ class Index:
             key = identity(item, names)
             candidates = self.available.get(key, [])
             if candidates:
-                evidence = min(candidates, key=lambda candidate: (candidate.name != item.name, candidate.name))
+                choices = preferred.get(item.name, set())
+                evidence = min(
+                    candidates,
+                    key=lambda candidate: (candidate.name not in choices, candidate.name != item.name, candidate.name),
+                )
                 target = evidence.name
             elif key in requested:
                 target, evidence = requested[key]

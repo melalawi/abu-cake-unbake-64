@@ -18,6 +18,7 @@ from unbake.layout.structs_types import Aggregate
 from unbake.match import imports, pool_literals, reporting, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
+from unbake.typemap.header_names import alias_types, type_identity
 
 
 def preflight(project: Project, policy: Policy, pending: list[needs.Need]) -> list[Edit]:
@@ -46,7 +47,11 @@ def final_source(
     # typedef that older compilers reject. Retire compatible shared aliases as
     # well, preserving distinct aliases and pointer/array declarators.
     shared_parser = headers.parser()
+    shared_aliases = {name: type_ for value in headers.texts.values() for name, type_ in alias_types(value).items()}
     for parser in parsers:
+        local_aliases = dict(shared_aliases)
+        for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
+            local_aliases.update(alias_types(parser.source[start:end]))
         for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
             local = Parser(parser.source[start:end])
             if local.peek() != "typedef":
@@ -61,14 +66,23 @@ def final_source(
             retained = []
             for member in members:
                 target = headers.types.get(member.name)
-                if (
+                aggregate_match = (
                     isinstance(member.base, Aggregate)
                     and isinstance(target, tuple)
                     and isinstance(target[0], Aggregate)
                     and local.type_name(member.base, member.operations) == shared_parser.type_name(*target)
-                    and member.name in headers.homes
                     and not re.search(r"\b(?:const|volatile|restrict|__restrict)\b", member.declaration)
+                )
+                callback_match = False
+                if (
+                    member.name in shared_aliases
+                    and member.name in local_aliases
+                    and any(kind == "function" for kind, _ in member.operations)
                 ):
+                    callback_match = type_identity(local_aliases[member.name], local_aliases) == type_identity(
+                        shared_aliases[member.name], shared_aliases
+                    )
+                if member.name in headers.homes and (aggregate_match or callback_match):
                     alias_home = headers.homes[member.name]
                     includes.add(
                         next(

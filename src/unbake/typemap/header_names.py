@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
-from unbake.decomp.header_declarations import Parser, declaration_source
+from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
 from unbake.project.config import Held, Policy, Project
 
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
@@ -21,7 +22,7 @@ def placeholder(name: str) -> bool:
 class _Declarations(Parser):
     def __init__(self, source: str, replacements: dict[str, str] | None = None, blocked: set[str] | None = None):
         super().__init__(source)
-        self.matches = list(_TOKEN.finditer(declaration_source(source)))
+        self.matches = list(_TOKEN.finditer(attribute_source(declaration_source(source))))
         self.tokens = [match[0] for match in self.matches]
         self.source = source
         self.replacements = replacements or {}
@@ -148,6 +149,67 @@ def alias_types(source: str) -> dict[str, str]:
     except Held as error:
         raise Held("solve", f"types.header_parse: {error.reason}") from error
     return parser.alias_types
+
+
+def type_identity(type_: str, aliases: dict[str, str]) -> object:
+    """Compare declarator structure, not parameter names or typedef spelling."""
+    from pycparser import c_ast  # type: ignore[import-untyped]
+
+    from unbake.typemap.declarations import _SeededParser, canonical, declarator
+
+    def parse(spelling: str) -> Any:
+        parser = _SeededParser(dict.fromkeys(aliases, True))
+        return parser.parse("typedef " + declarator(spelling, "__type_identity") + ";").ext[0].type
+
+    def shape(node: Any, active: tuple[str, ...] = ()) -> object:
+        if isinstance(node, c_ast.TypeDecl):
+            return ("type", tuple(sorted(node.quals)), shape(node.type, active))
+        if isinstance(node, c_ast.IdentifierType):
+            name = " ".join(node.names)
+            if name in aliases and name not in active:
+                target = shape(parse(aliases[name]), (*active, name))
+                # TypeDecl is a declarator wrapper, not an extra type layer.
+                if isinstance(target, tuple) and target[0] == "type" and not target[1]:
+                    return target[2]
+                return target
+            words = node.names
+            if set(words) <= {"signed", "unsigned", "short", "long", "int"}:
+                width = "short" if "short" in words else "long " * words.count("long")
+                name = ("unsigned " if "unsigned" in words else "") + (width.strip() or "int")
+            return ("scalar", canonical(name, {}))
+        if isinstance(node, (c_ast.Struct, c_ast.Union, c_ast.Enum)):
+            return (type(node).__name__, node.name)
+        if isinstance(node, c_ast.PtrDecl):
+            return ("pointer", tuple(sorted(node.quals)), shape(node.type, active))
+        if isinstance(node, c_ast.ArrayDecl):
+            from pycparser import c_generator  # type: ignore[import-untyped]
+
+            return ("array", c_generator.CGenerator().visit(node.dim) if node.dim else "", shape(node.type, active))
+        if isinstance(node, c_ast.FuncDecl):
+            params = None if node.args is None else tuple(parameter(param, active) for param in node.args.params)
+            return ("function", shape(node.type, active), params)
+        if isinstance(node, c_ast.EllipsisParam):
+            return ("variadic",)
+        raise Held("solve", "types.header_parse: unsupported compatible declarator")
+
+    def parameter(node: Any, active: tuple[str, ...]) -> object:
+        if isinstance(node, c_ast.EllipsisParam):
+            return shape(node, active)
+        value = shape(node.type, active)
+        # C adjusts parameter arrays/functions to pointers and drops top-level qualifiers.
+        if isinstance(value, tuple):
+            if value[0] == "array":
+                return ("pointer", (), value[2])
+            if value[0] == "function":
+                return ("pointer", (), value)
+            if value[0] in ("type", "pointer"):
+                return (value[0], (), value[2])
+        return value
+
+    try:
+        return shape(parse(type_))
+    except Exception as error:
+        raise Held("solve", f"types.header_parse: compatible declarator: {error}") from error
 
 
 def resolve(type_: str, replacements: dict[str, str]) -> str:

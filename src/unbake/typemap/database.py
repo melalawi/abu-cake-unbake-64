@@ -143,6 +143,10 @@ def _render(
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
     authored_tags = {tag for text in components.values() for tag in header_declarations(text).tags}
+    authored_declarations: dict[str, set[Path]] = defaultdict(set)
+    for path, text in components.items():
+        for name in header_declarations(text).declared:
+            authored_declarations[name].add(path)
     provided = set(authored_aliases)
     generated = {
         name: record
@@ -335,6 +339,10 @@ def _render(
         homes = layout.required(
             selection, blocked=consumer_names.get(source, set()), blocked_tags=session.consumer_tags.get(source, set())
         )
+        if name in authored_declarations:
+            # Import the existing declaration provider instead of emitting a second signature.
+            homes.update(layout.homes[provider] for provider in authored_declarations[name])
+            text = ""
         outputs[path] = session.guarded(path, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
         declaration_headers.append(layout.include(path))
     outputs[root / "shared/prototypes.h"] = session.guarded(

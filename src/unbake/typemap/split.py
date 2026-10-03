@@ -57,7 +57,7 @@ class Layout:
         self.providers: dict[str, set[Path]] = {}
         self.tags: dict[str, set[Path]] = {}
         for path, row in self.parsed.items():
-            for name in row.typedefs | row.exports | evidence_exports.get(path, set()):
+            for name in row.typedefs | row.exports | row.declared | evidence_exports.get(path, set()):
                 self.providers.setdefault(name, set()).add(path)
             for name in row.tags:
                 self.tags.setdefault(name, set()).add(path)
@@ -204,7 +204,8 @@ def required_providers(
             selected.update(providers.get(name, set()))
         if name not in (blocked_tags or set()):
             selected.update(tags.get(name, set()))
-        pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", aliases.get(name, "")))
+        if name not in (blocked or set()):
+            pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", aliases.get(name, "")))
     return selected
 
 

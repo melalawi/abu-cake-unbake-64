@@ -14,6 +14,7 @@ from typing import Any
 from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
 
 from unbake.decomp.draft_context import ordered_headers
+from unbake.decomp.header_declarations import attribute_source
 from unbake.decomp.header_declarations import declarations as header_declarations
 from unbake.layout.structs_parser import Parser
 from unbake.project.config import Held, Policy, Project
@@ -77,20 +78,7 @@ def clean(source: str, *, line_markers: bool = False) -> str:
     source = re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S)
     source = re.sub(r"^\s*#(?!\s*\d+\s+\")[^\n]*" if line_markers else r"^\s*#[^\n]*", "", source, flags=re.M)
     source = re.sub(r"\b(?:__extension__|__inline__|__inline|__restrict|restrict)\b", "", source)
-    # Attributes can contain calls and strings: a non-greedy regex leaves the
-    # last ')' of section(".sdata") behind in otherwise valid declarations.
-    while match := re.search(r"\b__attribute__\s*\(", source):
-        level = 1
-        end = match.end()
-        for token in _C_TOKEN.finditer(source, end):
-            level += (token[0] == "(") - (token[0] == ")")
-            end = token.end()
-            if not level:
-                break
-        if level:
-            raise Held("solve", "types.declaration: unclosed attribute")
-        source = source[: match.start()] + re.sub(r"[^\n]", " ", source[match.start() : end]) + source[end:]
-    return source
+    return attribute_source(source)
 
 
 def headers(
