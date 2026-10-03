@@ -4,7 +4,8 @@ import argparse
 import tomllib
 from pathlib import Path
 
-from unbake.cli.common import Subparsers, receipt
+from unbake.cli.common import Subparsers, receipt, suggest
+from unbake.cli.guidance import command
 from unbake.project.config import Held, PendingProject
 
 
@@ -63,6 +64,7 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
         ):
             raise Held("setup", "setup.helper_refresh: refresh helpers separately from setup facts")
         setup.refresh_helpers(config.load(project.root))
+        suggest(command(project.root, "next"))
         return receipt("setup", ["pinned helpers and scoped recipes refreshed"])
     if args.compilers:
         policy = config.load_policy(args.policy, stage="setup")

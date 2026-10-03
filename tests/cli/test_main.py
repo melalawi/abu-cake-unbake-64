@@ -137,6 +137,7 @@ class MainTests(MainCase):
         self.assertNotIn("Traceback", error)
 
     def test_missing_phase_module_is_held(self) -> None:
+        cli.make_parser()
         original_import = builtins.__import__
 
         def import_module(

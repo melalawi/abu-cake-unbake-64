@@ -36,9 +36,11 @@ class HelperRefreshTests(unittest.TestCase):
             patch.object(setup, "refresh_helpers") as refresh,
             patch.object(setup, "refresh", side_effect=AssertionError("full setup proof")),
             patch.object(cli, "receipt", return_value=False),
+            patch.object(cli, "suggest") as suggest,
         ):
             self.assertFalse(cli.run(self.args(), project))
         refresh.assert_called_once_with(project)
+        suggest.assert_called_once_with(cli.command(project.root, "next"))
 
     def test_refresh_rejects_unready_or_conflicting_setup_options(self):
         cases = [
