@@ -228,9 +228,9 @@ def try_draft(
             variant_work.mkdir(exist_ok=True)
             candidate = variant_work / f"{function}.o"
             try:
-                error = compile_errors[name, index]
-                if error is not None:
-                    raise error
+                compile_error = compile_errors[name, index]
+                if compile_error is not None:
+                    raise compile_error
                 compiled = Object(candidate)
                 if not any(
                     symbol["name"] == function and symbol["section"] and symbol["info"] & 15 == 2

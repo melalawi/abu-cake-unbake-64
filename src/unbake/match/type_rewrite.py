@@ -93,7 +93,7 @@ def _encode(value: Any) -> Any:
 
 
 def _decode(value: Any) -> Any:
-    objects = []
+    objects: list[Any] = []
     for name, _ in value["records"]:
         cls = getattr(c_ast, name)
         if not isinstance(cls, type) or not issubclass(cls, c_ast.Node):
