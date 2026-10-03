@@ -16,6 +16,7 @@ from unbake.layout import split
 from unbake.project import build, makefile
 from unbake.project.config import Held, Policy, Project, load_policy
 from unbake.project.flow import WorkManifest
+from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
 
 
 def digest(content: bytes) -> str:
@@ -245,9 +246,19 @@ def compiler_identity(project: Project, policy: Policy, ident: str) -> str:
     """Hash the compiler's files and drivers, excluding other units' recipes."""
     compiler = project.compilers[ident]
     paths = {compiler.cc}
-    directory = project.tools / ident
-    paths.update(path for path in directory.rglob("*") if path.is_file())
-    drivers = ["compile.py", "elf.py", "cache.py", "host.py"]
+    groups: dict[str, dict[str, str]] = {}
+    for row in compiler.sha256.read_text().splitlines():
+        fields = row.split(maxsplit=1)
+        if len(fields) == 2 and not row.startswith("#"):
+            name = fields[1].lstrip("*")
+            groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
+    paths.update(
+        project.root / name
+        for name in selected_pins(
+            groups, compiler.cc.relative_to(project.root), project.tools.relative_to(project.root), compiler.kind
+        )
+    )
+    drivers = list(driver_names("cc", compiler.kind == "sn64"))
     settings: dict[str, Any] = {"kind": compiler.kind}
     if compiler.kind == "sn64":
         import abumasn64
@@ -260,7 +271,6 @@ def compiler_identity(project: Project, policy: Policy, ident: str) -> str:
             paths.add(path if path.is_absolute() else project.root / path)
         assert abumasn64.__file__ is not None
         paths.update(Path(abumasn64.__file__).parent.glob("*.py"))
-        drivers.extend(("sn64_cc.py", "resolve_external_branches.py"))
     paths.update(project.tools / name for name in drivers if (project.tools / name).is_file())
     paths.update(
         Path(makefile.__file__).with_name(name) if name == "cache.py" else makefile.TEMPLATES / name for name in drivers
@@ -290,7 +300,9 @@ def _identity(project: Project, paths: set[Path], settings: dict[str, Any]) -> s
                 "files": {
                     path.relative_to(project.root).as_posix()
                     if path.is_relative_to(project.root)
-                    else "host:" + path.parent.name + "/" + path.name: digest(path.read_bytes())
+                    else "host:" + path.parent.name + "/" + path.name: digest(
+                        driver_content(path) if path.suffix == ".py" else path.read_bytes()
+                    )
                     for path in sorted(paths)
                 },
             }

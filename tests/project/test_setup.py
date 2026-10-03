@@ -141,7 +141,7 @@ class SetupTests(unittest.TestCase):
         project, policy = fixture(self.root, "sn64", case=self)
         setup.run(project, policy)
         self.assertTrue((self.root / "tools/sn64_cc.py").is_file())
-        self.assertIn("from abumasn64.assemble import assemble", (self.root / "tools/compile.py").read_text())
+        self.assertIn("from abumasn64.assemble import assemble", (self.root / "tools/codegen.py").read_text())
 
     def test_setup_retires_only_manifest_owned_helpers_and_compiler_files(self) -> None:
         stale_helper = self.root / "tools/retired.py"

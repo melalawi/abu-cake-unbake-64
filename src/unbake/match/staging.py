@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,7 @@ from unbake.match.common import (
 )
 from unbake.project import build, makefile
 from unbake.project.config import Project
+from unbake.project_tools.compile_identity import driver_names, selected_pins
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
 _OUTPUTS = frozenset({".git", "artifacts", ".unbake", ".splat", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
@@ -182,16 +184,50 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
     keys, while Make avoids starting one interpreter per stale source receipt.
     """
     recipe = tools / "build.json"
-    drivers = tuple(tools.glob("*.py"))
-    inputs = [path for path in (recipe, *drivers) if path.is_file()]
-    if not inputs:
+    if not recipe.is_file():
         return
-    newest = max(path.stat().st_mtime_ns for path in inputs)
-    # Assembly also depends on the symbol list, which a batch rewrites for every unit.
-    assembly = max(newest, symbols.stat().st_mtime_ns) if symbols.is_file() else newest
-    for kind, limit in (("src", newest), ("asm", assembly)):
-        for receipt in (generation / "obj" / kind).rglob("*.built"):
-            if not receipt.is_symlink() and receipt.stat().st_mtime_ns < limit:
+    data = json.loads(recipe.read_text())
+    version = generation.name.rsplit(".", 1)[0]
+    groups: dict[str, dict[str, str]] = {}
+    manifest = tools / "compiler.sha256"
+    if manifest.is_file():
+        for row in manifest.read_text().splitlines():
+            fields = row.split(maxsplit=1)
+            if len(fields) == 2 and not row.startswith("#"):
+                name = fields[1].lstrip("*")
+                groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
+    root = tools.parent
+    independent_objects(generation)
+    for kind in ("src", "asm"):
+        base = generation / "obj" / kind
+        for receipt in base.rglob("*.built"):
+            if receipt.is_symlink():
+                continue
+            unit = receipt.relative_to(base).with_suffix("").as_posix()
+            ident = (
+                data["units"].get(Path(unit).stem, data["default_compiler"])
+                if kind == "src"
+                else data["assembly_compiler"]
+            )
+            compiler = data["compilers"][ident] if ident else None
+            sn64 = compiler is not None and compiler["kind"] == "sn64"
+            inputs = [
+                tools / "compile/drivers" / (name + ".sha256")
+                for name in driver_names("cc" if kind == "src" else "as", sn64)
+            ]
+            inputs.append(tools / "compile" / version / ((ident if kind == "src" else "assembly") + ".json"))
+            if kind == "src" and compiler:
+                cc = Path(compiler["cc"])
+                inputs.extend(
+                    root / name
+                    for name in {str(cc), *selected_pins(groups, cc, tools.relative_to(root), compiler["kind"])}
+                )
+                inputs.append(tools / "compile/units" / (unit + ".json"))
+            if sn64:
+                inputs.append(tools / "compile/drivers/abumasn64.sha256")
+            if kind == "asm" and sn64:
+                inputs.append(symbols)
+            if any(path.is_file() and path.stat().st_mtime_ns > receipt.stat().st_mtime_ns for path in inputs):
                 receipt.unlink()
 
 
@@ -233,9 +269,15 @@ def project_at(project: Project, tree: Path) -> Project:
 def helper_edits(project: Project) -> list[split.Edit]:
     """Stage current generated drivers with verified checksum replacements."""
     edits = []
-    for relative_path, content in makefile.helpers(project).items():
+    rendered = makefile.render(project)
+    for relative_path, content in rendered.items():
         path = project.root / relative_path
-        if path.suffix == ".py" and (before := path.read_text() if path.exists() else "") != content:
+        if (
+            path.suffix == ".py"
+            or path.is_relative_to(project.tools / "compile")
+            or path == project.root / "Makefile"
+            or path.name in {"link.json", "extract.json"}
+        ) and (before := path.read_text() if path.exists() else "") != content:
             edits.append(split.Edit(path, before, content, project.versions))
     if not edits:
         return []
@@ -243,6 +285,8 @@ def helper_edits(project: Project) -> list[split.Edit]:
     before_checksum = checksum.read_text()
     lines = before_checksum.splitlines(keepends=True)
     for edit in edits:
+        if edit.path == project.root / "Makefile":
+            continue
         name = edit.path.relative_to(project.root).as_posix()
         entries = [i for i, line in enumerate(lines) if line.strip().split(maxsplit=1)[1:] == [name]]
         if edit.path.exists():
@@ -261,6 +305,9 @@ def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
     edits = split_apply.coalesce(edits)
     configured = {
         project.root / "config.toml",
+        project.root / "Makefile",
+        project.tools / "link.json",
+        project.tools / "extract.json",
         project.root / "unbake-exclusions.json",
         project.tools / "build.json",
         project.tools / "compiler.sha256",
@@ -274,8 +321,10 @@ def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
     }
     for edit in edits:
         relative(project, edit.path)
-        if edit.path not in configured and not any(
-            edit.path.is_relative_to(root) for root in (project.src, *project.include)
+        if (
+            edit.path not in configured
+            and not edit.path.is_relative_to(project.tools / "compile")
+            and not any(edit.path.is_relative_to(root) for root in (project.src, *project.include))
         ):
             held(f"{edit.path}: outside publication inputs")
         if (edit.path.read_text() if edit.path.exists() else "") != edit.before:

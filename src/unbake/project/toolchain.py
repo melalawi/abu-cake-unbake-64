@@ -368,7 +368,10 @@ def _ensure(project: Project, policy: Policy | SetupPolicy, override: Path | Non
             if (
                 len(fields) == 2
                 and re.fullmatch(r"[0-9a-f]{64}", fields[0])
-                and Path(fields[1]).parent == tools_relative
+                and (
+                    Path(fields[1]).parent == tools_relative
+                    or Path(fields[1]).is_relative_to(tools_relative / "compile")
+                )
             ):
                 manifest.append(line + "\n")
     compiler_files.atomic_bytes(manifest_path, "".join(manifest).encode())

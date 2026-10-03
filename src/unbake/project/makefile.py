@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, overload
 
+from unbake.project.cache import key
 from unbake.project.config import Held, Policy, Project, SetupPolicy
+from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
 
 TEMPLATES = Path(__file__).parents[1] / "project_tools"
 
@@ -211,6 +213,7 @@ def helpers(project: Project) -> dict[str, str]:
         "extract.py",
         "compile.py",
         "compile_identity.py",
+        "codegen.py",
         "elf.py",
         "layout.py",
         "rodata.py",
@@ -241,7 +244,103 @@ def helpers(project: Project) -> dict[str, str]:
     )
     files[tools + "/cache.py"] = cache_source
     files[tools + "/build.json"] = json.dumps(description(project), sort_keys=True, indent=2) + "\n"
+    data = description(project)
+    files[tools + "/link.json"] = json.dumps({"resident_mappings": data["resident_mappings"]}, sort_keys=True) + "\n"
+    assembly = data["assembly_compiler"]
+    files[tools + "/extract.json"] = (
+        json.dumps(
+            {
+                "assembly_compiler": assembly,
+                "compilers": {assembly: {"kind": data["compilers"][assembly]["kind"]}} if assembly else {},
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    files.update(compile_settings(project))
     return files
+
+
+def compile_settings(project: Project) -> dict[str, str]:
+    """Publish content-stable prerequisites for each compiler, version and unit flags."""
+    data = description(project)
+    tools = relative(project, project.tools)
+    files = {}
+    for version, macros in data["macros"].items():
+        for ident, compiler in data["compilers"].items():
+            settings = dict(
+                compiler={key: value for key, value in compiler.items() if key != "as" or compiler["kind"] == "sn64"},
+                include=data["include"],
+                macros=macros,
+            )
+            if compiler["kind"] == "sn64":
+                settings.update(cpp=data["cpp"], cppflags=data["cppflags"], asflags=data["sn64_asflags"])
+            files[f"{tools}/compile/{version}/{ident}.json"] = json.dumps(settings, sort_keys=True) + "\n"
+        sn64 = data["assembly_compiler"] is not None and data["compilers"][data["assembly_compiler"]]["kind"] == "sn64"
+        settings = dict(asflags=data["asflags"], compiler=data["assembly_compiler"], assembler=data["as"])
+        if sn64:
+            compiler = data["compilers"][data["assembly_compiler"]]
+            settings.update(assembler=compiler["as"], cpp=data["cpp"])
+        files[f"{tools}/compile/{version}/assembly.json"] = json.dumps(settings, sort_keys=True) + "\n"
+    units = {path.relative_to(project.src).with_suffix("").as_posix() for path in project.src.rglob("*.c")}
+    units.update(data["units"])
+    units.update(name.removeprefix(data["src"] + "/").removesuffix(".c") for name in data["unit_cflags"])
+    for unit in sorted(units):
+        direct = data["unit_cflags"].get(data["src"] + "/" + unit + ".c")
+        flags = direct if direct is not None else data["unit_cflags"].get(Path(unit).stem, [])
+        settings = dict(compiler=data["units"].get(Path(unit).stem, data["default_compiler"]), flags=flags)
+        files[f"{tools}/compile/units/{unit}.json"] = json.dumps(settings, sort_keys=True) + "\n"
+    if any(compiler["kind"] == "sn64" for compiler in data["compilers"].values()):
+        import abumasn64
+
+        assert abumasn64.__file__ is not None
+        files[f"{tools}/compile/drivers/abumasn64.sha256"] = (
+            key(*(driver_content(path) for path in sorted(Path(abumasn64.__file__).parent.glob("*.py")))) + "\n"
+        )
+    for name in {name for kind in ("cc", "as") for sn64 in (False, True) for name in driver_names(kind, sn64)}:
+        files[f"{tools}/compile/drivers/{name}.sha256"] = key(driver_content(TEMPLATES / name)) + "\n"
+    return files
+
+
+def compile_rules(project: Project) -> str:
+    data = description(project)
+    tools = relative(project, project.tools)
+    manifest = project.tools / "compiler.sha256"
+    groups: dict[str, dict[str, str]] = {}
+    if manifest.is_file():
+        for row in manifest.read_text().splitlines():
+            fields = row.split(maxsplit=1)
+            if len(fields) == 2 and not row.startswith("#"):
+                name = fields[1].lstrip("*")
+                groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
+
+    def dependencies(ident: str | None, kind: str) -> str:
+        compiler = data["compilers"][ident] if ident else None
+        sn64 = compiler is not None and compiler["kind"] == "sn64"
+        inputs = [f"{tools}/compile/drivers/{name}.sha256" for name in driver_names(kind, sn64)]
+        inputs.append(f"{tools}/compile/$(VERSION)/{ident if kind == 'cc' else 'assembly'}.json")
+        if kind == "cc" and compiler:
+            cc = Path(compiler["cc"])
+            inputs.extend(sorted({str(cc), *selected_pins(groups, cc, Path(tools), compiler["kind"])}))
+        if sn64 and compiler:
+            inputs.extend(("$(call resolve-tool," + compiler["as"] + ")", f"{tools}/compile/drivers/abumasn64.sha256"))
+        elif kind == "as":
+            inputs.append("$(call resolve-tool," + data["as"] + ")")
+        if kind == "as" and sn64:
+            inputs.append("$(BUILD)/symbol-addresses.txt")
+        return " ".join(inputs)
+
+    overrides = " ".join("$(BUILD)/obj/src/" + unit + ".built" for unit in data["units"])
+    lines = [f"$(filter-out {overrides},$(C_OBJECTS:.o=.built)): {dependencies(data['default_compiler'], 'cc')}"]
+    for unit, ident in data["units"].items():
+        lines.append(f"$(BUILD)/obj/src/{unit}.built: {dependencies(ident, 'cc')}")
+    units = {path.relative_to(project.src).with_suffix("").as_posix() for path in project.src.rglob("*.c")}
+    units.update(data["units"])
+    units.update(name.removeprefix(data["src"] + "/").removesuffix(".c") for name in data["unit_cflags"])
+    for unit in sorted(units):
+        lines.append(f"$(BUILD)/obj/src/{unit}.built: {tools}/compile/units/{unit}.json")
+    lines.append(f"$(ASM_OBJECTS:.o=.built): {dependencies(data['assembly_compiler'], 'as')}")
+    return "\n".join(lines)
 
 
 def render(project: Project) -> dict[str, str]:
@@ -261,20 +360,7 @@ def render(project: Project) -> dict[str, str]:
         "LD": shell_words([host_tool(project, build.ld, "mips_ld")]),
         "OBJCOPY": shell_words([host_tool(project, build.objcopy, "mips_objcopy")]),
         "SPLAT": shell_words([host_tool(project, build.splat, "splat")]),
-        "DRIVERS": " ".join(
-            "$(TOOLS)/" + name
-            for name in (
-                ["compile.py", "compile_identity.py", "elf.py", "host.py", "atomic.py"]
-                + (
-                    [
-                        "sn64_cc.py",
-                        "resolve_external_branches.py",
-                    ]
-                    if any(c.kind == "sn64" for c in project.compilers.values())
-                    else []
-                )
-            )
-        ),
+        "COMPILE_RULES": compile_rules(project),
     }
     blocks = []
     for name in project.versions:
@@ -288,8 +374,8 @@ def render(project: Project) -> dict[str, str]:
 
     def fill(filename: str) -> str:
         content = (TEMPLATES / filename).read_text()
-        for key, value in values.items():
-            content = content.replace("@" + key + "@", value)
+        for placeholder, value in values.items():
+            content = content.replace("@" + placeholder + "@", value)
         return content
 
     files = helpers(project)

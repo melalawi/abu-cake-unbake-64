@@ -12,7 +12,7 @@ from unittest.mock import patch
 from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.project.cache import key
 from unbake.project_tools import compile
-from unbake.project_tools.compile_identity import LEGACY_DRIVER, OPTIMIZED_SHA256
+from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
 
 
 class CompileInputTests(unittest.TestCase):
@@ -66,19 +66,141 @@ class CompileInputTests(unittest.TestCase):
             self.assertEqual(updated["tools/cc"], {"tools/cc/cc1": "444"})
             self.assertEqual(read.call_count, 2)
 
-    def test_generated_driver_preserves_legacy_key_but_later_driver_edits_invalidate(self):
+    def test_driver_logic_ignores_comments_and_link_methods_but_binds_codegen(self):
         project, _ = fixture(self.root, case=self)
         write_rendered(project)
-        driver = project.tools / "compile.py"
-        elf = project.tools / "elf.py"
-        self.assertNotEqual(hashlib.sha256(driver.read_bytes()).hexdigest(), OPTIMIZED_SHA256)
-        expected = key(LEGACY_DRIVER.encode(), elf)
-        self.assertEqual(compile.tool_digest((driver, elf)), key(driver, elf))
-        self.assertNotEqual(compile.tool_digest((driver, elf)), expected)
-        driver.write_text(driver.read_text() + "\n# subsequent driver revision\n")
-        compile.tool_digest.cache_clear()
-        self.assertEqual(compile.tool_digest((driver, elf)), key(driver, elf))
-        self.assertNotEqual(compile.tool_digest((driver, elf)), expected)
+        for name, change, changed in (
+            ("codegen.py", lambda text: text + "\n# cache reporting change\n", False),
+            ("codegen.py", lambda text: text.replace("Byte-producing compile logic", "Updated documentation"), False),
+            (
+                "codegen.py",
+                lambda text: text.replace(
+                    "source_name = Path(args.unit).stem", 'source_name = "changed" + Path(args.unit).stem'
+                ),
+                True,
+            ),
+            ("elf.py", lambda text: text.replace("result = []", "result = [123]"), False),
+            ("elf.py", lambda text: text.replace('self.section(".text")', 'self.section(".data")'), True),
+        ):
+            with self.subTest(name=name, changed=changed):
+                driver = project.tools / name
+                original = driver.read_text()
+                expected = driver_content(driver)
+                driver.write_text(change(original))
+                self.assertEqual(driver_content(driver) != expected, changed)
+                driver.write_text(original)
+        for kind, sn64, expected in (
+            ("cc", False, ("codegen.py", "elf.py")),
+            ("as", False, ("codegen.py",)),
+            ("cc", True, ("codegen.py", "elf.py", "sn64_cc.py")),
+            ("as", True, ("codegen.py", "sn64_cc.py", "resolve_external_branches.py")),
+        ):
+            with self.subTest(kind=kind, sn64=sn64):
+                self.assertEqual(driver_names(kind, sn64), expected)
+
+    def test_selected_pins_exclude_helpers_and_other_compilers(self):
+        groups = {
+            "tools": {"tools/cc": "a", "tools/cache.py": "b", "tools/pool_slices.py": "c"},
+            "tools/ido": {"tools/ido/cc": "d"},
+            "tools/ido/lib": {"tools/ido/lib/cc1": "e"},
+            "tools/other": {"tools/other/cc": "f"},
+        }
+        for compiler, expected in (
+            ("tools/cc", {"tools/cc": "a"}),
+            ("tools/ido/cc", {"tools/ido/cc": "d", "tools/ido/lib/cc1": "e"}),
+            ("tools/missing", {}),
+        ):
+            with self.subTest(compiler=compiler):
+                self.assertEqual(selected_pins(groups, Path(compiler), Path("tools")), expected)
+
+    def test_ido_pins_exclude_other_languages_linkers_and_catalogs(self):
+        names = ("cc", "cfe", "uopt", "acpp", "upas", "edgcpfe", "c++filt", "ld", "crt1.o", "err.english.cc")
+        groups = {"tools/ido": {"tools/ido/" + name: name for name in names}}
+        self.assertEqual(
+            set(selected_pins(groups, Path("tools/ido/cc"), Path("tools"), "ido")),
+            {"tools/ido/" + name for name in ("cc", "cfe", "uopt", "acpp")},
+        )
+        direct = {"tools": {"tools/cc": "compiler", "tools/cache.py": "service"}}
+        self.assertEqual(selected_pins(direct, Path("tools/cc"), Path("tools").absolute()), {"tools/cc": "compiler"})
+
+    def test_object_key_tracks_only_byte_inputs(self):
+        self.addCleanup(os.chdir, Path.cwd())
+        os.chdir(self.root)
+        project, _ = fixture(self.root, case=self)
+        write_rendered(project)
+        source = project.src / "middle.c"
+        artifact = self.root / "cached.o"
+        artifact.write_bytes(b"object")
+        args = argparse.Namespace(
+            recipe=project.tools / "build.json",
+            source=source,
+            output=self.root / "result.o",
+            kind="cc",
+            version="us",
+            unit="src/middle.c",
+            non_matching="0",
+            depfile=None,
+            dep_target=None,
+            cache_root=self.root / "cache",
+        )
+        original = json.loads(args.recipe.read_text())
+        compiler_path = self.root / original["compilers"][original["default_compiler"]]["cc"]
+        compiler_content = compiler_path.read_bytes()
+        content = b"int same;"
+        with (
+            patch.object(compile, "run", side_effect=lambda *args, **kwargs: content),
+            patch.object(compile.Cache, "produce", return_value=artifact) as cached,
+        ):
+            compile.compile_object(args, original.copy())
+            baseline = cached.call_args.args[1]
+            cases = (
+                ("link helper", False),
+                ("cache service", False),
+                ("driver service", False),
+                ("manifest helper", False),
+                ("other compiler", False),
+                ("other unit flags", False),
+                ("codegen flags", True),
+                ("compiler binary", True),
+                ("preprocessed closure", True),
+            )
+            for change, changed in cases:
+                with self.subTest(change=change):
+                    data = json.loads(json.dumps(original))
+                    target = None
+                    previous = None
+                    if change in {"link helper", "cache service", "driver service"}:
+                        target = (
+                            project.tools
+                            / {
+                                "link helper": "pool_slices.py",
+                                "cache service": "cache.py",
+                                "driver service": "compile.py",
+                            }[change]
+                        )
+                        previous = target.read_bytes()
+                        target.write_bytes(previous + b"\n# changed service\n")
+                    elif change == "manifest helper":
+                        target = project.tools / "compiler.sha256"
+                        previous = target.read_bytes()
+                        target.write_bytes(previous + b"0" * 64 + b"  tools/cache.py\n")
+                    elif change == "other compiler":
+                        data["compilers"]["unselected"] = dict(kind="ido", cc="missing", cflags=["-O0"], **{"as": "as"})
+                    elif change == "other unit flags":
+                        data["unit_cflags"]["elsewhere"] = ["-O0"]
+                    elif change == "codegen flags":
+                        data["compilers"][data["default_compiler"]]["cflags"].append("-O1")
+                    elif change == "compiler binary":
+                        target, previous = compiler_path, compiler_content
+                        target.write_bytes(previous + b"\n# new binary\n")
+                    elif change == "preprocessed closure":
+                        content = b"int changed;"
+                    compile.tool_digest.cache_clear()
+                    compile.compile_object(args, data)
+                    self.assertEqual(cached.call_args.args[1] != baseline, changed)
+                    if target is not None:
+                        target.write_bytes(previous)
+                    content = b"int same;"
 
     def test_one_preprocessing_pass_preserves_dependency_evidence_for_each_compiler(self):
         project, _ = fixture(self.root, case=self)
@@ -146,14 +268,6 @@ class CompileInputTests(unittest.TestCase):
                 self.assertEqual(args.output.read_bytes(), artifact.read_bytes())
                 # Dependency collection must not rewrite the preprocessed cache input.
                 generation = ["-O2", *flags]
-                manifest = project.tools / "compiler.sha256"
-                selected = (
-                    compile.manifest_pins(manifest, compile.file_signature(manifest)).get(
-                        str(Path(compiler["cc"]).parent), {}
-                    )
-                    if manifest.is_file()
-                    else {}
-                )
                 assembler_flags, assembler_inputs = compile.assembly_inputs(
                     [
                         *(data["sn64_asflags"] if kind == "sn64" else data["asflags"]),
@@ -163,8 +277,8 @@ class CompileInputTests(unittest.TestCase):
                 expected_digest = key(
                     content,
                     "middle.i",
-                    json.dumps([selected, generation, assembler_flags], sort_keys=True),
+                    json.dumps([generation, assembler_flags if kind == "sn64" else []], sort_keys=True),
                     "unchanged-tools",
-                    *assembler_inputs,
+                    *(assembler_inputs if kind == "sn64" else []),
                 )
                 self.assertEqual(cached.call_args.args[1], expected_digest)

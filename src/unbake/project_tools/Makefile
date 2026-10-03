@@ -29,7 +29,9 @@ OBJCOPY = $(call resolve-tool,@OBJCOPY@)
 SPLAT = $(call resolve-tool,@SPLAT@)
 PINS := @PINS@
 RECIPE := $(TOOLS)/build.json
-DRIVERS := @DRIVERS@
+LINK_RECIPE := $(TOOLS)/link.json
+EXTRACT_RECIPE := $(TOOLS)/extract.json
+
 ifeq ($(strip $(VERSION)),)
 ifneq ($(origin BUILD),file)
 $(error HELD(build): BUILD requires VERSION)
@@ -83,9 +85,9 @@ endif
 ifeq ($(NON_MATCHING),1)
 $(BUILD)/.split.mk: $(wildcard $(SRC)/*.c)
 endif
-$(BUILD)/.split.mk: $(BASEROM) $(SPLIT) $(SYMBOLS) $(TOOLS)/extract.py $(TOOLS)/rodata.py $(RECIPE)
+$(BUILD)/.split.mk: $(BASEROM) $(SPLIT) $(SYMBOLS) $(TOOLS)/extract.py $(TOOLS)/rodata.py $(EXTRACT_RECIPE)
 	@mkdir -p $(BUILD)
-	python3 $(TOOLS)/extract.py --split $(SPLIT) --symbols $(SYMBOLS) --baserom $(BASEROM) --build $(BUILD) --asm $(ASM) --src $(SRC) --name @NAME@ --splat $(SPLAT) --recipe $(RECIPE) --non-matching $(NON_MATCHING)
+	python3 $(TOOLS)/extract.py --split $(SPLIT) --symbols $(SYMBOLS) --baserom $(BASEROM) --build $(BUILD) --asm $(ASM) --src $(SRC) --name @NAME@ --splat $(SPLAT) --recipe $(EXTRACT_RECIPE) --non-matching $(NON_MATCHING)
 
 $(BUILD)/.split: $(BUILD)/.split.mk
 	python3 $(TOOLS)/atomic.py --touch $@
@@ -93,11 +95,13 @@ $(BUILD)/.split: $(BUILD)/.split.mk
 $(LD_SCRIPT) $(LINK_SCRIPTS) $(BUILD)/symbol-addresses.txt $(BUILD)/unit-ranges.json: | $(BUILD)/.split
 	@test -f $@ || { printf '%s\n' 'HELD(extract): missing $@; remove $(BUILD)/.split.mk and make extract'; exit 1; }
 
+@COMPILE_RULES@
+
 # Group only missing receipts. Existing objects retain their individual rules,
 # including header dependency tracking and unchanged-object timestamp behavior.
 C_COLD := $(filter-out $(wildcard $(C_OBJECTS:.o=.built)),$(C_OBJECTS:.o=.built))
 define compile-chunk
-$(1) &: $(patsubst $(BUILD)/obj/src/%.built,$(SRC)/%.c,$(1)) $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.json | verify
+$(1) &: $(patsubst $(BUILD)/obj/src/%.built,$(SRC)/%.c,$(1)) | verify
 	python3 $(TOOLS)/compile.py --kind cc --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit batch --source $(SRC) --output $(BUILD)/obj/src --batch $(patsubst $(BUILD)/obj/src/%.built,$(SRC)/%.c,$(1))
 endef
 define compile-chunks
@@ -107,7 +111,7 @@ $(call compile-chunks,$(C_COLD))
 
 ASM_COLD := $(filter-out $(wildcard $(ASM_OBJECTS:.o=.built)),$(ASM_OBJECTS:.o=.built))
 define assemble-chunk
-$(1) &: $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1)) $(RECIPE) $(DRIVERS) $(BUILD)/symbol-addresses.txt | verify
+$(1) &: $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1)) | verify
 	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit batch --source $(ASM) --output $(BUILD)/obj/asm --symbols $(BUILD)/symbol-addresses.txt --batch $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1))
 endef
 define assemble-chunks
@@ -115,7 +119,7 @@ $(if $(strip $(1)),$(eval $(call assemble-chunk,$(wordlist 1,128,$(1))))$(call a
 endef
 $(call assemble-chunks,$(ASM_COLD))
 
-$(BUILD)/obj/src/%.built: $(SRC)/%.c $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.json | verify
+$(BUILD)/obj/src/%.built: $(SRC)/%.c | verify
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/compile.py --kind cc --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $(SRC)/$*.c --source $< --output $(@:.built=.o) --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/src/$*.built'
 	python3 $(TOOLS)/atomic.py --touch $@
@@ -123,7 +127,7 @@ $(BUILD)/obj/src/%.built: $(SRC)/%.c $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.j
 $(BUILD)/obj/src/%.o: $(BUILD)/obj/src/%.built
 	@test -f $@
 
-$(BUILD)/obj/asm/%.built: $(ASM)/%.s $(RECIPE) $(DRIVERS) $(BUILD)/symbol-addresses.txt | verify
+$(BUILD)/obj/asm/%.built: $(ASM)/%.s | verify
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $* --source $< --output $(@:.built=.o) --symbols $(BUILD)/symbol-addresses.txt --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/asm/$*.built'
 	python3 $(TOOLS)/atomic.py --touch $@
@@ -131,16 +135,16 @@ $(BUILD)/obj/asm/%.built: $(ASM)/%.s $(RECIPE) $(DRIVERS) $(BUILD)/symbol-addres
 $(BUILD)/obj/asm/%.o: $(BUILD)/obj/asm/%.built
 	@test -f $@
 
-$(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin
+$(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin $(OBJCOPY) $(TOOLS)/atomic.py
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/atomic.py --output $@ -- $(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
 
-$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py
+$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py $(TOOLS)/elf.py $(TOOLS)/atomic.py $(LINK_RECIPE) $(BASEROM) $(BUILD)/unit-ranges.json $(LD)
 	@mkdir -p $(@D)
-	python3 $(TOOLS)/layout.py --script $(LD_SCRIPT) --output $(BUILD)/@NAME@.link.ld --build $(BUILD) --ranges $(BUILD)/unit-ranges.json --recipe $(RECIPE) --version $(VERSION) --baserom $(BASEROM) --non-matching $(NON_MATCHING)
+	python3 $(TOOLS)/layout.py --script $(LD_SCRIPT) --output $(BUILD)/@NAME@.link.ld --build $(BUILD) --ranges $(BUILD)/unit-ranges.json --recipe $(LINK_RECIPE) --version $(VERSION) --baserom $(BASEROM) --non-matching $(NON_MATCHING)
 	cd $(BUILD) && LC_ALL=C python3 $(abspath $(TOOLS))/atomic.py --output @NAME@.elf --output @NAME@.map -- $(LD) $$(cat @NAME@.link.flags) -T @NAME@.link.ld $(addprefix -T ,$(abspath $(LINK_SCRIPTS))) -Map @NAME@.map -o @NAME@.elf $(patsubst $(BUILD)/%,%,$(OBJECTS))
 
-$(ROM): $(ELF)
+$(ROM): $(ELF) $(OBJCOPY) $(TOOLS)/atomic.py
 	python3 $(TOOLS)/atomic.py --output $@ -- $(OBJCOPY) -O binary --pad-to $(ROM_BYTES) $< $@
 
 clean:
