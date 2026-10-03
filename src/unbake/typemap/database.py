@@ -686,10 +686,11 @@ def validate_headers(
         for path, closure in closures.items():
             if path not in outputs:
                 continue
-            # Include-only indexes add no declarations. Their leaves carry the
-            # transitive validation keys; a leaf edit does not reparse the index.
+            # Include-only indexes add no declarations. Generated leaves carry
+            # their own validation keys, so the index observes only itself and
+            # the authored headers no generated leaf validates.
             body = re.sub(r"^[ \t]*#[^\n]*|/\*.*?\*/|//[^\n]*", "", contents[path].decode(), flags=re.M | re.S)
-            inputs = closure if body.strip() else {path}
+            inputs = closure if body.strip() else {path, *(dep for dep in closure if dep not in outputs)}
             content_key = key(
                 environment, version, str(path), *(part for dep in sorted(inputs) for part in (str(dep), digests[dep]))
             )
