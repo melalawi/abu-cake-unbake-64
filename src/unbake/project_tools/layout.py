@@ -5,12 +5,14 @@ import argparse
 import json
 import re
 import struct
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from unbake.project_tools.atomic import write
 from unbake.project_tools.elf import Object
 from unbake.project_tools.extract import publish
+from unbake.project_tools.link_inputs import Objects, Selectors, clone
 from unbake.project_tools.literal_layout import arrange, signed, storage
 from unbake.project_tools.pool_slices import Provider, link_pools, split_pool
 from unbake.project_tools.rodata import fragment, insert_fragment, placement, relocated
@@ -133,7 +135,8 @@ def resident_mappings(value: object) -> list[dict[str, int]]:
 def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices: list[dict[str, Any]]) -> list[str]:
     """Rehome only compiler-provided bytes; retain other owners in assembly."""
     original = obj
-    obj = Object(obj.path, data=bytes(obj.data))
+    if any(obj.sections[index][5] for index in (obj.section(".rdata"), obj.section(".rodata")) if index is not None):
+        obj = clone(obj)
     text = obj.section(".text")
     if text is None:
         raise ValueError("layout.pool_span: missing compiler text")
@@ -218,7 +221,7 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
             raise ValueError(f"layout.pool_bytes: {name}: compiler bytes disagree at 0x{address:08X}")
     if obj.data != original.data:
         write(obj.path, bytes(obj.data))
-        original.__dict__.update(Object(obj.path, data=bytes(obj.data)).__dict__)
+        original.__dict__.update(obj.__dict__)
     return sorted(sections)
 
 
@@ -257,28 +260,38 @@ def place(args: argparse.Namespace) -> None:
         row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
     inventory = resident_slices(pools, mappings) if pools else None
     faults: list[str] = []
-    for name in objects:
-        try:
-            script = place_object(
-                args,
-                name,
-                script,
-                intervals,
-                image,
-                mappings,
-                sections,
-                partial,
-                pools=pools,
-                providers=providers,
-                inventory=inventory,
-            )
-        except (OSError, ValueError, KeyError, struct.error) as error:
-            # Every failing object is named so one link attributes all culprits.
-            faults.append(f"{name}: {error}")
-    if faults:
-        raise ValueError("\n".join(faults))
-    if providers:
-        script = link_pools(args.build, script, pools, providers, image)
+    selectors = Selectors(script)
+    with Objects(args.build / ".elf-metadata.sqlite") as load:
+        load.prefetch(args.build / name for name in objects)
+        for name in objects:
+            try:
+                script = place_object(
+                    args,
+                    name,
+                    script,
+                    intervals,
+                    image,
+                    mappings,
+                    sections,
+                    partial,
+                    pools=pools,
+                    providers=providers,
+                    load=load,
+                    selectors=selectors,
+                    inventory=inventory,
+                )
+            except (OSError, ValueError, KeyError, struct.error) as error:
+                # Every failing object is named so one link attributes all culprits.
+                faults.append(f"{name}: {error}")
+        if faults:
+            raise ValueError("\n".join(faults))
+        script = selectors.apply(script)
+        if providers:
+            pool_objects = [
+                args.build / ("obj/asm/data/" + row["path"] + row.get("section", ".rodata") + ".o") for row in pools
+            ]
+            load.prefetch([*(args.build / provider.object for provider in providers), *pool_objects])
+            script = link_pools(args.build, script, pools, providers, image, load=load)
     script = insert_fragment(script, "\n".join(sections))
     publish(args.output, script.encode())
     publish(args.output.with_suffix(".flags"), b"--no-check-sections" if sections else b"")
@@ -328,11 +341,14 @@ def place_object(
     pools: list[dict[str, Any]] | None = None,
     providers: list[Provider] | None = None,
     inventory: list[dict[str, Any]] | None = None,
+    load: Callable[[Path], Object] = Object,
+    selectors: Selectors | None = None,
+    mapped_pools: bool = False,
 ) -> str:
     unit = Path(name).stem
     if unit not in intervals:
         raise ValueError(f"unit-ranges.{unit} missing")
-    obj = Object(args.build / name)
+    obj = load(args.build / name)
     if not any(
         obj.sections[index][5] for section in (".rdata", ".rodata") if (index := obj.section(section)) is not None
     ) and not any(re.fullmatch(r"\.unbake_pool_[0-9A-F]{8}", section) for section in obj.names):
@@ -372,7 +388,10 @@ def place_object(
             if base != local:
                 raise ValueError(f"local {section} placement disagrees with split row")
             if section == ".rdata":
-                script = re.sub(re.escape(name) + r"\s*\(\.rodata\)", name + "(.rdata)", script)
+                if selectors is None:
+                    script = re.sub(re.escape(name) + r"\s*\(\.rodata\)", name + "(.rdata)", script)
+                else:
+                    selectors.replace(name, ".rodata", ".rdata")
     if partial:
         for section in (".rdata", ".rodata"):
             index = obj.section(section)
@@ -381,7 +400,12 @@ def place_object(
                 sections.append(f"  .partial_{unit}_{section[1:]} : {{ {name}({section}) }}")
     else:
         for section in (".rdata", ".rodata"):
-            if re.search(re.escape(name) + r"\s*\(" + re.escape(section) + r"\)", script):
+            selected = (
+                selectors.contains(name, section)
+                if selectors is not None
+                else re.search(re.escape(name) + r"\s*\(" + re.escape(section) + r"\)", script) is not None
+            )
+            if selected:
                 continue
             base = resident(obj, intervals[unit], image, section, mappings)
             if base is not None:

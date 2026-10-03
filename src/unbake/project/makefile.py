@@ -217,6 +217,7 @@ def helper_sources(project: Project) -> dict[str, str]:
         "codegen.py",
         "elf.py",
         "layout.py",
+        "link_inputs.py",
         "rodata.py",
         "literal_layout.py",
         "pool_slices.py",

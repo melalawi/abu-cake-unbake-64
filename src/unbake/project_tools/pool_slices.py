@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import struct
+from bisect import bisect_left
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import pairwise
@@ -12,6 +13,7 @@ from typing import Any
 
 from unbake.project_tools.atomic import write
 from unbake.project_tools.elf import Object
+from unbake.project_tools.link_inputs import Selectors
 from unbake.project_tools.literal_layout import replace, signed
 from unbake.project_tools.rodata import relocated
 
@@ -271,6 +273,8 @@ def link_pools(
     rows: list[dict[str, Any]],
     providers: list[Provider],
     image: bytes,
+    *,
+    load: Callable[[Path], Object] = Object,
 ) -> str:
     """Select one provider per ROM byte, retaining assembly for every other byte.
 
@@ -283,7 +287,7 @@ def link_pools(
     extents: list[tuple[Provider, int, bytes]] = []
     for provider in sorted(providers, key=lambda p: (p.object, p.address, p.section)):
         if provider.object not in objects:
-            objects[provider.object] = Object(build / provider.object)
+            objects[provider.object] = load(build / provider.object)
             originals[provider.object] = bytes(objects[provider.object].data)
         obj = objects[provider.object]
         index = obj.section(provider.section)
@@ -291,10 +295,20 @@ def link_pools(
             raise ValueError(f"layout.pool_owner: missing {provider.object}({provider.section})")
         material = relocated(obj, provider.section, provider.text_address)
         extents.append((provider, index, material))
+    by_address = sorted((p.address, number) for number, (p, _, _) in enumerate(extents))
+    addresses = [address for address, _ in by_address]
+    inputs = Selectors(script)
     touched: set[int] = set()
     for row in sorted(rows, key=lambda r: (r["address"], r["path"])):
         base, end = row["address"], row["address"] + row["end"] - row["start"]
-        owners = [(p, i, data) for p, i, data in extents if base <= p.address < p.address + len(data) <= end]
+        candidates = sorted(
+            number for _, number in by_address[bisect_left(addresses, base) : bisect_left(addresses, end)]
+        )
+        owners = [
+            extents[number]
+            for number in candidates
+            if base <= extents[number][0].address < extents[number][0].address + len(extents[number][2]) <= end
+        ]
         if not owners:
             continue
         raw = image[row["start"] : row["end"]]
@@ -312,10 +326,9 @@ def link_pools(
                 )
         pool_section = row.get("section", ".rodata")
         pool = "obj/asm/data/" + row["path"] + pool_section + ".o"
-        pattern = re.escape(pool) + r"\s*\(" + re.escape(pool_section) + r"\)"
-        if len(re.findall(pattern, script)) != 1:
+        if inputs.counts[pool, pool_section] != 1:
             raise ValueError(f"layout.pool_span: {row['path']}: expected one load selector")
-        assembly = Object(build / pool)
+        assembly = load(build / pool)
         asm_index = assembly.section(pool_section)
         if asm_index is None or assembly.content(asm_index) != raw:
             raise ValueError(f"layout.pool_bytes: {pool}: assembly bytes disagree at 0x{base:08X}")
@@ -338,7 +351,7 @@ def link_pools(
             origin = selected.address if selected else base
             name = piece(obj, index, start - origin, stop - origin, start)
             selectors.append((selected.object if selected else remainder) + "(" + name + ")")
-        script = re.sub(pattern, "; ".join(selectors), script)
+        inputs.substitute(pool, pool_section, "; ".join(selectors))
         if any(p is None for _, _, p, _ in runs):
             absolute_pool(assembly, asm_index, base)
             objects[remainder] = assembly
@@ -347,6 +360,11 @@ def link_pools(
     for provider, index, _ in extents:
         absolute_pool(objects[provider.object], index, provider.address)
     for name, obj in sorted(objects.items()):
-        if bytes(obj.data) != originals.get(name):
-            write(build / name, bytes(obj.data))
-    return script
+        material = bytes(obj.data)
+        path = build / name
+        before = originals.get(name)
+        if before is None and path.is_file():
+            before = path.read_bytes()
+        if material != before:
+            write(path, material)
+    return inputs.apply(script)

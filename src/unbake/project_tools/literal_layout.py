@@ -48,6 +48,7 @@ def arrange(
     emitted byte must belong to a proved reference. The resulting object remains
     an ordinary relocatable ELF with its original symbols and relocation kinds.
     """
+    original_data = bytes(obj.data) if persist else None
     index, text = obj.section(section), obj.section(".text")
     if index is None or text is None:
         raise ValueError(f"{section}: missing constant or text section")
@@ -226,7 +227,9 @@ def arrange(
     if obj.path.is_symlink():
         raise ValueError(f"{obj.path}: cannot rewrite a symlink object")
     if persist:
-        write(obj.path, bytes(obj.data))
+        material = bytes(obj.data)
+        if material != original_data:
+            write(obj.path, material)
     return base
 
 
@@ -236,6 +239,8 @@ def signed(word: int) -> int:
 
 def replace(obj: Object, index: int, data: bytes | bytearray) -> None:
     """Append replacement contents without disturbing other ELF offsets."""
+    if obj.content(index) == data:
+        return
     obj.data.extend(bytes(-len(obj.data) % 4))
     obj.sections[index][4:6] = [len(obj.data), len(data)]
     obj.data.extend(data)
