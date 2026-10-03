@@ -14,7 +14,6 @@ import hashlib
 import json
 import re
 import shutil
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -39,8 +38,8 @@ from unbake.match import (
     staging,
 )
 from unbake.match.common import atomic, held
-from unbake.match.publication import collect, swap
-from unbake.project import build, compiler_choice, config, makefile
+from unbake.match.publication import swap
+from unbake.project import build, compiler_choice, config, makefile, workspace
 from unbake.project.config import Held, Policy, Project
 from unbake.report import progress
 
@@ -79,15 +78,15 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
     if not candidates:
         return receipts
     project.build.mkdir(parents=True, exist_ok=True)
-    workspace = Path(tempfile.mkdtemp(prefix="submit-", dir=project.build))
-    try:
+    with workspace.temporary(project, prefix="submit-", directory=project.build) as temporary:
+        work = Path(temporary)
         with ExitStack() as holds:
             current: dict[str, Path] = {}
             with build.lock(project):
                 for version in project.versions:
                     current[version] = holds.enter_context(build.pin(build.current_generation(project, version)))
             with reporting.phase("stage"):
-                tree = workspace / "tree"
+                tree = work / "tree"
                 staging.copy_tree(project, project.root, tree, skip=("docs",), assembly=False)
                 local_policy = project.tools / "clone-policy.toml"
                 if local_policy.is_file():
@@ -176,10 +175,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             receipts.extend(f"OK(submit): {version}: {line}" for version, line in sha1.items())
             with reporting.phase("type_feedback", sources=len(candidates)):
                 receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
-        collect(project)
         return receipts
-    finally:
-        shutil.rmtree(workspace, ignore_errors=True)
 
 
 class _Inputs:

@@ -11,11 +11,20 @@ import tempfile
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from unbake.project import build, compiler_files, config, hygiene, makefile, setup_config, setup_proof, toolchain
+from unbake.project import (
+    build,
+    compiler_files,
+    config,
+    hygiene,
+    makefile,
+    setup_config,
+    setup_proof,
+    toolchain,
+    workspace,
+)
 from unbake.project.config import Held, PendingProject, Policy, Project, SetupPolicy
 from unbake.project_tools.host import resolve_tool
 
@@ -201,6 +210,8 @@ def _inputs(project: PendingProject | Project) -> dict[str, str]:
 # Setup evidence is regenerable build output, never part of the game repository.
 _EVIDENCE = "build/setup"
 _RETIRED_EVIDENCE = "docs/setup/"
+# Review proposals are recomputed, never inputs to another setup transaction.
+_TRANSIENT_EVIDENCE = frozenset({"symbol-proposal.json", "join-proposal.json", "proposal.json"})
 
 
 def _retired_evidence(relative: str) -> bool:
@@ -212,7 +223,7 @@ def _copy_inputs(project: PendingProject | Project, tree: Path, fingerprint: dic
     evidence = project.build / "setup"
     if evidence.is_dir():
         for path in evidence.iterdir():
-            if path.is_file():
+            if path.is_file() and path.name not in _TRANSIENT_EVIDENCE:
                 destination = tree / _EVIDENCE / path.name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, destination)
@@ -476,6 +487,7 @@ def _publish(
                 destination = project.build / f"{version}.{number}"
                 os.replace(staged.build_link(version).resolve(strict=True), destination)
                 moved.append(destination)
+                (destination / ".inuse").touch(exist_ok=True)
                 # Extraction dependencies normally use project-relative paths.
                 # Relocate explicit temporary paths in generated text receipts.
                 if not relocated_generations:
@@ -609,7 +621,7 @@ def prepare_setup(
     fingerprint = _inputs(project)
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="proof-", dir=directory) as temporary:
+    with workspace.temporary(project, prefix="proof-", directory=directory) as temporary:
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
         _layout_inputs(project, census, layout, tree)
@@ -651,9 +663,17 @@ def prepare_setup(
                 "typedef float f32;\ntypedef double f64;\n#endif\n",
             )
         del census, layout, proposal
-        yield partial(
-            _prove_publish, project, tree, policy, fingerprint, fresh=True, supply=supply, before_publish=guard
-        )
+        def prove() -> list[str]:
+            result = _prove_publish(
+                project, tree, policy, fingerprint, fresh=True, supply=supply, before_publish=guard
+            )
+            # compiler.json and confirmation.json hold the published receipt.
+            # Do not delete a proposal from an intervening planning command.
+            if accepted_path.is_file() and compiler_files.sha(accepted_path) == accepted_sha256:
+                accepted_path.unlink()
+            return result
+
+        yield prove
 
 
 def complete_setup(
@@ -681,7 +701,7 @@ def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None
     fingerprint = _inputs(project)
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="proof-", dir=directory) as temporary:
+    with workspace.temporary(project, prefix="proof-", directory=directory) as temporary:
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
         (tree / "config.toml").write_text(configured)

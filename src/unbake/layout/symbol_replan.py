@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import re
-import tempfile
 from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
@@ -16,7 +15,7 @@ import toml  # type: ignore[import-untyped]
 from unbake.cli.common import suggest
 from unbake.layout import planner, port, split, symbol_identity, symbol_proof
 from unbake.layout.symbol_identity import similarity_distribution
-from unbake.project import setup
+from unbake.project import setup, workspace
 from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import load
@@ -164,7 +163,7 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None) -> list[str]
     token = planner.digest([inputs, report])
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "symbol-proposal.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    (directory / "symbol-proposal.json").write_text(json.dumps(report, separators=(",", ":"), sort_keys=True) + "\n")
     print(
         f"OK(setup): symbol items {report['old_items']} -> {report['new_items']}; "
         f"{len(report['placements'])} placement names change; "
@@ -179,6 +178,7 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None) -> list[str]
     if confirm != token:
         raise Held("setup", "setup.symbol_proposal_stale: symbol proposal or project inputs changed")
     if not replacements and not report["data_symbols"]["objects"]:
+        (directory / "symbol-proposal.json").unlink(missing_ok=True)
         return ["symbol names unchanged"]
     data_changes = report.get("data_symbols", {}).get("renames", {})
     changed_data = {old for local in data_changes.values() for old in local}
@@ -194,7 +194,9 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None) -> list[str]
                 f"setup.symbol_authored_source: {source.relative_to(project.root)}: "
                 "changed identities require reviewed C before replanning",
             )
-    return publish(project, policy, replacements, report, inputs)
+    result = publish(project, policy, replacements, report, inputs)
+    (directory / "symbol-proposal.json").unlink(missing_ok=True)
+    return result
 
 
 def publish(
@@ -219,7 +221,7 @@ def publish(
         data["units"] = dict(sorted(units.items()))
     # Data identities rebind addresses per version, which only the full proof covers.
     fast = symbol_proof.available(project, replacements) and not report.get("data_symbols", {}).get("renames")
-    with tempfile.TemporaryDirectory(prefix="symbol-proof-", dir=directory) as temporary:
+    with workspace.temporary(project, prefix="symbol-proof-", directory=directory) as temporary:
         tree = Path(temporary) / "tree"
         setup._copy_inputs(project, tree, inputs)
         for v in project.versions:

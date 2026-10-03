@@ -10,6 +10,7 @@ from pathlib import Path
 from unbake.cli import (
     check,
     clone,
+    collect,
     common,
     decomp,
     guidance,
@@ -43,6 +44,7 @@ def make_parser() -> argparse.ArgumentParser:
         report,
         check,
         clone,
+        collect,
         rodata,
         draft,
         trial,
@@ -71,6 +73,7 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
         "solve": solve.run,
         "rodata": rodata.run,
         "clone": clone.run,
+        "collect": collect.run,
         "split": split.run,
         "report": report.run,
         "check": check.run,

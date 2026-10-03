@@ -1,5 +1,6 @@
 """Disjoint private pools replace exactly one load selector per slice."""
 
+import os
 import struct
 import tempfile
 import unittest
@@ -38,7 +39,12 @@ class PoolSliceTests(unittest.TestCase):
                 )
                 image[0x40:0x44] = bytes.fromhex("3f800000")
                 slices = [dict(start=0x40, end=0x44, address=address, path=f"rodata/{name}/{address:08X}")]
+                shared = obj.path.with_suffix(".shared")
+                os.link(obj.path, shared)
+                original = shared.read_bytes()
                 sections = transfer_private(obj, dict(start=0x20, end=0x38, address=text_address), bytes(image), slices)
+                self.assertEqual(shared.read_bytes(), original)
+                self.assertNotEqual(shared.stat().st_ino, obj.path.stat().st_ino)
                 rebuilt = Object(obj.path)
                 for sym_index, symbols in rebuilt.symbols.items():
                     first = rebuilt.sections[sym_index][7]

@@ -26,7 +26,7 @@ def encoded(value: object) -> bytes:
             return str(item)
         raise TypeError(f"unsupported proposal input {type(item).__name__}")
 
-    return (json.dumps(value, indent=2, sort_keys=True, default=serialize) + "\n").encode()
+    return (json.dumps(value, separators=(",", ":"), sort_keys=True, default=serialize) + "\n").encode()
 
 
 def digest(value: object) -> str:

@@ -1,5 +1,6 @@
 """Compiler literals can occupy a shared pool without source alignment tricks."""
 
+import os
 import struct
 import tempfile
 import unittest
@@ -41,8 +42,13 @@ class LiteralLayoutTests(unittest.TestCase):
                 return raw[address - 0x80003000 : address - 0x80003000 + size]
 
             target = {0: 0x3C088000, 4: 0x3C098000, 8: 0xC5003000, 12: 0xC5223004}
+            shared = obj.path.with_suffix(".shared")
+            os.link(obj.path, shared)
+            original = shared.read_bytes()
             self.assertEqual(arrange(obj, ".rdata", target, 0x80002000, read), 0x80003000)
             self.assertEqual(relocated(Object(obj.path), ".rdata", 0x80002000), raw)
+            self.assertEqual(shared.read_bytes(), original)
+            self.assertNotEqual(shared.stat().st_ino, obj.path.stat().st_ino)
 
     def anchored(self, values: list[tuple[int, bytes]], *, external: bool = True) -> None:
         with tempfile.TemporaryDirectory() as temporary:

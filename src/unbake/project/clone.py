@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -35,7 +37,9 @@ def require(path: Path, *, directory: bool = False) -> None:
         raise Held("clone", f"{path}: missing {'directory' if directory else 'file'}")
 
 
-def copy_regular(source: Path, destination: Path, ancestors: frozenset[Path] = frozenset()) -> None:
+def copy_regular(
+    source: Path, destination: Path, ancestors: frozenset[Path] = frozenset(), *, immutable_objects: bool = False
+) -> None:
     """Copy durable inputs from pinned link targets without destination links."""
     # Children enumerated from a pinned physical directory need only resolve
     # their own links, rather than walking every ancestor again.
@@ -44,7 +48,9 @@ def copy_regular(source: Path, destination: Path, ancestors: frozenset[Path] = f
         raise Held("clone", f"{source}: cyclic directory link")
     if destination.is_symlink():
         destination.unlink()
-    if resolved.is_dir():
+    if resolved.is_dir() and immutable_objects:
+        copy_generation(resolved, destination, ancestors)
+    elif resolved.is_dir():
         if destination.exists() and not destination.is_dir():
             destination.unlink()
         destination.mkdir(parents=True, exist_ok=True)
@@ -58,12 +64,64 @@ def copy_regular(source: Path, destination: Path, ancestors: frozenset[Path] = f
                 continue
             if child.name.endswith(".partial") or child.name in {"__pycache__", ".inuse"}:
                 continue
-            copy_regular(child, destination / child.name, ancestors | {resolved})
+            copy_regular(child, destination / child.name, ancestors | {resolved}, immutable_objects=immutable_objects)
         shutil.copystat(resolved, destination)
     else:
         require(resolved)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(resolved, destination)
+        copy_reflink(
+            resolved, destination,
+            immutable=immutable_objects and resolved.suffix == ".o" and "assets" not in resolved.parts,
+        )
+
+
+def copy_generation(source: Path, destination: Path, ancestors: frozenset[Path]) -> None:
+    """Materialize a pinned generation without repeating file path checks."""
+    destination.mkdir(parents=True, exist_ok=True)
+    ancestors = ancestors | {source}
+    with os.scandir(source) as entries:
+        for entry in entries:
+            name = entry.name
+            if name == ".inuse" or name == "__pycache__" or name.endswith(".partial"):
+                continue
+            if name.startswith((".extract-", ".object-", ".input-", ".compile-")) and name != ".extract-key":
+                continue
+            target = destination / name
+            path = Path(entry.path)
+            if entry.is_symlink():
+                copy_regular(path, target, ancestors, immutable_objects=True)
+            elif entry.is_dir():
+                copy_generation(path, target, ancestors)
+            else:
+                copy_reflink(path, target, immutable=name.endswith(".o") and "assets" not in path.parts)
+    shutil.copystat(source, destination)
+
+
+_reflink_available = True
+
+
+def copy_reflink(source: Path, destination: Path, *, immutable: bool = False) -> None:
+    """Share atomically replaced objects; use copy on write for other files."""
+    global _reflink_available
+    if immutable:
+        # Compile and layout publish .o through .partial + replace. Binary
+        # asset objects use objcopy in place and are deliberately excluded.
+        try:
+            os.link(source, destination)
+            return
+        except OSError:
+            pass
+    if _reflink_available:
+        try:
+            with source.open("rb") as original, destination.open("wb") as target:
+                fcntl.ioctl(target.fileno(), 0x40049409, original.fileno())
+        except OSError as error:
+            if error.errno in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTTY, errno.EXDEV}:
+                _reflink_available = False
+            shutil.copyfile(source, destination)
+        shutil.copystat(source, destination)
+    else:
+        shutil.copy2(source, destination)
 
 
 def git(root: Path, *arguments: str) -> bytes:
@@ -102,6 +160,39 @@ def refresh_checksums(project: Project) -> None:
     manifest.write_text("".join(rows))
 
 
+def copy_evidence(project: Project, cloned: Project) -> None:
+    """Carry published setup inputs without scratch or in-memory JSON trees."""
+    directory = project.build / "setup"
+    if not directory.is_dir():
+        return
+    for path in directory.iterdir():
+        if not path.is_file() or path.name in setup._TRANSIENT_EVIDENCE or path.name == ".inuse":
+            continue
+        if path.name.endswith(".partial"):
+            continue
+        target = cloned.build / "setup" / path.name
+        copy_regular(path, target)
+        if path.name == "layout.json":
+            # Workspace UUIDs have equal length. Rebind the identity without
+            # decoding a potentially huge correspondence/layout document.
+            old, new = project.workspace_id.encode(), cloned.workspace_id.encode()
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".identity-", delete=False) as stream:
+                temporary = Path(stream.name)
+            try:
+                with target.open("rb") as original, temporary.open("wb") as output:
+                    pending = b""
+                    while block := original.read(1024 * 1024):
+                        pending = (pending + block).replace(old, new)
+                        boundary = max(0, len(pending) - len(old) + 1)
+                        output.write(pending[:boundary])
+                        pending = pending[boundary:]
+                    output.write(pending.replace(old, new))
+                shutil.copystat(target, temporary)
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+
 def create(project: Project, policy: Policy, destination: Path, versions: Sequence[str]) -> Project:
     """Publish only a ready checkout; pin warm source generations through the copy."""
     destination = destination.expanduser().absolute()
@@ -118,13 +209,12 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
         raise Held("clone", "--version: duplicate VERSION")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with ExitStack() as pins:
-        with build.lock(project):
-            generations = {}
-            for name in versions:
-                generation = build.current_generation(project, name)
-                if generation.parent != project.build or not re.fullmatch(re.escape(name) + r"\.\d+", generation.name):
-                    raise Held("clone", f"{generation}: required build/{name}.N generation")
-                generations[name] = pins.enter_context(build.pin(generation))
+        generations = {}
+        for name in versions:
+            generation = pins.enter_context(build.pin_current(project, name))
+            if generation.parent != project.build or not re.fullmatch(re.escape(name) + r"\.\d+", generation.name):
+                raise Held("clone", f"{generation}: required build/{name}.N generation")
+            generations[name] = generation
         with tempfile.TemporaryDirectory(prefix=".clone-", dir=destination.parent) as temporary:
             stage = Path(temporary) / "project"
             cloned = _create(project, policy, stage, versions, generations)
@@ -142,7 +232,7 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
 def _create(
     project: Project, policy: Policy, destination: Path, versions: Sequence[str], generations: dict[str, Path]
 ) -> Project:
-    """Clone Git history, then copy live build inputs and receipts without hardlinks."""
+    """Clone Git history, then reflink live build inputs and receipts."""
     destination = destination.expanduser().absolute()
     if any(path.is_symlink() for path in (destination, *destination.parents)):
         raise Held("clone", f"{destination}: destination has a symlink component")
@@ -166,7 +256,8 @@ def _create(
         for path in (version.baserom, version.split, version.symbols):
             project_relative(project, path)
             require(path)
-        actual = hashlib.sha1(version.baserom.read_bytes()).hexdigest()
+        with version.baserom.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha1").hexdigest()
         if actual != version.baserom_sha1:
             raise Held("clone", f"{version.baserom}: sha1 expected {version.baserom_sha1}, found {actual}")
         generation = generations[name]
@@ -206,7 +297,9 @@ def _create(
         for path in (version.baserom, version.split.parent, version.symbols, project.asm / name):
             copy_regular(path, destination / project_relative(project, path))
         target = destination / project.build.relative_to(project.root) / generation.name
-        copy_regular(generation, target)
+        copy_regular(generation, target, immutable_objects=True)
+        (target / ".inuse").touch()
+        shutil.copystat(generation, target)
         link = destination / project.build.relative_to(project.root) / name
         if link.is_symlink():
             link.unlink()
@@ -222,6 +315,7 @@ def _create(
         raise Held("clone", "workspace.id: required one explicit workspace identity")
     config_path.write_text(text)
     cloned = config.load(destination)
+    copy_evidence(project, cloned)
     for path in (cloned.src, cloned.tools, cloned.asm, *cloned.include):
         project_relative(cloned, path)
     policy_path = cloned.tools / "clone-policy.toml"
@@ -234,14 +328,23 @@ def _create(
     for generation in generations.values():
         graph = destination / project.build.relative_to(project.root) / generation.name / ".split.mk"
         original_stat = graph.stat()
-        graph.write_bytes(
-            (
-                f"export UNBAKE_POLICY := $(abspath {local_policy})\n"
-                "DRIVERS := $(filter-out $(TOOLS)/cache.py,$(DRIVERS))\n"
-            ).encode()
-            + graph.read_bytes()
-        )
+        with tempfile.NamedTemporaryFile(dir=graph.parent, prefix=".graph-", delete=False) as output:
+            temporary = Path(output.name)
+        try:
+            with temporary.open("wb") as output, graph.open("rb") as original:
+                output.write(
+                    (
+                        f"export UNBAKE_POLICY := $(abspath {local_policy})\n"
+                        "DRIVERS := $(filter-out $(TOOLS)/cache.py,$(DRIVERS))\n"
+                    ).encode()
+                )
+                shutil.copyfileobj(original, output)
+            shutil.copystat(graph, temporary)
+            temporary.replace(graph)
+        finally:
+            temporary.unlink(missing_ok=True)
         os.utime(graph, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        shutil.copystat(generation, graph.parent)
     local = destination / ".unbake"
     local.mkdir(exist_ok=True)
     # Operators can source this environment for setup, clean builds and CLI use.
@@ -266,8 +369,23 @@ def prepare(project: Project, policy: Policy) -> bool:
             path = project.tools / ident / name
             if not path.is_file() or compiler_files.sha(path) != pin:
                 changed = True
-    toolchain.ensure(project, policy)
-    setup.publish_files(project, makefile.helpers(project))
+    if changed:
+        toolchain.ensure(project, policy)
+    helpers = makefile.helpers(project)
+    # Retain the proved helpers and their timestamps in a complete warm copy.
+    # A partial compiler/tool fixture still needs its missing build drivers.
+    if any(not (project.root / name).is_file() for name in helpers):
+        setup.publish_files(project, helpers)
+    else:
+        # Older warm projects rewrote literal/pool objects in place. Upgrade
+        # those writers before a clone can modify a shared published object.
+        # Byte-equivalent rewrites do not invalidate the warm build receipts.
+        for name in ("literal_layout.py", "pool_slices.py"):
+            path = project.tools / name
+            original_stat = path.stat()
+            content = helpers[project_relative(project, path).as_posix()].encode()
+            compiler_files.atomic_bytes(path, content, mode=original_stat.st_mode & 0o777)
+            os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
     return changed
 
 

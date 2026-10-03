@@ -155,6 +155,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.assertEqual(set(attribution[-1]["culprits"]), bad)
         self.assertFalse(proofs[-1]["failures"])
         self.assertIn(": OK", self.make())
+        self.assertFalse(list(self.project.build.glob("submit-*")))
 
     def test_three_bad_objects_in_32_publish_29_in_two_proofs(self):
         # Projects retain generated helpers from setup. A submit must stage
@@ -222,6 +223,7 @@ class BatchPublicationCliTests(unittest.TestCase):
             self.assertIn(f"HELD(match): {name}:", stream.getvalue())
         self.assertEqual(len([row for row in self.evidence() if row["event"] == "proof"]), 1)
         self.assertFalse(list(self.project.src.glob("*.c")))
+        self.assertFalse(list(self.project.build.glob("submit-*")))
 
     def test_compile_binding_and_byte_faults_share_one_proof_even_after_full_build(self):
         for fallback in (False, True):

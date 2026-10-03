@@ -479,6 +479,8 @@ class SetupTransactionTests(unittest.TestCase):
         guard.return_value.assert_called_once_with()
         self.assertEqual(confirmation.call_args.kwargs["confirm"], token)
         self.assertEqual((self.root / "build/setup/compiler.json").read_bytes(), accepted)
+        self.assertFalse(proposal_path.exists())
+        self.assertFalse(list((self.root / "build/setup").glob("proof-*")))
         self.assertEqual((self.root / "versions/us/baserom.sha1").read_text(), rom.sha1 + "  roms/baserom.us.z64\n")
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
 

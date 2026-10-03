@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import os
 import shutil
 import tarfile
@@ -124,6 +125,73 @@ class CloneTests(unittest.TestCase):
             hashlib.sha256((result.tools / "helper.py").read_bytes()).hexdigest(),
             (result.tools / "compiler.sha256").read_text(),
         )
+
+    def test_published_objects_share_storage_but_replacement_is_isolated(self) -> None:
+        source = self.live / "build/us.3/obj/src/unit.o"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"published object")
+        asset = self.live / "build/us.3/obj/assets/data.bin.o"
+        asset.parent.mkdir(parents=True)
+        asset.write_bytes(b"mutable asset object")
+        with (
+            patch.object(clone, "prepare", return_value=False),
+            patch.object(clone.fcntl, "ioctl", side_effect=OSError),
+        ):
+            clone.create(self.project, self.policy, self.destination, ["us"])
+        target = self.destination / "build/us.3/obj/src/unit.o"
+        self.assertEqual(source.stat().st_ino, target.stat().st_ino)
+        replacement = target.with_suffix(".o.partial")
+        replacement.write_bytes(b"new object")
+        replacement.replace(target)
+        self.assertEqual(source.read_bytes(), b"published object")
+        self.assertEqual(target.read_bytes(), b"new object")
+        copied_asset = self.destination / "build/us.3/obj/assets/data.bin.o"
+        self.assertNotEqual(copied_asset.stat().st_ino, asset.stat().st_ino)
+        copied_asset.write_bytes(b"changed asset object")
+        self.assertEqual(asset.read_bytes(), b"mutable asset object")
+
+    def test_rom_and_graph_contents_are_streamed(self) -> None:
+        evidence = self.project.build / "setup"
+        evidence.mkdir()
+        prefix = b'{"padding":"'
+        middle = b'","workspace_id":"'
+        padding = b"x" * (1024 * 1024 - 18 - len(prefix) - len(middle))
+        layout = evidence / "layout.json"
+        layout.write_bytes(prefix + padding + middle + self.project.workspace_id.encode() + b'"}')
+        (evidence / "us.json").write_bytes(b'{"providers": []}')
+        (evidence / "symbol-proposal.json").write_bytes(b"unread review")
+        (evidence / "proof-old").mkdir()
+        original_read = Path.read_bytes
+        roms = {self.project.version(v).baserom for v in self.project.versions}
+
+        def read(path):
+            if path in roms or path.name == ".split.mk" or path.parent.name == "setup":
+                self.fail(f"clone loaded whole input: {path}")
+            return original_read(path)
+
+        with patch.object(Path, "read_bytes", read), patch.object(clone, "prepare", return_value=False):
+            result = clone.create(self.project, self.policy, self.destination, self.project.versions)
+        copied = result.build / "setup"
+        self.assertEqual(json.loads((copied / "layout.json").read_bytes())["workspace_id"], result.workspace_id)
+        self.assertEqual((copied / "us.json").read_bytes(), b'{"providers": []}')
+        self.assertFalse((copied / "symbol-proposal.json").exists())
+        self.assertFalse((copied / "proof-old").exists())
+        self.assertIn(self.project.workspace_id.encode(), layout.read_bytes())
+
+    def test_warm_compiler_pins_do_not_reinstall_into_clone_cache(self) -> None:
+        from unbake.project import makefile, setup
+
+        setup.publish_files(self.project, makefile.helpers(self.project))
+        with (
+            patch.object(clone.compiler_files, "sha", return_value="pinned"),
+            patch.object(clone.toolchain, "specification", return_value=type("Spec", (), {"pins": {"cc": "pinned"}})),
+            patch.object(clone.toolchain, "ensure", side_effect=AssertionError("warm clone reinstall")),
+        ):
+            for ident in self.project.compilers:
+                path = self.project.tools / ident / "cc"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"pinned")
+            self.assertFalse(clone.prepare(self.project, self.policy))
 
     def test_ready_shell_without_initial_commit_keeps_durable_inputs(self) -> None:
         shutil.rmtree(self.live / ".git")
@@ -306,12 +374,12 @@ class CloneTests(unittest.TestCase):
         original_copy = clone.copy_regular
         attempted = []
 
-        def copy(source: Path, target: Path, ancestors: frozenset[Path] = frozenset()) -> None:
+        def copy(source: Path, target: Path, ancestors: frozenset[Path] = frozenset(), **kwargs) -> None:
             if source == generation:
                 build.discard_generation(generation)
                 attempted.append(generation)
                 self.assertTrue(generation.is_dir())
-            original_copy(source, target, ancestors)
+            original_copy(source, target, ancestors, **kwargs)
 
         with (
             patch.object(config, "load_policy", return_value=self.policy),
@@ -322,7 +390,7 @@ class CloneTests(unittest.TestCase):
             code = main(["--project", str(self.live), "clone", str(self.destination), "--version", "us"])
         self.assertEqual(code, 0)
         self.assertEqual(attempted, [generation])
-        self.assertFalse((self.destination / "build/us.3/.inuse").exists())
+        self.assertTrue((self.destination / "build/us.3/.inuse").is_file())
 
     def test_local_policy_and_build_outputs_leave_tracked_checkout_clean(self) -> None:
         helper = self.project.tools / "helper.py"

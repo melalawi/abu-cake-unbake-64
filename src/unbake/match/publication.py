@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import json
 import os
 import shutil
 from collections.abc import Iterable
@@ -24,7 +26,54 @@ def swap(link: Path, target: Path) -> None:
 def collect(project: Project, *, generations: Iterable[Path] | None = None) -> None:
     """Serialize discovery with reader pinning; never wait for active generations."""
     with build.lock(project):
+        _workspaces(project)
         _collect(project, generations=generations)
+
+
+def _workspaces(project: Project) -> None:
+    """Remove abandoned command scratch, preserving any live workspace lease."""
+    active_setup = False
+    patterns = {
+        project.build: ("submit-*",),
+        project.build / "setup": ("proof-*", "symbol-proof-*"),
+    }
+    for directory, names in patterns.items():
+        if directory.is_symlink():
+            continue
+        for pattern in names:
+            for path in directory.glob(pattern):
+                if path.is_symlink() or not path.is_dir():
+                    continue
+                with (path / ".inuse").open("a+b") as stream:
+                    try:
+                        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        if directory == project.build / "setup":
+                            active_setup = True
+                        continue
+                    shutil.rmtree(path)
+    if not active_setup and not (project.build / "setup").is_symlink():
+        _accepted_proposals(project.build / "setup")
+
+
+def _accepted_proposals(directory: Path) -> None:
+    """Drop consumed reviews only when their published evidence agrees."""
+    # This historical proposal has no reader; join now owns scoped receipts.
+    (directory / "join-proposal.json").unlink(missing_ok=True)
+    proposal = directory / "proposal.json"
+    confirmation = directory / "confirmation.json"
+    if proposal.is_file() and confirmation.is_file():
+        try:
+            accepted = json.loads(confirmation.read_bytes())["proposal_sha256"]
+            with proposal.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            if digest == accepted:
+                proposal.unlink()
+        except (ValueError, KeyError, TypeError):
+            pass
+    # Replan computes its review anew on confirmation; no command reads this
+    # file. Never deserialize historical reviews (hundreds of MB) to collect.
+    (directory / "symbol-proposal.json").unlink(missing_ok=True)
 
 
 def _collect(project: Project, *, generations: Iterable[Path] | None = None) -> None:
@@ -56,7 +105,7 @@ def _collect(project: Project, *, generations: Iterable[Path] | None = None) -> 
         while pending:
             generation = pending.pop()
             obj = generation / "obj"
-            paths = [obj] if obj.is_symlink() else list(obj.rglob("*")) if obj.is_dir() else []
+            paths = (obj,) if obj.is_symlink() else obj.rglob("*") if obj.is_dir() else ()
             for path in paths:
                 if not path.is_symlink():
                     continue
