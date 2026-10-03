@@ -87,3 +87,33 @@ class BatchHeaderHoldsTests(unittest.TestCase):
                         self.assertEqual(candidate.matched, expected)
                         self.assertEqual(candidate.compiler, {} if expected else {"selected": "fixture"})
                     self.assertEqual(admit.call_count, int(stale is None))
+
+    def test_stale_fuzzy_fallback_still_refuses_an_external_copy_of_published_c(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            src = root / "src"
+            src.mkdir()
+            source = root / "alpha.c"
+            source.write_text("int alpha(void) {return 0;}")
+            (src / "alpha.c").write_text(source.read_text())
+            inputs = SimpleNamespace(
+                owners={},
+                trials={
+                    "alpha": [
+                        {
+                            "source_sha256": drafts.source_identity(source.read_bytes()),
+                            "identical_everywhere": False,
+                            "work": {},
+                        }
+                    ]
+                },
+            )
+            with (
+                patch.object(batch.split, "holding_versions", return_value=("us",)),
+                patch.object(batch.checks, "run", return_value=[]),
+                patch.object(
+                    batch.work, "current_trial", side_effect=Held("submit", "submit.flags: changed since latest try")
+                ),
+                self.assertRaisesRegex(Held, "matched source already exists"),
+            ):
+                batch._admit(SimpleNamespace(src=src), None, inputs, source)

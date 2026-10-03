@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout import shared
-from unbake.layout.header_context import Headers
+from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.header_context import context as header_context
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
@@ -564,8 +564,9 @@ def fold(
             held("project", "shared declaration home required")
         path = destination if destination is not None else shared.home(project)
         before = texts.get(path, "")
+        guard = header_guard(context, path)
         before_header = before or (
-            f"#ifndef UNBAKE_{path.stem.upper()}_H\n#define UNBAKE_{path.stem.upper()}_H\n"
+            f"#ifndef {guard}\n#define {guard}\n"
             + _scalar_include(project, context, list(additions.values()))
             + "\n#endif\n"
         )

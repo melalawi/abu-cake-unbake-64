@@ -4,12 +4,51 @@ import unittest
 from pathlib import Path
 
 from unbake.decomp.header_declarations import declaration_source
-from unbake.layout.header_context import Headers, context, guarded_source
+from unbake.layout.header_context import Headers, context, guarded_source, header_guard
 from unbake.layout.split import Edit
 from unbake.project.config import Held
 
 
 class HeaderContextTests(unittest.TestCase):
+    def test_new_header_guard_does_not_shadow_a_different_declaration_provider(self):
+        for root in (Path("/original"), Path("/copied")):
+            for existing in (False, True):
+                with self.subTest(root=root, existing=existing):
+                    destination = root / "include/shared/alpha.h"
+                    texts = (
+                        {
+                            root / "include/shared/decls/alpha.h": (
+                                "#ifndef UNBAKE_ALPHA_H\n#define UNBAKE_ALPHA_H\nextern int alpha(void);\n#endif\n"
+                            )
+                        }
+                        if existing
+                        else {}
+                    )
+                    headers = Headers(texts, root=root)
+                    guard = header_guard(headers, destination)
+                    self.assertEqual(guard == "UNBAKE_ALPHA_H", not existing)
+                    headers.apply(
+                        [
+                            Edit(
+                                destination,
+                                "",
+                                f"#ifndef {guard}\n#define {guard}\nstruct Owner {{int value;}};\n#endif\n",
+                                (),
+                            )
+                        ]
+                    )
+                    self.assertIn("Owner", headers.index.names)
+                    if existing:
+                        original = Headers(
+                            {
+                                Path("/original/include/shared/decls/alpha.h"): texts[
+                                    root / "include/shared/decls/alpha.h"
+                                ]
+                            },
+                            root=Path("/original"),
+                        )
+                        self.assertEqual(guard, header_guard(original, Path("/original/include/shared/alpha.h")))
+
     def test_guarded_wrappers_and_nested_generated_copies_share_one_provider(self):
         for kind in ("struct", "union"):
             for generated_first in (False, True):

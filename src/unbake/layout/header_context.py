@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from bisect import bisect_right
 from dataclasses import replace
@@ -86,6 +87,19 @@ def guarded_source(source: str) -> str:
     text = source[cursor:]
     chunks.append(text if visible else re.sub(r"[^\n]", " ", text))
     return "".join(chunks)
+
+
+def header_guard(headers: Headers, path: Path) -> str:
+    """Choose a stable guard for a new header without shadowing another provider."""
+    guard = f"UNBAKE_{path.stem.upper()}_H"
+    pattern = re.compile(r"^\s*#\s*define\s+" + re.escape(guard) + r"\b", re.M)
+    if not any(home != path and pattern.search(text) for home, text in headers.texts.items()):
+        return guard
+    relative = (
+        path.relative_to(headers.root) if headers.root is not None and path.is_relative_to(headers.root) else path
+    )
+    digest = hashlib.sha256(relative.as_posix().encode()).hexdigest()[:12].upper()
+    return f"UNBAKE_{path.stem.upper()}_{digest}_H"
 
 
 def _parser(source: str) -> Parser:

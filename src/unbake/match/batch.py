@@ -274,9 +274,10 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
                 raise
             # An old fuzzy refusal cannot veto a fresh exact cartridge proof.
             # Drop its compiler choice too; the current configured inputs own it.
-            return Candidate(function, source, content, sha, versions, True)
-        manifest = admit(project, policy, source)
-        return Candidate(function, source, content, sha, versions, False, dict(manifest["compiler_evidence"]))
+            latest = None
+        else:
+            manifest = admit(project, policy, source)
+            return Candidate(function, source, content, sha, versions, False, dict(manifest["compiler_evidence"]))
     if published:
         held(f"submit.source: {destination}: matched source already exists")
     evidence = dict(latest["work"].get("compiler_evidence", {})) if latest is not None else {}

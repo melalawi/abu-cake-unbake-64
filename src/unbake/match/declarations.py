@@ -12,7 +12,7 @@ from pathlib import Path
 
 from unbake.decomp import drafts, needs
 from unbake.layout import entries, shared, split, structs
-from unbake.layout.header_context import Headers
+from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_parser import Parser
@@ -166,10 +166,9 @@ def _local_typedefs(
     # Declaration order follows the source, including chains of scalar aliases.
     names = sorted(selected, key=lambda name: min(spans[name]))
     before = headers.texts.get(destination, "")
+    guard = header_guard(headers, destination)
     after = before or (
-        f"#ifndef UNBAKE_{destination.stem.upper()}_H\n#define UNBAKE_{destination.stem.upper()}_H\n"
-        + _scalar_include(project, headers, records)
-        + "\n#endif\n"
+        f"#ifndef {guard}\n#define {guard}\n" + _scalar_include(project, headers, records) + "\n#endif\n"
     )
     required = wanted & headers.homes.keys()
     for path in sorted({headers.homes[name] for name in required} - {destination}):
