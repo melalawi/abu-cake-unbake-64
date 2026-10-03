@@ -840,7 +840,10 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
                 "source": "declaration_evidence",
                 "sha256": storage.digest(extra.read_bytes()),
             }
-            seed = extract(headers(project, policy, version, extra), provenance)
+            # Evidence imports the generated context too. Preserve definition
+            # homes so a canonical layout reused after a rename remains a
+            # generated provider, with its split dependencies intact.
+            seed = extract(headers(project, policy, version, extra), provenance, authored_headers=authored)
             for kind in ("functions", "globals", "arrays"):
                 seed[kind] = {name: row for name, row in seed[kind].items() if name in exports}
             seeds.append(seed)

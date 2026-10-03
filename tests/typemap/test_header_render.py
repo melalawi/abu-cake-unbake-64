@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 from tests.decomp.support import fixture
 from tests.typemap.split_support import expanded
+from unbake.layout.header_context import Headers
+from unbake.layout.structs_parser import Parser
+from unbake.match import declarations as publication
 from unbake.project.config import Held
-from unbake.typemap import database, declarations
+from unbake.typemap import database, declaration_evidence, declarations, solver
 from unbake.typemap.solver import Constraints, _merge_records
 
 
@@ -86,6 +89,71 @@ class HeaderRenderTests(unittest.TestCase):
         text = self.render("typedef struct Z Z; struct Z { int value; }; struct A { Z value; };")
         self.assertLess(text.index("struct Z {"), text.index("struct A {"))
         declarations.extract(declarations.clean(text), {})
+
+    def test_renamed_layout_merge_keeps_generated_provider_and_value_dependencies(self):
+        canonical = "typedef struct Vec3 { float x, y, z; } Vec3;"
+        cases = (
+            ("aliases", "Vec value; Vec3f other;"),
+            ("tags", "struct Vec value; struct Vec3f other;"),
+            ("arrays", "Vec value[2]; Vec3f other;"),
+        )
+        root = self.project.include[0]
+        authored = root / "authored.h"
+        authored.write_text("struct Authored { int value; };")
+        generated = root / "shared/types"
+        generated.mkdir(exist_ok=True)
+        for label, members in cases:
+            with self.subTest(label=label):
+                source = (
+                    "typedef struct Vec { float x, y, z; } Vec;"
+                    "typedef struct Vec3f { float x, y, z; } Vec3f;"
+                    f"struct Holder {{ {members} }};"
+                )
+                parser = Parser(source)
+                records = parser.parse()
+                context = Headers({generated / "vector.h": canonical}, root=root)
+                resolution = context.index.resolve(records, "published")
+                self.assertEqual(resolution["Vec"][0], "Vec3")
+                self.assertEqual(resolution["Vec3f"][0], "Vec3")
+                with patch.object(publication.source_views, "typed_context", return_value=canonical):
+                    renamed, _ = publication._layout_names(
+                        self.project, self.policy, "published", source, [parser], ("us",), context
+                    )
+                merged = declarations.extract(renamed, {})["structs"]
+                self.assertEqual(set(merged), {"Vec3", "Holder"})
+                prefix = f'# 1 "{authored}"\n' + authored.read_text() + "\n"
+                for name, record in merged.items():
+                    path = generated / (name + ".h")
+                    text = (
+                        record["declaration"]
+                        + "\n"
+                        + "".join(f"typedef {record['type']} {alias};\n" for alias in record["aliases"])
+                    )
+                    path.write_text(text)
+                    prefix += f'# 1 "{path}"\n' + text
+                evidence = {"shared/evidence.h": "extern struct Holder *published(void);"}
+
+                def evidence_context(project, policy, version, extra):
+                    return prefix + f'# 1 "{extra}"\n' + evidence["shared/evidence.h"]
+
+                with (
+                    patch.object(declarations, "_headers", return_value=prefix),
+                    patch.object(declarations, "headers", side_effect=evidence_context),
+                    patch.object(declaration_evidence, "feedback_components", return_value=evidence),
+                ):
+                    seeds = declarations.collect(self.project, self.policy)
+                self.assertEqual(len(seeds), 2)
+                for seed in seeds:
+                    self.assertEqual(seed["authored_structs"], ["Authored"])
+                value = solver.infer(self.project, {"functions": {}, "globals": {}}, seeds)
+                self.assertTrue(value["structs"]["Vec3"]["generated"])
+                self.assertTrue(value["structs"]["Holder"]["generated"])
+                self.assertFalse(value["structs"]["Authored"]["generated"])
+                text = self.capture(value)
+                self.assertEqual(text.count("struct Vec3 {"), 1)
+                self.assertLess(text.index("struct Vec3 {"), text.index("struct Holder {"))
+                parsed = declarations.extract(declarations.clean(text), {})
+                self.assertEqual(parsed["structs"]["Holder"]["size"], 36 if label == "arrays" else 24)
 
     def test_missing_array_and_pointer_callback_typedefs_are_ordered_without_cycles(self):
         source = (
