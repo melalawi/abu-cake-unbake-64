@@ -83,6 +83,19 @@ class PendingTests(unittest.TestCase):
             paths[-1].write_text("changed")
             self.assertEqual(cache.parsed("object", paths[-1], paths[-1].read_text), "changed")
 
+    def test_finish_releases_worker_snapshots_before_feedback(self):
+        for active in (None, (SimpleNamespace(shutdown=Mock()), Path("snapshot-directory"))):
+            with self.subTest(active=active), patch.object(forked, "release") as release:
+                token = forked._pool.set(active)
+                try:
+                    forked.finish()
+                    self.assertIsNone(forked._pool.get())
+                    if active is not None:
+                        active[0].shutdown.assert_called_once_with(cancel_futures=True)
+                    release.assert_called_once_with()
+                finally:
+                    forked._pool.reset(token)
+
 
 class StreamingFoldTests(unittest.TestCase):
     def test_fold_is_lazy_and_adopts_headers_before_yielding(self):

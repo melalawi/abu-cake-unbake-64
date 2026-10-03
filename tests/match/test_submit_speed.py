@@ -152,6 +152,9 @@ class FakePool:
     def __exit__(self, *args):
         self.closed = True
 
+    def shutdown(self, *, cancel_futures):
+        self.closed = True
+
     def submit(self, fn, item):
         self.maps += 1
         future = Future()

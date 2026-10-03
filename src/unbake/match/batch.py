@@ -231,6 +231,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 )
             if not candidates:
                 return receipts
+            forked.finish()
             with reporting.phase("publication", sources=len(candidates)):
                 candidates, sha1, followups = _publish_survivors(
                     project, staged, base, policy, candidates, current, generations, started, receipts, sha1

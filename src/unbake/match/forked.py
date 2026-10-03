@@ -53,6 +53,16 @@ def session(cores: int, jobs: int) -> Iterator[None]:
             _pool.reset(token)
 
 
+def finish() -> None:
+    """Release idle workers and their shared snapshots before publication feedback."""
+    active = _pool.get()
+    if active is not None:
+        pool, _ = active
+        _pool.set(None)
+        pool.shutdown(cancel_futures=True)
+    release()
+
+
 def _phase(item: tuple[str, Any]) -> tuple[list[str], Any]:
     global _snapshot
     name, value = item
