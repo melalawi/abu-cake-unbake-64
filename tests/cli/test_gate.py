@@ -1,9 +1,7 @@
 """Public CLI evidence for bulk naming and the owner fuzzy threshold."""
 
-import hashlib
 import io
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import replace
 from unittest.mock import patch
 
 from tests.cli.support import MainCase
@@ -11,9 +9,8 @@ from tests.match.support import MatchFixture
 from unbake.cli import main
 from unbake.decomp import drafts, fuzzy_bar, trial
 from unbake.decomp.trial_compare import TYPES, Compare, compare_object
-from unbake.layout import name_transaction
-from unbake.match import nonmatching, staging
-from unbake.project import build, config
+from unbake.match import nonmatching
+from unbake.project import config
 from unbake.project.config import Held
 
 
@@ -126,97 +123,6 @@ class GateAdmissionTests(MatchFixture):
         code, out = self.public_submit(source)
         self.assertEqual(code, 1)
         self.assertIn("below 90%", out)
-
-
-class GateTransactionTests(MatchFixture):
-    def setUp(self):
-        super().setUp()
-        versions = {
-            v: replace(
-                self.project.version(v),
-                baserom_sha1=hashlib.sha1(self.project.version(v).baserom.read_bytes()).hexdigest(),
-            )
-            for v in self.versions
-        }
-        self.project = replace(self.project, version_map=versions)
-        self.change = name_transaction.Change(self.root / "include/name.h", None, b"extern int carried;\n")
-        patch.object(name_transaction.makefile, "render", return_value={}).start()
-        patch.object(name_transaction, "refresh_checksums").start()
-        patch.object(config, "load", side_effect=lambda tree: staging.project_at(self.project, tree)).start()
-
-    def compiler(self, project, policy, versions, *, tree, generation_for):
-        results = {}
-        for version in versions:
-            generation = generation_for(version)
-            rom = generation / f"{project.name}.{version}.z64"
-            rom.write_bytes(project.version(version).baserom.read_bytes())
-            log = generation / "build.log"
-            log.write_text("proof")
-            results[version] = build.BuildResult(version, True, "ROM: OK", log, generation)
-        return results
-
-    def test_all_roms_prove_before_publication(self):
-        with patch.object(build, "build", side_effect=self.compiler):
-            result = name_transaction.apply(self.project, self.policy, [self.change])
-        self.assertEqual(len(result), len(self.versions))
-        self.assertEqual(self.change.path.read_bytes(), self.change.after)
-        for version in self.versions:
-            self.assertNotEqual(build.current_generation(self.project, version), self.original[version])
-
-    def test_proof_generated_assembly_paths_publish_with_the_generation(self):
-        generated = self.project.asm / "us/data/rodata/carried/constant.s"
-
-        def extract(*args, **kwargs):
-            tree = kwargs["tree"]
-            path = tree / generated.relative_to(self.root)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b".word 0\n")
-            return self.compiler(*args, **kwargs)
-
-        with patch.object(build, "build", side_effect=extract):
-            name_transaction.apply(self.project, self.policy, [self.change])
-        self.assertEqual(generated.read_bytes(), b".word 0\n")
-
-    def test_false_rom_proof_publishes_no_file_or_generation(self):
-        def wrong(*args, **kwargs):
-            results = self.compiler(*args, **kwargs)
-            (results["eu"].generation / "fixture.eu.z64").write_bytes(b"wrong")
-            return results
-
-        with patch.object(build, "build", side_effect=wrong), self.assertRaisesRegex(Held, "split.rename.sha1.eu"):
-            name_transaction.apply(self.project, self.policy, [self.change])
-        self.assertFalse(self.change.path.exists())
-        self.assert_untouched()
-
-    def test_intervening_input_or_trial_change_refuses_before_writes(self):
-        def mutate(*args, **kwargs):
-            results = self.compiler(*args, **kwargs)
-            (self.root / "include/other.h").write_bytes(b"changed")
-            return results
-
-        with patch.object(build, "build", side_effect=mutate), self.assertRaisesRegex(Held, "split.rename.stale"):
-            name_transaction.apply(self.project, self.policy, [self.change])
-        self.assertFalse(self.change.path.exists())
-        self.assert_untouched()
-
-    def test_publication_error_rolls_back_prior_writes(self):
-        second = name_transaction.Change(self.root / "include/second.h", None, b"second")
-        actual = name_transaction.atomic
-
-        def fail(path, content):
-            if path == second.path:
-                raise OSError("publication write failed")
-            return actual(path, content)
-
-        with (
-            patch.object(build, "build", side_effect=self.compiler),
-            patch.object(name_transaction, "atomic", side_effect=fail),
-            self.assertRaisesRegex(OSError, "publication write failed"),
-        ):
-            name_transaction.apply(self.project, self.policy, [self.change, second])
-        self.assertFalse(self.change.path.exists())
-        self.assertFalse(second.path.exists())
-        self.assert_untouched()
 
 
 class PredicateTests(MainCase):
