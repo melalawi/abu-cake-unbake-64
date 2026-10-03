@@ -85,6 +85,40 @@ class ChecksTest(unittest.TestCase):
                     with self.assertRaisesRegex(Held, "raw-offset"):
                         checks.resolve(list(findings), None, None)
 
+    def test_generic_scalar_stores_are_not_display_packets(self) -> None:
+        cases = [
+            "player->fxStage = -1; player->fxTimer = 0;",
+            "bot->route = -2; bot->routePos = -1;",
+            "screen->selection = -1; screen->state = 3;",
+            "p->first = (s32)(-1); p->second = address;",
+            "p->first = ~0; p->second = 0;",
+            "p->first = -256 | (index << 8); p->second = address;",
+            "p->first = 0; p->second = 22;",
+            "p->first = 0x12345678; p->second = address;",
+            "magic = 0xB8000000; p->unk0 = -1; p->unk4 = -2; p = &p->unk8;",
+            "if (p->first == 0xBF000000) { p->second = 0; }",
+        ]
+        for content in cases:
+            with self.subTest(content=content):
+                self.assertEqual([f for f in checks.run(content) if f.rule == "raw-gfx"], [])
+
+    def test_display_packet_stores_remain_refused(self) -> None:
+        cases = [
+            "p->words.w0 = runtime;",
+            "p->words_w1 = address;",
+            "p->w0 = runtime; p->w1 = address;",
+            "Gfx *p; p->first = runtime; p->second = address;",
+            "p->unk0 = (s32)(((n & 0xFF) << 0x10) | 0x01000040); p->unk4 = address;",
+            "p->unk0 = 0xBF000000; p->unk4 = vertices;",
+            "p->first = 0xFF100000; p->second = address;",
+            "p->first = 0xE7 << 24; p->second = 0;",
+            "p->first = _SHIFTL(0xE7, 24, 8); p->second = 0;",
+            "magic = 0xB8000000; p->unk0 = replacement0; p->unk4 = replacement4; p = &p->unk8;",
+        ]
+        for content in cases:
+            with self.subTest(content=content):
+                self.assertTrue([f for f in checks.run(content) if f.rule == "raw-gfx"])
+
     def test_volatile_distinguishes_storage_from_type_and_device_access(self) -> None:
         cases = [
             ("parenthesized cast", "x = *((volatile float *) (&p->field));", 0),

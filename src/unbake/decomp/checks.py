@@ -316,7 +316,8 @@ def _gfx(source: str, code: str) -> list[GuardFinding]:
     # Hidden packets still require SDK exposure. Recognize the command tag in
     # the first store, and packet-stride copies guarded by a command sentinel.
     from unbake.decomp.gbi import OP_NAMES
-    from unbake.decomp.gbi_expr import Ambiguous, Word
+    from unbake.decomp.gbi_expr import Ambiguous, Word, integer, scalar, split
+    from unbake.decomp.gbi_source import packet_pointers
 
     opcodes = set(OP_NAMES) | {0x01, 0x05, 0x06, 0x08, 0xAF, 0xB6, 0xB7, 0xB8, 0xBF, 0xDD}
     pairs = re.finditer(
@@ -325,11 +326,21 @@ def _gfx(source: str, code: str) -> list[GuardFinding]:
         code,
     )
     packet_sentinel = any(int(m[0], 16) >> 24 in opcodes for m in re.finditer(r"0[xX][0-9A-Fa-f]{8}\b", code))
+    gfx_pointers = packet_pointers(code, "Gfx")
     for match in pairs:
         if match["first"] == match["second"]:
             continue
         try:
-            opcode = Word.parse(match["value"]).fixed(24, 8)
+            # Word.parse normalizes constants modulo 2**32 for decoding. A
+            # signed scalar sentinel (-1, -2, ~0) is not an opcode word merely
+            # because sign extension happens to put a command tag in byte 3.
+            terms = split(scalar(match["value"]), "|")
+            constants = [integer(term) for term in terms]
+            opcode = (
+                Word.parse(match["value"]).fixed(24, 8)
+                if all(value is None or 0 <= value <= 0xFFFFFFFF for value in constants)
+                else None
+            )
         except Ambiguous:
             opcode = None
         stride_copy = (
@@ -337,8 +348,9 @@ def _gfx(source: str, code: str) -> list[GuardFinding]:
             and match["second"] == "unk4"
             and packet_sentinel
             and re.search(r"->\s*unk8\b", code)
+            and integer(match["value"]) is None
         )
-        if opcode in opcodes or stride_copy:
+        if match["ptr"] in gfx_pointers or opcode in opcodes or stride_copy:
             findings.append(_finding("raw-gfx", source, match))
     lines = source.splitlines()
     # Only the lowering boundary emits this per-line diagnostic for an
