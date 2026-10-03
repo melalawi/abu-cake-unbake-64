@@ -81,7 +81,7 @@ def _baseline(project: Project, policy: Policy) -> list[str]:
     # Keep the previous recipe as provenance: refreshing implementation helpers
     # must not bless different compiler flags or other changed build inputs.
     if json.loads((project.tools / "build.json").read_text()) != makefile.description(project):
-        held("submit.baseline_inputs: build recipe changed; run make -j4 check before an empty submit")
+        held("submit.baseline_inputs: build recipe changed; run setup before an empty submit")
     with ExitStack() as holds:
         generations = {
             version: staging.generation(
