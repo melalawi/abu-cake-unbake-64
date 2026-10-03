@@ -133,7 +133,7 @@ class HeaderRenderTests(unittest.TestCase):
                     prefix += f'# 1 "{path}"\n' + text
                 evidence = {"shared/evidence.h": "extern struct Holder *published(void);"}
 
-                def evidence_context(project, policy, version, extra):
+                def evidence_context(project, policy, version, extra, prefix=prefix, evidence=evidence):
                     return prefix + f'# 1 "{extra}"\n' + evidence["shared/evidence.h"]
 
                 with (
