@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 import tempfile
 from collections.abc import Iterable
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 from unbake.decomp import drafts, needs
@@ -227,50 +229,62 @@ def _layout_names(
 
     from unbake.typemap.declarations import headers as typed_headers
 
-    for index, parser in enumerate(parsers):
-        # Validate canonical scalar names before rewriting any aggregate alias.
-        scalar_edits(project, parser, headers)
-        records = _records(parser)
-        resolution = headers.index.resolve([record for record in records if record.name not in sdk], function)
-        resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
-        if not resolution:
-            continue
-        with tempfile.TemporaryDirectory(prefix="match-types-") as temporary:
-            roots = source_views.header_includes(project, headers, Path(temporary))
-            context_project = replace(project, include=roots, overlay_roots=roots)
-            planned = type_rewrite.edits(
-                parser, typed_headers(context_project, policy, versions[index]), resolution, tag_only
-            )
-        for span, target in planned.items():
-            if span in replacements and replacements[span] != target:
-                structs.held(function, "version-dependent layout rename at the same source token")
-            replacements[span] = target
-        # A layout that keeps its name may absorb a same-source duplicate,
-        # whose forward typedef and definition are then both dropped.
-        local = {record.name for record in records if resolution.get(record.name, (record.name,))[0] == record.name}
-        defined: set[str] = set()
-        for record in records:
-            if record.name not in resolution:
+    with ExitStack() as cleanup:
+        context_project: Project | None = None
+
+        def typed_context(version: str) -> str:
+            nonlocal context_project
+            if context_project is None:
+                temporary = cleanup.enter_context(tempfile.TemporaryDirectory(prefix="match-types-"))
+                roots = source_views.header_includes(project, headers, Path(temporary))
+                context_project = replace(project, include=roots, overlay_roots=roots)
+            return typed_headers(context_project, policy, version)
+
+        for index, parser in enumerate(parsers):
+            # Validate canonical scalar names before rewriting any aggregate alias.
+            scalar_edits(project, parser, headers)
+            records = _records(parser)
+            resolution = headers.index.resolve([record for record in records if record.name not in sdk], function)
+            resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
+            if not resolution:
                 continue
-            target, _ = resolution[record.name]
-            if target in defined:
-                # A forward typedef and its definition both name this record.
-                spans = [
-                    (item.start, item.end)
-                    for item in parser.declarations
-                    if getattr(item.base, "start", None) == record.start
-                ]
-                for number, span in enumerate(spans):
-                    keep = record.aliases and number == 0 and target not in local
-                    redundant[span] = f"typedef {record.kind} {target} {target};" if keep else ""
-            defined.add(target)
-        for name, (target, _) in resolution.items():
-            if name != target:
-                renames.add((name, target))
-        for record in records:
-            if record.name in resolution:
-                target, evidence = resolution[record.name]
-                renamed_members(record.fields, evidence.fields, record.name, target)
+            planned = type_rewrite.edits(
+                parser,
+                partial(typed_context, versions[index]),
+                resolution,
+                tag_only,
+                cache_root=policy.cache_root,
+            )
+            for span, target in planned.items():
+                if span in replacements and replacements[span] != target:
+                    structs.held(function, "version-dependent layout rename at the same source token")
+                replacements[span] = target
+            # A layout that keeps its name may absorb a same-source duplicate,
+            # whose forward typedef and definition are then both dropped.
+            local = {record.name for record in records if resolution.get(record.name, (record.name,))[0] == record.name}
+            defined: set[str] = set()
+            for record in records:
+                if record.name not in resolution:
+                    continue
+                target, _ = resolution[record.name]
+                if target in defined:
+                    # A forward typedef and its definition both name this record.
+                    spans = [
+                        (item.start, item.end)
+                        for item in parser.declarations
+                        if getattr(item.base, "start", None) == record.start
+                    ]
+                    for number, span in enumerate(spans):
+                        keep = record.aliases and number == 0 and target not in local
+                        redundant[span] = f"typedef {record.kind} {target} {target};" if keep else ""
+                defined.add(target)
+            for name, (target, _) in resolution.items():
+                if name != target:
+                    renames.add((name, target))
+            for record in records:
+                if record.name in resolution:
+                    target, evidence = resolution[record.name]
+                    renamed_members(record.fields, evidence.fields, record.name, target)
     replacements = {
         span: target
         for span, target in replacements.items()

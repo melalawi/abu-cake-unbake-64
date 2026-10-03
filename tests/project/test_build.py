@@ -1,5 +1,6 @@
 import fcntl
 import tempfile
+import threading
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,6 +12,38 @@ from unbake.project import build, config, setup
 
 
 class BuildTests(unittest.TestCase):
+    def test_compile_versions_shares_all_slots_and_preserves_failures(self):
+        sources = [Path(f"src/unit{index}.c") for index in range(8)]
+        jobs = {version: (sources, Path(version)) for version in ("us", "eu")}
+        first_wave = threading.Barrier(4)
+        mutex = threading.Lock()
+        visited = []
+        active = peak = 0
+        policy = config.load_policy()
+        from dataclasses import replace
+
+        policy = replace(policy, cores=4)
+
+        def compile_chunk(project, policy, members, version, out):
+            nonlocal active, peak
+            with mutex:
+                active += 1
+                peak = max(peak, active)
+                visited.append((version, tuple(members)))
+                initial = len(visited) <= 4
+            if initial:
+                first_wave.wait(timeout=5)
+            with mutex:
+                active -= 1
+            return {source.stem: "diagnostic" for source in members if source.stem == "unit3"}
+
+        with patch.object(build, "compile_objects", side_effect=compile_chunk):
+            result = build.compile_versions(None, policy, jobs)
+        self.assertEqual(peak, 4)
+        self.assertEqual({version for version, _ in visited[:4]}, {"us", "eu"})
+        self.assertEqual({v: {"unit3": "diagnostic"} for v in jobs}, result)
+        self.assertCountEqual([(v, p) for v, chunk in visited for p in chunk], [(v, p) for v in jobs for p in sources])
+
     def setUp(self) -> None:
         WORK.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=WORK)

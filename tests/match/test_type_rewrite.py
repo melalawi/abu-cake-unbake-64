@@ -1,6 +1,9 @@
 """Resolved source edits follow C type and member namespaces."""
 
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from unbake.layout.structs import layouts
 from unbake.layout.structs_identity import identity
@@ -9,6 +12,43 @@ from unbake.match import type_rewrite
 
 
 class TypeRewriteTests(unittest.TestCase):
+    def test_persistent_context_restores_shared_nodes_and_identical_edits(self):
+        context = "typedef struct Canon {int value; struct Canon *next;} Canon, Alias; extern Canon *global;"
+        source = "typedef struct Old {int old; struct Old *tail;} Old; int alpha(void) {return global->value;}"
+        parser = Parser(source)
+        parser.parse()
+        resolution = {"Old": ("Canon", layouts(context)[0])}
+        expected = type_rewrite.edits(parser, context, resolution)
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary)
+            first = type_rewrite.edits(parser, context, resolution, cache_root=cache)
+            type_rewrite._context.cache_clear()
+            with patch.object(type_rewrite, "_parse_context", side_effect=AssertionError("context reparsed")):
+                second = type_rewrite.edits(parser, context, resolution, cache_root=cache)
+            self.assertEqual(first, expected)
+            self.assertEqual(second, expected)
+            declarations, _ = type_rewrite._context(context.rstrip() + "\n", cache)
+            self.assertIs(declarations[0].type.type, declarations[1].type.type)
+            type_rewrite._context.cache_clear()
+
+    def test_unchanged_layout_never_loads_typed_header_context(self):
+        parser = Parser("struct Canon {int value;}; int alpha(struct Canon *p) {return p->value;}")
+        record = parser.parse()[0]
+        context = Mock(side_effect=AssertionError("unneeded shared header parse"))
+        self.assertEqual(type_rewrite.edits(parser, context, {"Canon": ("Canon", record)}), {})
+        context.assert_not_called()
+
+    def test_renamed_layout_loads_context_once_and_preserves_namespace_edits(self):
+        source = "struct Old {int old;}; int alpha(struct Old *p) {int Old=1; return p->old+Old;}"
+        parser = Parser(source)
+        parser.parse()
+        context = "struct Canon {int value;};"
+        record = layouts(context)[0]
+        load = Mock(return_value=context)
+        eager = type_rewrite.edits(parser, context, {"Old": ("Canon", record)})
+        self.assertEqual(type_rewrite.edits(parser, load, {"Old": ("Canon", record)}), eager)
+        load.assert_called_once_with()
+
     def rewrite(self, source, context):
         parser = Parser(source)
         records = parser.parse()

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Callable
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
+from pycparser import c_ast, c_lexer, c_parser  # type: ignore[import-untyped]
 
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
+from unbake.project.cache import Cache, key
 
 
 def _gnu_blank(view: str, blank: Any) -> str:
@@ -33,16 +37,94 @@ def _gnu_blank(view: str, blank: Any) -> str:
 
 
 @lru_cache(maxsize=8)
-def _context(prefix: str) -> tuple[list[Any], dict[str, bool]]:
+def _context(prefix: str, cache_root: Path | None = None) -> tuple[list[Any], dict[str, bool]]:
     """Parse the shared typed headers once; sources reuse their declarations and typedef scope."""
+    if cache_root is None:
+        return _parse_context(prefix)
+    identity = key(
+        "rewrite-context-v1",
+        prefix,
+        Path(__file__),
+        Path(c_parser.__file__),
+        Path(c_lexer.__file__),
+        Path(c_ast.__file__),
+    )
+    computed = None
+
+    def produce(output: Path) -> None:
+        nonlocal computed
+        computed = _parse_context(prefix)
+        declarations, scope = computed
+        with output.open("w") as stream:
+            json.dump({"declarations": _encode(declarations), "scope": scope}, stream)
+
+    artifact = Cache(cache_root).produce("rewrite-context", identity, produce)
+    if computed is not None:
+        return computed
+    with artifact.open() as stream:
+        document = json.load(stream)
+    return _decode(document["declarations"]), document["scope"]
+
+
+def _encode(value: Any) -> Any:
+    records: list[Any] = []
+    seen: dict[int, int] = {}
+
+    def visit(item: Any) -> Any:
+        if isinstance(item, c_ast.Node):
+            index = seen.get(id(item))
+            if index is None:
+                index = len(records)
+                seen[id(item)] = index
+                records.append(None)
+                records[index] = [
+                    type(item).__name__,
+                    [visit(getattr(item, slot)) for slot in item.__slots__ if slot != "__weakref__"],
+                ]
+            return {"ref": index}
+        if isinstance(item, c_parser.Coord):
+            return {"coord": [item.file, item.line, item.column]}
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        return item
+
+    root = visit(value)
+    return {"root": root, "records": records}
+
+
+def _decode(value: Any) -> Any:
+    objects = []
+    for name, _ in value["records"]:
+        cls = getattr(c_ast, name)
+        if not isinstance(cls, type) or not issubclass(cls, c_ast.Node):
+            raise ValueError("rewrite context: expected C declaration node")
+        objects.append(object.__new__(cls))
+
+    def visit(item: Any) -> Any:
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        if isinstance(item, dict):
+            if "coord" in item:
+                return c_parser.Coord(*item["coord"])
+            return objects[item["ref"]]
+        return item
+
+    for (_, values), instance in zip(value["records"], objects, strict=True):
+        slots = (slot for slot in instance.__slots__ if slot != "__weakref__")
+        for slot, item in zip(slots, values, strict=True):
+            setattr(instance, slot, visit(item))
+    return visit(value["root"])
+
+
+def _parse_context(prefix: str) -> tuple[list[Any], dict[str, bool]]:
     parser = c_parser.CParser()
     tree = parser.parse(prefix)
     return list(tree.ext), dict(parser._scope_stack[0])
 
 
-def _parse(prefix: str, view: str) -> c_ast.FileAST:
+def _parse(prefix: str, view: str, cache_root: Path | None = None) -> c_ast.FileAST:
     """Parse VIEW after PREFIX with source coordinates as if both were one text."""
-    declarations, scope = _context(prefix)
+    declarations, scope = _context(prefix, cache_root)
     parser = c_parser.CParser()
     parser._scope_stack = [dict(scope)]
     parser.clex.input("\n" * prefix.count("\n") + view, "")
@@ -55,7 +137,12 @@ def _parse(prefix: str, view: str) -> c_ast.FileAST:
 
 
 def edits(
-    parser: Parser, context: str, resolution: dict[str, tuple[str, Layout]], tag_only: set[str] | None = None
+    parser: Parser,
+    context: str | Callable[[], str],
+    resolution: dict[str, tuple[str, Layout]],
+    tag_only: set[str] | None = None,
+    *,
+    cache_root: Path | None = None,
 ) -> dict[tuple[int, int], str]:
     """Use C namespaces and expression types; preserve comments, strings and value identifiers."""
     records = {record.name: record for record in (parser.layout(item) for item in parser.aggregates if item.name)}
@@ -80,9 +167,9 @@ def edits(
     )
     view = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", blank, view, flags=re.M)
     view = _gnu_blank(view, blank)
-    prefix = context.rstrip() + "\n"
+    prefix = (context() if callable(context) else context).rstrip() + "\n"
     try:
-        tree = _parse(prefix, view)
+        tree = _parse(prefix, view, cache_root)
     except c_parser.ParseError as error:
         held("source types", f"cannot rewrite resolved layouts: {error}")
     first_line = prefix.count("\n") + 1
@@ -260,5 +347,19 @@ def edits(
                 replace(node.field, node.field.name, target)
             self.generic_visit(node)
 
-    Rewrite().visit(tree)
+    # Shared declarations only seed namespaces. Their coordinates precede the
+    # editable source, so resolutions cannot produce edits in this part.
+    from unbake.project.cache import remembered
+
+    shared = tree.ext[: len(_context(prefix, cache_root)[0])]
+
+    def seed() -> tuple[dict[str, Any], dict[tuple[str, str], Any], dict[str, Any]]:
+        Rewrite().visit(c_ast.FileAST(shared))
+        return dict(aliases), dict(tags), dict(scopes[0])
+
+    initial_aliases, initial_tags, initial_scope = remembered("rewrite.namespaces", prefix, seed, keep=8)
+    aliases.update(initial_aliases)
+    tags.update(initial_tags)
+    scopes[0].update(initial_scope)
+    Rewrite().visit(c_ast.FileAST(tree.ext[len(shared) :]))
     return replacements

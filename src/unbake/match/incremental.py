@@ -106,10 +106,13 @@ def prepare(
         if not advance(staged, version, generation, splits[version], staged.version(version).split.read_text()):
             return None
 
+    changed = {v: changed_sources(original, staged, g, v) for v, g in generations.items()}
+    compiled = build.compile_versions(staged, policy, {v: (changed[v], g / "obj/src") for v, g in generations.items()})
+
     def compile_version(version: str) -> tuple[list[str], dict[str, list[str]]]:
         generation = generations[version]
-        sources = changed_sources(original, staged, generation, version)
-        failures = build.compile_objects(staged, policy, sources, version, generation / "obj/src") if sources else {}
+        sources = changed[version]
+        failures = compiled[version]
         faults = {name: [f"{version}: compile diagnostic: {reason}"] for name, reason in failures.items()}
         intervals = extract.unit_ranges(staged.version(version).split.read_text())
         alignments = {

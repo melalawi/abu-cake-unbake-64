@@ -1,16 +1,31 @@
 import errno
 import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from unbake.project.cache import Cache, key
+from unbake.project.cache import Cache, key, parsed
 from unbake.project.config import Held
 
 
 class CacheTests(unittest.TestCase):
+    def test_shared_parse_reuses_copies_but_observes_every_edit(self) -> None:
+        other = self.directory / "copy.o"
+        other.write_bytes(self.source.read_bytes())
+        with patch("unbake.project.cache._parsed", {}), patch("unbake.project.cache._remembered", {}):
+            make = Mock(side_effect=["first", "edited", "other version"])
+            self.assertEqual(parsed("fixture", self.source, make, extra="us", share=True), "first")
+            self.assertEqual(parsed("fixture", other, make, extra="us", share=True), "first")
+            previous = other.stat()
+            other.write_bytes(b"Object bytes")
+            os.utime(other, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+            self.assertEqual(parsed("fixture", other, make, extra="us", share=True), "edited")
+            self.assertEqual(parsed("fixture", other, make, extra="eu", share=True), "other version")
+            self.assertEqual(make.call_count, 3)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

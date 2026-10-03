@@ -327,7 +327,9 @@ def functions(project: Project, v: str) -> list[Function]:
     from unbake.project.cache import parsed
 
     version = project.version(v)
-    return list(parsed("split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v))
+    return list(
+        parsed("split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v, share=True)
+    )
 
 
 def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
@@ -338,12 +340,12 @@ def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
 
     def build() -> dict[str, list[Function]]:
         index: dict[str, list[Function]] = {}
-        for row in _functions(project, v):
+        for row in functions(project, v):
             for alias in row.aliases:
                 index.setdefault(alias, []).append(row)
         return index
 
-    return parsed("split.aliases", (version.split, version.symbols), build, extra=v)
+    return parsed("split.aliases", (version.split, version.symbols), build, extra=v, share=True)
 
 
 def holding_versions(

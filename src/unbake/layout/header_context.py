@@ -17,16 +17,23 @@ from unbake.project.config import Held
 from unbake.project.headers import include_headers
 
 
-def context(contents: dict[Path, str], *, root: Path | None = None) -> tuple[dict[Path, str], Parser, list[Layout]]:
+def context(
+    contents: dict[Path, str], *, root: Path | None = None, cache_root: Path | None = None
+) -> tuple[dict[Path, str], Parser, list[Layout]]:
     """Reuse draft's declaration parser; retain raw spans for header edits.
 
     One parse per distinct header set in a process; the parser is shared and read-only.
     """
     from unbake.project.cache import remembered
 
-    ordered, parser, records = remembered(
-        "headers.context", (root, tuple(sorted(contents.items()))), lambda: _context(contents, root=root)
-    )
+    def parse() -> tuple[dict[Path, str], Parser, list[Layout]]:
+        if cache_root is None:
+            return _context(contents, root=root)
+        from unbake.layout import header_cache
+
+        return header_cache.context(contents, root, cache_root, lambda: _context(contents, root=root))
+
+    ordered, parser, records = remembered("headers.context", (root, cache_root, tuple(sorted(contents.items()))), parse)
     return dict(ordered), parser, records
 
 
@@ -141,12 +148,13 @@ class Headers:
     combined source, so callers locate declarations exactly as with context().
     """
 
-    def __init__(self, texts: dict[Path, str], *, root: Path | None) -> None:
+    def __init__(self, texts: dict[Path, str], *, root: Path | None, cache_root: Path | None = None) -> None:
         self.root = root
+        self._cache_root = cache_root
         self._load(texts)
 
     def _load(self, texts: dict[Path, str]) -> None:
-        ordered, parser, records = context(texts, root=self.root)
+        ordered, parser, records = context(texts, root=self.root, cache_root=self._cache_root)
         self.texts = ordered
         self.source = parser.source
         self.types = dict(parser.types)
@@ -172,9 +180,9 @@ class Headers:
         self.tag_only = {record.name for record in self.records if record.name not in record.aliases}
 
     @classmethod
-    def read(cls, project: Any) -> Headers:
+    def read(cls, project: Any, *, cache_root: Path | None = None) -> Headers:
         texts = {path: path.read_text() for path, _ in include_headers(project)}
-        return cls(texts, root=getattr(project, "root", None))
+        return cls(texts, root=getattr(project, "root", None), cache_root=cache_root)
 
     def seeded(self, text: str) -> Parser:
         """A parser for text that sees every type declared by these headers."""

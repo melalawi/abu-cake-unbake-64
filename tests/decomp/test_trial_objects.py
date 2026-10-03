@@ -4,6 +4,7 @@ import io
 import json
 import shutil
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
@@ -26,6 +27,23 @@ class ObjectTrialTests(unittest.TestCase):
         from tests.objdiff_fixture import install
 
         install(self)
+
+    def test_trial_compiles_versions_concurrently_and_keeps_ordered_verdicts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project, policy, source = fixture(root, versions=("us", "eu"), case=self)
+            policy.cores = 2
+            ready = threading.Barrier(2)
+
+            def compile_source(project, policy, source, version, out):
+                ready.wait(timeout=5)
+                shutil.copyfile(assemble(out.parent, "compiled", assembly("alpha", [0x24020001, 0x03E00008, 0])), out)
+                return out
+
+            with patch.object(build, "compile_object", side_effect=compile_source), redirect_stdout(io.StringIO()):
+                result = try_draft(project, policy, source, root / "scratch")
+            self.assertEqual(list(result.compares), ["us", "eu"])
+            self.assertTrue(result.identical_everywhere)
 
     def test_resolved_relocations_keep_naming_separate_from_code_differences(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

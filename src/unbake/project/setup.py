@@ -492,6 +492,9 @@ def _publish(
                 # Relocate explicit temporary paths in generated text receipts.
                 if not relocated_generations:
                     _relocate_generation(destination, staged.root, project.root)
+                # Read-only readers must be able to open the pin before the
+                # generation becomes visible through its published link.
+                (destination / ".inuse").touch(exist_ok=True)
             for target, (source, mode, mtime) in writes.items():
                 if target != config_path:
                     compiler_files.atomic_copy(target, source, mode=mode)

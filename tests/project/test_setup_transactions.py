@@ -123,6 +123,33 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.1")
         self.assertEqual((self.project.asm / "generated.s").read_bytes(), b".text\n")
 
+    def test_freshly_published_generation_can_be_pinned_without_writes(self) -> None:
+        from unbake.decomp import trial_target
+
+        def proof(*args, **kwargs):
+            self.proof(*args, **kwargs)
+            staged, version = args[:2]
+            (staged.build_link(version) / (staged.name + ".ld")).write_text("SECTIONS {}\n")
+            self.assertFalse((staged.build_link(version) / ".inuse").exists())
+
+        original_swap = setup._swap
+
+        def publish(link, target):
+            if link == self.project.build_link("us"):
+                self.assertTrue((link.parent / target / ".inuse").is_file())
+            return original_swap(link, target)
+
+        with patch.object(setup_proof, "proof", side_effect=proof), patch.object(setup, "_swap", side_effect=publish):
+            setup.refresh(self.project, self.settings)
+        generation = self.project.build_link("us").resolve()
+        before = {path: path.stat().st_mtime_ns for path in generation.rglob("*")}
+        with (
+            patch.object(trial_target, "make_target", side_effect=AssertionError("read-only pin must not build")),
+            trial_target._target_generation(self.project, "us", read_only=True) as pinned,
+        ):
+            self.assertEqual(pinned, generation)
+        self.assertEqual(before, {path: path.stat().st_mtime_ns for path in generation.rglob("*")})
+
     def test_ready_refresh_publishes_required_ignore_rules_and_keeps_owner_rules(self) -> None:
         from tests.git_fixture import Index
         from tests.process_fakes import boundary

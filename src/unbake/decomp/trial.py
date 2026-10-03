@@ -6,6 +6,7 @@ import json
 import re
 import shlex
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
@@ -181,12 +182,28 @@ def try_draft(
     work = Path(tempfile.mkdtemp(prefix=f"{function}.", dir=directory))
     copied = work / f"{function}.c"
     copied.write_bytes(("#define NON_MATCHING 1\n#line 1 " + json.dumps(str(source)) + "\n").encode() + content)
+
+    def compile_variant(name: str, index: int) -> Held | None:
+        result = results[index]
+        variant_work = work / name / f"flags-{index}" if flags else work / name
+        variant_work.mkdir(parents=True, exist_ok=True)
+        configured = variant_project(project, copied, result.flags) if result.flags else project
+        try:
+            compile_draft(configured, policy, copied, name, variant_work / f"{function}.o")
+        except Held as error:
+            return error
+        return None
+
+    jobs = [(name, index) for name in selected for index in range(len(results))]
+    with ThreadPoolExecutor(max_workers=min(policy.cores, len(jobs))) as pool:
+        futures = {(name, index): pool.submit(compile_variant, name, index) for name, index in jobs}
+        compile_errors = {job: future.result() for job, future in futures.items()}
     for name in selected:
         project.version(name)
         generation, target = pinned[name]
         trial.generations[name] = generation
         version_work = work / name
-        version_work.mkdir()
+        version_work.mkdir(exist_ok=True)
         obj = Object(target)
         symbols = [s for table in obj.symbols.values() for s in table if s["info"] & 15 == 2 and s["section"]]
         if not any(s["name"] == function for s in symbols):
@@ -210,9 +227,10 @@ def try_draft(
             variant_work = version_work / f"flags-{index}" if flags else version_work
             variant_work.mkdir(exist_ok=True)
             candidate = variant_work / f"{function}.o"
-            configured = variant_project(project, copied, result.flags) if result.flags else project
             try:
-                compile_draft(configured, policy, copied, name, candidate)
+                error = compile_errors[name, index]
+                if error is not None:
+                    raise error
                 compiled = Object(candidate)
                 if not any(
                     symbol["name"] == function and symbol["section"] and symbol["info"] & 15 == 2

@@ -184,4 +184,12 @@ class Parser:
 
 
 def declarations(source: str) -> Declarations:
-    return Parser(source).parse()
+    from unbake.project.cache import remembered
+
+    # A version fold reads the same installed declarations through several
+    # private include trees. Text, rather than their temporary paths, identifies
+    # this analysis. Keep caller-owned sets outside the shared cache.
+    parsed = remembered("headers.declarations", source, lambda: Parser(source).parse(), keep=2048)
+    return Declarations(
+        set(parsed.typedefs), set(parsed.uses), set(parsed.exports), set(parsed.tags), set(parsed.complete_uses)
+    )

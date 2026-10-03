@@ -2,12 +2,14 @@
 
 from dataclasses import asdict
 from itertools import pairwise
+from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.decomp import needs
+from unbake.layout.header_context import Headers
 from unbake.layout.structs import layouts
 from unbake.layout.structs_parser import Parser
-from unbake.match import declarations
+from unbake.match import declarations, source_views
 
 
 class DeclarationTests(MatchFixture):
@@ -21,6 +23,47 @@ class DeclarationTests(MatchFixture):
         for mock in (boundary(structs, output), boundary(declarations, output)):
             mock.start()
             self.addCleanup(mock.stop)
+
+    def test_version_rewrites_share_one_effective_header_tree(self) -> None:
+        prefix = "typedef struct Canon {int value;} Canon;\n"
+        header = self.project.include[0] / "canonical.h"
+        header.write_text(prefix)
+        headers = Headers.read(self.project)
+        source = "struct Old {int old;}; int alpha(struct Old *p) {return p->old;}"
+        parsers = [headers.parse(source)[0] for _ in self.versions]
+        trees = []
+
+        def typed(project, policy, version):
+            trees.append(project.include)
+            self.assertTrue((project.include[0] / "canonical.h").is_file())
+            return prefix
+
+        with (
+            patch.object(source_views, "header_includes", wraps=source_views.header_includes) as materialize,
+            patch("unbake.typemap.declarations.headers", side_effect=typed) as typed_headers,
+        ):
+            rewritten, _ = declarations._layout_names(
+                self.project, self.policy, "alpha", source, parsers, self.versions, headers
+            )
+        self.assertIn("p->value", rewritten)
+        self.assertEqual(typed_headers.call_count, len(self.versions))
+        materialize.assert_called_once()
+        self.assertEqual(trees[0], trees[1])
+        self.assertFalse(trees[0][0].exists())
+
+    def test_equivalent_canonical_source_skips_typed_header_materialization(self) -> None:
+        prefix = "typedef struct Canon {int value;} Canon;\n"
+        (self.project.include[0] / "canonical.h").write_text(prefix)
+        headers = Headers.read(self.project)
+        source = prefix + "int alpha(Canon *p) {return p->value;}"
+        parser = headers.parse(source)[0]
+        with (
+            patch.object(source_views, "header_includes") as materialize,
+            patch("unbake.typemap.declarations.headers") as typed,
+        ):
+            declarations._layout_names(self.project, self.policy, "alpha", source, [parser], self.versions, headers)
+        materialize.assert_not_called()
+        typed.assert_not_called()
 
     def test_existing_c_row_with_rodata_can_be_resubmitted(self) -> None:
         source = self.src / "alpha.c"

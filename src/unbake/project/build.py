@@ -10,7 +10,8 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,6 +206,36 @@ def preprocess_object(project: Project, policy: Policy, source: Path, v: str) ->
             project.root,
         )
     return _run([str(compiler.cc), *[flag for flag in flags if flag != "-c"], "-E", str(source)], project.root)
+
+
+def compile_versions(
+    project: Project, policy: Policy, jobs: Mapping[str, tuple[Sequence[Path], Path]]
+) -> dict[str, dict[str, str]]:
+    """Share object compile slots across versions, retaining small interpreter batches."""
+    if policy.cores < 1:
+        raise Held("compile", "policy.cores must be a positive integer")
+    total = sum(len(sources) for sources, _ in jobs.values())
+    size = max(1, -(-total // (4 * policy.cores)))
+    chunks = {
+        version: [(sources[start : start + size], out) for start in range(0, len(sources), size)]
+        for version, (sources, out) in jobs.items()
+    }
+    # Interleave versions; a large first version must not monopolize the queue.
+    planned = [
+        (version, *parts[index])
+        for index in range(max((len(parts) for parts in chunks.values()), default=0))
+        for version, parts in chunks.items()
+        if index < len(parts)
+    ]
+    failures: dict[str, dict[str, str]] = {version: {} for version in jobs}
+    if planned:
+        with ThreadPoolExecutor(max_workers=min(policy.cores, len(planned))) as pool:
+            futures = [
+                (v, pool.submit(compile_objects, project, policy, sources, v, out)) for v, sources, out in planned
+            ]
+            for version, future in futures:
+                failures[version].update(future.result())
+    return failures
 
 
 def compile_objects(project: Project, policy: Policy, sources: Sequence[Path], v: str, out: Path) -> dict[str, str]:

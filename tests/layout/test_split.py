@@ -114,6 +114,34 @@ class SplitTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.project = ProjectFixture(Path(self.temp.name))
 
+    def test_alias_index_and_private_copy_reuse_inventory_until_inputs_change(self) -> None:
+        original = self.project.version("us")
+        copied = Path(self.temp.name) / "copy"
+        copied.mkdir()
+        version = SimpleNamespace(split=copied / "fixture.yaml", symbols=copied / "symbols.txt")
+        version.split.write_bytes(original.split.read_bytes())
+        version.symbols.write_bytes(original.symbols.read_bytes())
+        project = SimpleNamespace(version=lambda _: version)
+        with (
+            patch("unbake.project.cache._remembered", {}),
+            patch("unbake.project.cache._parsed", {}),
+            patch.object(split, "_functions", wraps=split._functions) as compute,
+        ):
+            inventory = split.functions(self.project, "us")
+            self.assertEqual(split.owners_by_alias(self.project, "us")["alpha"], inventory[:1])
+            self.assertEqual(split.functions(project, "us"), inventory)
+            self.assertEqual(split.owners_by_alias(project, "us")["alpha"], inventory[:1])
+            compute.assert_called_once()
+            version.symbols.write_text(version.symbols.read_text() + "entry = 0x80001004; // type:func\n")
+            updated = split.functions(project, "us")
+            self.assertIn(("entry", 4), updated[0].entries)
+            self.assertEqual(compute.call_count, 2)
+            self.assertEqual(split.owners_by_alias(project, "us")["alpha"], updated[:1])
+            self.assertEqual(compute.call_count, 2)
+            version.split.write_text(version.split.read_text().replace("asm, alpha", "c, alpha"))
+            self.assertEqual(split.functions(project, "us")[0].kind, "c")
+            self.assertEqual(compute.call_count, 3)
+
     def test_cut_preserves_other_lines_and_places_vram_symbol(self) -> None:
         version = self.project.version("us")
         before = split.read(version.split)

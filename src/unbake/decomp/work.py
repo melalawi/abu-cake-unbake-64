@@ -219,9 +219,12 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
         split.holding_versions(project, source.stem),
         True,
     )
-    headers = Headers.read(staged)
+    headers = Headers.read(staged, cache_root=getattr(policy, "cache_root", None))
+    original_headers = dict(headers.texts)
     folded = batch_fold._fold_one(staged, policy, headers, candidate, batch_fold.Changes())
     for path, text in headers.texts.items():
+        if original_headers.get(path) == text:
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     result = staged.src / source.name

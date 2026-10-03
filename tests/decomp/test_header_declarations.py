@@ -2,6 +2,7 @@
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.decomp.header_declarations import declaration_source, declarations
@@ -11,6 +12,23 @@ from unbake.project.config import Held
 
 
 class HeaderDeclarationsTests(unittest.TestCase):
+    def test_reused_header_analysis_keeps_callers_mutations_private(self) -> None:
+        source = "typedef int CachedWord; extern CachedWord cached_value;"
+        expected = declarations(source)
+        with (
+            patch("unbake.project.cache._remembered", {}),
+            patch("unbake.decomp.header_declarations.Parser.parse", return_value=expected) as parse,
+        ):
+            first = declarations(source)
+            first.typedefs.clear()
+            first.uses.add("unrelated")
+            second = declarations(source)
+            self.assertEqual(second.typedefs, {"CachedWord"})
+            self.assertEqual(second.uses, {"CachedWord"})
+            parse.assert_called_once()
+            declarations(source.replace("CachedWord", "EditedWord"))
+            self.assertEqual(parse.call_count, 2)
+
     def test_logical_directives_keep_offsets_and_cannot_hide_the_next_typedef(self) -> None:
         source = (
             "#define WRITE(p) \\\n"
