@@ -162,6 +162,8 @@ def compile_batch(args: argparse.Namespace) -> None:
         item.source = source
         item.unit = str(source)
         item.output = output
+        if args.kind == "as" and args.symbols.is_dir():
+            item.symbols = args.symbols / relative.with_suffix(".txt")
         item.depfile = output.with_suffix(".d")
         item.dep_target = (
             "$(BUILD)/obj/" + ("asm/" if args.kind == "as" else "src/") + str(relative.with_suffix(".built"))

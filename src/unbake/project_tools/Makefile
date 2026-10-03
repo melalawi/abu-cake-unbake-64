@@ -112,7 +112,7 @@ $(call compile-chunks,$(C_COLD))
 ASM_COLD := $(filter-out $(wildcard $(ASM_OBJECTS:.o=.built)),$(ASM_OBJECTS:.o=.built))
 define assemble-chunk
 $(1) &: $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1)) | verify
-	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit batch --source $(ASM) --output $(BUILD)/obj/asm --symbols $(BUILD)/symbol-addresses.txt --batch $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1))
+	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit batch --source $(ASM) --output $(BUILD)/obj/asm --symbols $(BUILD)/asm-symbols --batch $(patsubst $(BUILD)/obj/asm/%.built,$(ASM)/%.s,$(1))
 endef
 define assemble-chunks
 $(if $(strip $(1)),$(eval $(call assemble-chunk,$(wordlist 1,128,$(1))))$(call assemble-chunks,$(wordlist 129,$(words $(1)),$(1))))
@@ -129,7 +129,7 @@ $(BUILD)/obj/src/%.o: $(BUILD)/obj/src/%.built
 
 $(BUILD)/obj/asm/%.built: $(ASM)/%.s | verify
 	@mkdir -p $(@D)
-	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $* --source $< --output $(@:.built=.o) --symbols $(BUILD)/symbol-addresses.txt --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/asm/$*.built'
+	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $* --source $< --output $(@:.built=.o) --symbols $(BUILD)/asm-symbols/$*.txt --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/asm/$*.built'
 	python3 $(TOOLS)/atomic.py --touch $@
 
 $(BUILD)/obj/asm/%.o: $(BUILD)/obj/asm/%.built
@@ -139,7 +139,7 @@ $(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin $(OBJCOPY) $(TOOLS)/atomic.py
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/atomic.py --output $@ -- $(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
 
-$(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py $(TOOLS)/elf.py $(TOOLS)/extract.py $(TOOLS)/atomic.py $(LINK_RECIPE) $(BASEROM) $(BUILD)/unit-ranges.json $(LD)
+$(ELF): $(SYMBOLS) $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py $(TOOLS)/elf.py $(TOOLS)/extract.py $(TOOLS)/atomic.py $(LINK_RECIPE) $(BASEROM) $(BUILD)/unit-ranges.json $(LD)
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/layout.py --script $(LD_SCRIPT) --output $(BUILD)/@NAME@.link.ld --build $(BUILD) --ranges $(BUILD)/unit-ranges.json --recipe $(LINK_RECIPE) --version $(VERSION) --baserom $(BASEROM) --non-matching $(NON_MATCHING)
 	cd $(BUILD) && LC_ALL=C python3 $(abspath $(TOOLS))/atomic.py --output @NAME@.elf --output @NAME@.map -- $(LD) $$(cat @NAME@.link.flags) -T @NAME@.link.ld $(addprefix -T ,$(abspath $(LINK_SCRIPTS))) -Map @NAME@.map -o @NAME@.elf $(patsubst $(BUILD)/%,%,$(OBJECTS))

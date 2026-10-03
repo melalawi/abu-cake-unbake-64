@@ -71,3 +71,44 @@ class CompileChunkTests(unittest.TestCase):
                 compiler.compile_batch(args)
             self.assertEqual(visited, [("us", units[0])])
             self.assertFalse(list(root.rglob("*.built")))
+
+    def test_assembly_batch_selects_nested_symbol_inputs_and_retains_legacy_file(self) -> None:
+        for scoped in (False, True):
+            with self.subTest(scoped=scoped), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                symbols = root / "symbols"
+                if scoped:
+                    symbols.mkdir()
+                else:
+                    symbols.write_text("global 0x80000000\n")
+                sources = [root / "asm" / path for path in ("first.s", "nested/second.s")]
+                args = argparse.Namespace(
+                    source=root / "asm",
+                    output=root / "obj",
+                    kind="as",
+                    batch=sources,
+                    recipe=root / "recipe",
+                    symbols=symbols,
+                )
+                visited = []
+
+                def build(item, data, visited=visited):
+                    visited.append((item.source, item.symbols, item.dep_target))
+                    item.output.parent.mkdir(parents=True, exist_ok=True)
+
+                with (
+                    patch.object(compiler, "read_recipe", return_value={}),
+                    patch.object(compiler, "compile_object", side_effect=build),
+                ):
+                    compiler.compile_batch(args)
+                self.assertEqual(
+                    visited,
+                    [
+                        (
+                            source,
+                            symbols / source.relative_to(args.source).with_suffix(".txt") if scoped else symbols,
+                            "$(BUILD)/obj/asm/" + str(source.relative_to(args.source).with_suffix(".built")),
+                        )
+                        for source in sources
+                    ],
+                )

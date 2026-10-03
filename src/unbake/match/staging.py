@@ -291,7 +291,7 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
             elif kind == "asm" and data.get("as"):
                 inputs.append(executable(data["as"]))
             if kind == "asm" and sn64:
-                inputs.append(symbols)
+                inputs.append(generation / "asm-symbols" / (unit + ".txt"))
             if any(path.is_file() and path.stat().st_mtime_ns > receipt.stat().st_mtime_ns for path in inputs):
                 receipt.unlink()
 

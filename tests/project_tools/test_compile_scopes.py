@@ -182,9 +182,10 @@ class CompileScopeTests(unittest.TestCase):
                 self.assertEqual({name for name, path in receipts.items() if not path.exists()}, expected)
                 self.assertTrue(link.is_symlink())
 
-    def test_sn64_receipts_bind_assembler_symbols_and_only_their_own_drivers(self):
+    def test_sn64_receipts_bind_scoped_symbols_and_only_their_own_drivers(self):
         cases = (
-            ("symbols", {"asm/first"}),
+            ("symbols", set()),
+            ("asm-symbols/first.txt", {"asm/first"}),
             ("asbin", {"src/middle", "asm/first"}),
             ("compile/drivers/sn64_cc.py.sha256", {"src/middle", "asm/first"}),
             ("compile/drivers/abumasn64.sha256", {"src/middle", "asm/first"}),
@@ -199,7 +200,7 @@ class CompileScopeTests(unittest.TestCase):
                 tools = root / "tools"
                 generation = root / "build/us.0"
                 for name, _ in cases:
-                    path = tools / name
+                    path = (generation if name.startswith("asm-symbols/") else tools) / name
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text("")
                     os.utime(path, ns=(100, 100))
@@ -217,7 +218,8 @@ class CompileScopeTests(unittest.TestCase):
                     path.write_bytes(b"receipt")
                     os.utime(path, ns=(150, 150))
                     receipts[name] = path
-                os.utime(tools / changed, ns=(200, 200))
+                changed_path = (generation if changed.startswith("asm-symbols/") else tools) / changed
+                os.utime(changed_path, ns=(200, 200))
                 with patch.object(staging, "resolve_tool", return_value=str(tools / "asbin")) as resolve:
                     staging.chunk_stale_sources(generation, tools, tools / "symbols")
                     resolve.assert_called_once_with("policy:mips_as")

@@ -341,8 +341,6 @@ def compile_rules(project: Project) -> str:
             inputs.extend(("$(call resolve-tool," + compiler["as"] + ")", f"{tools}/compile/drivers/abumasn64.sha256"))
         elif kind == "as":
             inputs.append("$(call resolve-tool," + data["as"] + ")")
-        if kind == "as" and sn64:
-            inputs.append("$(BUILD)/symbol-addresses.txt")
         return " ".join(inputs)
 
     overrides = " ".join("$(BUILD)/obj/src/" + unit + ".built" for unit in data["units"])

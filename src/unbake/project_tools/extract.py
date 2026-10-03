@@ -73,6 +73,54 @@ def publish(path: Path, content: bytes) -> None:
         write(path, content)
 
 
+def assembly_symbols(
+    directory: Path, includes: Path, symbols: dict[str, int], units: dict[str, int], build: Path
+) -> None:
+    """Publish only each assembly source's named addresses, retaining unchanged mtimes.
+
+    Include closure tokens cover symbols supplied by assembler/preprocessor macros.
+    Unit placement is an input to SN64's external branch encoder even when the
+    source does not explicitly name its split unit.
+    """
+    token = re.compile(r"[A-Za-z_.$][\w.$]*")
+    include = re.compile(r'^\s*(?:#\s*include|\.include)\s*[<"]([^>"]+)[>"]', re.M)
+    memo: dict[Path, tuple[set[str], list[Path]]] = {}
+
+    def references(source: Path) -> set[str]:
+        names: set[str] = set()
+        pending, visited = [source], set()
+        while pending:
+            path = pending.pop().resolve()
+            if path in visited:
+                continue
+            visited.add(path)
+            if path not in memo:
+                text = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.S)
+                headers = include.findall(text)
+                # Comments and string literals do not reference address definitions.
+                text = re.sub(r'"[^"\n]*"|(?<!\S)#(?!\s*(?:define|if|elif|ifdef|ifndef|include)\b)[^\n]*', "", text)
+                dependencies = []
+                for name in headers:
+                    candidates = (path.parent / name, includes / name, directory / name)
+                    header = next((candidate for candidate in candidates if candidate.is_file()), None)
+                    if header is None:
+                        raise ValueError(f"assembly include {name} missing for {path.name}")
+                    dependencies.append(header)
+                memo[path] = set(token.findall(text)), dependencies
+            tokens, headers_paths = memo[path]
+            names.update(tokens)
+            pending.extend(headers_paths)
+        return names
+
+    for source in sorted(directory.rglob("*.s")):
+        names = references(source) | {source.stem}
+        content = "".join(
+            f"{name} 0x{symbols[name]:08X}{' unit' if name in units else ''}\n"
+            for name in sorted(names & symbols.keys())
+        )
+        publish(build / "asm-symbols" / source.relative_to(directory).with_suffix(".txt"), content.encode())
+
+
 def scalar(text: str) -> str:
     text = text.split(" #", 1)[0].strip()
     return str(ast.literal_eval(text)) if text[:1] in {"'", '"'} else text
@@ -349,6 +397,10 @@ def inventory(script: str, staging: Path, asm: Path, src: Path, compiler: str) -
         if target not in seen:
             groups[group].append(target)
             edges.append(f"{target if group == 'ASSET' else target[:-2] + '.built'}: {source}")
+            if group == "ASM" and compiler == "sn64":
+                symbol_input = "$(BUILD)/asm-symbols/" + str(obj.relative_to("obj/asm").with_suffix(".txt"))
+                edges.append(f"{target[:-2] + '.built'}: {symbol_input}")
+                edges.append(f"{symbol_input}: | $(BUILD)/.split")
             if group != "C":
                 edges.append(f"{source}: | $(BUILD)/.split")
             seen.add(target)
@@ -582,6 +634,8 @@ def extract(args: argparse.Namespace) -> None:
             f"{name} 0x{value:08X}{' unit' if name in units else ''}\n" for name, value in sorted(symbols.items())
         )
         publish(args.build / "symbol-addresses.txt", addresses.encode())
+        if compiler == "sn64":
+            assembly_symbols(staging / "asm", staging / "include", symbols, units, args.build)
         publish(args.build / "unit-ranges.json", json.dumps(unit_ranges(text), sort_keys=True).encode())
         publish(args.build / "pool-providers.json", json.dumps(pool_rows(text, storage=True), sort_keys=True).encode())
         publish(args.build / (args.name + ".ld"), rewritten.encode())
