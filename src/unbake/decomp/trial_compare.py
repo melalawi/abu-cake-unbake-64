@@ -182,16 +182,25 @@ def compare_object(version: str, document: dict[str, object], function: str) -> 
         # A linker fixup and an already encoded local branch have the same target.
         if resolved and destination is not None and start <= int(destination) < start + int(entry.get("size", 0)):
             return "function-offset", int(destination) - start
+        if resolved:
+            side_name = "left" if side is left else "right"
+            unplaced = cast(dict[str, list[int]], document.get("unplaced_relocation_offsets", {}))
+            if int(instruction.get("address", 0)) in unplaced.get(side_name, []):
+                return "unplaced", side_name
+            paired = cast(dict[str, dict[int, tuple[int, int]]], document.get("relocation_addresses", {}))
+            effective = paired.get(side_name, {}).get(int(instruction.get("address", 0)))
+            if effective is not None:
+                text_base = sections.get(side_name, {}).get("[.text]")
+                if effective[0] == 4 and text_base is not None:
+                    entry_address = text_base + start
+                    if entry_address <= effective[1] < entry_address + int(entry.get("size", 0)):
+                        return "function-offset", effective[1] - entry_address
+                return "address", *effective
         if value is None:
             return None
         symbol = side["symbols"][int(value.get("target_symbol", 0))]
         name, type_, addend = symbol["name"], value.get("type", 0), int(value.get("addend", 0))
         if resolved:
-            side_name = "left" if side is left else "right"
-            paired = cast(dict[str, dict[int, tuple[int, int]]], document.get("relocation_addresses", {}))
-            effective = paired.get(side_name, {}).get(int(instruction.get("address", 0)))
-            if effective is not None:
-                return "address", *effective
             bases = sections.get(side_name, {})
             if name in bases:
                 return "address", type_, bases[name] + addend
@@ -201,10 +210,18 @@ def compare_object(version: str, document: dict[str, object], function: str) -> 
 
     def operands(instruction: dict[str, Any]) -> list[object]:
         # Normalize only the target argument; registers and opcodes stay exact.
-        return [
+        parts = [
             {"arg": {"reloc": True}} if "branch_dest" in part.get("arg", {}) else part
             for part in instruction.get("parts", [])
         ]
+        # Objdiff prints encoded J/JAL destinations as opaque names. The ELF
+        # operand proof above supplies their identity, not the printed spelling.
+        opcodes = [part["opcode"] for part in parts if "opcode" in part]
+        if any(isinstance(opcode, dict) and opcode.get("mnemonic") in ("j", "jal") for opcode in opcodes):
+            args = [index for index, part in enumerate(parts) if "arg" in part]
+            if args:
+                parts[args[-1]] = {"arg": {"reloc": True}}
+        return parts
 
     for i in range(max(len(a), len(b))):
         x, y = a[i] if i < len(a) else {}, b[i] if i < len(b) else {}

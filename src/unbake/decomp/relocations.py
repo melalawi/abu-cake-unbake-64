@@ -14,7 +14,7 @@ from unbake.project_tools.elf import Object
 def paired_relocation_addresses(
     candidate: Path, sections: dict[str, int], addresses: dict[str, int]
 ) -> dict[int, tuple[int, int]]:
-    """Resolve ELF HI16/LO16 pairs, including objdiff's synthetic pool symbols.
+    """Resolve ELF operands, including objdiff's synthetic pool and jump names.
 
     Objdiff names inferred pool slices but omits their containing section. ELF
     relocation records retain that identity; only a proved section base is used.
@@ -28,15 +28,23 @@ def paired_relocation_addresses(
     code = obj.content(text)
     pending: dict[tuple[str, int, int], list[tuple[int, int]]] = {}
     result = {}
-    for offset, kind, symbol in obj.relocations(text):
-        if kind not in (5, 6):
+    records = obj.relocations(text)
+    relocated_offsets = {offset for offset, _, _ in records}
+    text_base = sections.get("[.text]")
+    if text_base is not None:
+        for offset in range(0, len(code) - 3, 4):
+            word = int.from_bytes(code[offset : offset + 4], "big")
+            if word >> 26 in (2, 3) and offset not in relocated_offsets:
+                result[offset] = 4, ((text_base + offset + 4) & 0xF0000000) | ((word & 0x03FFFFFF) << 2)
+    for offset, kind, symbol in records:
+        if kind not in (4, 5, 6):
             continue
         key = symbol["name"], symbol["value"], symbol["section"]
         word = int.from_bytes(code[offset : offset + 4], "big")
         if kind == 5:
             pending.setdefault(key, []).append((offset, word))
             continue
-        highs = pending.pop(key, [])
+        highs = pending.pop(key, []) if kind == 6 else []
         if symbol["section"] == 0:
             base = addresses.get(symbol["name"])
         elif symbol["section"] == 0xFFF1:
@@ -47,6 +55,9 @@ def paired_relocation_addresses(
         else:
             base = None
         if base is None:
+            continue
+        if kind == 4:
+            result[offset] = 4, (base + ((word & 0x03FFFFFF) << 2)) & 0xFFFFFFFF
             continue
         lows = set()
         for at, high in highs:
@@ -131,15 +142,18 @@ def resolve_literal_placement(
                 slices,
             )
         except (Held, ValueError, KeyError, struct.error):
-            copied.unlink(missing_ok=True)
-            return candidate, {}
-        return copied, {
-            "[.text]": text_base,
-            **{
-                f"[{name}]": row["address"]
-                for name, row in zip(section_names, sorted(slices, key=lambda item: item["address"]), strict=True)
-            },
-        }
+            # A compiler section can also contain proved shared storage outside
+            # the private slices. Compare its full resident identity below;
+            # discard any partial transfer before attempting that proof.
+            shutil.copyfile(candidate, copied)
+        else:
+            return copied, {
+                "[.text]": text_base,
+                **{
+                    f"[{name}]": row["address"]
+                    for name, row in zip(section_names, sorted(slices, key=lambda item: item["address"]), strict=True)
+                },
+            }
     for section in pools:
         if not resolved:
             shutil.copyfile(candidate, copied)
@@ -225,7 +239,10 @@ def jump_table_differences(
 
     def expected_at(location: int, pointer: bool) -> int | None:
         if reader is not None and reader.find_span(location, 4) is not None:
-            return reader.table_entry(location) if pointer else int.from_bytes(reader(location, 4), "big")
+            # transfer_private emits resident bytes, including the configured
+            # table bias. Ordinary compiler sections still hold runtime pointers.
+            runtime_pointer = pointer and not section_name.startswith(".unbake_pool_")
+            return reader.table_entry(location) if runtime_pointer else int.from_bytes(reader(location, 4), "big")
         if linked is None:
             return None
         loaded = [

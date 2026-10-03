@@ -258,9 +258,23 @@ def diff(
             resolve_literal_placement,
             resolve_table_placement,
         )
+        from unbake.project_tools.elf import Object
 
         sections = placements(generation.resolve(), function, placement_target or target)
         addresses = cast(dict[str, int], document["symbol_addresses"])
+        # A trial's private text entry occupies the owning function placement.
+        # This also supplies the PC region for already encoded J/JAL operands.
+        if function in addresses:
+            for side, path in (("left", target), ("right", candidate)):
+                obj = Object(path)
+                entries = [
+                    symbol
+                    for table in obj.symbols.values()
+                    for symbol in table
+                    if symbol["name"] == function and symbol["section"] == obj.section(".text")
+                ]
+                if len(entries) == 1:
+                    sections[side].setdefault("[.text]", addresses[function] - entries[0]["value"])
         placed, proved = resolve_literal_placement(
             generation.resolve(), version, function, candidate, output, addresses
         )
@@ -276,6 +290,23 @@ def diff(
             "left": paired_relocation_addresses(target, sections["left"], addresses),
             "right": paired_relocation_addresses(placed, sections["right"], addresses),
         }
+        # A local definition cannot borrow a global symbol's address merely by
+        # sharing its name. Its containing section needs a placement proof.
+        unplaced: dict[str, list[int]] = {}
+        for side, path in (("left", target), ("right", placed)):
+            obj = Object(path)
+            text = obj.section(".text")
+            unplaced[side] = (
+                [
+                    offset
+                    for offset, _, symbol in obj.relocations(text)
+                    if 0 < symbol["section"] < len(obj.names)
+                    and f"[{obj.names[symbol['section']]}]" not in sections[side]
+                ]
+                if text is not None
+                else []
+            )
+        document["unplaced_relocation_offsets"] = unplaced
         document["jump_table_differences"] = [
             difference
             for section in (".rdata", ".rodata")
