@@ -27,15 +27,15 @@ def register(phases: Subparsers) -> None:
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     if args.struct is not None:
         if args.function is not None:
-            raise Held("draft", "draft.subject: select FUNCTION or --struct ID")
+            raise Held("draft", "draft.subject: select FUNCTION or --struct ID", next_action="unbake draft --help")
         raise Unfinished("draft", "draft.struct")
     function = args.function
     if function is None:
-        raise Held("draft", "draft.function: supply FUNCTION")
+        raise Held("draft", "draft.function: supply FUNCTION", next_action="unbake next")
     if not re.fullmatch(r"[A-Za-z_]\w*", function):
-        raise Held("draft", "draft.function: expected a C identifier")
+        raise Held("draft", "draft.function: expected a C identifier", next_action="unbake next")
     if function in exclusions.load(project, getattr(args, "exclude", None)):
-        raise Held("draft", f"draft.excluded: {function}: excluded by explicit manifest")
+        raise Held("draft", f"draft.excluded: {function}: excluded by explicit manifest", next_action="unbake next")
     local = project.tools / "clone-policy.toml"
     if local.is_file():
         policy = load_policy(local)
@@ -47,7 +47,18 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     source = destination / (function + ".c")
     refresh = source.exists() and function in type_context.redrafts(project)
     if source.exists() and not refresh:
-        raise Held("draft", f"draft.source: {source} already exists; edit and try it")
+        try:
+            work.overlay_data(project, source)
+        except Held as error:
+            if not error.reason.startswith("trial.overlay_stale:"):
+                raise
+            refresh = True
+    if source.exists() and not refresh:
+        raise Held(
+            "draft",
+            f"draft.source: {source} already exists; edit and try it",
+            next_action="unbake try " + shlex.quote(str(source)) + " --scratch " + shlex.quote(str(scratch)),
+        )
     with inputs(project, function, versions, read_only=True) as pinned:
         generated = m2c.draft(
             project,

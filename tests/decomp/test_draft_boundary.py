@@ -58,10 +58,17 @@ class DraftBoundaryTests(unittest.TestCase):
             ("void alpha(void) { M2C_ERROR(/* mtc0 $a0, $18 */); }", "mtc0"),
             ("void alpha(void) { *(int *)saved_reg_s3 = 1; }", "incoming saved register $s3"),
             ("int alpha(void) { return missing; }", "missing"),
+            ("void alpha(void *p) { *p = 1; }", "invalid use of void expression"),
         ):
             with self.subTest(output=output), tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
                 root = Path(temporary).resolve()
-                self.compiler_error = "missing: undeclared identifier" if "return missing" in output else ""
+                self.compiler_error = (
+                    "missing: undeclared identifier"
+                    if "return missing" in output
+                    else "invalid use of void expression"
+                    if "*p = 1" in output
+                    else ""
+                )
                 project, policy, _ = fixture(root, case=self)
                 tool = root / "m2c"
                 tool.write_text(f"#!{sys.executable}\nprint({output!r})\n")
@@ -73,6 +80,12 @@ class DraftBoundaryTests(unittest.TestCase):
                 self.assertTrue(caught.exception.reason.startswith("alpha:"))
                 self.assertIn(reason, caught.exception.reason)
                 self.assertNotIn("draft_path:", messages.getvalue())
+                self.assertIn("draft alpha", caught.exception.next_action)
+                if self.compiler_error:
+                    self.assertIn("m2c/type compile proof failed", caught.exception.reason)
+                    retained = Path(caught.exception.reason.split("draft_path: ", 1)[1].splitlines()[0])
+                    self.assertTrue(retained.is_file())
+                    self.assertIn(output, retained.read_text())
                 self.assertFalse((project.include[0] / "structs.h").exists())
                 self.assertFalse(list((project.work).glob("*/alpha.c")))
 

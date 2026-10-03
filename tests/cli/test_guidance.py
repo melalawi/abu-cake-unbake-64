@@ -124,7 +124,7 @@ class GuidanceTests(MainCase):
             code, out, error = self.run_main(self.args("setup"))
         self.assertEqual(code, 130)
         self.assertEqual(error, "")
-        self.assertIn("Next: Supply interrupted operation", out)
+        self.assertIn("Next: Repair the prerequisite identified above. Then run ", out)
 
     def test_explicit_policy_override_is_named_in_retry(self) -> None:
         policy = self.directory / "policy with spaces.toml"

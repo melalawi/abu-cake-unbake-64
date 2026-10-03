@@ -29,7 +29,12 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     for kind in ("functions", "globals", "structs", "arrays"):
         records = value[kind]
         lines.append(f"{kind}: known={sum(row['state'] == 'known' for row in records.values())} total={len(records)}")
-    lines.extend(f"{row['key']}: {row.get('alternatives', row.get('reason', []))}" for row in value["conflicts"])
+    conflicts = [f"{row['key']}: {row.get('alternatives', row.get('reason', []))}" for row in value["conflicts"]]
+    conflict_path = project.build / "types/conflicts.txt"
+    conflict_path.parent.mkdir(parents=True, exist_ok=True)
+    conflict_path.write_text("".join(line + "\n" for line in conflicts), encoding="utf-8")
+    lines.append(f"conflict list: {conflict_path}; showing {min(5, len(conflicts))} of {len(conflicts)}")
+    lines.extend(conflicts[:5])
     lines.append(f"redraft={len(redrafts(project))}; unknown details are retained in the database")
     common.suggest("unbake next")
     return common.receipt("solve", lines)

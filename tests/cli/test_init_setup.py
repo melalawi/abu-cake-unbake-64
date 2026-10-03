@@ -35,7 +35,7 @@ class InitSetupTests(MainCase):
             code, out, error = self.run_main(["--project", str(target), "setup"], load_project=False)
         self.assertEqual(code, 1)
         self.assertIn("HELD(setup): setup.roms", out)
-        self.assertIn("Next: Supply setup.roms", out)
+        self.assertIn(f"Next: Put ROMs in {target / 'roms'}. Then run ", out)
         self.assertEqual(error, "")
         policy.assert_not_called()
         self.assertEqual(hashlib.sha256((target / "config.toml").read_bytes()).hexdigest(), before)
@@ -108,6 +108,7 @@ class InitSetupTests(MainCase):
         self.assertEqual(code, 1)
         self.assertEqual(
             out,
-            f"HELD(setup): layout.plan: missing\nNext: Supply layout.plan. Then run {command(self.root, 'setup')}.\n",
+            "HELD(setup): layout.plan: missing\nNext: Repair the prerequisite identified above. "
+            f"Then run {command(self.root, 'setup')}.\n",
         )
         self.assertEqual(error, "")

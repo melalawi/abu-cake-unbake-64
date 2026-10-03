@@ -33,7 +33,11 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         detail = "; ".join(f"{args.source}:{checks.message(finding)}" for finding in blockers)
         print("owner fuzzy bar: FAIL")
         print(f"HELD(try): trial.source_rules: {detail}")
-        suggest(f"Edit {args.source}. Then run " + shlex.join([*prefix(project), "try", str(args.source)]))
+        suggest(
+            f"Edit {args.source}. Then run "
+            + shlex.join([*prefix(project), "try", str(args.source), "--scratch", str(args.scratch)]),
+            on_refusal=True,
+        )
         return True
     result = trial.retain_draft(
         project, policy, args.source, args.scratch, versions=None, flags=args.flags, overlay_root=args.overlay_root

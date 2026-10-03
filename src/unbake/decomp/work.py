@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import shutil
 from dataclasses import replace
 from functools import partial
@@ -164,7 +165,14 @@ def overlay_data(project: Project, source: Path) -> dict[str, Any]:
     if any(
         name in actual and data["base"].get(name) != value and actual[name] != value for name, value in current.items()
     ):
-        raise Held("try", "trial.overlay_stale: project headers changed; draft again")
+        raise Held(
+            "try",
+            "trial.overlay_stale: project headers changed; draft again",
+            next_action="unbake draft "
+            + shlex.quote(source.stem)
+            + " --scratch "
+            + shlex.quote(str(source.parent.parent.parent if source.parent.parent.name == "drafts" else source.parent)),
+        )
     # A preceding publication may already have installed this exact proposal.
     # Bind its proved bytes as the current base instead of proposing it again.
     data["base"] = {**data["base"], **{name: value for name, value in current.items() if actual.get(name) == value}}

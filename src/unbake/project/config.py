@@ -13,9 +13,10 @@ POLICY_PATH = Path(__file__).with_name("policy.toml")
 
 
 class Held(Exception):
-    def __init__(self, phase: str, reason: str) -> None:
+    def __init__(self, phase: str, reason: str, *, next_action: str | None = None) -> None:
         self.phase = phase
         self.reason = reason
+        self.next_action = next_action
         super().__init__(reason)
 
 

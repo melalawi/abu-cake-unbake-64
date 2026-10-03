@@ -17,6 +17,9 @@ def command(root: Path | None, phase: str) -> str:
 
 
 def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
+    if root is not None and missing == "setup.roms":
+        project = config.load_pending(root)
+        return f"Put ROMs in {project.roms}. Then run {retry}."
     if root is not None and missing == "types.feedback.source_sha256":
         from unbake.typemap import storage
 
@@ -65,13 +68,13 @@ def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unba
         except (Held, OSError, ValueError):
             pass
     if missing is not None:
-        return f"Supply {missing}. Then run {retry}."
+        return f"Repair the prerequisite identified above. Then run {retry}."
     if root is None:
         return "unbake init <name>"
     try:
         project = config.load_pending(root)
     except Held as error:
-        return f"Supply {error.reason.split(':', 1)[0]}. Then run {retry}."
+        return error.next_action or f"Repair the project configuration identified above. Then run {retry}."
     if project.state == "awaiting-roms":
         setup = command(root, "setup")
         if project.roms.is_dir() and next(project.roms.iterdir(), None) is not None:
@@ -82,5 +85,6 @@ def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unba
 
         return select(config.load(root), config.load_policy())[0]
     except (Held, OSError, ValueError) as error:
-        reason = error.reason if isinstance(error, Held) else str(error)
-        return f"Supply {reason.split(chr(58), 1)[0]}. Then run {command(root, 'next')}."
+        if isinstance(error, Held) and error.next_action is not None:
+            return error.next_action
+        return f"Repair the prerequisite identified above. Then run {command(root, 'next')}."

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -280,7 +281,15 @@ def _draft(
     candidate = work / "compile-proof" / (function + ".c")
     candidate.parent.mkdir()
     candidate.write_text(content, encoding="utf-8")
-    prove(project, policy, function, v, candidate)
+    try:
+        prove(project, policy, function, v, candidate)
+    except Held as error:
+        raise Held(
+            error.phase,
+            f"m2c/type compile proof failed: {error.reason}\ndraft_path: {candidate}\n"
+            "Repair the shared header types identified above and redraft.",
+            next_action=shlex.join(["unbake", "draft", function, "--scratch", str(directory)]),
+        ) from error
     source.write_text(content, encoding="utf-8")
     draft_work.save_overlay(original_project, work)
     if announce:
@@ -316,7 +325,17 @@ def draft(
         )
     except Held as error:
         if function and not error.reason.startswith(function + ":"):
-            raise Held(error.phase, f"{function}: {error.reason}") from error
+            raise Held(
+                error.phase,
+                f"{function}: {error.reason}",
+                next_action=error.next_action or shlex.join(["unbake", "draft", function, "--scratch", str(scratch)]),
+            ) from error
+        if function and error.next_action is None:
+            error.next_action = shlex.join(["unbake", "draft", function, "--scratch", str(scratch)])
         raise
     except (OSError, UnicodeError) as error:
-        raise Held("m2c", f"{function}: draft input/output: {error}") from error
+        raise Held(
+            "m2c",
+            f"{function}: draft input/output: {error}",
+            next_action=shlex.join(["unbake", "draft", function, "--scratch", str(scratch)]) if function else None,
+        ) from error

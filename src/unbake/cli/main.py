@@ -139,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"HELD({error.phase}): {error.reason}", file=sys.stderr if json_output else sys.stdout)
         if phase == "config":
             retry = "unbake --help" if error.phase == "config" else f"unbake {error.phase}"
+        if error.next_action is not None:
+            common.suggest(error.next_action, on_refusal=True)
         missing = error.reason.split(":", 1)[0]
         return 1
     except (ImportError, OSError, RuntimeError, ValueError) as error:
