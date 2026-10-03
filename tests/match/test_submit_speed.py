@@ -321,6 +321,7 @@ class ReusedObjectAdmissionTests(unittest.TestCase):
             "missing source digest",
             "receipt",
             "old receipt",
+            "cache helper",
             "object",
             "compiler",
         ]
@@ -350,6 +351,10 @@ class ReusedObjectAdmissionTests(unittest.TestCase):
                 os.utime(recipe, ns=(100, 100))
                 os.utime(driver, ns=(100, 100))
                 os.utime(receipt, ns=(200, 200))
+                if fault == "cache helper":
+                    cache = tools / "cache.py"
+                    cache.write_text("cache implementation changed")
+                    os.utime(cache, ns=(300, 300))
                 if fault in ["header", "source"]:
                     (header if fault == "header" else source).write_text("edited")
                 if fault == "missing source digest":
@@ -380,7 +385,7 @@ class ReusedObjectAdmissionTests(unittest.TestCase):
                     else:
                         self.assertEqual(
                             incremental.reusable_sources(project, {"us": root / "generation"}, {"a": ("us",)}),
-                            {"a"} if fault == "valid" else set(),
+                            {"a"} if fault in {"valid", "cache helper"} else set(),
                         )
 
     def test_checked_sources_preserve_bytes_and_still_enter_normal_proof(self):

@@ -112,7 +112,7 @@ def reusable_sources(project: Project, generations: dict[str, Path], sources: di
     recipe = project.tools / "build.json"
     if not recipe.is_file() or json.loads(recipe.read_text()) != makefile.description(project):
         return set()
-    newest = max(path.stat().st_mtime_ns for path in (recipe, *project.tools.glob("*.py")))
+    newest = max(path.stat().st_mtime_ns for path in (recipe, project.tools / "compile.py") if path.is_file())
     digests: dict[Path, str] = {}
 
     def digest(path: Path) -> str:
