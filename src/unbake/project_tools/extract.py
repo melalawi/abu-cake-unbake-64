@@ -583,7 +583,7 @@ def extract(args: argparse.Namespace) -> None:
         )
         publish(args.build / "symbol-addresses.txt", addresses.encode())
         publish(args.build / "unit-ranges.json", json.dumps(unit_ranges(text), sort_keys=True).encode())
-        publish(args.build / "pool-providers.json", json.dumps(pool_rows(text), sort_keys=True).encode())
+        publish(args.build / "pool-providers.json", json.dumps(pool_rows(text, storage=True), sort_keys=True).encode())
         publish(args.build / (args.name + ".ld"), rewritten.encode())
         graph.extend(["LINK_SCRIPTS := " + " ".join(link_scripts), f"ROM_BYTES := {args.baserom.stat().st_size}"])
         # This file is the successful extraction receipt; replace it last.

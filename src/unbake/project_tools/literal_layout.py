@@ -38,6 +38,8 @@ def arrange(
     *,
     emit_resident: bool = False,
     slices: list[dict[str, int]] | None = None,
+    provided: list[dict[str, int]] | None = None,
+    persist: bool = True,
 ) -> int:
     """Expand shared literal uses and preserve resident gaps, proving each emitted word.
 
@@ -121,17 +123,46 @@ def arrange(
     if not anchors:
         end = (end + 3) & ~3
     if slices:
-        for _, address, size in chunks:
-            if not any(
-                row["address"] <= address < address + size <= row["address"] + row["end"] - row["start"]
+        if provided is not None:
+            slices = [
+                row
                 for row in slices
-            ):
+                if any(
+                    address < row["address"] + row["end"] - row["start"] and row["address"] < address + size
+                    for _, address, size in chunks
+                )
+            ]
+        for _, address, size in chunks:
+            covered_span = sum(
+                max(0, min(address + size, row["address"] + row["end"] - row["start"]) - max(address, row["address"]))
+                for row in slices
+            )
+            if covered_span != size:
                 raise ValueError(f"layout.pool_owner: {section}: unassigned compiler bytes at 0x{address:08X}")
         base = min(row["address"] for row in slices)
         end = max(row["address"] + row["end"] - row["start"] for row in slices)
     if not slices and end - base > max(0x10000, len(source) * 16):
         raise ValueError(f"{section}: pool references cross unrelated resident spans")
-    if slices:
+    if slices and provided is not None:
+        # Only proved compiler bytes change providers. Unemitted resident bytes
+        # remain with assembly, including private constants referenced as externs.
+        result = bytearray(end - base)
+        for row in sorted(slices, key=lambda row: row["address"]):
+            ranges = sorted(
+                (max(address, row["address"]), min(address + size, row["address"] + row["end"] - row["start"]))
+                for _, address, size in chunks
+                if address < row["address"] + row["end"] - row["start"] and row["address"] < address + size
+            )
+            merged: list[tuple[int, int]] = []
+            for start, stop in ranges:
+                if merged and start <= merged[-1][1]:
+                    merged[-1] = merged[-1][0], max(merged[-1][1], stop)
+                else:
+                    merged.append((start, stop))
+            for start, stop in merged:
+                rom = row["start"] + start - row["address"]
+                provided.append(dict(address=start, start=rom, end=rom + stop - start))
+    elif slices:
         result = bytearray(end - base)
         for row in slices:
             size = row["end"] - row["start"]
@@ -194,7 +225,8 @@ def arrange(
     replace(obj, index, result)
     if obj.path.is_symlink():
         raise ValueError(f"{obj.path}: cannot rewrite a symlink object")
-    write(obj.path, bytes(obj.data))
+    if persist:
+        write(obj.path, bytes(obj.data))
     return base
 
 

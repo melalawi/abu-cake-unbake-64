@@ -239,7 +239,7 @@ class PoolSliceTests(unittest.TestCase):
                 if name != names[1]:
                     self.assertEqual(rebuilt.content(index), image[row["start"] : row["end"]])
 
-    def test_nonzero_private_tail_needs_compiler_material(self) -> None:
+    def test_nonzero_private_tail_stays_with_assembly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             obj = Object(
                 assemble(
@@ -253,12 +253,12 @@ class PoolSliceTests(unittest.TestCase):
             image = bytearray(0x48)
             image[0x20:0x30] = struct.pack(">4I", 0x3C018000, 0xC4203000, 0x03E00008, 0)
             image[0x40:0x48] = bytes.fromhex("3f80000012345678")
-            before = obj.path.read_bytes()
-            with self.assertRaisesRegex(ValueError, "unaccounted private"):
-                transfer_private(
-                    obj,
-                    dict(start=0x20, end=0x30, address=0x80002000),
-                    bytes(image),
-                    [dict(start=0x40, end=0x48, address=0x80003000)],
-                )
-            self.assertEqual(obj.path.read_bytes(), before)
+            names = transfer_private(
+                obj,
+                dict(start=0x20, end=0x30, address=0x80002000),
+                bytes(image),
+                [dict(start=0x40, end=0x48, address=0x80003000)],
+            )
+            rebuilt = Object(obj.path)
+            self.assertEqual(names, [".unbake_pool_80003000"])
+            self.assertEqual(rebuilt.content(rebuilt.section(names[0])), image[0x40:0x44])

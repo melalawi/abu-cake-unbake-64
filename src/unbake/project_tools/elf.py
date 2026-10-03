@@ -18,9 +18,9 @@ class Symbol(TypedDict):
 
 
 class Object:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, data: bytes | None = None) -> None:
         self.path = Path(path)
-        self.data = bytearray(self.path.read_bytes())
+        self.data = bytearray(self.path.read_bytes() if data is None else data)
         if self.data[:7] != b"\x7fELF\x01\x02\x01":
             raise ValueError(f"{path}: expected big-endian ELF32")
         header = struct.unpack_from(">HHIIIIIHHHHHH", self.data, 16)
