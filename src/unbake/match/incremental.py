@@ -106,13 +106,15 @@ def reusable_sources(project: Project, generations: dict[str, Path], sources: di
     """Recognize objects already compiled from these exact source/dependency bytes.
 
     Require the saved recipe and receipt age as well as every dependency digest.
-    A missing source digest, changed flags, changed header, or old driver receipt
-    takes the ordinary compile path. Object and cartridge comparisons still run.
+    A missing source digest, changed flags, changed header, or old recipe receipt
+    takes the ordinary compile path. Cache-wrapper refresh is not a compiler input:
+    the historical object already certifies these exact dependency bytes with the
+    verified compiler and unchanged flags. Object and cartridge comparisons still run.
     """
     recipe = project.tools / "build.json"
     if not recipe.is_file() or json.loads(recipe.read_text()) != makefile.description(project):
         return set()
-    newest = max(path.stat().st_mtime_ns for path in (recipe, project.tools / "compile.py") if path.is_file())
+    newest = recipe.stat().st_mtime_ns
     digests: dict[Path, str] = {}
 
     def digest(path: Path) -> str:
