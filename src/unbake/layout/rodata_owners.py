@@ -16,7 +16,7 @@ from unbake.project.config import Held, Project
 from unbake.project.makefile import recipe
 from unbake.project_tools.elf import Object
 from unbake.project_tools.literal_layout import storage
-from unbake.project_tools.rodata import pools, relocated, table_addresses
+from unbake.project_tools.rodata import pools, relocated, table_addresses, table_pointer_bias
 
 
 @dataclass(frozen=True)
@@ -206,7 +206,7 @@ def proved_tables(
             raw = image[start : start + pool.size]
             normalized = b"".join(((word + span.bias) & 0xFFFFFFFF).to_bytes(4, "big") for word in words(raw))
             actual = material[pool.offset : pool.offset + pool.size]
-            if len(raw) != pool.size or actual not in (raw, normalized):
+            if len(raw) != pool.size or (actual != normalized and table_pointer_bias(actual, raw) is None):
                 raise ValueError(f"{section}: table bytes disagree at 0x{address:08X}")
             result.append((owner, address, address + pool.size))
     return result

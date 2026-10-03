@@ -167,6 +167,24 @@ def table_addresses(obj: Object, section: str, target_words: Mapping[int, int]) 
     return result
 
 
+def table_pointer_bias(actual: bytes, resident: bytes) -> int | None:
+    """Prove the resident encoding of an already relocated local-text table.
+
+    Some ROMs store physical text pointers and others store KSEG0 pointers.
+    Require every relocated entry to agree exactly; this never maps pool bytes
+    to a different address or admits an arbitrary pointer delta.
+    """
+    if not actual or len(actual) != len(resident) or len(actual) % 4:
+        return None
+    for bias in (0, 0x80000000):
+        normalized = b"".join(
+            struct.pack(">I", (word[0] + bias) & 0xFFFFFFFF) for word in struct.iter_unpack(">I", resident)
+        )
+        if normalized == actual:
+            return bias
+    return None
+
+
 def fragment(rows: Iterable[Mapping[str, object]]) -> str:
     """Render proved shared-pool overlays from explicit split-row facts.
 

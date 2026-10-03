@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 
 from unbake.project_tools.atomic import write
 from unbake.project_tools.elf import Object
-from unbake.project_tools.rodata import pools, relocated
+from unbake.project_tools.rodata import pools, relocated, table_pointer_bias
 
 ANCHOR = re.compile(r"unbake_rodata_([0-9A-F]{8})_([0-9A-F]+)$")
 
@@ -112,7 +112,7 @@ def arrange(
             expected = (read_table or read_memory)(address, size) if table else read_memory(address, size)
             actual = material[own : own + size]
             raw = read_memory(address, size)
-            if actual != expected and (table is None or actual != raw):
+            if actual != expected and (table is None or table_pointer_bias(actual, raw) is None):
                 raise ValueError(f"{section}.bytes: disagree at 0x{address:08X}")
             if emit_resident and table is not None and actual != raw and own not in normalized:
                 normalized.add(own)
