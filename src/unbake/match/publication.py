@@ -4,6 +4,7 @@ import fcntl
 import os
 import shutil
 from collections.abc import Iterable
+from contextlib import ExitStack
 from pathlib import Path
 from uuid import uuid4
 
@@ -27,33 +28,42 @@ def collect(project: Project, *, generations: Iterable[Path] | None = None) -> N
 
 
 def _collect(project: Project, *, generations: Iterable[Path] | None = None) -> None:
-    parent = project.build
-    selected = set(generations) if generations is not None else None
-    retained: set[Path] = set()
-    for generation in parent.iterdir():
-        if not generation.is_dir() or generation.is_symlink():
-            continue
-        for name in ("asm", "assets"):
-            path = generation / "obj" / name
-            if path.is_symlink():
-                target = path.resolve()
-                retained.update(p for p in target.parents if p.parent == parent)
-    for version in project.versions:
-        live = build.current_generation(project, version).resolve()
-        for generation in parent.glob(f"{version}.*"):
-            suffix = generation.name.removeprefix(version + ".")
-            if (
-                (selected is not None and generation not in selected)
-                or not suffix.isdigit()
-                or not generation.is_dir()
-                or generation.is_symlink()
-                or (generation.resolve() == live)
-                or generation.resolve() in retained
-            ):
-                continue
-            with (generation / ".inuse").open("a+b") as lock:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
+    parent = project.build.resolve()
+    selected = {path.resolve() for path in generations} if generations is not None else None
+    numbered = {
+        path.resolve()
+        for version in project.versions
+        for path in parent.glob(f"{version}.*")
+        if path.name.removeprefix(version + ".").isdigit() and path.is_dir() and not path.is_symlink()
+    }
+    roots = {build.current_generation(project, version).resolve() for version in project.versions}
+    roots.update(path for path in numbered if selected is not None and path not in selected)
+    # Non-generation workspaces can also retain assembly/assets from a base.
+    roots.update(
+        path.resolve()
+        for path in parent.iterdir()
+        if path.is_dir() and not path.is_symlink() and path.resolve() not in numbered
+    )
+    with ExitStack() as locks:
+        for generation in numbered - roots:
+            lock = locks.enter_context((generation / ".inuse").open("a+b"))
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                roots.add(generation)
+        retained = set(roots)
+        pending = list(roots)
+        while pending:
+            generation = pending.pop()
+            obj = generation / "obj"
+            paths = [obj] if obj.is_symlink() else list(obj.rglob("*")) if obj.is_dir() else []
+            for path in paths:
+                if not path.is_symlink():
                     continue
-                shutil.rmtree(generation)
+                target = path.resolve()
+                owner = next((p for p in (target, *target.parents) if p in numbered), None)
+                if owner is not None and owner not in retained:
+                    retained.add(owner)
+                    pending.append(owner)
+        for generation in numbered - retained:
+            shutil.rmtree(generation)

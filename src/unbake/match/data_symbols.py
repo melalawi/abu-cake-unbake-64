@@ -4,8 +4,10 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from unbake.decomp import symbols_edits
 from unbake.decomp.needs import SymbolNeed
 from unbake.layout import split
+from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
@@ -117,3 +119,47 @@ def needs(project: Project, function: str, version: str, path: Path) -> list[Sym
         SymbolNeed(version, name, address, 0, "data", "address", 0, "owning ROM HI16/LO16 pairs")
         for name, address in found.items()
     ]
+
+
+def resolve(needs: list[SymbolNeed], project: Project, policy: Policy) -> list[Edit]:
+    """Replace version-local aliases instead of defining a second Splat symbol."""
+    selected: dict[tuple[str, int], str] = {}
+    for need in needs:
+        key = (need.version, need.address)
+        if key in selected and selected[key] != need.name:
+            raise Held("symbols", f"{need.name}: conflicting names at 0x{need.address:08X} on VERSION {need.version}")
+        selected[key] = need.name
+    validated = {edit.path: edit for edit in symbols_edits.resolve(list(needs), project, policy)}
+    edits = []
+    for version in dict.fromkeys(need.version for need in needs):
+        path = project.version(version).symbols
+        before = path.read_text()
+        lines = before.splitlines()
+        replacements = {address: name for (v, address), name in selected.items() if v == version}
+        emitted: set[int] = set()
+        rendered = []
+        for line in lines:
+            match = symbols_edits._LINE.fullmatch(line)
+            address = int(match[2], 0) if match else None
+            if address not in replacements:
+                rendered.append(line)
+                continue
+            assert match is not None and address is not None
+            name = replacements[address]
+            if re.search(r"\btype:(?:func|function)\b", match[3] or ""):
+                raise Held("symbols", f"{name}: data placement aliases a function in {path}")
+            if address in emitted:
+                continue
+            emitted.add(address)
+            rendered.append(line[: match.start(1)] + name + line[match.end(1) :])
+        # Validated additions cover addresses with no previous version-local name.
+        after_validation = validated[path].after if path in validated else before
+        for line in after_validation.splitlines():
+            match = symbols_edits._LINE.fullmatch(line)
+            if match and (addition_address := int(match[2], 0)) in replacements and addition_address not in emitted:
+                rendered.append(line)
+                emitted.add(addition_address)
+        after = "\n".join(rendered) + ("\n" if rendered else "")
+        if after != before:
+            edits.append(Edit(path, before, after, (version,)))
+    return edits

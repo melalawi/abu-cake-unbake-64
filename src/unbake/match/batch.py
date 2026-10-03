@@ -24,8 +24,8 @@ from typing import Any
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.decomp import checks, drafts, symbols_edits, type_context
-from unbake.decomp.needs import Need, SymbolNeed
+from unbake.decomp import checks, drafts, type_context
+from unbake.decomp.needs import SymbolNeed
 from unbake.layout import split, split_apply
 from unbake.layout.header_context import Headers
 from unbake.match import (
@@ -59,6 +59,7 @@ class Candidate:
     compiler: dict[str, Any] = field(default_factory=dict)
     final: str = ""
     removed_rows: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    symbol_needs: list[SymbolNeed] = field(default_factory=list)
 
 
 def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
@@ -93,7 +94,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                     shutil.copy2(local_policy, tree / local_policy.relative_to(project.root))
                 staged = staging.project_at(project, tree)
                 staging.write_staged(staged, staging.helper_edits(staged))
-                base = _Base(staged)
+                base = _Base(staged, policy)
             with reporting.phase("fold", sources=len(candidates)):
                 candidates = _fold(staged, policy, candidates, receipts)
             if not candidates:
@@ -168,9 +169,9 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 for candidate in candidates
             )
             receipts.extend(f"OK(submit): {version}: {line}" for version, line in sha1.items())
-        collect(project, generations=current.values())
-        with reporting.phase("type_feedback", sources=len(candidates)):
-            receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
+            with reporting.phase("type_feedback", sources=len(candidates)):
+                receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
+        collect(project)
         return receipts
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
@@ -248,7 +249,9 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
 class _Base:
     """Staged inputs before any candidate edit; materialization starts here."""
 
-    def __init__(self, staged: Project) -> None:
+    def __init__(self, staged: Project, policy: Policy) -> None:
+        self.policy = policy
+        self.symbols = {v: staged.version(v).symbols.read_text() for v in staged.versions}
         self.splits = {v: staged.version(v).split.read_text() for v in staged.versions}
         self.config = (staged.root / "config.toml").read_text()
         self.sources = {path.name: path.read_text() for path in staged.src.glob("*.c")}
@@ -281,6 +284,11 @@ def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts
 def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> None:
     """Render sources, rows, compiler units and exclusions for exactly these candidates."""
     selected = {candidate.function: candidate for candidate in candidates}
+    for version, text in base.symbols.items():
+        split_apply.write(staged.version(version).symbols, text)
+    needs = [need for candidate in candidates for need in candidate.symbol_needs]
+    for edit in data_symbols.resolve(needs, staged, base.policy):
+        split_apply.write(edit.path, edit.after)
     for path in staged.src.glob("*.c"):
         if path.stem not in selected and base.sources.get(path.name) != path.read_text():
             if path.name in base.sources:
@@ -474,14 +482,17 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
         if candidate.function in refused:
             receipts.append(f"HELD(submit): {candidate.function}: {refused[candidate.function]}")
     while True:
-        pending: list[Need] = [need for name, items in found.items() if name not in refused for need in items]
+        pending: list[SymbolNeed] = [need for name, items in found.items() if name not in refused for need in items]
         try:
-            edits = symbols_edits.resolve(pending, staged, policy) if pending else []
+            edits = data_symbols.resolve(pending, staged, policy) if pending else []
         except Held as error:
             # A refused symbol names its owners; the rest of the batch continues.
             symbol = error.reason.split(":", 1)[0]
             owners = {
-                name for name, items in found.items() if name not in refused and any(n.name == symbol for n in items)
+                name
+                for name, items in found.items()
+                if name not in refused
+                and any(n.name == symbol or str(staged.version(n.version).symbols) in error.reason for n in items)
             }
             if not owners:
                 raise
@@ -490,9 +501,40 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
                 receipts.append(f"HELD(submit): {owner}: {refused[owner]}")
             continue
         break
+    for candidate in candidates:
+        if candidate.function not in refused:
+            candidate.symbol_needs = found.get(candidate.function, [])
     for edit in edits:
         split_apply.write(edit.path, edit.after)
     return [candidate for candidate in candidates if candidate.function not in refused]
+
+
+def _input_culprits(
+    staged: Project, candidates: list[Candidate], generations: dict[str, Path], failures: list[str]
+) -> dict[str, list[str]]:
+    """Attribute symbol-file extraction errors to the sources introducing those rows."""
+    faults: dict[str, list[str]] = {}
+    for version in failures:
+        log = generations[version] / "build.log"
+        if not log.is_file():
+            continue
+        content = log.read_text(errors="replace")
+        path = staged.version(version).symbols
+        rows = path.read_text().splitlines()
+        for diagnostic in content.splitlines():
+            if not re.search(r"Duplicate symbol detected|(?i:error|HELD\(|invalid|clashes)", diagnostic):
+                continue
+            for candidate in candidates:
+                for need in candidate.symbol_needs:
+                    if need.version != version or not re.search(rf"\b{re.escape(need.name)}\b", diagnostic):
+                        continue
+                    row = next(
+                        (i for i, line in enumerate(rows, 1) if re.match(rf"\s*{re.escape(need.name)}\s*=", line)), None
+                    )
+                    reason = f"VERSION {version}: data_symbols input {path}:{row or '?'}: {diagnostic.strip()}"
+                    if reason not in faults.setdefault(candidate.function, []):
+                        faults[candidate.function].append(reason)
+    return faults
 
 
 def _isolate(
@@ -523,6 +565,8 @@ def _isolate(
         culprits = attribution.diagnose(
             staged, failures, generations, names, (project, reference) if reference is not None else None
         )
+        for name, details in _input_culprits(staged, candidates, generations, failures).items():
+            culprits.setdefault(name, []).extend(details)
         for name, details in (initial_faults or {}).items():
             culprits.setdefault(name, []).extend(details)
         initial_faults = None
@@ -588,7 +632,25 @@ def _bisect(
         return any(not result.ok for result in _relink(staged, policy, generations, extracted).values())
 
     if differs([]):
-        held(f"submit.dependencies: cartridge differs on {detail} with no batch sources")
+        inputs = []
+        for version in failures:
+            if version not in generations:
+                continue
+            log = generations[version] / "build.log"
+            if log.is_file():
+                lines = log.read_text(errors="replace").splitlines()
+                diagnostic = next(
+                    (
+                        (i, line)
+                        for i, line in enumerate(lines, 1)
+                        if re.search(r"error|HELD\(|Duplicate symbol", line, re.I)
+                    ),
+                    None,
+                )
+                if diagnostic is not None:
+                    inputs.append(f"input {log}:{diagnostic[0]}: {diagnostic[1][:300]}")
+        named = "; " + "; ".join(inputs) if inputs else ""
+        held(f"submit.dependencies: cartridge differs on {detail} with no batch sources{named}")
     faults: dict[str, list[str]] = {}
 
     def inspect(members: list[Candidate]) -> None:
