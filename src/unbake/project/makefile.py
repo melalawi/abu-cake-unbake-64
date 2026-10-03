@@ -207,6 +207,7 @@ def linker_script(script: str, rows: list[dict[str, Any]]) -> str:
 def helpers(project: Project) -> dict[str, str]:
     tools = relative(project, project.tools)
     names = [
+        "atomic.py",
         "extract.py",
         "compile.py",
         "compile_identity.py",
@@ -263,7 +264,7 @@ def render(project: Project) -> dict[str, str]:
         "DRIVERS": " ".join(
             "$(TOOLS)/" + name
             for name in (
-                ["compile.py", "compile_identity.py", "elf.py", "host.py"]
+                ["compile.py", "compile_identity.py", "elf.py", "host.py", "atomic.py"]
                 + (
                     [
                         "sn64_cc.py",

@@ -4,6 +4,8 @@ import struct
 from pathlib import Path
 from typing import TypedDict
 
+from unbake.project_tools.atomic import write
+
 
 class Symbol(TypedDict):
     table: int
@@ -87,4 +89,4 @@ class Object:
             return
         self.sections[index][5] = end
         struct.pack_into(">IIIIIIIIII", self.data, self.table + index * 40, *self.sections[index])
-        self.path.write_bytes(self.data)
+        write(self.path, bytes(self.data))

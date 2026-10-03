@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from unbake.project.cache import Cache, key
+from unbake.project_tools.atomic import receipt, staging, write
 from unbake.project_tools.compile_identity import LEGACY_DRIVER, OPTIMIZED_SHA256
 from unbake.project_tools.host import resolve_tool
 
@@ -197,6 +198,18 @@ def preprocessed_dependencies(content: bytes, source: Path) -> list[str]:
 
 
 def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None:
+    """Stage dependency output even when an external preprocessor writes it."""
+    if args.depfile:
+        item = argparse.Namespace(**vars(args))
+        item.dep_target = args.dep_target or str(args.output.resolve())
+        with staging(args.depfile) as temporary:
+            item.depfile = temporary
+            _compile_object(item, data)
+    else:
+        _compile_object(args, data)
+
+
+def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None:
     if data is None:
         data = read_recipe(args.recipe)
     out = args.output.resolve()
@@ -389,16 +402,15 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
 
     cached = Cache(args.cache_root or cache_root()).produce(args.kind, digest, produce)
     if not out.exists() or out.read_bytes() != cached.read_bytes():
-        temporary = out.with_name(out.name + ".partial")
-        shutil.copyfile(cached, temporary)
-        temporary.replace(out)
+        with staging(out) as pending:
+            shutil.copyfile(cached, pending)
     if assembly and args.depfile and not args.depfile.exists():
         args.depfile.write_text((args.dep_target or str(out)) + ": " + str(args.source) + "\n")
 
     if args.kind == "cc" and args.depfile and args.depfile.is_file():
         words = dependency_paths(args.depfile.read_text())
         dependency_hashes = {str(Path(word)): dependency_hash(word) for word in words}
-        out.with_suffix(".inputs.json").write_text(json.dumps(dependency_hashes, sort_keys=True))
+        write(out.with_suffix(".inputs.json"), json.dumps(dependency_hashes, sort_keys=True).encode())
 
 
 def compile_batch(args: argparse.Namespace) -> None:
@@ -421,11 +433,11 @@ def compile_batch(args: argparse.Namespace) -> None:
         )
         try:
             compile_object(item, data)
-            output.with_suffix(".built").touch()
+            receipt(output.with_suffix(".built"))
         except (OSError, ValueError, KeyError) as error:
             failures.append(f"{source}: {error}")
             if cancel_file is not None:
-                cancel_file.touch()
+                receipt(cancel_file)
                 break
     if failures:
         raise ValueError("batch objects failed:\n" + "\n".join(failures))

@@ -88,7 +88,7 @@ $(BUILD)/.split.mk: $(BASEROM) $(SPLIT) $(SYMBOLS) $(TOOLS)/extract.py $(TOOLS)/
 	python3 $(TOOLS)/extract.py --split $(SPLIT) --symbols $(SYMBOLS) --baserom $(BASEROM) --build $(BUILD) --asm $(ASM) --src $(SRC) --name @NAME@ --splat $(SPLAT) --recipe $(RECIPE) --non-matching $(NON_MATCHING)
 
 $(BUILD)/.split: $(BUILD)/.split.mk
-	@touch $@
+	python3 $(TOOLS)/atomic.py --touch $@
 
 $(LD_SCRIPT) $(LINK_SCRIPTS) $(BUILD)/symbol-addresses.txt $(BUILD)/unit-ranges.json: | $(BUILD)/.split
 	@test -f $@ || { printf '%s\n' 'HELD(extract): missing $@; remove $(BUILD)/.split.mk and make extract'; exit 1; }
@@ -118,7 +118,7 @@ $(call assemble-chunks,$(ASM_COLD))
 $(BUILD)/obj/src/%.built: $(SRC)/%.c $(RECIPE) $(DRIVERS) $(BUILD)/unit-ranges.json | verify
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/compile.py --kind cc --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $(SRC)/$*.c --source $< --output $(@:.built=.o) --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/src/$*.built'
-	@touch $@
+	python3 $(TOOLS)/atomic.py --touch $@
 
 $(BUILD)/obj/src/%.o: $(BUILD)/obj/src/%.built
 	@test -f $@
@@ -126,22 +126,22 @@ $(BUILD)/obj/src/%.o: $(BUILD)/obj/src/%.built
 $(BUILD)/obj/asm/%.built: $(ASM)/%.s $(RECIPE) $(DRIVERS) $(BUILD)/symbol-addresses.txt | verify
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/compile.py --kind as --non-matching $(NON_MATCHING) --recipe $(RECIPE) --version $(VERSION) --unit $* --source $< --output $(@:.built=.o) --symbols $(BUILD)/symbol-addresses.txt --depfile $(@:.built=.d) --dep-target='$$(BUILD)/obj/asm/$*.built'
-	@touch $@
+	python3 $(TOOLS)/atomic.py --touch $@
 
 $(BUILD)/obj/asm/%.o: $(BUILD)/obj/asm/%.built
 	@test -f $@
 
 $(BUILD)/obj/assets/%.bin.o: $(ASM)/assets/%.bin
 	@mkdir -p $(@D)
-	$(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
+	python3 $(TOOLS)/atomic.py --output $@ -- $(OBJCOPY) -I binary -O elf32-tradbigmips -B mips $< $@
 
 $(ELF): $(OBJECTS) $(LD_SCRIPT) $(LINK_SCRIPTS) $(TOOLS)/layout.py $(TOOLS)/rodata.py $(TOOLS)/literal_layout.py $(TOOLS)/pool_slices.py
 	@mkdir -p $(@D)
 	python3 $(TOOLS)/layout.py --script $(LD_SCRIPT) --output $(BUILD)/@NAME@.link.ld --build $(BUILD) --ranges $(BUILD)/unit-ranges.json --recipe $(RECIPE) --version $(VERSION) --baserom $(BASEROM) --non-matching $(NON_MATCHING)
-	cd $(BUILD) && LC_ALL=C $(LD) $$(cat @NAME@.link.flags) -T @NAME@.link.ld $(addprefix -T ,$(abspath $(LINK_SCRIPTS))) -Map @NAME@.map -o @NAME@.elf $(patsubst $(BUILD)/%,%,$(OBJECTS))
+	cd $(BUILD) && LC_ALL=C python3 $(abspath $(TOOLS))/atomic.py --output @NAME@.elf --output @NAME@.map -- $(LD) $$(cat @NAME@.link.flags) -T @NAME@.link.ld $(addprefix -T ,$(abspath $(LINK_SCRIPTS))) -Map @NAME@.map -o @NAME@.elf $(patsubst $(BUILD)/%,%,$(OBJECTS))
 
 $(ROM): $(ELF)
-	$(OBJCOPY) -O binary --pad-to $(ROM_BYTES) $< $@
+	python3 $(TOOLS)/atomic.py --output $@ -- $(OBJCOPY) -O binary --pad-to $(ROM_BYTES) $< $@
 
 clean:
 	@test -n '$(BUILD)' && test '$(BUILD)' != / && test '$(BUILD)' != .

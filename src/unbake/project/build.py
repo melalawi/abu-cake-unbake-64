@@ -150,8 +150,17 @@ def build(
             )
             log_word = makefile.shell_words([generation / "build.log"])
             status_word = makefile.shell_words([generation / "build.exit"])
+            temporary_word = makefile.shell_words([generation / ".build-log.XXXXXX"])
             lines.extend(
-                [v + ":", f"\t+@{command} > {log_word} 2>&1; result=$$?; echo $$result > {status_word}; exit $$result"]
+                [
+                    v + ":",
+                    f"\t+@pending=$$(mktemp -d {temporary_word}) || exit 1; "
+                    "trap 'rm -rf -- \"$$pending\"' EXIT HUP INT TERM; "
+                    f'{command} > "$$pending/log" 2>&1; result=$$?; '
+                    'echo $$result > "$$pending/status"; '
+                    f'mv -f -- "$$pending/log" {log_word} && '
+                    f'mv -f -- "$$pending/status" {status_word} || exit 1; exit $$result',
+                ]
             )
         driver.write_text("\n".join(lines) + "\n")
         try:

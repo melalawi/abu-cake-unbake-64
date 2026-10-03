@@ -4,6 +4,7 @@ import re
 import struct
 from collections.abc import Callable, Mapping
 
+from unbake.project_tools.atomic import write
 from unbake.project_tools.elf import Object
 from unbake.project_tools.rodata import pools, relocated
 
@@ -193,12 +194,7 @@ def arrange(
     replace(obj, index, result)
     if obj.path.is_symlink():
         raise ValueError(f"{obj.path}: cannot rewrite a symlink object")
-    temporary = obj.path.with_name(obj.path.name + ".partial")
-    try:
-        temporary.write_bytes(obj.data)
-        temporary.replace(obj.path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write(obj.path, bytes(obj.data))
     return base
 
 

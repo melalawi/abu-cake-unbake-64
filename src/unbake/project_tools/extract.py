@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.cache import Cache
+from unbake.project_tools.atomic import receipt as refresh_receipt
+from unbake.project_tools.atomic import write
 from unbake.project_tools.compile import cache_root
 from unbake.project_tools.rodata import defer_bss
 
@@ -68,9 +70,7 @@ def publish(path: Path, content: bytes) -> None:
     _WRITTEN[str(path)] = hashlib.sha256(content).hexdigest()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() or path.read_bytes() != content:
-        partial = path.with_name(path.name + ".partial")
-        partial.write_bytes(content)
-        partial.replace(path)
+        write(path, content)
 
 
 def scalar(text: str) -> str:
@@ -494,14 +494,14 @@ def extract(args: argparse.Namespace) -> None:
     graph_path = build / ".split.mk"
     if receipt.exists() and receipt.read_text() == digest.hexdigest() and graph_path.exists():
         # Make needs a timestamp receipt when input mtimes changed but bytes did not.
-        graph_path.touch()
+        refresh_receipt(graph_path)
         return
     # A fresh generation reuses an identical extraction whose published
     # assembly is still present byte for byte.
     store = Cache(cache_root())
     cached = store.get("extract", digest.hexdigest())
     if cached is not None and _restore(json.loads(cached.read_bytes()), build):
-        receipt.write_text(digest.hexdigest())
+        write(receipt, digest.hexdigest().encode())
         return
     _WRITTEN.clear()
 
@@ -588,7 +588,7 @@ def extract(args: argparse.Namespace) -> None:
         graph.extend(["LINK_SCRIPTS := " + " ".join(link_scripts), f"ROM_BYTES := {args.baserom.stat().st_size}"])
         # This file is the successful extraction receipt; replace it last.
         destination = args.build / ".split.mk"
-        destination.write_text("\n".join(graph) + "\n")
+        write(destination, ("\n".join(graph) + "\n").encode())
         outputs, published = {".split.mk": destination.read_text()}, {}
         for name, value in _WRITTEN.items():
             path = Path(name).resolve()
@@ -597,10 +597,10 @@ def extract(args: argparse.Namespace) -> None:
             else:
                 published[name] = value
         record = build / ".extract-record.json"
-        record.write_text(json.dumps({"outputs": outputs, "published": published}, sort_keys=True))
+        write(record, json.dumps({"outputs": outputs, "published": published}, sort_keys=True).encode())
         store.put("extract", digest.hexdigest(), record)
         record.unlink()
-        receipt.write_text(digest.hexdigest())
+        write(receipt, digest.hexdigest().encode())
 
 
 def _restore(record: dict[str, Any], build: Path) -> bool:
@@ -616,7 +616,7 @@ def _restore(record: dict[str, Any], build: Path) -> bool:
     for name, content in record["outputs"].items():
         publish(build / name, content.encode())
     # The graph is the extraction receipt Make reads; write it last.
-    (build / ".split.mk").write_text(graph)
+    write(build / ".split.mk", graph.encode())
     return True
 
 

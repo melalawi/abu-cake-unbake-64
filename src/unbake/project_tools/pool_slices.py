@@ -7,6 +7,7 @@ from copy import deepcopy
 from itertools import pairwise
 from typing import Any
 
+from unbake.project_tools.atomic import write
 from unbake.project_tools.elf import Object
 from unbake.project_tools.literal_layout import replace, signed
 
@@ -175,12 +176,7 @@ def split_pool(obj: Object, section: str, base: int, slices: list[dict[str, Any]
             replace(obj, rel_index, data)
     replace(obj, text, code)
     replace(obj, index, b"")
-    temporary = obj.path.with_name(obj.path.name + ".partial")
-    try:
-        temporary.write_bytes(obj.data)
-        temporary.replace(obj.path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write(obj.path, bytes(obj.data))
     # Text relocations now reference inserted section symbols. Keep the parser's
     # symbol table in sync when another compiler section is split next.
     obj.symbols = Object(obj.path).symbols
