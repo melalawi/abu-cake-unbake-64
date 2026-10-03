@@ -42,6 +42,7 @@ from unbake.match.publication import swap
 from unbake.project import build, compiler_choice, config, makefile, workspace
 from unbake.project.config import Held, Policy, Project
 from unbake.report import progress
+from unbake.typemap import storage
 
 # Rules the fold resolves: they are judged on the folded text, not on admission.
 FOLDED_RULES = frozenset({"invented-struct", "local-type-copy", "raw-offset"})
@@ -59,6 +60,7 @@ class Candidate:
     final: str = ""
     removed_rows: dict[str, tuple[str, ...]] = field(default_factory=dict)
     symbol_needs: list[SymbolNeed] = field(default_factory=list)
+    republication: bool = False
 
 
 def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
@@ -116,6 +118,12 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             versions = list(project.versions)
             for version in versions:
                 generations[version] = staging.generation(project, version, current[version], holds, retained=True)
+                # A published source may have the same bytes in both trees:
+                # the user edited the live file before submit. Its old object
+                # must still be rebuilt and checked against the cartridge.
+                for candidate in candidates:
+                    if candidate.republication and version in candidate.versions:
+                        (generations[version] / "obj/src" / (candidate.function + ".built")).unlink(missing_ok=True)
             with reporting.phase("proof", sources=len(candidates)):
                 extracted = {v: staged.version(v).split.read_text() for v in versions}
                 faults = incremental.prepare(project, staged, policy, generations, base.splits)
@@ -162,7 +170,8 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             if not candidates:
                 return receipts
             with reporting.phase("publication", sources=len(candidates)):
-                _commit(project, policy, staged, candidates, current, generations, started)
+                followups = _commit(project, policy, staged, candidates, current, generations, started)
+                receipts.extend(followups or [])
             receipts.extend(
                 f"OK(match): {candidate.function} matched on VERSION {', '.join(candidate.versions)}"
                 if candidate.matched
@@ -173,8 +182,9 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 for candidate in candidates
             )
             receipts.extend(f"OK(submit): {version}: {line}" for version, line in sha1.items())
-            with reporting.phase("type_feedback", sources=len(candidates)):
-                receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
+            if not any(candidate.republication for candidate in candidates):
+                with reporting.phase("type_feedback", sources=len(candidates)):
+                    receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
         return receipts
 
 
@@ -201,19 +211,21 @@ def _admission(project: Project, policy: Policy, sources: list[Path], receipts: 
             reporting.learn(line)
         if isinstance(outcome, str):
             receipts.append(f"HELD(submit): {source.stem}: {outcome}")
+        elif outcome is None:
+            receipts.append(f"OK(submit): {source.stem}: published source unchanged")
         else:
             candidates.append(outcome)
     return candidates
 
 
-def _admitted(shared: tuple[Project, Policy, _Inputs], source: Path) -> Candidate | str:
+def _admitted(shared: tuple[Project, Policy, _Inputs], source: Path) -> Candidate | str | None:
     try:
         return _admit(*shared, source)
     except Held as error:
         return error.reason
 
 
-def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> Candidate:
+def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> Candidate | None:
     function = source.stem
     if source.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", function):
         held(f"submit.source: {source} must be named <function>.c")
@@ -234,6 +246,20 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
     latest = rows[-1] if rows else None
     destination = project.src / f"{function}.c"
     published = destination.is_file() and not drafts.is_partial(destination.read_text())
+    republication = published and source.resolve() == destination.resolve()
+    if republication:
+        proven = project.build / "types/proven.json"
+        if proven.is_file():
+            value = storage.read(proven, "types.feedback")
+            storage.validate_identity(project, value, "types.feedback")
+            record = value.get("records", {}).get(function, {})
+            if (
+                record.get("source") == str(destination.relative_to(project.root))
+                and record.get("source_sha256") == hashlib.sha256(content).hexdigest()
+            ):
+                return None
+        # Re-prove a published unit as matched C regardless of an older trial.
+        return Candidate(function, source, content, sha, versions, True, republication=True)
     if latest is not None and not latest["identical_everywhere"]:
         from unbake.match.nonmatching import admit
 
@@ -349,8 +375,9 @@ def _row_owners(base: _Base, candidates: list[Candidate], receipts: list[str]) -
             if not candidate.matched or version not in candidate.versions:
                 continue
             own = rows.get(candidate.function, [])
-            if len(own) != 1 or split.ROW.fullmatch(own[0])["kind"] != "asm":  # type: ignore[index]
-                refused.setdefault(candidate.function, f"submit.row: VERSION {version} requires one asm row")
+            kind = "c" if candidate.republication else "asm"
+            if len(own) != 1 or split.ROW.fullmatch(own[0])["kind"] != kind:  # type: ignore[index]
+                refused.setdefault(candidate.function, f"submit.row: VERSION {version} requires one {kind} row")
             elif own[0] in removed and removed[own[0]] != candidate.function:
                 refused.setdefault(
                     candidate.function, f"submit.row: VERSION {version} row is folded by {removed[own[0]]}"
@@ -374,8 +401,9 @@ def _rows(text: str, version: str, candidates: list[Candidate]) -> str:
         row = split.ROW.fullmatch(line)
         name = Path(split.plain(row["path"])).name if row is not None else None
         if row is not None and name in wanted and row["kind"] in ("asm", "c"):
-            if row["kind"] != "asm" or name in seen:
-                held(f"{name}: VERSION {version} requires one asm row")
+            kind = "c" if wanted[name].republication else "asm"
+            if row["kind"] != kind or name in seen:
+                held(f"{name}: VERSION {version} requires one {kind} row")
             seen.add(name)
             line = split.replace_row(line, row, kind="c", path=name)
         result.append(line)
@@ -715,8 +743,9 @@ def _commit(
     current: dict[str, Path],
     generations: dict[str, Path],
     started: dict[str, str],
-) -> None:
+) -> list[str]:
     """Publish the proved staged inputs and generations together, or nothing."""
+    followups: list[str] = []
     with ThreadPoolExecutor(max_workers=min(policy.cores, policy.setup_version_jobs, len(project.versions))) as pool:
         measured = {
             v: pool.submit(progress.measure, staged, policy, v, generation=generations[v]) for v in project.versions
@@ -750,6 +779,9 @@ def _commit(
         ledger = Path(policy.state_root) / project.id / project.workspace_id / "receipts" / "match.jsonl"
         report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
         touched = set(writes) | {ledger, project.root / "README.md"} | report_paths
+        republication = any(candidate.republication for candidate in candidates)
+        if republication:
+            touched.add(project.build / "types/proven.json")
         before = {path: path.read_bytes() if path.exists() else None for path in touched}
         swapped = []
         try:
@@ -768,11 +800,16 @@ def _commit(
                         "function": candidate.function,
                         "versions": list(candidate.versions),
                         "sha256": candidate.sha256,
+                        "source": str((project.src / f"{candidate.function}.c").relative_to(project.root)),
+                        "source_sha256": storage.file_digest(project.src / f"{candidate.function}.c"),
                         "fakematch": list(checks.fakematches(candidate.final)),
                         "compiler_evidence": candidate.compiler,
                         "at": datetime.now(UTC).isoformat(),
                     }
                     output.write(json.dumps(row, sort_keys=True) + "\n")
+            if republication:
+                with reporting.phase("type_feedback", sources=len(candidates)):
+                    followups = _feedback(config.load(project.root), policy, candidates, current, strict=True)
             reporting.record(
                 "published",
                 sources=[candidate.function for candidate in candidates],
@@ -787,6 +824,7 @@ def _commit(
                 else:
                     atomic(path, previous)
             raise
+    return followups
 
 
 def _type_preflight(
@@ -808,7 +846,14 @@ def _type_preflight(
     return [candidate for candidate in candidates if candidate.function not in refused]
 
 
-def _feedback(project: Project, policy: Policy, candidates: list[Candidate], previous: dict[str, Path]) -> list[str]:
+def _feedback(
+    project: Project,
+    policy: Policy,
+    candidates: list[Candidate],
+    previous: dict[str, Path],
+    *,
+    strict: bool = False,
+) -> list[str]:
     """Feed every proved layout back to solve once for the whole batch."""
     entries = []
     owners_by_version = {version: split.owners_by_alias(project, version) for version in project.versions}
@@ -818,7 +863,8 @@ def _feedback(project: Project, policy: Policy, candidates: list[Candidate], pre
         targets = {}
         for version in candidate.versions:
             owners = owners_by_version[version].get(candidate.function, [])
-            target = previous[version] / "obj" / "asm" / (owners[0].path + ".o") if owners else None
+            kind = "src" if candidate.republication else "asm"
+            target = previous[version] / "obj" / kind / (owners[0].path + ".o") if owners else None
             if target is not None and target.is_file():
                 targets[version] = hashlib.sha256(target.read_bytes()).hexdigest()
         entries.append((candidate.function, project.src / f"{candidate.function}.c", candidate.versions, targets))
@@ -827,6 +873,22 @@ def _feedback(project: Project, policy: Policy, candidates: list[Candidate], pre
     try:
         type_context.feedback_many(project, entries, policy=policy)
     except (Held, OSError, ValueError, RuntimeError) as error:
+        if isinstance(error, Held) and error.reason.startswith("types.feedback.source_sha256:"):
+            stale = storage.changed_source(project)
+            proven = project.build / "types/proven.json"
+            records = storage.read(proven, "types.feedback").get("records", {}) if proven.is_file() else {}
+            seeded = all(
+                records.get(function, {}).get("source_sha256") == storage.file_digest(source)
+                for function, source, _, _ in entries
+            )
+            if (
+                seeded
+                and stale is not None
+                and stale.resolve() not in {source.resolve() for _, source, _, _ in entries}
+            ):
+                return [f"OK(types): {error.reason}; follow-up: {storage.submit_command(project, stale)}"]
+        if strict:
+            raise
         reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"
         return [f"HELD(types): {reason}; batch was published"]
     return []

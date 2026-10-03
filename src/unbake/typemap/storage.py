@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,24 @@ def validate_identity(project: Project, value: dict[str, Any], key: str) -> None
         raise Held("solve", f"{key}: project/workspace/ROM identity changed")
 
 
+def changed_source(project: Project) -> Path | None:
+    """Find the first published source that needs a new cartridge proof."""
+    proven = project.build / "types/proven.json"
+    if not proven.is_file():
+        return None
+    value = read(proven, "types.feedback")
+    validate_identity(project, value, "types.feedback")
+    for row in value.get("records", {}).values():
+        source: Path = project.root / row["source"]
+        if not source.is_file() or file_digest(source) != row["source_sha256"]:
+            return source
+    return None
+
+
+def submit_command(project: Project, source: Path) -> str:
+    return shlex.join(["unbake", "--project", str(project.root), "submit", str(source)])
+
+
 def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     paths = {project.root / "config.toml"}
     for version in project.versions:
@@ -86,10 +105,15 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
         proven = project.build / "types/proven.json"
         if proven.is_file():
             paths.add(proven)
+            stale = changed_source(project)
+            if stale is not None:
+                raise Held(
+                    "solve",
+                    f"types.feedback.source_sha256: published source changed: {stale}; "
+                    f"re-prove with {submit_command(project, stale)}",
+                )
             for row in read(proven, "types.feedback").get("records", {}).values():
                 source = project.root / row["source"]
-                if not source.is_file() or digest(source.read_bytes()) != row["source_sha256"]:
-                    raise Held("solve", f"types.feedback.source_sha256: published source changed: {source}")
                 paths.add(source)
     return {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
 

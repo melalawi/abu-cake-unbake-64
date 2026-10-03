@@ -12,7 +12,9 @@ from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 
 
 def register(phases: Subparsers) -> None:
-    parser = phases.add_parser("submit", phase="submit", help="Prove and publish tried sources and its headers.")
+    parser = phases.add_parser(
+        "submit", phase="submit", help="Prove and publish sources, including edits to published C."
+    )
     parser.add_argument("source", type=Path, metavar="FILE", nargs="?")
     parser.add_argument("--scratch", type=Path, help="Read receipts retained by try in this private directory.")
     parser.add_argument("--batch", type=Path, nargs="+", metavar="FILE")
@@ -38,7 +40,8 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
 
     with reporting.stream(emit):
         lines = publish(project, policy, sources)
-    suggest(command(project.root, "next"))
+    followups = [line.split("; follow-up: ", 1)[1] for line in lines if line.startswith("OK(types):")]
+    suggest(followups[0] if followups else command(project.root, "next"))
     remaining = [line for line in lines if line not in emitted]
     if remaining or not lines:
         receipt("submit", remaining)

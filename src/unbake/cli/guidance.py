@@ -17,6 +17,13 @@ def command(root: Path | None, phase: str) -> str:
 
 
 def resolve(root: Path | None, *, missing: str | None = None, retry: str = "unbake setup") -> str:
+    if root is not None and missing == "types.feedback.source_sha256":
+        from unbake.typemap import storage
+
+        published_project = config.load(root)
+        source = storage.changed_source(published_project)
+        if source is not None:
+            return storage.submit_command(published_project, source)
     if missing == "headers.declaration":
         return f"Repair the SDK/shared header prerequisite identified above. Then run {retry}."
     if missing is not None and missing.startswith("split."):

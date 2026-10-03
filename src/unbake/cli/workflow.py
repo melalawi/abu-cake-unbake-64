@@ -4,7 +4,7 @@ import json
 import shlex
 from pathlib import Path
 
-from unbake.cli.guidance import command
+from unbake.cli.guidance import command, resolve
 from unbake.decomp import drafts, exclusions, fuzzy_bar, plan, type_context, work
 from unbake.decomp.assign import Ledger
 from unbake.decomp.trial_target import owning_versions
@@ -33,6 +33,8 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None) -> 
     try:
         type_context.required(project)
     except Held as error:
+        if error.reason.startswith("types.feedback.source_sha256:"):
+            return resolve(project.root, missing="types.feedback.source_sha256"), error.reason
         if error.reason.startswith("map.inputs_stale"):
             return command(project.root, "solve"), error.reason
         if error.reason.startswith("map."):
