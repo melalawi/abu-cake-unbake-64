@@ -4,6 +4,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from tests.decomp.support import assemble, fixture
 from unbake.match import data_symbols
@@ -11,6 +12,63 @@ from unbake.project_tools.elf import Object
 
 
 class DataSymbolTests(unittest.TestCase):
+    def identity_project(self, root, source, target):
+        paths = {version: root / f"{version}.txt" for version in ("source", "target")}
+        paths["source"].write_text(source)
+        paths["target"].write_text(target)
+        return SimpleNamespace(versions=("source", "target"), version=lambda v: SimpleNamespace(symbols=paths[v]))
+
+    def test_missing_target_alias_has_identity_between_agreeing_data_anchors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.identity_project(
+                Path(temporary),
+                "before = 0x80001000;\nshared = 0x80001010;\nafter = 0x80001020;\n",
+                "before = 0x80002000;\nafter = 0x80002020;\n",
+            )
+            self.assertEqual(data_symbols.preferred_address(project, "target", "shared"), 0x80002010)
+            self.assertEqual(data_symbols.preferred_address(project, "source", "shared"), 0x80001010)
+
+    def test_disagreeing_or_missing_anchors_do_not_supply_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for target in ("before = 0x80002000;\n", "before = 0x80002000;\nafter = 0x80002030;\n"):
+                with self.subTest(target=target):
+                    project = self.identity_project(
+                        root,
+                        "before = 0x80001000;\nshared = 0x80001010;\nafter = 0x80001020;\n",
+                        target,
+                    )
+                    self.assertIsNone(data_symbols.preferred_address(project, "target", "shared"))
+
+    def test_functions_do_not_supply_data_anchors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.identity_project(
+                Path(temporary),
+                "before = 0x80001000; // type:func\nshared = 0x80001010;\nafter = 0x80001020;\n",
+                "before = 0x80002000;\nafter = 0x80002020;\n",
+            )
+            self.assertIsNone(data_symbols.preferred_address(project, "target", "shared"))
+
+    def test_unknown_spelling_does_not_supply_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.identity_project(Path(temporary), "", "")
+            self.assertIsNone(data_symbols.preferred_address(project, "target", "D_80001000_other"))
+
+    def test_conflicting_version_identities_do_not_break_a_tie(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.identity_project(
+                root,
+                "before = 0x80001000;\nshared = 0x80001010;\nafter = 0x80001020;\n",
+                "before = 0x80002000;\nafter = 0x80002020;\n",
+            )
+            third = root / "third.txt"
+            third.write_text("before = 0x80003000;\nshared = 0x80003014;\nafter = 0x80003020;\n")
+            original_version = project.version
+            project.versions = (*project.versions, "third")
+            project.version = lambda v: SimpleNamespace(symbols=third) if v == "third" else original_version(v)
+            self.assertIsNone(data_symbols.preferred_address(project, "target", "shared"))
+
     def test_only_used_unplaced_external_data_requires_an_object(self) -> None:
         source = """
 extern int placed, unused, table[];

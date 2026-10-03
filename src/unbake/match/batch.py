@@ -477,12 +477,30 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
                     candidate.function
                 )
     for (version, name), addresses in proposed.items():
-        if len(addresses) > 1:
-            for owners in addresses.values():
-                for owner in owners:
-                    refused.setdefault(
-                        owner, f"submit.data_symbols: VERSION {version}: {name}: sources disagree on its address"
-                    )
+        # A source already refused elsewhere cannot vote against surviving users.
+        active = {address: owners - refused.keys() for address, owners in addresses.items()}
+        active = {address: owners for address, owners in active.items() if owners}
+        if len(active) <= 1:
+            continue
+        preferred = data_symbols.preferred_address(staged, version, name)
+        if preferred is not None and preferred in active:
+            selected = preferred
+            evidence = "native data identity and owning ROM pairs"
+        else:
+            # Every proposal was proved from its owner's ROM. Without an
+            # independent identity, retain the largest agreeing group. Equal
+            # groups keep the first in source order, never refuse every user.
+            selected = max(active, key=lambda address: len(active[address]))
+            evidence = "agreeing owning ROM placements"
+        for address, owners in active.items():
+            if address == selected:
+                continue
+            for owner in owners:
+                refused.setdefault(
+                    owner,
+                    f"submit.data_symbols: VERSION {version}: {name}: sources disagree on its address; "
+                    f"source places 0x{address:08X}, selected 0x{selected:08X} from {evidence}",
+                )
     for candidate in candidates:
         if candidate.function in refused:
             receipts.append(f"HELD(submit): {candidate.function}: {refused[candidate.function]}")

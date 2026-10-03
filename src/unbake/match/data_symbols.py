@@ -121,6 +121,46 @@ def needs(project: Project, function: str, version: str, path: Path) -> list[Sym
     ]
 
 
+def preferred_address(project: Project, version: str, name: str) -> int | None:
+    """Identify a disputed ROM placement using independent native data identities.
+
+    Proposals already come from instruction-identical owning ROM pairs. A name
+    placed in another VERSION can identify which proposal belongs to that data:
+    require the nearest shared data anchors on both sides to agree on the delta.
+    Unlike correspondence, admission need not find an existing target alias;
+    publishing that missing alias is its job. Never infer identity from a lone
+    anchor, a function, or a spelling from an unrelated VERSION.
+    """
+    _, target = split.symbols(project.version(version).symbols)
+    if name in target:
+        return target[name][0]
+    identities: set[int] = set()
+    for source_version in project.versions:
+        if source_version == version:
+            continue
+        _, source = split.symbols(project.version(source_version).symbols)
+        if name not in source:
+            continue
+        address = source[name][0]
+        anchors = [
+            (entry[0], target[key][0] - entry[0])
+            for key, entry in source.items()
+            if key in target
+            and key != name
+            and not key.startswith(("func_", "_"))
+            and not any(re.search(r"\btype\s*:\s*(?:func|function)\b", row[2].string) for row in (entry, target[key]))
+        ]
+        lower = [item for item in anchors if item[0] < address]
+        upper = [item for item in anchors if item[0] > address]
+        if not lower or not upper:
+            continue
+        left, right = max(item[0] for item in lower), min(item[0] for item in upper)
+        deltas = {delta for base, delta in lower if base == left} | {delta for base, delta in upper if base == right}
+        if len(deltas) == 1:
+            identities.add(address + deltas.pop())
+    return identities.pop() if len(identities) == 1 else None
+
+
 def resolve(needs: list[SymbolNeed], project: Project, policy: Policy) -> list[Edit]:
     """Replace version-local aliases instead of defining a second Splat symbol."""
     selected: dict[tuple[str, int], str] = {}

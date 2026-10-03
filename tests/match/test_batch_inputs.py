@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from unbake.decomp.needs import SymbolNeed
 from unbake.match import batch, data_symbols, publication
+from unbake.project.config import Held
 
 
 class InputTests(unittest.TestCase):
@@ -130,6 +131,110 @@ class CollectionTests(unittest.TestCase):
                 publication.collect(project)
             self.assertEqual({p.name for p in root.iterdir()}, {"us.0", "us.2", "us.3", "us.5"})
             self.assertTrue((generations[5] / "obj/asm").is_dir())
+
+
+class DataAdmissionTests(unittest.TestCase):
+    """Compile and ROM decoding boundaries are mocked; admission is real."""
+
+    def admit(self, addresses, preferred=None, failures=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            symbols = root / "symbols.txt"
+            symbols.write_text("")
+            project = SimpleNamespace(
+                versions=("us",), work=root, src=root, version=lambda v: SimpleNamespace(symbols=symbols)
+            )
+            candidates = [
+                batch.Candidate(name, root / f"{name}.c", b"", "", ("us",), True, final="extern int shared;")
+                for name in addresses
+            ]
+
+            def needs(project, function, version, obj):
+                if function in (failures or {}):
+                    raise Held("match", failures[function])
+                return [SymbolNeed(version, "shared", addresses[function], 0, "data", "address", 0, "ROM")]
+
+            receipts = []
+            with (
+                patch.object(batch.build, "compile_objects", return_value={}),
+                patch.object(data_symbols, "needs", side_effect=needs),
+                patch.object(data_symbols, "preferred_address", return_value=preferred),
+                patch.object(data_symbols, "resolve", return_value=[]) as resolve,
+            ):
+                passing = batch._data_symbols(project, SimpleNamespace(cores=1), candidates, receipts)
+            return passing, receipts, resolve.call_args
+
+    def test_agreeing_majority_survives_a_single_wrong_declarer(self):
+        passing, receipts, resolved = self.admit({"one": 0x80001000, "wrong": 0x80002000, "two": 0x80001000})
+        self.assertEqual([candidate.function for candidate in passing], ["one", "two"])
+        self.assertEqual([need.address for need in resolved.args[0]], [0x80001000, 0x80001000])
+        self.assertEqual(len(receipts), 1)
+        self.assertIn("HELD(submit): wrong:", receipts[0])
+        self.assertIn("source places 0x80002000, selected 0x80001000", receipts[0])
+
+    def test_agreeing_sources_all_pass(self):
+        passing, receipts, _ = self.admit({"one": 0x80001000, "two": 0x80001000})
+        self.assertEqual(len(passing), 2)
+        self.assertEqual(receipts, [])
+
+    def test_rom_identity_breaks_a_tie(self):
+        passing, receipts, _ = self.admit({"wrong": 0x80002000, "right": 0x80001000}, 0x80001000)
+        self.assertEqual([candidate.function for candidate in passing], ["right"])
+        self.assertIn("native data identity and owning ROM pairs", receipts[0])
+
+    def test_rom_identity_overrides_a_wrong_majority(self):
+        passing, receipts, _ = self.admit({"wrong1": 0x80002000, "right": 0x80001000, "wrong2": 0x80002000}, 0x80001000)
+        self.assertEqual([candidate.function for candidate in passing], ["right"])
+        self.assertEqual(len(receipts), 2)
+
+    def test_no_proposal_matches_identity_holds_only_the_minority(self):
+        passing, receipts, _ = self.admit({"one": 0x80001000, "wrong": 0x80002000, "two": 0x80001000}, 0x80003000)
+        self.assertEqual([candidate.function for candidate in passing], ["one", "two"])
+        self.assertEqual(len(receipts), 1)
+
+    def test_unproved_tie_keeps_first_group_in_source_order(self):
+        passing, receipts, _ = self.admit({"first": 0x80002000, "second": 0x80001000})
+        self.assertEqual([candidate.function for candidate in passing], ["first"])
+        self.assertEqual(len(receipts), 1)
+
+    def test_instruction_difference_holds_only_its_source(self):
+        passing, receipts, _ = self.admit(
+            {"bad": 0x80001000, "good": 0x80001000},
+            failures={"bad": "shared: relocation instruction differs from owning ROM text"},
+        )
+        self.assertEqual([candidate.function for candidate in passing], ["good"])
+        self.assertEqual(len(receipts), 1)
+        self.assertIn("HELD(submit): bad:", receipts[0])
+
+    def test_refused_sources_cannot_outvote_survivors_in_another_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            symbols = root / "symbols.txt"
+            symbols.write_text("")
+            project = SimpleNamespace(
+                versions=("us", "eu"), work=root, src=root, version=lambda v: SimpleNamespace(symbols=symbols)
+            )
+            candidates = [
+                batch.Candidate(name, root / f"{name}.c", b"", "", project.versions, True, final="extern int shared;")
+                for name in ("bad1", "good", "bad2")
+            ]
+
+            def needs(project, function, version, obj):
+                if function != "good" and version == "eu":
+                    raise Held("match", "shared: relocation instruction differs from owning ROM text")
+                address = 0x80001000 if function == "good" else 0x80002000
+                return [SymbolNeed(version, "shared", address, 0, "data", "address", 0, "ROM")]
+
+            receipts = []
+            with (
+                patch.object(batch.build, "compile_objects", return_value={}),
+                patch.object(data_symbols, "needs", side_effect=needs),
+                patch.object(data_symbols, "preferred_address", return_value=None),
+                patch.object(data_symbols, "resolve", return_value=[]),
+            ):
+                passing = batch._data_symbols(project, SimpleNamespace(cores=1), candidates, receipts)
+            self.assertEqual([candidate.function for candidate in passing], ["good"])
+            self.assertEqual(len(receipts), 2)
 
 
 def local_project(directory, **kwargs):
