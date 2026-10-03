@@ -411,8 +411,18 @@ def catalogue(project: Project, policy: Policy, unit: Path, version: str, source
         raise Held("gbi", "SDK macro recovery: no project SDK macro definitions")
     directives = []
     for line in source.splitlines():
-        if re.match(r"\s*#\s*include\b", line):
-            break
+        included = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
+        if included:
+            provider = next(
+                (
+                    root / included[1]
+                    for root in (*project.include, *getattr(project, "declaration_evidence", ()))
+                    if (root / included[1]).is_file()
+                ),
+                None,
+            )
+            if provider is not None and re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", provider.read_text(), re.M):
+                break
         if re.match(r"\s*#\s*(?:define|undef)\b", line):
             directives.append(line)
     with tempfile.TemporaryDirectory(prefix="gbi-sdk-") as temporary:
@@ -434,7 +444,15 @@ def catalogue(project: Project, policy: Policy, unit: Path, version: str, source
         return remembered("gbi.sdk.patterns", definitions, lambda: patterns(definitions))
 
 
-def proven(project: Project, policy: Policy, unit: Path, source: str, headers: dict[Path, str]) -> str:
+def proven(
+    project: Project,
+    policy: Policy,
+    unit: Path,
+    source: str,
+    headers: dict[Path, str],
+    *,
+    authored: str | None = None,
+) -> str:
     """Keep a private rewrite only if every owning VERSION and mode is identical."""
     if not any(f.rule in RULES for f in checks.run(source)):
         return source
@@ -442,6 +460,25 @@ def proven(project: Project, policy: Policy, unit: Path, source: str, headers: d
     from unbake.layout import split as layout_split
 
     before = import_aliases(project, source, headers, sdk_aliases=False)
+    # Provider resolution may have added the installed SDK before a missing
+    # legacy include. Restore the authored SDK choice for the raw comparison.
+    from unbake.match.imports import _INCLUDE, _without_comments
+
+    requested = set(_INCLUDE.findall(_without_comments(authored if authored is not None else source)))
+    installed = {
+        path.relative_to(root).as_posix()
+        for path, text in headers.items()
+        for root in project.include
+        if path.is_relative_to(root)
+        if re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", text, re.M)
+    }
+    legacy = any(
+        (old / name).is_file() and re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", (old / name).read_text(), re.M)
+        for name in requested - installed
+        for old in getattr(project, "declaration_evidence", ())
+    )
+    if legacy and not requested & installed:
+        before = _INCLUDE.sub(lambda match: "" if match[1] in installed else match[0], before)
     source = import_aliases(project, source, headers)
 
     with tempfile.TemporaryDirectory(prefix="gbi-recovery-") as temporary:
@@ -461,8 +498,6 @@ def proven(project: Project, policy: Policy, unit: Path, source: str, headers: d
         after = imports.resolve(staged, Headers.read(staged), recovered[0], unit.stem)
         # The raw form sees its actual legacy SDK macros, not the replacement
         # header. Only private proof inputs receive these read-only bytes.
-        from unbake.match.imports import _INCLUDE, _without_comments
-
         for name in _INCLUDE.findall(_without_comments(before)):
             if any((include / name).is_file() for include in staged.include):
                 continue

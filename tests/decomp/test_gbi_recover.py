@@ -226,7 +226,8 @@ class RecoveryTests(unittest.TestCase):
             live.mkdir()
             (old / "legacy.h").write_text(SDK + "/* raw SDK identity */")
             project = SimpleNamespace(root=root, include=(live,), declaration_evidence=(old,))
-            before = '#include "legacy.h"\np->words.w0=0xE7000000;p->words.w1=0;'
+            before = '#include "commands.h"\n#include "legacy.h"\np->words.w0=0xE7000000;p->words.w1=0;'
+            authored = before.replace('#include "commands.h"\n', "")
 
             def overlay(project, work):
                 include = work / "overlay/include"
@@ -235,6 +236,7 @@ class RecoveryTests(unittest.TestCase):
 
             def prove(staged, policy, unit, raw, after):
                 self.assertIn('"legacy.h"', raw)
+                self.assertNotIn('"commands.h"', raw)
                 self.assertIn('"commands.h"', after)
                 self.assertEqual((staged.include[0] / "legacy.h").read_text(), (old / "legacy.h").read_text())
 
@@ -246,7 +248,7 @@ class RecoveryTests(unittest.TestCase):
                 patch("unbake.match.imports.resolve", side_effect=lambda project, headers, source, function: source),
                 patch("unbake.decomp.gbi_proof.preserve", side_effect=prove) as proof,
             ):
-                recover.proven(project, None, root / "alpha.c", before, {live / "commands.h": SDK})
+                recover.proven(project, None, root / "alpha.c", before, {live / "commands.h": SDK}, authored=authored)
                 proof.assert_called_once()
             self.assertFalse((live / "legacy.h").exists())
 
@@ -299,3 +301,27 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual(len(family), 1)
                 source = f"p->words.w0={w0};p->words.w1={w1};"
                 self.assertEqual(recover.lower(source, family), f"{name}(p, {arguments});")
+
+    def test_catalogue_honors_defines_after_scalar_includes(self):
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
+            root = Path(temporary)
+            (root / "commands.h").write_text(SDK)
+            (root / "types.h").write_text("typedef int s32;")
+            project = SimpleNamespace(include=(root,), src=root, declaration_evidence=())
+            recipe = SimpleNamespace(cppflags=("-DSDK_MODE=2",), cpp="cpp")
+            source = '#include "types.h"\n#undef SDK_MODE\n#define SDK_MODE 1\n#include "commands.h"\n'
+
+            def preprocess(command, work, phase):
+                probe = Path(command[-1]).read_text()
+                self.assertIn("#undef SDK_MODE\n#define SDK_MODE 1", probe)
+                self.assertIn("-DSDK_MODE=2", command)
+                self.assertIn("-DVERSION_US", command)
+                return SDK
+
+            with (
+                patch("unbake.project.makefile.recipe", return_value=recipe),
+                patch("unbake.project.makefile.flags", return_value=["-DVERSION_US"]),
+                patch("unbake.project.makefile.host_executable", return_value="cpp"),
+                patch("unbake.decomp.trial_compile.run_tool", side_effect=preprocess),
+            ):
+                self.assertTrue(recover.catalogue(project, None, root / "alpha.c", "us", source))

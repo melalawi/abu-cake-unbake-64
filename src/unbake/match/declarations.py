@@ -193,6 +193,7 @@ def fold_source(
     """Plan aggregate promotion against a shared header context; the context is not changed."""
     from unbake.typemap import declaration_evidence
 
+    authored = text
     text, evidence_end = declaration_evidence.inject(project, headers, text, function, versions)
     if evidence_end:
         text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
@@ -233,6 +234,7 @@ def fold_source(
         project.src / f"{function}.c",
         final,
         {**headers.texts, **{edit.path: edit.after for edit in edits}},
+        authored=authored,
     )
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
