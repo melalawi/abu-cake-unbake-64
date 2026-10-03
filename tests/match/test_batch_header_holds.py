@@ -44,7 +44,7 @@ class BatchHeaderHoldsTests(unittest.TestCase):
                     patch.object(batch_fold.forked, "ordered", side_effect=ordered),
                     patch.object(batch_fold, "_fold_one", side_effect=fold),
                 ):
-                    accepted = batch_fold.fold(None, SimpleNamespace(cores=1), headers, candidates, receipts)
+                    accepted = list(batch_fold.fold(None, SimpleNamespace(cores=1), headers, candidates, receipts))
                 self.assertEqual([c.function for c, _ in accepted], ["good"])
                 self.assertEqual(len(receipts), 1)
                 self.assertIn("bad: submit.fold:", receipts[0])

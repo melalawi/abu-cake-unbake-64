@@ -324,10 +324,10 @@ def _source_units(
         except Held as error:
             return error
 
-    cores = min(8, getattr(headers_batch.policy, "cores", 1))
+    cores = min(2, getattr(headers_batch.policy, "cores", 1))
     with ThreadPoolExecutor(max_workers=cores) as pool:
-        for start in range(0, len(tasks), 64):
-            chunk = tasks[start : start + 64]
+        for start in range(0, len(tasks), cores):
+            chunk = tasks[start : start + cores]
             yield from zip(chunk, pool.map(preprocess, chunk), strict=True)
 
 
@@ -738,6 +738,8 @@ class _PublishedDeclarations:
             and result["unknown"] == seed["unknown"]
         ):
             self.sources[source_key] = result
+            while len(self.sources) > 8:
+                del self.sources[next(iter(self.sources))]
         return result
 
 
@@ -785,6 +787,7 @@ def validate_sources(
                 published.extract(
                     text, {"kind": "proven", "function": function, "version": version}, source, compact=True
                 )
+                published.sources.clear()
             except Held as error:
                 refused[function] = error.reason
     return refused

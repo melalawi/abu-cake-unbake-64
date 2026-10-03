@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from collections import ChainMap
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,10 +93,9 @@ class Changes:
 
 def fold(
     staged: Project, policy: Policy, headers: Headers, candidates: list[Any], receipts: list[str]
-) -> list[tuple[Any, declarations.Folded]]:
+) -> Iterator[tuple[Any, declarations.Folded]]:
     """Fold candidates in order into headers; returns each accepted source with its fold."""
-    accepted: list[tuple[Any, declarations.Folded]] = []
-    window = max(1, policy.cores * 16)
+    window = max(1, min(policy.cores, forked.MAX_WORKERS) * 2)
     reused = again = 0
     start = 0
     while start < len(candidates):
@@ -124,11 +123,13 @@ def fold(
                     changes.reloaded = True
                     receipts.append(f"HELD(submit): {candidate.function}: submit.fold: {error.reason}")
                 else:
-                    accepted.append((candidate, folded))
+                    yield candidate, folded
+                    del folded
+                del trial, before
+                forked.release()
                 if changes.reloaded:
                     break
     reporting.record("fold", reused=reused, folded_in_order=again, window=window)
-    return accepted
 
 
 def _warm_contexts(staged: Project, policy: Policy, headers: Headers, members: list[Any]) -> None:

@@ -6,6 +6,7 @@ import os
 import pickle
 import tempfile
 import unittest
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -151,9 +152,14 @@ class FakePool:
     def __exit__(self, *args):
         self.closed = True
 
-    def map(self, fn, items, **kwargs):
+    def submit(self, fn, item):
         self.maps += 1
-        return map(fn, items)
+        future = Future()
+        try:
+            future.set_result(fn(item))
+        except BaseException as error:
+            future.set_exception(error)
+        return future
 
 
 class BatchPoolTests(unittest.TestCase):
@@ -177,9 +183,9 @@ class BatchPoolTests(unittest.TestCase):
                     second = list(forked.ordered(plus, 20, [1, 2], 8))
                 self.assertEqual(load.call_count, 2)
                 self.assertEqual(len(pools), 1)
-                self.assertEqual(pools[0].options["max_workers"], 3)
+                self.assertEqual(pools[0].options["max_workers"], forked.MAX_WORKERS)
                 snapshot = Path(forked._snapshot[0])
-                self.assertTrue(snapshot.exists())
+                self.assertFalse(snapshot.exists())
             self.assertFalse(snapshot.exists())
             self.assertIsNone(forked._pool.get())
         self.assertTrue(pools[0].closed)

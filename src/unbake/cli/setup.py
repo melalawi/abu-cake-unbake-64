@@ -10,6 +10,9 @@ from unbake.project.config import Held, PendingProject
 
 def register(phases: Subparsers) -> None:
     parser = phases.add_parser("setup", phase="setup", help="Inventory ROMs and prepare project setup.")
+    parser.add_argument(
+        "--refresh-helpers", action="store_true", help="Refresh pinned helpers and recipes incrementally."
+    )
     parser.add_argument("--names-from", metavar="VERSION")
     parser.add_argument("--version-name", action="append", default=[], metavar="OLD=NEW")
     parser.add_argument("--version-order", metavar="V1,V2,...")
@@ -42,6 +45,25 @@ def pairs(values: list[str], flag: str) -> dict[str, str]:
 def run(args: argparse.Namespace, project: PendingProject) -> bool:
     from unbake.project import census, config, flow, setup, setup_config, toolchain
 
+    if getattr(args, "refresh_helpers", False):
+        if project.state != "ready":
+            raise Held("setup", "setup.helper_refresh: ready project required")
+        if (
+            args.compilers
+            or args.repropose_compilers
+            or args.replan_symbols
+            or args.compiler
+            or args.confirm
+            or args.name
+            or args.title
+            or args.names_from
+            or args.version_name
+            or args.version_order
+            or args.supply
+        ):
+            raise Held("setup", "setup.helper_refresh: refresh helpers separately from setup facts")
+        setup.refresh_helpers(config.load(project.root))
+        return receipt("setup", ["pinned helpers and scoped recipes refreshed"])
     if args.compilers:
         policy = config.load_policy(args.policy, stage="setup")
         lines = []

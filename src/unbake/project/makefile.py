@@ -251,8 +251,16 @@ def helper_sources(project: Project) -> dict[str, str]:
 def helpers(project: Project) -> dict[str, str]:
     tools = relative(project, project.tools)
     files = helper_sources(project)
-    files[tools + "/build.json"] = json.dumps(description(project), sort_keys=True, indent=2) + "\n"
     data = description(project)
+    files[tools + "/build.json"] = json.dumps(data, sort_keys=True, indent=2) + "\n"
+    files.update(scoped_settings(project, data))
+    return files
+
+
+def scoped_settings(project: Project, data: dict[str, Any]) -> dict[str, str]:
+    """Render all scoped recipe prerequisites from a verified build description."""
+    tools = relative(project, project.tools)
+    files = {}
     files[tools + "/link.json"] = json.dumps({"resident_mappings": data["resident_mappings"]}, sort_keys=True) + "\n"
     assembly = data["assembly_compiler"]
     files[tools + "/extract.json"] = (
@@ -265,13 +273,13 @@ def helpers(project: Project) -> dict[str, str]:
         )
         + "\n"
     )
-    files.update(compile_settings(project))
+    files.update(compile_settings(project, data=data))
     return files
 
 
-def compile_settings(project: Project) -> dict[str, str]:
+def compile_settings(project: Project, *, data: dict[str, Any] | None = None) -> dict[str, str]:
     """Publish content-stable prerequisites for each compiler, version and unit flags."""
-    data = description(project)
+    data = description(project) if data is None else data
     tools = relative(project, project.tools)
     files = {}
     for version, macros in data["macros"].items():

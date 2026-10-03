@@ -188,7 +188,32 @@ def publish_files(project: Project, files: dict[str, str]) -> None:
 def refresh_helpers(project: Project) -> None:
     """Refresh tool-owned helpers and their pins before mixing build implementations."""
     with build.lock(project):
-        publish_files(project, makefile.helper_sources(project) | makefile.driver_settings(project))
+        recipe = project.tools / "build.json"
+        try:
+            data = json.loads(recipe.read_bytes())
+        except (OSError, ValueError) as error:
+            raise Held("setup", f"helper recipe provenance {recipe}: {error}") from error
+        files = makefile.helper_sources(project) | makefile.scoped_settings(project, data)
+        paths = {project.root / relative for relative in files}
+        manifest = project.tools / "compiler.sha256"
+        paths.add(manifest)
+        for row in manifest.read_text().splitlines():
+            fields = row.split(maxsplit=1)
+            if len(fields) == 2:
+                old = Path(fields[1])
+                if old.parent == project.tools.relative_to(project.root) and old.suffix == ".py":
+                    paths.add(project.root / old)
+        before = {path: (path.read_bytes(), path.stat().st_mode & 0o777) if path.is_file() else None for path in paths}
+        try:
+            publish_files(project, files)
+        except BaseException:
+            for path, previous in before.items():
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    compiler_files.atomic_bytes(path, previous[0])
+                    path.chmod(previous[1])
+            raise
 
 
 def require_helpers(project: Project, *, tree: Path | None = None) -> None:
@@ -199,7 +224,7 @@ def require_helpers(project: Project, *, tree: Path | None = None) -> None:
         if not path.is_file() or path.read_text() != content:
             import shlex
 
-            command = shlex.join(["unbake", "--project", str(root), "setup"])
+            command = shlex.join(["unbake", "--project", str(root), "setup", "--refresh-helpers"])
             raise Held("build", f"project helpers stale: run {command}")
 
 

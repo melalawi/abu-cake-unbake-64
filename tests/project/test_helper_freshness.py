@@ -78,3 +78,55 @@ class HelperFreshnessTests(unittest.TestCase):
                 timestamps = [p.stat().st_mtime_ns for p in paths]
                 setup.refresh_helpers(project)
                 self.assertEqual([p.stat().st_mtime_ns for p in paths], timestamps)
+
+    def test_refresh_restores_every_scoped_recipe_without_rewriting_current_files(self):
+        for state in ("missing", "stale"):
+            with self.subTest(state=state), patch.dict(os.environ), tempfile.TemporaryDirectory() as directory:
+                project, _policy = fixture(Path(directory).resolve(), case=self)
+                write_rendered(project)
+                expected = makefile.helpers(project)
+                recipes = [name for name in expected if name.endswith(".json") and not name.endswith("build.json")]
+                self.assertTrue(any("/compile/" in name for name in recipes))
+                provenance = (project.tools / "build.json").read_bytes()
+                for name in recipes:
+                    path = project.root / name
+                    if state == "missing":
+                        path.unlink()
+                    else:
+                        path.write_text("stale")
+                setup.refresh_helpers(project)
+                manifest = (project.tools / "compiler.sha256").read_text()
+                for name in recipes:
+                    self.assertEqual((project.root / name).read_text(), expected[name])
+                    self.assertIn(f"{hashlib.sha256(expected[name].encode()).hexdigest()}  {name}\n", manifest)
+                self.assertEqual((project.tools / "build.json").read_bytes(), provenance)
+                timestamps = {name: (project.root / name).stat().st_mtime_ns for name in expected}
+                setup.refresh_helpers(project)
+                self.assertEqual({name: (project.root / name).stat().st_mtime_ns for name in expected}, timestamps)
+
+    def test_refresh_transaction_restores_files_and_pins_on_write_failure(self):
+        for fail_at in (1, 3, 7):
+            with self.subTest(fail_at=fail_at), patch.dict(os.environ), tempfile.TemporaryDirectory() as directory:
+                project, _policy = fixture(Path(directory).resolve(), case=self)
+                write_rendered(project)
+                (project.tools / "layout.py").write_text("old helper")
+                (project.tools / "extract.json").unlink()
+                (project.tools / "link.json").write_text("old recipe")
+                before = {p: p.read_bytes() for p in project.tools.rglob("*") if p.is_file()}
+                original = setup.compiler_files.atomic_bytes
+                count = 0
+
+                def write(path, content, original=original, fail_at=fail_at):
+                    nonlocal count
+                    count += 1
+                    if count == fail_at:
+                        raise OSError("interrupted refresh")
+                    original(path, content)
+
+                # Make enough outputs differ to inject failures at every boundary.
+                for name in makefile.helper_sources(project):
+                    (project.root / name).write_text("old helper")
+                before = {p: p.read_bytes() for p in project.tools.rglob("*") if p.is_file()}
+                with patch.object(setup.compiler_files, "atomic_bytes", side_effect=write), self.assertRaises(OSError):
+                    setup.refresh_helpers(project)
+                self.assertEqual({p: p.read_bytes() for p in project.tools.rglob("*") if p.is_file()}, before)

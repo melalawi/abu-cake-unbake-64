@@ -40,6 +40,8 @@ def parsed(
         return cached[1]  # type: ignore[no-any-return]
     value = parse()
     _parsed[index] = digests, value
+    while len(_parsed) > 64:
+        del _parsed[next(iter(_parsed))]
     return value
 
 

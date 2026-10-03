@@ -232,8 +232,12 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             if not candidates:
                 return receipts
             with reporting.phase("publication", sources=len(candidates)):
-                followups = _commit(project, policy, staged, candidates, current, generations, started)
-                receipts.extend(followups or [])
+                candidates, sha1, followups = _publish_survivors(
+                    project, staged, base, policy, candidates, current, generations, started, receipts, sha1
+                )
+                receipts.extend(followups)
+            if not candidates:
+                return receipts
             if all((generation / "obj").is_symlink() for generation in generations.values()):
                 holds.close()
                 for version, generation in generations.items():
@@ -392,16 +396,15 @@ def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts
     for candidate in retained:
         candidate.final = candidate.content.decode("utf-8")
     pending = [candidate for candidate in candidates if not candidate.compiled]
-    folds = batch_fold.fold(staged, policy, headers, pending, receipts) if pending else []
-    for candidate, folded in folds:
+    accepted = set()
+    for candidate, folded in batch_fold.fold(staged, policy, headers, pending, receipts):
+        accepted.add(candidate.function)
         candidate.final = folded.source
         candidate.removed_rows = folded.removed_rows
     for path, text in headers.texts.items():
         if base.get(path) != text:
             split_apply.write(path, text)
-    return [
-        candidate for candidate in candidates if candidate.compiled or any(candidate is folded for folded, _ in folds)
-    ]
+    return [candidate for candidate in candidates if candidate.compiled or candidate.function in accepted]
 
 
 def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> None:
@@ -527,6 +530,7 @@ def _recipe(staged: Project) -> None:
     lines[entries[0]] = f"{hashlib.sha256(rendered.encode()).hexdigest()}  {name}\n"
     split_apply.write(recipe, rendered)
     split_apply.write(checksum, "".join(lines))
+    setup.refresh_helpers(project)
 
 
 def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
@@ -845,6 +849,50 @@ def _bisect(
     return faults
 
 
+def _publish_survivors(
+    project: Project,
+    staged: Project,
+    base: _Base,
+    policy: Policy,
+    candidates: list[Candidate],
+    current: dict[str, Path],
+    generations: dict[str, Path],
+    started: dict[str, str],
+    receipts: list[str],
+    sha1: dict[str, str],
+) -> tuple[list[Candidate], dict[str, str], list[str]]:
+    """Hold attributable report faults, reprove the remainder, then publish it."""
+    extracted = {v: staged.version(v).split.read_text() for v in generations}
+    while candidates:
+        try:
+            followups = _commit(project, policy, staged, candidates, current, generations, started)
+            return candidates, sha1, followups or []
+        except Held as error:
+            named = re.match(r"matched function ([A-Za-z_]\w*)(?::| source | linked src object )", error.reason)
+            if error.phase != "report" or named is None:
+                raise
+            owners = {c.function for c in candidates if c.function == named[1]}
+            for candidate in candidates:
+                for rows in candidate.removed_rows.values():
+                    for line in rows:
+                        row = split.ROW.fullmatch(line)
+                        if row is not None and Path(split.plain(row["path"])).name == named[1]:
+                            owners.add(candidate.function)
+            if not owners:
+                raise
+            for name in sorted(owners):
+                receipts.append(f"HELD(report): {name}: {error.reason}; batch source was not published")
+            candidates = [c for c in candidates if c.function not in owners]
+            if not candidates:
+                return [], {}, []
+            _materialize(staged, base, candidates)
+            results = _relink(staged, policy, generations, extracted)
+            candidates, sha1 = _isolate(
+                project, staged, base, policy, candidates, generations, results, receipts, reference=current
+            )
+    return [], {}, []
+
+
 def _commit(
     project: Project,
     policy: Policy,
@@ -883,7 +931,8 @@ def _commit(
                 v: pool.submit(progress.measure, staged, policy, v, generation=generations[v]) for v in project.versions
             }
             reports = {v: future.result() for v, future in measured.items()}
-    paths = [staged.root / "config.toml", staged.tools / "build.json", staged.tools / "compiler.sha256"]
+    paths = [staged.root / "config.toml", staged.root / "Makefile", staged.tools / "compiler.sha256"]
+    paths += [staged.root / relative for relative in makefile.helpers(config.load(staged.root))]
     paths += [p for v in staged.versions for p in (staged.version(v).split, staged.version(v).symbols)]
     paths += [staged.tools / name.name for name in makefile.TEMPLATES.glob("*.py")] + [staged.tools / "cache.py"]
     paths += [staged.root / "unbake-exclusions.json"]

@@ -174,6 +174,16 @@ class Pool:
         assert chunksize > 0
         return map(function, items)
 
+    def submit(self, function, item):
+        from concurrent.futures import Future
+
+        future = Future()
+        try:
+            future.set_result(function(item))
+        except BaseException as error:
+            future.set_exception(error)
+        return future
+
     def shutdown(self, *, cancel_futures):
         assert cancel_futures
 

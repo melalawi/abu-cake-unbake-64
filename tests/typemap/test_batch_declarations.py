@@ -234,3 +234,50 @@ int (*factory(void))(int) { return 0; }
         self.assertEqual(record["params"][0]["type"], "M2C_UNK")
         self.assertNotIn("M2C_UNK", record["prototype"])
         declarations.extract(prefix + record["prototype"], {})
+
+    def test_source_receipt_cache_is_bounded_and_eviction_preserves_bytes(self):
+        batch = declarations._PublishedDeclarations()
+        prefix = "typedef int Word;\n"
+        first = None
+        for i in range(20):
+            name = f"unit_{i}"
+            result = batch.extract(
+                (prefix, f"Word {name}(void) {{ return {i}; }}"), {}, Path(name + ".c"), compact=False
+            )
+            if i == 0:
+                first = storage.encoded(result)
+            self.assertLessEqual(len(batch.sources), 8)
+        again = batch.extract((prefix, "Word unit_0(void) { return 0; }"), {}, Path("unit_0.c"), compact=False)
+        self.assertEqual(storage.encoded(again), first)
+
+    def test_preprocessor_queue_retains_only_one_unit_per_worker(self):
+        import tempfile
+        from types import SimpleNamespace
+
+        for cores in (1, 12):
+            with self.subTest(cores=cores), tempfile.TemporaryDirectory() as directory:
+                sizes = []
+
+                class Pool:
+                    def __init__(self, cores=cores, **kwargs):
+                        self.workers = kwargs["max_workers"]
+                        self.asserted_workers = min(2, cores)
+
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        pass
+
+                    def map(self, fn, tasks, sizes=sizes):
+                        sizes.append(len(tasks))
+                        return map(fn, tasks)
+
+                headers = SimpleNamespace(
+                    scratch=Path(directory), policy=SimpleNamespace(cores=cores), source=lambda v, p: str(p)
+                )
+                tasks = [(str(i), Path(str(i)), "us", {}) for i in range(25)]
+                with patch.object(declarations, "ThreadPoolExecutor", Pool):
+                    results = list(declarations._source_units(headers, tasks))
+                self.assertEqual([task[0] for task, text in results], [str(i) for i in range(25)])
+                self.assertLessEqual(max(sizes), min(2, cores))
