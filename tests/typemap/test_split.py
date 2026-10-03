@@ -210,6 +210,89 @@ class SplitTests(unittest.TestCase):
             '#include "shared/common.h"\nvoid f(Owner *owner, Rider *rider) { owner->value = rider->value; }',
         )
 
+    def test_consumer_ownership_follows_only_authored_include_closure(self):
+        from unbake.typemap.regeneration import Session
+
+        rows = (
+            ("direct", '#include "local.h"\n', "local.h", True),
+            ("nested", '#include "nested.h"\n', "local.h", True),
+            ("generated", '#include "shared/types/local.h"\n', "shared/types/local.h", False),
+            ("bridge", '#include "shared/types/bridge.h"\n', "local.h", True),
+            ("unrelated", "", "local.h", False),
+        )
+        for label, include, home, expected in rows:
+            with self.subTest(label=label), tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+                project, policy, _ = fixture(Path(directory).resolve(), case=self)
+                root = project.include[0]
+                (root / "shared").mkdir(exist_ok=True)
+                (root / "shared/typemap.h").write_text("")
+                path = root / home
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    "typedef int Handler; struct LocalTag { int value; }; int callback(void); typedef int M2C_UNK;"
+                )
+                (root / "nested.h").write_text('#include "local.h"\n')
+                (root / "shared/types").mkdir(exist_ok=True)
+                (root / "shared/types/bridge.h").write_text('#include "local.h"\n')
+                source = project.src / "user.c"
+                source.write_text(
+                    include + '#include "shared/typemap.h"\nvoid user(Handler h, struct LocalTag *tag) { callback(); }'
+                )
+                other = project.src / "other.c"
+                other.write_text('#include "shared/typemap.h"\nvoid other(Handler h) {}')
+                session = Session(project, policy)
+                for _cached in (False, True):
+                    consumers = {}
+                    self.assertEqual(session.source_names(consumers), set())
+                    self.assertEqual(
+                        consumers[source],
+                        {"Handler", "LocalTag", "callback", "M2C_UNK"} if expected else set(),
+                    )
+                    self.assertEqual(consumers[other], set())
+                    self.assertEqual(session.consumer_tags[source], {"LocalTag"} if expected else set())
+                    layout = Layout(
+                        {root / "alias.h": "typedef int Handler;", root / "tag.h": "struct LocalTag { int value; };"},
+                        {root / "alias.h": "typedef int Handler;", root / "tag.h": "struct LocalTag { int value; };"},
+                        root,
+                    )
+                    required = layout.required(
+                        session.sources[source], blocked=consumers[source], blocked_tags=session.consumer_tags[source]
+                    )
+                    self.assertEqual(required, set() if expected else set(layout.headers))
+                    self.assertEqual(
+                        layout.required(session.sources[other], blocked=consumers[other]),
+                        {layout.homes[root / "alias.h"]},
+                    )
+
+    def test_authored_scalar_compatibility_is_excluded_per_consumer(self):
+        for nested in (False, True):
+            with self.subTest(nested=nested), tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+                project, policy, _ = fixture(Path(directory).resolve(), case=self)
+                root = project.include[0]
+                (root / "shared").mkdir(exist_ok=True)
+                (root / "shared/typemap.h").write_text("")
+                (root / "scalar.h").write_text("typedef int M2C_UNK;")
+                (root / "nested.h").write_text('#include "scalar.h"\n')
+                name = "nested.h" if nested else "scalar.h"
+                (project.src / "local.c").write_text(
+                    f'#include "{name}"\n#include "shared/typemap.h"\nM2C_UNK local(void);'
+                )
+                (project.src / "remote.c").write_text('#include "shared/typemap.h"\nM2C_UNK remote(void);')
+                value = {"structs": {}, "functions": {}, "globals": {}, "arrays": {}}
+                outputs = {}
+
+                def capture(project, content, *args, outputs=outputs, root=root, **kwargs):
+                    outputs.update({p.relative_to(root).as_posix(): data.decode() for p, data in content.items()})
+                    raise ValueError("captured")
+
+                with (
+                    patch.object(database, "validate_headers", side_effect=capture),
+                    self.assertRaisesRegex(ValueError, "captured"),
+                ):
+                    database.publish(project, value, {}, policy=policy)
+                self.assertNotIn("shared/consumers/local.h", outputs)
+                self.assertIn("compat_M2C_UNK.h", outputs["shared/consumers/remote.h"])
+
     def test_callback_used_by_global_survives_solve_and_emission(self):
         from tests.typemap.test_solver import solve
 

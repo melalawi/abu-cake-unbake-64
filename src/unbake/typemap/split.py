@@ -133,7 +133,9 @@ class Layout:
 
         return f'#include "{relative_root(self.root, path)}"'
 
-    def required(self, text: str, *, blocked: set[str] | None = None) -> set[Path]:
+    def required(
+        self, text: str, *, blocked: set[str] | None = None, blocked_tags: set[str] | None = None
+    ) -> set[Path]:
         """Select body/signature type names, then let header includes close them."""
         selected = set()
         pending = re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))
@@ -145,7 +147,8 @@ class Layout:
             seen.add(name)
             if name not in (blocked or set()):
                 selected.update(self.providers.get(name, set()))
-            selected.update(self.tags.get(name, set()))
+            if name not in (blocked_tags or set()):
+                selected.update(self.tags.get(name, set()))
             pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", self.aliases.get(name, "")))
         return {self.homes[path] for path in selected}
 

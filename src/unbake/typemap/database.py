@@ -317,7 +317,9 @@ def _render(
         selection = record.get("prototype", text)
         if source.is_file():
             selection += "\n" + session.sources[source]
-        homes = layout.required(selection, blocked=consumer_names.get(source, set()))
+        homes = layout.required(
+            selection, blocked=consumer_names.get(source, set()), blocked_tags=session.consumer_tags.get(source, set())
+        )
         outputs[path] = session.guarded(path, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
         declaration_headers.append(layout.include(path))
     outputs[root / "shared/prototypes.h"] = session.guarded(
@@ -356,9 +358,14 @@ def _render(
         for source, text in sorted(source_context.items()):
             if not re.search(r'#\s*include\s*"shared/typemap.h"', text):
                 continue
-            selected = (layout.required(text, blocked=consumer_names.get(source, set())) & alias_homes) | compatibility(
-                source, text
-            )
+            selected = (
+                layout.required(
+                    text,
+                    blocked=consumer_names.get(source, set()),
+                    blocked_tags=session.consumer_tags.get(source, set()),
+                )
+                & alias_homes
+            ) | compatibility(source, text)
             if not selected:
                 continue
             destination = root / "shared/consumers" / (source.stem + ".h")
@@ -376,7 +383,9 @@ def _render(
         for source in sorted(set(source_imports[path.name])):
             text = source_context[source]
             homes = layout.required(
-                text + "\n" + split.narrow(components.get(path, ""), ""), blocked=consumer_names.get(source, set())
+                text + "\n" + split.narrow(components.get(path, ""), ""),
+                blocked=consumer_names.get(source, set()),
+                blocked_tags=session.consumer_tags.get(source, set()),
             )
             homes.update(compatibility(source, text))
             destination = root / "shared/consumers" / (source.stem + ".h")

@@ -579,6 +579,26 @@ class RegenerationTests(unittest.TestCase):
                     self.headers(), {p: data for p, data in reference.items() if storage.generated(self.project, p)}
                 )
 
+    def test_prototype_delta_preserves_authored_tag_ownership(self):
+        (self.root / "local.h").write_text("struct LocalTag { int value; };")
+        (self.project.src / "f.c").write_text(
+            '#include "local.h"\n#include "shared/decls/f.h"\nstruct LocalTag *f(void);'
+        )
+        self.value["functions"]["f"]["prototype"] = "struct LocalTag *f(void);"
+        self.publish()
+        for prototype in ("struct LocalTag *f(int value);", "void f(struct LocalTag *value);"):
+            with self.subTest(prototype=prototype):
+                self.value["functions"]["f"]["prototype"] = prototype
+                with patch.object(database, "_render", side_effect=AssertionError("full render on prototype edit")):
+                    self.publish()
+                header = self.root / "shared/decls/f.h"
+                self.assertNotIn(b"#include", header.read_bytes())
+                session = regeneration.Session(self.project, self.policy)
+                reference = database._render(self.project, copy.deepcopy(self.value), self.policy, session)
+                self.assertEqual(
+                    self.headers(), {p: data for p, data in reference.items() if storage.generated(self.project, p)}
+                )
+
     def test_prototype_delta_falls_back_when_state_or_render_artifact_is_missing(self):
         for missing in ("state", "artifact"):
             with self.subTest(missing=missing):

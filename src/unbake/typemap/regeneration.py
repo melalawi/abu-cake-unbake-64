@@ -106,6 +106,7 @@ class Session:
         self.layout_value: dict[str, Any] | None = None
         self.consumer_names: dict[Path, set[str]] = {}
         self._rewrite_contexts: dict[tuple[int, int], tuple[dict[str, str], frozenset[str], str, frozenset[str]]] = {}
+        self.consumer_tags: dict[Path, set[str]] = {}
 
     def source_names(self, consumers: dict[Path, set[str]]) -> set[str]:
         def compute() -> Any:
@@ -115,11 +116,17 @@ class Session:
                 self.policy,
                 consumers=consumers,
                 texts={**self.authored, **self.sources},
+                consumer_tags=self.consumer_tags,
             )
-            return {"names": sorted(names), "consumers": {str(p): sorted(v) for p, v in consumers.items()}}
+            return {
+                "names": sorted(names),
+                "consumers": {str(p): sorted(v) for p, v in consumers.items()},
+                "tags": {str(p): sorted(v) for p, v in self.consumer_tags.items()},
+            }
 
         value = artifact(self.cache, "typemap-source-names", self.inputs, compute)
         consumers.update({Path(p): set(names) for p, names in value["consumers"].items()})
+        self.consumer_tags.update({Path(p): set(tags) for p, tags in value["tags"].items()})
         self.reserved = set(value["names"])
         return self.reserved
 
@@ -254,7 +261,11 @@ class Session:
                     text = "extern " + text
                 source = self.project.src / (name + ".c")
                 selection = record["prototype"] + ("\n" + self.sources[source] if source in self.sources else "")
-                homes = layout.required(selection, blocked=set(result["consumers"].get(str(source), [])))
+                homes = layout.required(
+                    selection,
+                    blocked=set(result["consumers"].get(str(source), [])),
+                    blocked_tags=set(result["consumer_tags"].get(str(source), [])),
+                )
                 output = self.project.include[0] / "shared/decls" / (name + ".h")
                 data = self.guarded(output, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
                 result["outputs"][str(output)] = data.decode()
@@ -272,6 +283,7 @@ class Session:
                 "reserved": sorted(self.reserved),
                 "layout": self.layout_value,
                 "consumers": {str(p): sorted(names) for p, names in self.consumer_names.items()},
+                "consumer_tags": {str(p): sorted(tags) for p, tags in self.consumer_tags.items()},
             }
 
         result = artifact(self.cache, "typemap-render", content_key, make)

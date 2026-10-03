@@ -30,6 +30,18 @@ class _Declarations(Parser):
         self.depth = 0
         self.names: set[str] = set()
         self.alias_types: dict[str, str] = {}
+        self.external_names: set[str] = set()
+        self.declarator_depth = 0
+
+    def declarator(self, *, abstract: bool = False) -> tuple[str, bool]:
+        self.declarator_depth += 1
+        try:
+            name, pointer = super().declarator(abstract=abstract)
+            if self.depth == 1 and self.declarator_depth == 1 and name:
+                self.external_names.add(name)
+            return name, pointer
+        finally:
+            self.declarator_depth -= 1
 
     def specifiers(self) -> tuple[str, str]:
         start = self.index
@@ -160,6 +172,89 @@ def rewrite(source: str, replacements: dict[str, str], blocked: set[str]) -> str
     return source
 
 
+class IncludeClosure:
+    """Resolve project-local includes once, sharing the effective input texts."""
+
+    def __init__(self, project: Project, texts: dict[Path, str] | None = None):
+        self.canonical: dict[str, str] = {}
+        self.texts = {self.resolved(str(path)): text for path, text in (texts or {}).items()}
+        self.supplied = set(self.texts)
+        self.edges: dict[str, set[str]] = {}
+        self.frontiers: dict[str, set[str]] = {}
+        self.roots = tuple(map(str, project.include))
+        shared = self.resolved(str(project.include[0] / "shared"))
+        self.special = {
+            os.path.join(shared, name) for name in ("typemap.h", "prototypes.h", "types", "decls", "consumers")
+        }
+        self.prefixes = tuple(os.path.join(shared, name) + os.sep for name in ("types", "decls", "consumers"))
+
+    def resolved(self, path: str) -> str:
+        if path not in self.canonical:
+            self.canonical[path] = os.path.realpath(path)
+        return self.canonical[path]
+
+    def generated(self, path: str) -> bool:
+        return path in self.special or path.startswith(self.prefixes)
+
+    def imports(self, path: str) -> set[str]:
+        path = self.resolved(path)
+        if path not in self.edges:
+            if path not in self.texts:
+                self.texts[path] = Path(path).read_text() if os.path.isfile(path) else ""
+            text = re.sub(r"/\*.*?\*/|//[^\n]*", "", self.texts[path], flags=re.S)
+            self.edges[path] = set()
+            for name in _INCLUDE.findall(text):
+                candidates = [os.path.join(root, name) for root in (os.path.dirname(path), *self.roots)]
+                # Missing generated relative paths cannot shadow real authored
+                # headers later in the compiler's include search order.
+                target = next(
+                    (
+                        self.resolved(item)
+                        for item in candidates
+                        if os.path.isfile(item) or self.resolved(item) in self.supplied
+                    ),
+                    None,
+                )
+                if target is None:
+                    target = next(
+                        (self.resolved(item) for item in candidates if self.generated(self.resolved(item))), None
+                    )
+                if target is not None:
+                    self.edges[path].add(target)
+        return self.edges[path]
+
+    def authored_frontier(self, path: str) -> set[str]:
+        """Follow generated edges to authored inputs without claiming their names."""
+        if path not in self.frontiers:
+            pending, seen, authored = [path], set(), set()
+            while pending:
+                current = pending.pop()
+                if current in seen:
+                    continue
+                seen.add(current)
+                if not self.generated(current):
+                    authored.add(current)
+                elif current in self.frontiers:
+                    authored.update(self.frontiers[current])
+                else:
+                    pending.extend(self.imports(current))
+            self.frontiers[path] = authored
+        return self.frontiers[path]
+
+    def paths(self, path: Path, *, authored_only: bool = False) -> set[Path]:
+        pending, seen = [self.resolved(str(path))], set()
+        while pending:
+            current = pending.pop()
+            if current not in seen:
+                seen.add(current)
+                pending.extend(
+                    self.authored_frontier(current)
+                    if authored_only and self.generated(current)
+                    else self.imports(current)
+                )
+        return {Path(item) for item in seen}
+
+
 def source_names(
     project: Project,
     header: Path,
@@ -167,8 +262,9 @@ def source_names(
     *,
     consumers: dict[Path, set[str]] | None = None,
     texts: dict[Path, str] | None = None,
+    consumer_tags: dict[Path, set[str]] | None = None,
 ) -> set[str]:
-    """Reserve file-scope names in every C source importing HEADER transitively.
+    """Reserve source names and collect each consumer's authored include ownership.
 
     Conditional source bodies must be viewed per version: simply deleting cpp
     directives can leave both arms' opening braces and hide later declarations.
@@ -178,78 +274,30 @@ def source_names(
     from unbake.match.source_views import _preprocessed_lines, _version_lines
     from unbake.project.cache import Cache, key
     from unbake.typemap.declarations import clean
+    from unbake.typemap.storage import generated
 
     supplied = texts
-    canonical: dict[str, str] = {}
-
-    def resolved(path: str) -> str:
-        if path not in canonical:
-            canonical[path] = os.path.realpath(path)
-        return canonical[path]
-
-    source_texts = {resolved(str(path)): text for path, text in (texts or {}).items()}
-    edges: dict[str, set[str]] = {}
-    include_roots = tuple(map(str, project.include))
-    prototypes = resolved(str(project.include[0] / "shared/prototypes.h"))
-    target_header = resolved(str(header))
-    generated_roots = tuple(
-        os.path.join(os.path.dirname(target_header), name) for name in ("types", "decls", "consumers")
-    )
-    generated_prefixes = tuple(root + os.sep for root in generated_roots)
-    special = {target_header, prototypes, *generated_roots}
+    closure = IncludeClosure(project, texts)
     cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+    header = Path(closure.resolved(str(header)))
     generator = key(Path(__file__))
 
-    def imports(path: str) -> set[str]:
-        path = resolved(path)
-        if path not in edges:
-            if path not in source_texts:
-                source_texts[path] = Path(path).read_text() if os.path.isfile(path) else ""
-            text = source_texts[path]
-            edges[path] = {target_header} if path == prototypes else set()
-            for name in _INCLUDE.findall(re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)):
-                for root in (os.path.dirname(path), *include_roots):
-                    candidate = os.path.join(root, name)
-                    target = resolved(candidate)
-                    if (
-                        target in source_texts
-                        or target in special
-                        or target.startswith(generated_prefixes)
-                        or os.path.isfile(candidate)
-                    ):
-                        edges[path].add(target)
-                        break
-        return edges[path]
-
-    def uses_header(path: Path) -> bool:
-        pending, seen = [resolved(str(path))], set()
-        while pending:
-            current = pending.pop()
-            if current == target_header or current in generated_roots or current.startswith(generated_prefixes):
-                return True
-            if current not in seen:
-                seen.add(current)
-                pending.extend(imports(current))
-        return False
-
     names: set[str] = set()
+    header_owned: dict[Path, tuple[set[str], set[str]]] = {}
     sources = (
         (path for path in supplied if str(path).startswith(str(project.src) + os.sep) and path.suffix == ".c")
         if supplied is not None
         else project.src.rglob("*.c")
     )
     for path in sorted(sources):
-        if not uses_header(path):
+        included = closure.paths(path, authored_only=True)
+        if header not in included and not any(generated(project, dep) for dep in included):
             continue
-        text = source_texts[resolved(str(path))]
-        # Only typedefs and aggregate tags can reserve shared declaration names.
-        # With none of these tokens, every conditional view has an empty result.
-        if not re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)):
-            if consumers is not None:
-                consumers[path] = set()
-            continue
-        views = {text}
-        if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
+        text = closure.texts[closure.resolved(str(path))]
+        # Preserve the no-owned-type fast path, but still collect authored
+        # header ownership for sources with no local typedefs or tags.
+        views = {text} if re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)) else set()
+        if views and re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
             if policy is None:
                 raise Held("solve", f"types.header_parse: {path}: policy.cpp required for conditional source names")
             lines = declaration_source(text).splitlines(keepends=True)
@@ -260,6 +308,8 @@ def source_names(
                     active = _preprocessed_lines(project, policy, text, version)
                 views.add("".join(line for index, line in enumerate(lines) if index in active))
         owned: set[str] = set()
+        local: set[str] = set()
+        tags: set[str] = set()
         for view in views:
             content = clean(declaration_source(view))
             content_key = key(generator, content)
@@ -267,15 +317,42 @@ def source_names(
             def compute(output: Path, content: str = content, path: Path = path) -> None:
                 parser = _Declarations(content)
                 try:
-                    parser.parse()
+                    row = parser.parse()
                 except Held as error:
                     raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
-                output.write_text(json.dumps(sorted(parser.names)))
+                output.write_text(
+                    json.dumps(
+                        {
+                            "names": sorted(parser.names),
+                            "tags": sorted(row.tags),
+                        }
+                    )
+                )
 
-            owned.update(json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes()))
+            row = json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes())
+            owned.update(row["names"])
+            tags.update(row["tags"])
         names.update(owned)
+        # Header ownership is per consumer. Reserving it globally would remove
+        # aliases from consumers that never import that authored declaration.
+        local.update(owned)
+        for dep in sorted(included - {Path(closure.resolved(str(path)))}):
+            if generated(project, dep):
+                continue
+            if dep not in header_owned:
+                parser = _Declarations(clean(declaration_source(closure.texts[closure.resolved(str(dep))])))
+                try:
+                    row = parser.parse()
+                except Held as error:
+                    raise Held("solve", f"types.header_parse: {dep}: {error.reason}") from error
+                header_owned[dep] = parser.names | parser.external_names, row.tags
+            dep_names, dep_tags = header_owned[dep]
+            local.update(dep_names)
+            tags.update(dep_tags)
         if consumers is not None:
-            consumers[path] = owned
+            consumers[path] = local
+        if consumer_tags is not None:
+            consumer_tags[path] = tags
     return names
 
 
