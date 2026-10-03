@@ -128,7 +128,7 @@ as = "policy:mips_as"
 cflags = ["-G0", "-mips3", "-O2", "-mgas", "-meb", "-mcpu=VR4300", "-mhard-float", "-mgp32", "-mfp64", "-mno-fix4300"]
 # SN64: O1, strength reduction, scheduling, FP32, unsigned char and delayed
 # branches changed the probe's .text; O2/O3 matched its O2 baseline. FP32 is
-# also used by real RageWars unit overrides, alongside strength/fast-math flags.
+# also used by real per-unit overrides, alongside strength/fast-math flags.
 flag_variants = [
     [], ["-O1"], ["-O2"], ["-O3"],
     ["-fno-strength-reduce"], ["-fno-expensive-optimizations"],
