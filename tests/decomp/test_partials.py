@@ -129,7 +129,7 @@ class PartialsTest(unittest.TestCase):
         compiler = project.tools / "fixture/cc"
         code = compiler.read_text().replace(
             "a = sys.argv[1:]",
-            "a = sys.argv[1:]\nwith Path('compiler-args.jsonl').open('a') as trace_args: "
+            f"a = sys.argv[1:]\nwith Path({str(project.root / 'compiler-args.jsonl')!r}).open('a') as trace_args: "
             "trace_args.write(json.dumps(a) + '\\n')",
         )
         compiler.write_text(code)
