@@ -262,7 +262,7 @@ def place(args: argparse.Namespace) -> None:
     faults: list[str] = []
     selectors = Selectors(script)
     with Objects(args.build / ".elf-metadata.sqlite") as load:
-        load.prefetch(args.build / name for name in objects)
+        load.prefetch(args.build / name for name in sorted({name for name, _ in selectors.entries}))
         for name in objects:
             try:
                 script = place_object(

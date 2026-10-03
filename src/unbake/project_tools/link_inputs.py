@@ -84,7 +84,7 @@ class Objects:
                 return path, error
 
         with executor(max_workers=workers) as pool:
-            self.pending.update(pool.map(read, dict.fromkeys(paths)))
+            self.pending.update(pool.map(read, (path for path in dict.fromkeys(paths) if path not in self.pending)))
 
     def __call__(self, path: str | Path) -> Object:
         path = Path(path)

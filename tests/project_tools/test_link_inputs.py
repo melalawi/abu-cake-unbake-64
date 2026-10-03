@@ -116,6 +116,7 @@ class MetadataTests(unittest.TestCase):
                 executor = Mock(return_value=pool)
                 with Objects(root / "metadata", parse=parser, read=read, parser_identity=b"parser") as load:
                     load.prefetch([source, source], workers=3, executor=executor)
+                    load.prefetch([source], workers=3, executor=executor)
                     read.assert_called_once_with(source)
                     if failure:
                         with self.assertRaises(FileNotFoundError) as raised:
@@ -126,8 +127,9 @@ class MetadataTests(unittest.TestCase):
                         self.assertEqual(load(source).data, b"original")
                         parser.assert_called_once_with(source, data=b"original")
                     read.assert_called_once_with(source)
-                executor.assert_called_once_with(max_workers=3)
-                pool.__exit__.assert_called_once()
+                self.assertEqual(executor.call_count, 2)
+                executor.assert_called_with(max_workers=3)
+                self.assertEqual(pool.__exit__.call_count, 2)
 
     def test_failure_does_not_publish_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
