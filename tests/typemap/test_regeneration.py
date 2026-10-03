@@ -91,6 +91,16 @@ class RegenerationTests(unittest.TestCase):
                 ),
             ),
             ("typedef", lambda: self.value["typedefs"].update(Word="int")),
+            (
+                "declaration evidence",
+                lambda: self.value.update(
+                    declaration_evidence={
+                        "shared/.evidence_1234abcd.h": (
+                            "/* unbake declaration evidence: evidence_1234abcd */\n#define COUNT 3\n"
+                        )
+                    }
+                ),
+            ),
             ("authored", lambda: (self.root / "extra.h").write_text("typedef int Extra;")),
             ("source", lambda: (self.project.src / "f.c").write_text("int f(void) { return 1; }")),
         ]

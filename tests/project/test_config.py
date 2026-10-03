@@ -71,6 +71,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(project.version("us").macros, ("VERSION_US",))
         self.assertEqual(project.build_link("us"), self.root / "build/us")
 
+    def test_declaration_evidence_is_an_explicit_external_or_relative_include_tree(self) -> None:
+        for values, expected in (
+            ([], ()),
+            (["old/include"], (self.root / "old/include",)),
+            (["/external/include"], (Path("/external/include"),)),
+        ):
+            with self.subTest(values=values):
+                self.path.write_text(
+                    self.original.replace("[paths]", "[paths]\ndeclaration_evidence = " + json.dumps(values))
+                )
+                self.assertEqual(config.load(self.root).declaration_evidence, expected)
+        self.held_config(
+            self.original.replace("[paths]", '[paths]\ndeclaration_evidence = "bad"'), "paths.declaration_evidence"
+        )
+
     def test_single_version_and_explicit_empty_values(self) -> None:
         text = self.original.replace('versions = ["us", "us-rev1"]', 'versions = ["us"]')
         text = text.replace('cflags = ["-O2", "-G0", "-mips2"]', "cflags = []")

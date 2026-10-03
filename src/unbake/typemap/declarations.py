@@ -824,6 +824,26 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
             for kind in ("functions", "globals", "structs", "arrays"):
                 seed[kind] = {name: {**row, "provenance": provenance} for name, row in seed[kind].items()}
         seeds.append(seed)
+    from unbake.typemap import declaration_evidence
+
+    components = declaration_evidence.feedback_components(project)
+    if components:
+        exports = set().union(*(header_declarations(text).declared for text in components.values()))
+        # Generated layouts are part of the prefix, while extern evidence is
+        # retained at declared confidence (never promoted to an exact C proof).
+        extra = scratch / "declaration_evidence.c"
+        extra.write_text("\n".join(components.values()))
+        for version in project.versions:
+            provenance = {
+                "kind": "declared",
+                "version": version,
+                "source": "declaration_evidence",
+                "sha256": storage.digest(extra.read_bytes()),
+            }
+            seed = extract(headers(project, policy, version, extra), provenance)
+            for kind in ("functions", "globals", "arrays"):
+                seed[kind] = {name: row for name, row in seed[kind].items() if name in exports}
+            seeds.append(seed)
     path = project.build / "types/proven.json"
     if path.is_file():
         records = storage.read(path, "types.feedback").get("records", {})

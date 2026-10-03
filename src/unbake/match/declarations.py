@@ -193,6 +193,11 @@ def fold_source(
     prove_headers: bool = True,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
+    from unbake.typemap import declaration_evidence
+
+    text, evidence_end = declaration_evidence.inject(project, headers, text, function, versions)
+    if evidence_end:
+        text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
     text = imports.resolve(project, headers, text, function)
     text = pool_literals.lower(project, function, text, versions)
     parsers = source_views.parsers(project, policy, text, versions, headers)
@@ -218,6 +223,10 @@ def fold_source(
         if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', final, re.M):
             final = f'#include "{include}"\n' + final
     final = imports.resolve(project, context, final, function, edits=tuple(edits))
+    if evidence_end:
+        evidence_context = Headers({**headers.texts, **{edit.path: edit.after for edit in edits}}, root=headers.root)
+        final, evidence_edits = declaration_evidence.promote(project, evidence_context, final, evidence_end)
+        edits.extend(evidence_edits)
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
         group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)

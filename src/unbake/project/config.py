@@ -72,6 +72,7 @@ class Project:
     work: Path
     drafts: Path
     overlay_roots: tuple[Path, ...] = ()
+    declaration_evidence: tuple[Path, ...] = ()
 
     def compiler_reference(self, unit: str | Path) -> str:
         """An exception unit names its compiler; every other unit uses the default."""
@@ -467,6 +468,10 @@ def load(root: Path, *, text: str | None = None) -> Project:
         pending.build,
         pending.work,
         pending.drafts,
+        declaration_evidence=tuple(
+            _path(item, "paths.declaration_evidence", root)
+            for item in _strings(paths.get("declaration_evidence", []), "paths.declaration_evidence")
+        ),
     )
 
 

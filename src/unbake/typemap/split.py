@@ -33,10 +33,31 @@ class Layout:
         self.render = render or guarded
         self.contents = contents
         self.parsed = {path: declarations(text) for path, text in contents.items()}
+        evidence_exports: dict[Path, set[str]] = {}
+        evidence_macros: dict[Path, dict[str, str]] = {}
+        for path, text in contents.items():
+            if "/* unbake declaration evidence:" not in text:
+                continue
+            macros = {
+                match[1]: match[2]
+                for match in re.finditer(
+                    r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(?:\([^\n]*?\))?[ \t]*((?:\\\n|[^\n])*)", text, re.M
+                )
+                if not match[1].startswith("UNBAKE_")
+            }
+            constants = {
+                match[1]
+                for body in re.findall(r"\benum\b[^{};]*\{([^{}]*)\}", declaration_source(text))
+                for member in body.split(",")
+                if (match := re.match(r"\s*([A-Za-z_]\w*)", member))
+            }
+            evidence_exports[path] = set(macros) | constants | self.parsed[path].declared
+            evidence_macros[path] = macros
+            self.aliases.update(macros)
         self.providers: dict[str, set[Path]] = {}
         self.tags: dict[str, set[Path]] = {}
         for path, row in self.parsed.items():
-            for name in row.typedefs | row.exports:
+            for name in row.typedefs | row.exports | evidence_exports.get(path, set()):
                 self.providers.setdefault(name, set()).add(path)
             for name in row.tags:
                 self.tags.setdefault(name, set()).add(path)
@@ -67,6 +88,17 @@ class Layout:
                 alias_target = self.aliases.get(alias, "")
                 if re.fullmatch(r"(?:struct|union) \w+", alias_target):
                     deps.update(self.tags.get(alias_target.split()[1], set()))
+            if path in evidence_macros:
+                deps.update(
+                    required_providers(
+                        " ".join(evidence_macros[path].values()),
+                        self.providers,
+                        self.tags,
+                        self.aliases,
+                        evidence_exports[path] | row.typedefs,
+                        row.tags,
+                    )
+                )
             deps.discard(path)
         self.headers: dict[Path, bytes] = {}
         self.homes: dict[Path, Path] = {}

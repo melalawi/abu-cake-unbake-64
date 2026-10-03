@@ -131,7 +131,20 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
             for row in read(proven, "types.feedback").get("records", {}).values():
                 source = project.root / row["source"]
                 paths.add(source)
-    return {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
+    result = {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
+    if headers:
+        from unbake.typemap import declaration_evidence
+
+        result.update(
+            {"declaration-source:" + str(path): file_digest(path) for path in declaration_evidence.files(project)}
+        )
+        result.update(
+            {
+                "declaration-feedback:" + str(path.relative_to(project.include[0])): digest(text.encode())
+                for path, text in declaration_evidence.feedback_components(project).items()
+            }
+        )
+    return result
 
 
 @lru_cache(maxsize=32)

@@ -28,3 +28,19 @@ Passing fuzzy sources keep assembly under `NON_MATCHING`.
 
 Run `bin/test` then `bin/lint` and `bin/hygiene` for development.
 Licensed under [GNU GPL version 3 or later](LICENSE).
+
+Imported C can explicitly supply authored declaration evidence with
+`[paths] declaration_evidence = ["/path/to/old/include"]` in `config.toml`.
+The include trees are read only. Needed absent names are selected by declaration,
+then use the ordinary aggregate collision/rename and shared layout fold. Extern
+names require the live symbol/address inventory; ambiguous declarations hold.
+Supplemental aliases, prototypes, enums and macros enter generated split components
+and the normal solve/feedback database. No old header is installed. Evidence inputs
+are content pinned, and changing them invalidates the solved type context.
+Decompiler placeholder typedefs and `m2c_prelude.h` are excluded from evidence.
+
+To admit declarations for sources that still need instruction work, run
+`unbake solve --declarations-needed candidate.c other.c` with the evidence tree
+configured. This records declared evidence through shared layout folding and solve,
+without marking functions matched. Per-source refusals are recorded in
+`build/types/declaration-admission.json`; a failed solve rolls back admission edits.

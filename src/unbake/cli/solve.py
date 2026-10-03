@@ -1,20 +1,62 @@
 """Solve project types, exposing every unknown and conflict."""
 
 import argparse
+from pathlib import Path
 
 from unbake.cli import common
+from unbake.layout.split import Edit
 from unbake.project.config import Policy, Project
 from unbake.typemap import redrafts, solve, storage
 
 
 def register(phases: common.Subparsers) -> None:
-    phases.add_parser("solve", phase="solve", help="Solve mapped signatures, globals and shared layouts.")
+    parser = phases.add_parser("solve", phase="solve", help="Solve mapped signatures, globals and shared layouts.")
+    parser.add_argument(
+        "--declarations-needed",
+        type=Path,
+        nargs="+",
+        metavar="FILE",
+        help="Import authored declaration evidence needed by these C sources before solving.",
+    )
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     map_path = project.build / "map/facts.json"
     before = map_path.stat().st_mtime_ns if map_path.is_file() else None
-    value = solve(project, policy)
+    needed = tuple(getattr(args, "declarations_needed", None) or ())
+    reports: list[dict[str, str]] = []
+    edits: list[Edit] = []
+    if needed:
+        from unbake.layout import split_apply
+        from unbake.typemap import declaration_evidence
+
+        edits, reports = declaration_evidence.plan_many(project, policy, needed)
+        storage.write(
+            project.build / "types/declaration-admission.json",
+            storage.encoded({"schema": 1, "state": "planned", "records": reports}),
+        )
+        split_apply._write_staging(project, edits)
+    try:
+        value = solve(project, policy)
+    except BaseException as error:
+        if reports:
+            storage.write(
+                project.build / "types/declaration-admission.json",
+                storage.encoded({"schema": 1, "state": "held", "reason": str(error), "records": reports}),
+            )
+        for edit in reversed(edits):
+            if edit.before:
+                storage.write(edit.path, edit.before.encode())
+            else:
+                edit.path.unlink(missing_ok=True)
+        raise
+    if reports:
+        storage.write(
+            project.build / "types/declaration-admission.json",
+            storage.encoded({"schema": 1, "state": "solved", "records": reports}),
+        )
+        for report in reports:
+            print(f"declaration evidence: {report['status']}: {report['source']}: {report['reason']}")
     lines = [
         f"revision={value['revision']} unknown={len(value['unknown'])} conflicts={len(value['conflicts'])}; "
         "build/types/database.json"

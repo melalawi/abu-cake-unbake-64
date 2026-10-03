@@ -222,6 +222,7 @@ class Session:
             for kind, keys in fields.items()
         }
         projection["typedefs"] = value.get("typedefs", {})
+        projection["declaration_evidence"] = value.get("declaration_evidence", {})
         # The legacy bridge is a render input; fresh projects do not acquire it.
         legacy = (self.project.include[0] / "shared/typemap.h").is_file() or any(
             re.search(r'#\s*include\s*"(?:(?:shared/)?typemap.h|shared/(?:types|consumers)/[^"]+)"', text)
@@ -236,7 +237,7 @@ class Session:
                 return None
             previous = json.loads(state.read_bytes())
             before = previous["projection"]
-            if any(before[kind] != projection[kind] for kind in projection if kind != "functions"):
+            if any(before.get(kind) != projection[kind] for kind in projection if kind != "functions"):
                 return None
             if before["functions"].keys() != projection["functions"].keys():
                 return None

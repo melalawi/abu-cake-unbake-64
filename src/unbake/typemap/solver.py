@@ -912,6 +912,12 @@ def solve(project: Project, policy: Policy | None = None) -> dict[str, Any]:
     log = storage.FactLog(project.build / "types")
     try:
         result = infer(project, facts, declarations.collect(project, policy), constraint_log=log)
+        from unbake.typemap import declaration_evidence
+
+        result["declaration_evidence"] = {
+            str(path.relative_to(project.include[0])): text
+            for path, text in declaration_evidence.feedback_components(project).items()
+        }
         result["constraints"] = [log.finish(project.root), *result["constraints"]]
     finally:
         log.close()

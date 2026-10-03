@@ -140,6 +140,7 @@ def _render(
     reserved = session.source_names(consumer_names)
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
     components = dict(session.authored)
+    components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
     provided = set(authored_aliases)
     generated = {
@@ -233,9 +234,15 @@ def _render(
                 raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
             prerequisites[alias] = type_
     originals = dict(components)
-    for path in authored:
+    for path in (*authored, *(root / name for name in value.get("declaration_evidence", {}))):
         components[path] = session.rewrite(components[path], replacements, reserved)
     rendered = header_names.imports(project, originals, components)
+    for name in value.get("declaration_evidence", {}):
+        path = root / name
+        import base64
+
+        retained = base64.b64encode(value["declaration_evidence"][name].encode()).decode()
+        rendered[path] = components[path] + f"\n/* unbake evidence input: {retained} */\n"
     for alias, type_ in sorted(prerequisites.items()):
         path = root / "shared" / (".typedef-" + alias + ".h")
         components[path] = rendered[path] = session.rewrite(
