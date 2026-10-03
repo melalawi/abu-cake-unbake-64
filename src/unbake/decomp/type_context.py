@@ -88,6 +88,7 @@ def feedback_many(
     entries: list[tuple[str, Path, tuple[str, ...], dict[str, str]]],
     *,
     policy: Policy | None = None,
+    regenerate: bool = True,
 ) -> None:
     proofs = []
     owners_by_version = {version: split.owners_by_alias(project, version) for version in project.versions}
@@ -115,4 +116,7 @@ def feedback_many(
     api = provider()
     if not hasattr(api, "feedback_many"):
         raise Held("types", "types.feedback.batch: whole-program provider lacks feedback_many")
-    api.feedback_many(project, proofs, policy=policy)
+    if regenerate:
+        api.feedback_many(project, proofs, policy=policy)
+    else:
+        api.feedback_many(project, proofs, policy=policy, regenerate=False)

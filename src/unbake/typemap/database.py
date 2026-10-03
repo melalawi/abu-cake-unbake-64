@@ -578,6 +578,7 @@ def feedback_many(
     entries: list[dict[str, Any]],
     *,
     policy: Policy | None = None,
+    regenerate: bool = True,
 ) -> dict[str, Any]:
     """Validate every published receipt, then refresh mapped metadata and solve once."""
     from unbake.typemap.mapping import refresh_map
@@ -641,6 +642,8 @@ def feedback_many(
     storage.validate_identity(project, previous, "types.feedback")
     previous["records"].update(records)
     storage.write(path, storage.encoded(previous))
+    if not regenerate:
+        return previous
     if policy is None:
         from unbake.project.config import read_policy
 

@@ -462,3 +462,42 @@ class SharedHeaderContextTests(unittest.TestCase):
                 self.assertEqual(placement.call_count, 2 if reusable else 0)
                 for call in proof.call_args_list:
                     self.assertEqual(call.kwargs, {"extracted": reusable, "placed": reusable})
+
+
+class BorrowedProofTests(unittest.TestCase):
+    def test_unchanged_placement_preserves_any_certified_script_without_replaying_layout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw, placed = "original graph", "previous complete placed graph"
+            (root / "game.ld").write_text(raw)
+            (root / "game.link.flags").write_bytes(b"old flags")
+            (root / "retained-layout.json").write_text(json.dumps({"raw": raw, "placed": placed, "sources": []}))
+            self.assertTrue(relink.place_changed(SimpleNamespace(name="game"), "us", root))
+            self.assertEqual((root / "game.link.ld").read_text(), placed)
+            self.assertEqual((root / "game.link.flags").read_bytes(), b"old flags")
+
+    def test_borrowed_objects_are_detached_before_any_changed_dependency_is_compiled(self):
+        for dirty in (False, True):
+            with self.subTest(dirty=dirty), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                old, proof = root / "old", root / "proof"
+                old.mkdir()
+                proof.mkdir()
+                obj = old / "obj/src/a.o"
+                obj.parent.mkdir(parents=True)
+                obj.write_bytes(b"certified object")
+                (old / ".split.mk").write_text("C_OBJECTS := $(BUILD)/obj/src/a.o\n")
+                split_file = root / "split"
+                split_file.write_text("split")
+                project = SimpleNamespace(
+                    name="game", version=lambda v, split_file=split_file: SimpleNamespace(split=split_file)
+                )
+                staging.retain(old, proof, borrowed=True)
+                self.assertTrue((proof / "obj").is_symlink())
+                with (
+                    patch.object(incremental, "advance", return_value=True),
+                    patch.object(incremental, "changed_sources", return_value=[root / "a.c"] if dirty else []),
+                ):
+                    incremental._prepare_version((project, project, {"us": proof}, {"us": "before"}), "us")
+                self.assertEqual((proof / "obj").is_symlink(), not dirty)
+                self.assertEqual(obj.read_bytes(), b"certified object")

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout import split
-from unbake.match import forked, reporting
+from unbake.match import forked, reporting, staging
 from unbake.match.common import held
 from unbake.project import build, makefile
 from unbake.project.config import Policy, Project
@@ -168,6 +168,8 @@ def _prepare_version(
     if not advance(staged, version, generation, splits[version], staged.version(version).split.read_text()):
         return None
     changed = changed_sources(original, staged, generation, version)
+    if changed and (generation / "obj").is_symlink():
+        staging.independent_objects(generation)
     if retained is not None:
         retained["sources"] = [source.stem for source in changed]
         (generation / "retained-layout.json").write_text(json.dumps(retained))

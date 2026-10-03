@@ -140,7 +140,9 @@ def fingerprint(project: Project, root: Path) -> dict[str, str]:
     return result
 
 
-def generation(project: Project, version: str, current: Path, holds: ExitStack, *, retained: bool = False) -> Path:
+def generation(
+    project: Project, version: str, current: Path, holds: ExitStack, *, retained: bool = False, borrowed: bool = False
+) -> Path:
     parent = project.build
     number = 1
     prefix = version + "."
@@ -159,7 +161,7 @@ def generation(project: Project, version: str, current: Path, holds: ExitStack, 
                 number += 1
     try:
         if retained:
-            retain(current, generation)
+            retain(current, generation, borrowed=borrowed)
             return generation
         result = subprocess.run(
             ["cp", "-a", "--reflink=auto", *(str(p) for p in current.iterdir() if p.name != ".inuse"), str(generation)],
@@ -204,13 +206,16 @@ def _retain_object(source: Path, target: Path) -> None:
                 os.link(old, new, follow_symlinks=True)
 
 
-def retain(current: Path, generation: Path) -> None:
+def retain(current: Path, generation: Path, *, borrowed: bool = False) -> None:
     """Retain known link inputs, without copying unrelated build artifacts."""
     for path in current.iterdir():
         if path.name in {".inuse", "report", "obj", "retained-layout.json"} or path.suffix in {".elf", ".map", ".z64"}:
             continue
         if path.is_file():
             shutil.copy2(path, generation / path.name)
+    if borrowed:
+        (generation / "obj").symlink_to(current / "obj", target_is_directory=True)
+        return
     for kind in ("src", "asm", "assets"):
         (generation / "obj" / kind).mkdir(parents=True, exist_ok=True)
     for relative_path in object_paths(current):
@@ -412,6 +417,13 @@ def copy_assembly(project: Project, staged: Project) -> None:
 
 def independent_objects(generation: Path) -> None:
     """Detach retained assembly before a fallback Make can write through its directory."""
+    objects = generation / "obj"
+    if objects.is_symlink():
+        source = objects.resolve()
+        objects.unlink()
+        objects.mkdir()
+        for obj in object_paths(source.parent):
+            _retain_object(source / obj.relative_to("obj"), generation / obj)
     for name in ("asm", "assets"):
         path = generation / "obj" / name
         if path.is_symlink():

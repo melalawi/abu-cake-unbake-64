@@ -70,11 +70,14 @@ class BatchPublicationCliTests(unittest.TestCase):
         from unbake.typemap import storage
 
         with (
+            patch("unbake.typemap.solver.solve", side_effect=AssertionError("derived solve must be explicit")),
+            patch.object(batch.progress, "measure", side_effect=AssertionError("unchanged native report")),
             patch.object(batch.build, "compile_versions", wraps=batch.build.compile_versions) as compiles,
             patch.object(storage, "write", wraps=storage.write) as writes,
             patch.object(batch, "_feedback", wraps=batch._feedback) as feedback,
         ):
-            self.cli("submit", "--batch", *published)
+            output = self.cli("submit", "--batch", *published)
+        self.assertIn("follow-up:", output)
         self.assertEqual(feedback.call_count, 1)
         self.assertTrue(all(candidate.compiled for candidate in feedback.call_args.args[2]))
         self.assertTrue(all(not sources for call in compiles.call_args_list for sources, out in call.args[2].values()))

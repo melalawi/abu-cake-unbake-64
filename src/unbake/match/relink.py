@@ -192,6 +192,12 @@ def place_changed(project: Project, version: str, generation: Path) -> bool:
         return False
     retained = json.loads(snapshot.read_text())
     raw, placed = retained["raw"], retained["placed"]
+    current = (generation / f"{project.name}.ld").read_text()
+    if not retained["sources"] and current == raw:
+        # No link input changed. Keep its exact placement, including transformations
+        # older layout drivers used. The complete ROM is still linked and checked.
+        (generation / f"{project.name}.link.ld").write_text(placed)
+        return True
     overlays = list(_RESIDENT.finditer(placed))
     core = _RESIDENT.sub("", placed)
     before, after = list(_SELECTOR.finditer(raw)), list(_SELECTOR.finditer(core))

@@ -168,7 +168,14 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             generations: dict[str, Path] = {}
             versions = list(project.versions)
             for version in versions:
-                generations[version] = staging.generation(project, version, current[version], holds, retained=True)
+                generations[version] = staging.generation(
+                    project,
+                    version,
+                    current[version],
+                    holds,
+                    retained=True,
+                    borrowed=all(candidate.compiled for candidate in candidates),
+                )
                 for candidate in candidates:
                     if candidate.republication and not candidate.compiled and version in candidate.versions:
                         (generations[version] / "obj/src" / f"{candidate.function}.built").unlink(missing_ok=True)
@@ -227,6 +234,11 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             with reporting.phase("publication", sources=len(candidates)):
                 followups = _commit(project, policy, staged, candidates, current, generations, started)
                 receipts.extend(followups or [])
+            if all((generation / "obj").is_symlink() for generation in generations.values()):
+                holds.close()
+                for version, generation in generations.items():
+                    build.discard_generation(generation)
+                    sha1[version] = f"{current[version] / f'{project.name}.{version}.z64'}: OK"
             receipts.extend(
                 f"OK(match): {candidate.function} matched on VERSION {', '.join(candidate.versions)}"
                 if candidate.matched
@@ -841,11 +853,33 @@ def _commit(
 ) -> list[str]:
     """Publish the proved staged inputs and generations together, or nothing."""
     followups: list[str] = []
-    with ThreadPoolExecutor(max_workers=min(policy.cores, policy.setup_version_jobs, len(project.versions))) as pool:
-        measured = {
-            v: pool.submit(progress.measure, staged, policy, v, generation=generations[v]) for v in project.versions
-        }
-        reports = {v: future.result() for v, future in measured.items()}
+    unchanged = (
+        all(candidate.compiled for candidate in candidates)
+        and all((generation / "obj").is_symlink() for generation in generations.values())
+        and all(
+            hashlib.sha1((current[v] / f"{project.name}.{v}.z64").read_bytes()).hexdigest()
+            == project.version(v).baserom_sha1
+            for v in project.versions
+        )
+    )
+    reports: dict[str, dict[str, Any]] = {}
+    if unchanged:
+        for version in project.versions:
+            cached = project.root / "versions" / version / "report.json"
+            if not cached.is_file():
+                reports = {}
+                break
+            document = progress._json(cached)
+            progress._native_counts(document, cached)
+            reports[version] = document
+    if not reports:
+        with ThreadPoolExecutor(
+            max_workers=min(policy.cores, policy.setup_version_jobs, len(project.versions))
+        ) as pool:
+            measured = {
+                v: pool.submit(progress.measure, staged, policy, v, generation=generations[v]) for v in project.versions
+            }
+            reports = {v: future.result() for v, future in measured.items()}
     paths = [staged.root / "config.toml", staged.tools / "build.json", staged.tools / "compiler.sha256"]
     paths += [p for v in staged.versions for p in (staged.version(v).split, staged.version(v).symbols)]
     paths += [staged.tools / name.name for name in makefile.TEMPLATES.glob("*.py")] + [staged.tools / "cache.py"]
@@ -886,7 +920,11 @@ def _commit(
         try:
             for path, content in writes.items():
                 atomic(path, content)
-            for version, generation in generations.items():
+            published_generations = current if unchanged and not writes else generations
+            if published_generations is generations:
+                for generation in generations.values():
+                    staging.independent_objects(generation)
+            for version, generation in published_generations.items():
                 swap(project.build_link(version), generation)
                 swapped.append(version)
             progress.write(project, policy, reports=reports)
@@ -910,11 +948,12 @@ def _commit(
                 followups = _feedback(config.load(project.root), policy, candidates, current, strict=republication)
             # Feedback owns shared header writes. Refresh only after its last
             # write so an immediate independent check reuses the proved objects.
-            staging.publication_stamps(project, generations)
+            if published_generations is generations:
+                staging.publication_stamps(project, generations)
             reporting.record(
                 "published",
                 sources=[candidate.function for candidate in candidates],
-                generations={version: str(generation) for version, generation in generations.items()},
+                generations={version: str(generation) for version, generation in published_generations.items()},
             )
         except BaseException:
             for directory in generated_directories:
@@ -992,7 +1031,15 @@ def _feedback(
     if not entries:
         return []
     try:
-        type_context.feedback_many(project, entries, policy=policy)
+        refresh = not all(candidate.compiled for candidate in candidates)
+        if refresh:
+            type_context.feedback_many(project, entries, policy=policy)
+        else:
+            type_context.feedback_many(project, entries, policy=policy, regenerate=False)
+            from unbake.cli.guidance import command
+
+            followup = command(project.root, "solve")
+            return [f"OK(types): refreshed {len(entries)} matched source proofs; follow-up: {followup}"]
     except (Held, OSError, ValueError, RuntimeError) as error:
         if isinstance(error, Held) and error.reason.startswith("types.feedback.source_sha256:"):
             stale = storage.changed_source(project)
