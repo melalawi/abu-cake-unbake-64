@@ -40,6 +40,7 @@ class BatchHeaderHoldsTests(unittest.TestCase):
                     return declarations.Folded("good", "int good(void) {return 0;}", [], {})
 
                 with (
+                    patch.object(batch_fold, "_warm_contexts"),
                     patch.object(batch_fold.forked, "ordered", side_effect=ordered),
                     patch.object(batch_fold, "_fold_one", side_effect=fold),
                 ):

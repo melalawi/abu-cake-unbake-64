@@ -87,21 +87,35 @@ def compare_failure(project: Project, version: str, result: build.BuildResult) -
 
 
 def copy_tree(
-    project: Project, source: Path, destination: Path, *, skip: tuple[str, ...] = (), assembly: bool = True
+    project: Project,
+    source: Path,
+    destination: Path,
+    *,
+    skip: tuple[str, ...] = (),
+    assembly: bool = True,
+    linked: bool = False,
 ) -> None:
-    """Copy project inputs; skip names top-level inputs the build never reads."""
+    """Copy project inputs; linked staging requires editors that replace paths.
+
+    Other callers get independent writable copies. Output directories are pruned
+    before traversal, including the entire build and retained scratch trees.
+    """
+
+    accept = _classifier(project)
 
     def ignore(directory: str, names: list[str]) -> list[str]:
         parent = Path(directory).relative_to(source)
         return [
             name
             for name in names
-            if not project_input(project, parent / name)
+            if not accept((parent / name).parts)
             or (parent == Path(".") and name in skip)
             or (not assembly and parent / name == project.asm.relative_to(project.root))
         ]
 
-    shutil.copytree(source, destination, ignore=ignore, symlinks=True)
+    shutil.copytree(
+        source, destination, ignore=ignore, symlinks=True, copy_function=os.link if linked else shutil.copy2
+    )
 
 
 def fingerprint(project: Project, root: Path) -> dict[str, str]:
@@ -145,23 +159,7 @@ def generation(project: Project, version: str, current: Path, holds: ExitStack, 
                 number += 1
     try:
         if retained:
-            for path in current.iterdir():
-                if path.name in {".inuse", "report", "obj"} or path.suffix in {".elf", ".map", ".z64"}:
-                    continue
-                if path.is_dir():
-                    shutil.copytree(path, generation / path.name, symlinks=True)
-                else:
-                    shutil.copy2(path, generation / path.name)
-            objects = generation / "obj"
-            objects.mkdir()
-            for path in (current / "obj").iterdir():
-                target = objects / path.name
-                if path.name in {"asm", "assets"}:
-                    target.symlink_to(path.resolve(), target_is_directory=True)
-                elif path.is_dir():
-                    shutil.copytree(path, target, symlinks=True)
-                else:
-                    shutil.copy2(path, target)
+            retain(current, generation)
             return generation
         result = subprocess.run(
             ["cp", "-a", "--reflink=auto", *(str(p) for p in current.iterdir() if p.name != ".inuse"), str(generation)],
@@ -176,6 +174,47 @@ def generation(project: Project, version: str, current: Path, holds: ExitStack, 
         holds.close()
         build.discard_generation(generation)
         raise
+
+
+def object_paths(generation: Path) -> tuple[Path, ...]:
+    """Read the extraction's object inventory, without visiting the build tree."""
+    graph = generation / ".split.mk"
+    if not graph.is_file():
+        return ()
+    names = re.findall(r"\$\(BUILD\)/(obj/[^\s:]+\.o)(?=\s|$)", graph.read_text())
+    paths = {Path(name) for name in names}
+    if any(path.is_absolute() or ".." in path.parts for path in paths):
+        held(f"submit.objects: {graph}: object outside generation")
+    return tuple(sorted(paths))
+
+
+def _retain_object(source: Path, target: Path) -> None:
+    """Link immutable object bytes; keep timestamp receipts on private inodes.
+
+    Compiler and placement writers replace output paths atomically. Hard links
+    keep resolve() local, unlike a symlink that could redirect a compiler write.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for suffix in (".o", ".d", ".inputs.json", ".built"):
+        old, new = source.with_suffix(suffix), target.with_suffix(suffix)
+        if old.is_file():
+            if suffix == ".built":
+                shutil.copy2(old, new)
+            else:
+                os.link(old, new, follow_symlinks=True)
+
+
+def retain(current: Path, generation: Path) -> None:
+    """Retain known link inputs, without copying unrelated build artifacts."""
+    for path in current.iterdir():
+        if path.name in {".inuse", "report", "obj", "retained-layout.json"} or path.suffix in {".elf", ".map", ".z64"}:
+            continue
+        if path.is_file():
+            shutil.copy2(path, generation / path.name)
+    for kind in ("src", "asm", "assets"):
+        (generation / "obj" / kind).mkdir(parents=True, exist_ok=True)
+    for relative_path in object_paths(current):
+        _retain_object(current / relative_path, generation / relative_path)
 
 
 def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
@@ -378,7 +417,10 @@ def independent_objects(generation: Path) -> None:
         if path.is_symlink():
             source = path.resolve()
             path.unlink()
-            shutil.copytree(source, path, symlinks=True)
+            path.mkdir()
+            for obj in object_paths(generation):
+                if obj.parts[1] == name:
+                    _retain_object(source / obj.relative_to(Path("obj") / name), generation / obj)
 
 
 def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
@@ -392,8 +434,11 @@ def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
         # Retained assembly directories belong to an older generation. Receipt
         # updates must never write through those shared directory symlinks.
         independent_objects(generation)
-        for receipt in (generation / "obj").rglob("*.built"):
-            if not receipt.is_symlink():
+        for obj in object_paths(generation):
+            if obj.parts[1] not in {"src", "asm"}:
+                continue
+            receipt = (generation / obj).with_suffix(".built")
+            if receipt.is_file() and not receipt.is_symlink():
                 receipt.touch()
         for name in (".split.mk", ".split"):
             path = generation / name

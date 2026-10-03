@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
@@ -45,6 +47,35 @@ def parsers(
             parsed[key] = contextual(view)
         result.append(parsed[key])
     return result
+
+
+def typed_context(project: Project, policy: Policy, headers: Headers, version: str) -> str:
+    """Reuse preprocessing for an effective header set and selected version."""
+    from unbake.project.cache import remembered
+    from unbake.typemap.declarations import headers as typed_headers
+
+    selection = (
+        project.root,
+        project.include,
+        tuple(headers.texts.items()),
+        policy.cpp,
+        policy.cppflags,
+        project.compilers[project.default_compiler].cflags,
+        project.version(version).macros,
+    )
+
+    def compute() -> str:
+        with tempfile.TemporaryDirectory(prefix="match-types-") as temporary:
+            roots = header_includes(project, headers, Path(temporary))
+            local = replace(project, include=roots, overlay_roots=roots)
+            return typed_headers(local, policy, version)
+
+    cached: dict[tuple[Any, ...], str] = headers.__dict__.setdefault("_typed_contexts", {})
+    if selection not in cached:
+        cached[selection] = remembered("match.typed-context", selection, compute, keep=8)
+        if len(cached) > 8:
+            cached.pop(next(iter(cached)))
+    return cached[selection]
 
 
 def header_includes(project: Project, headers: Headers, directory: Path) -> tuple[Path, ...]:

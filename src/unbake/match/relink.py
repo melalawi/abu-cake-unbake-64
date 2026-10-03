@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from unbake.match import reporting
 from unbake.project import build, makefile
 from unbake.project.config import Held, Policy, Project, SetupPolicy
 
@@ -127,33 +128,35 @@ def prove(
         options = [
             argument for word in scripts[1].split() for argument in ("-T", word.replace("$(BUILD)", str(generation)))
         ]
-        run(
-            [
-                ld,
-                *(generation / f"{project.name}.link.flags").read_text().split(),
-                "-T",
-                f"{project.name}.link.ld",
-                *options,
-                "-Map",
-                f"{project.name}.map",
-                "-o",
-                str(elf),
-                *objects,
-            ],
-            generation,
-        )
-        run(
-            [
-                objcopy,
-                "-O",
-                "binary",
-                "--pad-to",
-                str(project.version(version).baserom.stat().st_size),
-                str(elf),
-                str(image),
-            ]
-        )
-        ok = hashlib.sha1(image.read_bytes()).hexdigest() == project.version(version).baserom_sha1
+        with reporting.phase("link", version=version):
+            run(
+                [
+                    ld,
+                    *(generation / f"{project.name}.link.flags").read_text().split(),
+                    "-T",
+                    f"{project.name}.link.ld",
+                    *options,
+                    "-Map",
+                    f"{project.name}.map",
+                    "-o",
+                    str(elf),
+                    *objects,
+                ],
+                generation,
+            )
+            run(
+                [
+                    objcopy,
+                    "-O",
+                    "binary",
+                    "--pad-to",
+                    str(project.version(version).baserom.stat().st_size),
+                    str(elf),
+                    str(image),
+                ]
+            )
+        with reporting.phase("rom_check", version=version):
+            ok = hashlib.sha1(image.read_bytes()).hexdigest() == project.version(version).baserom_sha1
         sha1_line = f"{image}: {'OK' if ok else 'FAILED'}"
         output.append(sha1_line + "\n")
     except Held as error:
@@ -162,6 +165,75 @@ def prove(
         log.write_text("".join(output))
         (generation / "build.exit").write_text("0\n" if ok else "1\n")
     return build.BuildResult(version, ok, sha1_line, log, generation)
+
+
+_SELECTOR = re.compile(r"(?P<object>obj/(?:src|asm)/[^\s()]+\.o)\s*\((?P<section>[^()]+)\)")
+_RESIDENT = re.compile(
+    r"^  \.resident_[0-9A-F]{8} 0x[0-9A-F]{8} \(NOLOAD\) : SUBALIGN\(1\) "
+    r"\{ obj/src/[^\s()]+\.o\(\.(?:rdata|rodata)\) \}\n?",
+    re.M,
+)
+
+
+def place_changed(project: Project, version: str, generation: Path) -> bool:
+    """Reuse a certified placement of unchanged objects, placing only dirty units.
+
+    Reconstruct the retained placed script byte for byte from selector substitutions
+    and resident overlays before trusting it. Any other transformation uses the
+    ordinary whole-layout proof. The final link still compares the complete ROM.
+    """
+    import argparse
+
+    from unbake.project_tools import layout
+    from unbake.project_tools.rodata import insert_fragment
+
+    snapshot = generation / "retained-layout.json"
+    if not snapshot.is_file():
+        return False
+    retained = json.loads(snapshot.read_text())
+    raw, placed = retained["raw"], retained["placed"]
+    overlays = list(_RESIDENT.finditer(placed))
+    core = _RESIDENT.sub("", placed)
+    before, after = list(_SELECTOR.finditer(raw)), list(_SELECTOR.finditer(core))
+    if len(before) != len(after):
+        return False
+    replacements: dict[str, str] = {}
+    for old, new in zip(before, after, strict=True):
+        if old[0] in replacements and replacements[old[0]] != new[0]:
+            return False
+        replacements[old[0]] = new[0]
+    rendered = _SELECTOR.sub(lambda match: replacements[match[0]], raw)
+    if insert_fragment(rendered, "\n".join(match[0].rstrip("\n") for match in overlays)) != placed:
+        return False
+    changed = {"obj/src/" + name + ".o" for name in retained["sources"]}
+    current = (generation / f"{project.name}.ld").read_text()
+
+    def rewrite(match: re.Match[str]) -> str:
+        prior = replacements.get(match[0], match[0])
+        target = _SELECTOR.fullmatch(prior)
+        if match["object"] in changed or (target is not None and target["object"] in changed):
+            return match[0]
+        return prior
+
+    script = _SELECTOR.sub(rewrite, current)
+    sections = [match[0].rstrip("\n") for match in overlays if _SELECTOR.search(match[0])["object"] not in changed]  # type: ignore[index]
+    intervals = json.loads((generation / "unit-ranges.json").read_text())
+    image = project.version(version).baserom.read_bytes()
+    configured = makefile.description(project).get("resident_mappings", {})
+    mappings = layout.resident_mappings(configured.get(version, []))
+    objects = {match["object"] for match in _SELECTOR.finditer(current)}
+    try:
+        for name in sorted(changed & objects):
+            script = layout.place_object(
+                argparse.Namespace(build=generation), name, script, intervals, image, mappings, sections, False
+            )
+    except (OSError, ValueError, KeyError):
+        return False
+    script = insert_fragment(script, "\n".join(sections))
+    (generation / f"{project.name}.link.ld").write_text(script)
+    (generation / f"{project.name}.link.flags").write_bytes(b"--no-check-sections" if sections else b"")
+    reporting.record("placement", version=version, sources=sorted(changed & objects), retained=True)
+    return True
 
 
 def retarget_rows(project: Project, generation: Path, before: str, after: str) -> bool:

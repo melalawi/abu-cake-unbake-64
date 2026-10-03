@@ -645,7 +645,7 @@ def feedback_many(
         from unbake.project.config import read_policy
 
         policy = read_policy()
-    return solve(project, policy)
+    return solve(project, policy, facts=facts)
 
 
 def feedback(

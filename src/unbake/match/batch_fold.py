@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from collections import ChainMap
 from collections.abc import Sequence
-from contextlib import closing
+from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,7 +24,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.structs import Layout
 from unbake.layout.structs_identity import Index, identity
 from unbake.layout.structs_types import Aggregate
-from unbake.match import declarations, forked, reporting
+from unbake.match import declarations, forked, reporting, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Held, Policy, Project
 
@@ -102,6 +102,7 @@ def fold(
     while start < len(candidates):
         changes = Changes()
         members = candidates[start : start + window]
+        _warm_contexts(staged, policy, headers, members)
         trials = forked.ordered(_speculate, (staged, policy, headers), members, policy.cores)
         with closing(trials):
             for candidate, (lines, trial) in zip(members, trials, strict=False):
@@ -128,6 +129,28 @@ def fold(
                     break
     reporting.record("fold", reused=reused, folded_in_order=again, window=window)
     return accepted
+
+
+def _warm_contexts(staged: Project, policy: Policy, headers: Headers, members: list[Any]) -> None:
+    """Warm only possible aggregate rewrites; leave source parsing to workers."""
+    versions = set()
+    for candidate in members:
+        text = candidate.content.decode("utf-8")
+        if re.search(r"\b(?:struct|union)\b", text):
+            versions.update(
+                candidate.versions
+                if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M)
+                else candidate.versions[:1]
+            )
+    parsed: set[str] = set()
+    for version in sorted(versions):
+        # A speculative refusal must not replace the source's normal diagnostic.
+        with suppress(Held):
+            context = source_views.typed_context(staged, policy, headers, version)
+            if context not in parsed:
+                parsed.add(context)
+                with suppress(Exception):
+                    type_rewrite._context(context.rstrip() + "\n", policy.cache_root)
 
 
 def _adopt(headers: Headers, trial: Trial, changes: Changes) -> declarations.Folded:

@@ -28,7 +28,11 @@ class PublicationStampTests(unittest.TestCase):
             stamp.touch()
             (generation / "obj/src/shared.built").symlink_to(old)
             for name in (".split.mk", ".split"):
-                (generation / name).write_text("graph")
+                (generation / name).write_text(
+                    "C_OBJECTS := $(BUILD)/obj/src/alpha.o\nASM_OBJECTS := $(BUILD)/obj/asm/data.o\n"
+                    if name == ".split.mk"
+                    else "graph"
+                )
                 os.utime(generation / name, ns=(1, 1))
             with patch.object(staging, "independent_objects", wraps=staging.independent_objects) as detach:
                 staging.publication_stamps(SimpleNamespace(), {"us": generation})

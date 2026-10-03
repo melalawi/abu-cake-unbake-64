@@ -9,9 +9,10 @@ import re
 from collections.abc import Set
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 from unbake.layout import split
-from unbake.match import reporting
+from unbake.match import forked, reporting
 from unbake.match.common import held
 from unbake.project import build, makefile
 from unbake.project.config import Policy, Project
@@ -101,6 +102,78 @@ def changed_sources(original: Project, staged: Project, generation: Path, versio
     return sources
 
 
+def reusable_sources(project: Project, generations: dict[str, Path], sources: dict[str, tuple[str, ...]]) -> set[str]:
+    """Recognize objects already compiled from these exact source/dependency bytes.
+
+    Require the saved recipe and receipt age as well as every dependency digest.
+    A missing source digest, changed flags, changed header, or old driver receipt
+    takes the ordinary compile path. Object and cartridge comparisons still run.
+    """
+    recipe = project.tools / "build.json"
+    if not recipe.is_file() or json.loads(recipe.read_text()) != makefile.description(project):
+        return set()
+    newest = max(path.stat().st_mtime_ns for path in (recipe, *project.tools.glob("*.py")))
+    digests: dict[Path, str] = {}
+
+    def digest(path: Path) -> str:
+        if path not in digests:
+            digests[path] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return digests[path]
+
+    from unbake.project import toolchain
+
+    for ident in {project.compiler_for(project.src / f"{name}.c").id for name in sources}:
+        toolchain.verify(project.tools / ident, toolchain.specification(ident))
+
+    reusable = set()
+    for name, versions in sources.items():
+        for version in versions:
+            obj = generations[version] / "obj/src" / f"{name}.o"
+            receipt, evidence = obj.with_suffix(".built"), obj.with_suffix(".inputs.json")
+            if (
+                not obj.is_file()
+                or not receipt.is_file()
+                or not evidence.is_file()
+                or receipt.stat().st_mtime_ns < newest
+            ):
+                break
+            saved = json.loads(evidence.read_text())
+            local_source = str((project.src / f"{name}.c").relative_to(project.root))
+            if local_source not in saved:
+                break
+            valid = True
+            for word, expected in saved.items():
+                path = Path(word)
+                if not path.is_absolute():
+                    path = project.root / path
+                if not path.is_relative_to(project.root) or not path.is_file() or digest(path) != expected:
+                    valid = False
+                    break
+            if not valid:
+                break
+        else:
+            reusable.add(name)
+    return reusable
+
+
+def _prepare_version(
+    shared: tuple[Project, Project, dict[str, Path], dict[str, str]], version: str
+) -> list[Path] | None:
+    original, staged, generations, splits = shared
+    generation = generations[version]
+    raw, placed = generation / f"{staged.name}.ld", generation / f"{staged.name}.link.ld"
+    retained: dict[str, Any] | None = (
+        {"raw": raw.read_text(), "placed": placed.read_text()} if raw.is_file() and placed.is_file() else None
+    )
+    if not advance(staged, version, generation, splits[version], staged.version(version).split.read_text()):
+        return None
+    changed = changed_sources(original, staged, generation, version)
+    if retained is not None:
+        retained["sources"] = [source.stem for source in changed]
+        (generation / "retained-layout.json").write_text(json.dumps(retained))
+    return changed
+
+
 def prepare(
     original: Project,
     staged: Project,
@@ -116,11 +189,17 @@ def prepare(
     current = makefile.description(staged)
     if {k: v for k, v in recipe.items() if k != "units"} != {k: v for k, v in current.items() if k != "units"}:
         return None
-    for version, generation in generations.items():
-        if not advance(staged, version, generation, splits[version], staged.version(version).split.read_text()):
+    changed = {}
+    shared = original, staged, generations, splits
+    for version, (lines, prepared) in zip(
+        generations, forked.ordered(_prepare_version, shared, list(generations), policy.cores), strict=True
+    ):
+        for line in lines:
+            reporting.learn(line)
+        if prepared is None:
             return None
+        changed[version] = prepared
 
-    changed = {v: changed_sources(original, staged, g, v) for v, g in generations.items()}
     compiled = build.compile_versions(
         staged,
         policy,
@@ -147,10 +226,14 @@ def prepare(
 
     def compile_version(version: str) -> tuple[list[str], dict[str, list[str]]]:
         generation = generations[version]
-        sources = changed[version]
+        intervals = extract.unit_ranges(staged.version(version).split.read_text())
+        sources = list(
+            dict.fromkeys(
+                [*changed[version], *(staged.src / f"{name}.c" for name in sorted(submitted) if name in intervals)]
+            )
+        )
         failures = compiled[version]
         faults = {name: [f"{version}: compile diagnostic: {reason}"] for name, reason in failures.items()}
-        intervals = extract.unit_ranges(staged.version(version).split.read_text())
         alignments = {
             Path(row.path).name: int(row.match["align"], 0)
             for segment in split.layout(staged.version(version).split)[2]
@@ -169,7 +252,7 @@ def prepare(
             )
         args = argparse.Namespace(build=generation)
         script = (generation / f"{staged.name}.ld").read_text()
-        configured = makefile.description(staged).get("resident_mappings", {})
+        configured = current.get("resident_mappings", {})
         mappings = layout.resident_mappings(configured.get(version, []))
         pool_path = generation / "pool-providers.json"
         pools = json.loads(pool_path.read_text()) if pool_path.is_file() else []
@@ -224,6 +307,8 @@ def prepare(
             )
             if unknown:
                 faults.setdefault(name, []).append(f"{version}: undefined reference to {', '.join(unknown)}")
+            if source not in changed[version]:
+                continue
             try:
                 layout.place_object(
                     args,

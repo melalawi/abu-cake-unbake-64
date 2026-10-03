@@ -154,6 +154,7 @@ class Tools:
             if "return 2" in source.read_text() or (header.is_file() and "PROOF_VALUE 2" in header.read_text()):
                 code = CODE[:-1] + b"\x02"
             target = out / (source.stem + ".o")
+            target.unlink(missing_ok=True)  # The production compiler publishes by atomic replacement.
             if "missing()" in source.read_text():
                 write_object(
                     target,
@@ -205,6 +206,7 @@ class Tools:
         for name in names:
             path = generation / "obj/src" / (name + ".o")
             if name in self.bad:
+                path.unlink(missing_ok=True)
                 write_object(path, {".text": CODE[:-1] + b"\x02"}, [(name, ".text", 0, 8)])
             if not path.is_file():
                 failures.append(name)

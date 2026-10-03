@@ -56,6 +56,35 @@ class BatchPublicationCliTests(unittest.TestCase):
             for line in path.read_text().splitlines()
         ]
 
+    def test_checked_published_batch_preserves_bytes_and_updates_feedback_once(self):
+        sources = self.sources[:3]
+        self.cli("submit", "--batch", *sources)
+        published = [self.project.src / source.name for source in sources]
+        for source in published:
+            source.write_text("/* includes reviewed by an independent check */\n" + source.read_text())
+        generations = {v: (self.project.build / v).resolve() for v in self.project.versions}
+        for version, generation in generations.items():
+            self.tools.compile(self.project, self.policy, published, version, generation / "obj/src")
+        before = {source: source.read_bytes() for source in published}
+        proven = self.project.build / "types/proven.json"
+        from unbake.typemap import storage
+
+        with (
+            patch.object(batch.build, "compile_versions", wraps=batch.build.compile_versions) as compiles,
+            patch.object(storage, "write", wraps=storage.write) as writes,
+            patch.object(batch, "_feedback", wraps=batch._feedback) as feedback,
+        ):
+            self.cli("submit", "--batch", *published)
+        self.assertEqual(feedback.call_count, 1)
+        self.assertTrue(all(candidate.compiled for candidate in feedback.call_args.args[2]))
+        self.assertTrue(all(not sources for call in compiles.call_args_list for sources, out in call.args[2].values()))
+        self.assertEqual(sum(call.args[0] == proven for call in writes.call_args_list), 1)
+        records = json.loads(proven.read_text())["records"]
+        for source, content in before.items():
+            self.assertEqual(source.read_bytes(), content)
+            self.assertEqual(records[source.stem]["source_sha256"], hashlib.sha256(content).hexdigest())
+        self.assertIn(": OK", self.make())
+
     def test_declaration_refusal_precedes_rom_proof_and_publication(self):
         source = self.sources[0]
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}

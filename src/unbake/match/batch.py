@@ -61,6 +61,7 @@ class Candidate:
     removed_rows: dict[str, tuple[str, ...]] = field(default_factory=dict)
     symbol_needs: list[SymbolNeed] = field(default_factory=list)
     republication: bool = False
+    compiled: bool = False
 
 
 def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
@@ -68,7 +69,11 @@ def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
     names = [source.stem for source in sources]
     if len(set(names)) != len(names):
         held("submit.source: duplicate function names in --batch")
-    with reporting.session(project), build.lock(project):
+    with (
+        reporting.session(project),
+        build.lock(project),
+        forked.session(policy.cores, max(len(sources), len(project.versions))),
+    ):
         project = config.load(project.root)
         setup.refresh_helpers(project)
         if not sources:
@@ -125,14 +130,22 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             with build.lock(project):
                 for version in project.versions:
                     current[version] = holds.enter_context(build.pin(build.current_generation(project, version)))
+            with reporting.phase("reuse_objects", sources=len(candidates)):
+                reused = incremental.reusable_sources(
+                    project, current, {c.function: c.versions for c in candidates if c.republication}
+                )
+                for candidate in candidates:
+                    candidate.compiled = candidate.function in reused
+                reporting.record("reused_objects", sources=sorted(reused))
             with reporting.phase("stage"):
                 tree = work / "tree"
-                staging.copy_tree(project, project.root, tree, skip=("docs",), assembly=False)
+                staging.copy_tree(project, project.root, tree, skip=("docs",), assembly=False, linked=True)
                 local_policy = project.tools / "clone-policy.toml"
                 if local_policy.is_file():
                     shutil.copy2(local_policy, tree / local_policy.relative_to(project.root))
                 staged = staging.project_at(project, tree)
-                staging.write_staged(staged, staging.helper_edits(staged))
+                if not all(candidate.compiled for candidate in candidates):
+                    staging.write_staged(staged, staging.helper_edits(staged))
                 base = _Base(staged, policy)
             with reporting.phase("fold", sources=len(candidates)):
                 candidates = _fold(staged, policy, candidates, receipts)
@@ -156,12 +169,9 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             versions = list(project.versions)
             for version in versions:
                 generations[version] = staging.generation(project, version, current[version], holds, retained=True)
-                # A published source may have the same bytes in both trees:
-                # the user edited the live file before submit. Its old object
-                # must still be rebuilt and checked against the cartridge.
                 for candidate in candidates:
-                    if candidate.republication and version in candidate.versions:
-                        (generations[version] / "obj/src" / (candidate.function + ".built")).unlink(missing_ok=True)
+                    if candidate.republication and not candidate.compiled and version in candidate.versions:
+                        (generations[version] / "obj/src" / f"{candidate.function}.built").unlink(missing_ok=True)
             with reporting.phase("proof", sources=len(candidates)):
                 extracted = {v: staged.version(v).split.read_text() for v in versions}
                 faults = incremental.prepare(
@@ -233,20 +243,28 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
 class _Inputs:
     """Trial rows and split owners read once for a whole admission."""
 
-    def __init__(self, project: Project, policy: Policy) -> None:
+    def __init__(self, project: Project, policy: Policy, sources: list[Path] | None = None) -> None:
         # The build lock holds these inputs still; a refusal repeats per source.
         self.owners: dict[str, Any] | None = None
         self.trials: dict[str, list[Any]] | None = None
+        proven = project.build / "types/proven.json"
+        self.proven = storage.read(proven, "types.feedback") if proven.is_file() else {}
+        if self.proven:
+            storage.validate_identity(project, self.proven, "types.feedback")
         try:
             self.owners = {v: split.owners_by_alias(project, v) for v in project.versions}
-            self.trials = drafts.Store(policy, project).by_function()
+            self.trials = (
+                {}
+                if sources is not None and all(source == project.src / source.name for source in sources)
+                else drafts.Store(policy, project).by_function()
+            )
         except Held:
             pass
 
 
 def _admission(project: Project, policy: Policy, sources: list[Path], receipts: list[str]) -> list[Candidate]:
     """Admit every source on all cores; candidates and refusals keep source order."""
-    shared = project, policy, _Inputs(project, policy)
+    shared = project, policy, _Inputs(project, policy, sources)
     candidates = []
     for source, (lines, outcome) in zip(sources, forked.ordered(_admitted, shared, sources, policy.cores), strict=True):
         for line in lines:
@@ -292,8 +310,10 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
     if republication:
         proven = project.build / "types/proven.json"
         if proven.is_file():
-            value = storage.read(proven, "types.feedback")
-            storage.validate_identity(project, value, "types.feedback")
+            value = getattr(inputs, "proven", None)
+            if value is None:
+                value = storage.read(proven, "types.feedback")
+                storage.validate_identity(project, value, "types.feedback")
             record = value.get("records", {}).get(function, {})
             if (
                 record.get("source") == str(destination.relative_to(project.root))
@@ -347,20 +367,32 @@ class _Base:
 
 def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
     """Fold every source against one context; a refused source leaves the context unchanged."""
+    if all(candidate.compiled for candidate in candidates):
+        for candidate in candidates:
+            candidate.final = candidate.content.decode("utf-8")
+        return candidates
     headers = Headers.read(staged)
     base = dict(headers.texts)
-    folds = batch_fold.fold(staged, policy, headers, candidates, receipts)
+    retained = [candidate for candidate in candidates if candidate.compiled]
+    for candidate in retained:
+        candidate.final = candidate.content.decode("utf-8")
+    pending = [candidate for candidate in candidates if not candidate.compiled]
+    folds = batch_fold.fold(staged, policy, headers, pending, receipts) if pending else []
     for candidate, folded in folds:
         candidate.final = folded.source
         candidate.removed_rows = folded.removed_rows
     for path, text in headers.texts.items():
         if base.get(path) != text:
             split_apply.write(path, text)
-    return [candidate for candidate, _ in folds]
+    return [
+        candidate for candidate in candidates if candidate.compiled or any(candidate is folded for folded, _ in folds)
+    ]
 
 
 def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> None:
     """Render sources, rows, compiler units and exclusions for exactly these candidates."""
+    if candidates and all(candidate.compiled for candidate in candidates):
+        return
     selected = {candidate.function: candidate for candidate in candidates}
     for version, text in base.symbols.items():
         split_apply.write(staged.version(version).symbols, text)
@@ -484,12 +516,14 @@ def _recipe(staged: Project) -> None:
 
 def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
     """Place unknown data a source declares from its owning ROM relocations, in parallel."""
+    if all(candidate.compiled for candidate in candidates):
+        return candidates
     known = {v: set(split.symbols(staged.version(v).symbols)[1]) for v in staged.versions}
     work = staged.work / "data-symbols"
     work.mkdir(parents=True, exist_ok=True)
     jobs: list[tuple[Candidate, str]] = []
     for candidate in candidates:
-        if not candidate.matched:
+        if not candidate.matched or candidate.compiled:
             continue
         declared = set(re.findall(r"\bextern\b[^;()]*?\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)*;", candidate.final))
         jobs.extend(
@@ -500,7 +534,7 @@ def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], 
     chunks: list[tuple[str, list[Candidate]]] = []
     for version in staged.versions:
         members = [candidate for candidate, v in jobs if v == version]
-        size = max(1, -(-len(members) // policy.cores))
+        size = max(1, len(members))
         chunks.extend((version, members[i : i + size]) for i in range(0, len(members), size))
 
     def compile_chunk(chunk: tuple[str, list[Candidate]]) -> list[tuple[Candidate, list[SymbolNeed] | str]]:
@@ -708,7 +742,17 @@ def _relink(
     reporting.record("relink", reused={v: str(r) for v, r in reuse.items()})
     with ThreadPoolExecutor(max_workers=min(policy.cores, policy.setup_version_jobs, len(generations))) as pool:
         futures = {
-            v: pool.submit(relink.prove, staged, policy, v, g, None, extracted=reuse[v]) for v, g in generations.items()
+            v: pool.submit(
+                relink.prove,
+                staged,
+                policy,
+                v,
+                g,
+                None,
+                extracted=reuse[v],
+                placed=reuse[v] and relink.place_changed(staged, v, g),
+            )
+            for v, g in generations.items()
         }
         return {v: future.result() for v, future in futures.items()}
 
@@ -891,6 +935,8 @@ def _commit(
 def _type_preflight(
     project: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]
 ) -> list[Candidate]:
+    if all(candidate.compiled for candidate in candidates):
+        return candidates
     from unbake.typemap.declarations import validate_sources
 
     refused = validate_sources(
@@ -899,7 +945,7 @@ def _type_preflight(
         [
             (candidate.function, project.src / f"{candidate.function}.c", candidate.versions)
             for candidate in candidates
-            if candidate.matched
+            if candidate.matched and not candidate.compiled
         ],
     )
     # Declaration acceptance is weaker than the project's actual C compiler
@@ -907,7 +953,7 @@ def _type_preflight(
     # folded source on one containing version before preparing the long proof.
     jobs: dict[str, list[Path]] = {}
     for candidate in candidates:
-        if candidate.function not in refused:
+        if candidate.function not in refused and not candidate.compiled:
             jobs.setdefault(candidate.versions[0], []).append(project.src / f"{candidate.function}.c")
     with workspace.temporary(project, prefix="type-preflight-", directory=project.build) as temporary:
         compiled = build.compile_versions(

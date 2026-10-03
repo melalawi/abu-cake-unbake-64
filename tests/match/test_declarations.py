@@ -159,9 +159,9 @@ class DeclarationTests(MatchFixture):
                 self.project, self.policy, "alpha", source, parsers, self.versions, headers
             )
         self.assertIn("p->value", rewritten)
-        self.assertEqual(typed_headers.call_count, len(self.versions))
+        self.assertEqual(typed_headers.call_count, len({self.project.version(v).macros for v in self.versions}))
         materialize.assert_called_once()
-        self.assertEqual(trees[0], trees[1])
+        self.assertTrue(all(tree == trees[0] for tree in trees))
         self.assertFalse(trees[0][0].exists())
 
     def test_equivalent_canonical_source_skips_typed_header_materialization(self) -> None:

@@ -904,10 +904,10 @@ def infer(
     }
 
 
-def solve(project: Project, policy: Policy | None = None) -> dict[str, Any]:
+def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, Any] | None = None) -> dict[str, Any]:
     from unbake.typemap.abi_facts import refine
 
-    facts = refine(project, refresh_map(project))
+    facts = refine(project, refresh_map(project) if facts is None else facts)
     pinned = storage.inputs(project, headers=True)
     log = storage.FactLog(project.build / "types")
     try:
