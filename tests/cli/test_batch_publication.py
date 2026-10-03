@@ -104,7 +104,7 @@ class BatchPublicationCliTests(unittest.TestCase):
     def test_feedback_header_writes_precede_receipt_refresh_for_new_and_edited_sources(self):
         events = []
         original = batch.staging.publication_stamps
-        header = self.project.include[0] / "shared/typemap.h"
+        header = next((self.project.include[0] / "shared/types").glob("*.h"))
 
         def feedback(project, policy, candidates, current, *, strict=False):
             events.append(("feedback", strict))
@@ -137,8 +137,20 @@ class BatchPublicationCliTests(unittest.TestCase):
         snapshots = {path: path.read_bytes() if path.is_file() else None for path in type_paths}
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
 
+        split_header = self.project.include[0] / "shared/types/old.h"
+        split_header.parent.mkdir(exist_ok=True)
+        split_header.write_text("/* original split header */")
+        created = self.project.include[0] / "shared/decls/new.h"
+        authored = self.project.include[0] / "shared/compat.h"
+        authored.write_text("/* original wrapper */")
+        before = fixture.PublicationBoundaryCliTests.inputs(self)
+
         def feedback(project, *args, **kwargs):
             (project.include[0] / "shared/typemap.h").write_text("changed after feedback")
+            split_header.write_text("/* changed split header */")
+            created.parent.mkdir(exist_ok=True)
+            created.write_text("new generated header")
+            authored.write_text("/* changed wrapper */")
             for path in type_paths:
                 path.write_text("changed after feedback")
             return []
@@ -152,6 +164,9 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.assertEqual(fixture.PublicationBoundaryCliTests.inputs(self), before)
         self.assertEqual({v: self.project.build_link(v).resolve() for v in self.project.versions}, generations)
         self.assertEqual({path: path.read_bytes() if path.is_file() else None for path in type_paths}, snapshots)
+        self.assertEqual(split_header.read_text(), "/* original split header */")
+        self.assertEqual(authored.read_text(), "/* original wrapper */")
+        self.assertFalse(created.exists())
 
     def test_receipt_refresh_failure_rolls_back_inputs_and_generations(self):
         before = fixture.PublicationBoundaryCliTests.inputs(self)

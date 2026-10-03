@@ -159,7 +159,9 @@ def rewrite(source: str, replacements: dict[str, str], blocked: set[str]) -> str
     return source
 
 
-def source_names(project: Project, header: Path, policy: Policy | None) -> set[str]:
+def source_names(
+    project: Project, header: Path, policy: Policy | None, *, consumers: dict[Path, set[str]] | None = None
+) -> set[str]:
     """Reserve file-scope names in every C source importing HEADER transitively.
 
     Conditional source bodies must be viewed per version: simply deleting cpp
@@ -183,7 +185,9 @@ def source_names(project: Project, header: Path, policy: Policy | None) -> set[s
                     (
                         item.resolve()
                         for item in candidates
-                        if item.is_file() or item.resolve() in (header.resolve(), prototypes)
+                        if item.is_file()
+                        or item.resolve() in (header.resolve(), prototypes)
+                        or item.resolve().is_relative_to(header.parent.resolve() / "decls")
                     ),
                     None,
                 )
@@ -195,7 +199,12 @@ def source_names(project: Project, header: Path, policy: Policy | None) -> set[s
         pending, seen = [path.resolve()], set()
         while pending:
             current = pending.pop()
-            if current == header.resolve():
+            if (
+                current == header.resolve()
+                or current.is_relative_to(header.parent.resolve() / "types")
+                or current.is_relative_to(header.parent.resolve() / "decls")
+                or current.is_relative_to(header.parent.resolve() / "consumers")
+            ):
                 return True
             if current not in seen:
                 seen.add(current)
@@ -218,13 +227,17 @@ def source_names(project: Project, header: Path, policy: Policy | None) -> set[s
                 if active is None:
                     active = _preprocessed_lines(project, policy, text, version)
                 views.add("".join(line for index, line in enumerate(lines) if index in active))
+        owned: set[str] = set()
         for view in views:
             parser = _Declarations(clean(declaration_source(view)))
             try:
                 parser.parse()
             except Held as error:
                 raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
-            names.update(parser.names)
+            owned.update(parser.names)
+        names.update(owned)
+        if consumers is not None:
+            consumers[path] = owned
     return names
 
 

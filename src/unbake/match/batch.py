@@ -788,6 +788,8 @@ def _commit(
             project.build / "types" / name for name in ("proven.json", "database.json", "summary.json", "redraft.json")
         )
         touched.update(project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
+        generated_directories = [project.include[0] / "shared" / name for name in ("types", "decls", "consumers")]
+        touched.update(path for root in project.include for path in root.rglob("*.h"))
         before = {path: path.read_bytes() if path.exists() else None for path in touched}
         swapped = []
         try:
@@ -824,6 +826,10 @@ def _commit(
                 generations={version: str(generation) for version, generation in generations.items()},
             )
         except BaseException:
+            for directory in generated_directories:
+                for path in directory.rglob("*.h"):
+                    if path not in before:
+                        path.unlink()
             for version in swapped:
                 swap(project.build_link(version), current[version])
             for path, previous in before.items():

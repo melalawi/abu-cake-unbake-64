@@ -154,6 +154,10 @@ def flags(project: Project, version: str, unit: str | Path) -> tuple[str, ...]:
     if direct is not None and stem is not None and direct != stem:
         raise Held("config", f"[build].unit_cflags.{path}: conflicting stem flags")
     result.extend(direct if direct is not None else stem if stem is not None else ())
+    from unbake.typemap.split import consumer_macro
+
+    if any((include / "shared/consumers" / (path.stem + ".h")).is_file() for include in project.include):
+        result.insert(len(project.include), "-D" + consumer_macro(path.stem) + "=1")
     return tuple(result)
 
 

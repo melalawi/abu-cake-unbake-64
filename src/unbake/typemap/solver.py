@@ -885,6 +885,12 @@ def infer(
     )
     dependencies = {name: sorted(neighbours[name]) for name in facts["functions"]}
     return {
+        "typedefs": {
+            name: declarations.canonical(type_, aliases)
+            for seed in seeds
+            for name, type_ in seed.get("shared_typedefs", seed["aliases"]).items()
+            if not declarations.unknown(type_)
+        },
         "functions": output_functions,
         "globals": output_globals,
         "structs": output_structs,

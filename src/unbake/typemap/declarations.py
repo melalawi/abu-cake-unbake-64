@@ -119,6 +119,18 @@ def headers(
     return _headers(project, policy, version, contents, extra, line_markers=line_markers)
 
 
+def _generated_context(project: Project) -> list[Path]:
+    if not project.include:
+        return []
+    shared = project.include[0] / "shared"
+    umbrella = shared / "typemap.h"
+    if umbrella.is_file():
+        return [umbrella]
+    # Analysis retains shared declarations even when no current source imports
+    # their spelling. Consumer collision aliases remain source-specific.
+    return sorted(path for path in (shared / "types").glob("*.h") if not path.name.startswith("consumer_alias_"))
+
+
 def _headers(
     project: Project,
     policy: Policy | None,
@@ -150,11 +162,13 @@ def _headers(
         raise Held("solve", "policy.cpp: required for typed header preprocessing")
     source = "".join(f'#include "{path}"\n' for path in ordered)
     if extra is not None:
-        generated_types = project.include[0] / "shared/typemap.h"
-        if generated_types.is_file():
-            source += f'#include "{generated_types}"\n'
+        source += "".join(f'#include "{path}"\n' for path in _generated_context(project))
         if raw:
             source += _BOUNDARY + "\n"
+        from unbake.typemap.split import consumer_macro
+
+        if (project.include[0] / "shared/consumers" / (extra.stem + ".h")).is_file():
+            source += f"#define {consumer_macro(extra.stem)} 1\n"
         source += f'#include "{extra}"\n'
     command = _cpp_command(project, policy, version, extra=extra is not None, line_markers=line_markers)
     text = _preprocess(project, command, source)
@@ -211,16 +225,14 @@ class _PublishedHeaders:
         }
         self.ordered = ordered_headers(self.contents)
         texts = list(self.contents.values())
-        generated = project.include[0] / "shared/typemap.h" if project.include else None
-        if generated is not None and generated.is_file():
-            texts.append(generated.read_text())
+        generated = _generated_context(project)
+        texts.extend(path.read_text() for path in generated)
         self.replay = policy is not None and not any(
             re.search(r"__COUNTER__|^\s*#\s*pragma\b", text, re.M) for text in texts
         )
         self.guarded = {}
         consumed = dict(self.contents)
-        if generated is not None and generated.is_file():
-            consumed[generated] = generated.read_text()
+        consumed.update({path: path.read_text() for path in generated})
         for path, text in consumed.items():
             text = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
             guard = re.match(r"\s*#\s*ifndef\s+(\w+)\s*\n\s*#\s*define\s+\1\b", text)
@@ -252,9 +264,7 @@ class _PublishedHeaders:
             if not marker:
                 raise Held("solve", "types.declaration: missing preprocessor source boundary")
             prelude = "".join(f'#include "{path}"\n' for path in self.ordered)
-            generated = project.include[0] / "shared/typemap.h" if project.include else None
-            if generated is not None and generated.is_file():
-                prelude += f'#include "{generated}"\n'
+            prelude += "".join(f'#include "{path}"\n' for path in _generated_context(project))
             command = _cpp_command(project, policy, version, extra=True, line_markers=False)
             macros = _preprocess(project, [*command[:-1], "-dM", "-"], prelude)
             # A provider must support cpp's macro dump, including fixture providers.
@@ -278,6 +288,10 @@ class _PublishedHeaders:
                 project, policy, version, self.contents, source, line_markers=False, ordered=self.ordered, raw=True
             )
         prefix, command = prepared
+        from unbake.typemap.split import consumer_macro
+
+        if (project.include[0] / "shared/consumers" / (source.stem + ".h")).is_file():
+            command = [*command[:-1], "-D" + consumer_macro(source.stem) + "=1", command[-1]]
         content = source.read_text()
         temporary = None
         if not re.search(r"^\s*#\s*(?:undef|define|include_next)\b", content, re.M):
@@ -449,6 +463,13 @@ def extract(
     incoming = {node.name: _type(node.type) for node in tree.ext if isinstance(node, c_ast.Typedef)}
     aliases = {} if _prefix is None else _prefix["aliases"] if _compact and not incoming else dict(_prefix["aliases"])
     aliases.update(incoming)
+    shared_typedefs = dict((_prefix or {}).get("shared_typedefs", {}))
+    shared_typedefs.update(
+        (node.name, incoming[node.name])
+        for node in tree.ext
+        if isinstance(node, c_ast.Typedef)
+        and (owned_source is None or (node.coord.file and node.coord.file != str(owned_source)))
+    )
     prefix_structs = {} if _prefix is None else _prefix["structs"]
     complete_layout = False
     if _prefix is not None:
@@ -492,6 +513,7 @@ def extract(
         "structs": {},
         "arrays": {},
         "aliases": aliases,
+        "shared_typedefs": shared_typedefs,
         "unknown": [],
     }
     if _prefix is not None:
@@ -685,6 +707,7 @@ class _PublishedDeclarations:
                 # never tracebacks that retain a partially parsed header AST.
                 self.prefix_errors[prefix] = error.phase, error.reason
                 raise
+            seed["shared_typedefs"] = seed["aliases"]
             seed["layout_source"] = cleaned
             cached = cleaned, parser._scope_stack[0].copy(), seed
             self.prefixes[prefix] = cached
@@ -713,6 +736,7 @@ class _PublishedDeclarations:
             )
         except _FullDeclarationUnit:
             result = extract(cleaned + suffix, provenance, definitions=True, owned_source=source)
+        result["shared_typedefs"] = {**seed["aliases"], **result["shared_typedefs"]}
         prototypes = _portable_signatures(result, seed["aliases"])
         if prototypes:
             try:

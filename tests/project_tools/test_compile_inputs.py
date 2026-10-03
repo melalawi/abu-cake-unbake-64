@@ -71,9 +71,10 @@ class CompileInputTests(unittest.TestCase):
         write_rendered(project)
         driver = project.tools / "compile.py"
         elf = project.tools / "elf.py"
-        self.assertEqual(hashlib.sha256(driver.read_bytes()).hexdigest(), OPTIMIZED_SHA256)
+        self.assertNotEqual(hashlib.sha256(driver.read_bytes()).hexdigest(), OPTIMIZED_SHA256)
         expected = key(LEGACY_DRIVER.encode(), elf)
-        self.assertEqual(compile.tool_digest((driver, elf)), expected)
+        self.assertEqual(compile.tool_digest((driver, elf)), key(driver, elf))
+        self.assertNotEqual(compile.tool_digest((driver, elf)), expected)
         driver.write_text(driver.read_text() + "\n# subsequent driver revision\n")
         compile.tool_digest.cache_clear()
         self.assertEqual(compile.tool_digest((driver, elf)), key(driver, elf))
@@ -134,6 +135,9 @@ class CompileInputTests(unittest.TestCase):
                 ):
                     compile.compile_object(args, data)
                 self.assertEqual(len(commands), count)
+                from unbake.typemap.split import consumer_macro
+
+                self.assertNotIn("-D" + consumer_macro(source.stem) + "=1", commands[0])
                 self.assertEqual(args.depfile.read_text(), "custom-target: " + " ".join(expected_paths) + "\n")
                 self.assertEqual(
                     json.loads(args.output.with_suffix(".inputs.json").read_text()),

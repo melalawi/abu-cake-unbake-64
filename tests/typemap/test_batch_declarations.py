@@ -49,6 +49,7 @@ class BatchDeclarationsTests(unittest.TestCase):
         declarations._portable_signatures(expected, declarations.extract(prefix, {})["aliases"])
         raw = prefix + declarations._BOUNDARY + "\n" + suffix
         actual = batch.extract(raw, provenance, source)
+        expected["shared_typedefs"] = declarations.extract(prefix, {})["aliases"]
         self.assertEqual(storage.encoded(actual), storage.encoded(expected))
         return actual
 

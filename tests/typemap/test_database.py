@@ -18,6 +18,9 @@ class DatabaseTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
         self.project, self.policy, _ = fixture(Path(directory.name).resolve(), versions=("us", "eu"), case=self)
+        shared = self.project.include[0] / "shared"
+        shared.mkdir(exist_ok=True)
+        (shared / "typemap.h").write_text("")
 
     def test_map_keeps_all_versions_and_visible_unknown_types(self) -> None:
         mapped = map_program(self.project)
@@ -26,7 +29,7 @@ class DatabaseTests(unittest.TestCase):
         database = solve(self.project)
         self.assertIsNotNone(load(self.project))
         self.assertEqual(database["functions"]["alpha"]["state"], "known")
-        self.assertIn("shared/prototypes.h", context(self.project))
+        self.assertIn("shared/decls/alpha.h", context(self.project))
         self.assertNotIn("typedef", (self.project.include[0] / "shared/typemap.h").read_text())
 
     def test_disassembled_data_never_enters_function_map_or_actionable_pool(self) -> None:
@@ -396,16 +399,23 @@ class DatabaseTests(unittest.TestCase):
         shapes = [name for name, row in first["structs"].items() if row["state"] == "known"]
         self.assertEqual(len(shapes), 1)
         shape = shapes[0]
-        header = project.include[0] / "shared/typemap.h"
-        text = header.read_text().replace("int field_0;", "RetainedWord field_0;")
-        header.write_text(
+        type_header = next(
+            path
+            for path in (project.include[0] / "shared/types").glob("*.h")
+            if f"struct {shape} {{" in path.read_text()
+        )
+        text = type_header.read_text().replace("int field_0;", "RetainedWord field_0;")
+        type_header.write_text(
             text.replace(
                 f"struct {shape} {{",
                 f"typedef int RetainedWord;\ntypedef struct {shape} RetainedShape;\nstruct {shape} {{",
             )
         )
         source = project.src / "beta.c"
-        source.write_text('#include "shared/typemap.h"\n' + f"int beta(struct {shape} *p) {{ return p->field_0; }}\n")
+        source.write_text(
+            f'#include "{type_header.relative_to(project.include[0]).as_posix()}"\n'
+            f"int beta(struct {shape} *p) {{ return p->field_0; }}\n"
+        )
         cartridge.split.write_text(cartridge.split.read_text().replace(", asm, beta]", ", c, beta]"))
         proof = {
             "matched": True,
@@ -424,9 +434,10 @@ class DatabaseTests(unittest.TestCase):
         repeated = solve(project, policy)
         self.assertEqual(repeated["structs"][shape]["base_nodes"], result["structs"][shape]["base_nodes"])
         self.assertIsNone(repeated["structs"][shape]["size"])
-        self.assertIn(f"struct {shape} {{", header.read_text())
-        self.assertIn(f"typedef struct {shape} RetainedShape;", header.read_text())
-        self.assertIn("typedef int RetainedWord;", header.read_text())
+        shared = "\n".join(path.read_text() for path in (project.include[0] / "shared/types").glob("*.h"))
+        self.assertIn(f"struct {shape} {{", shared)
+        self.assertIn(f"typedef struct {shape} RetainedShape;", shared)
+        self.assertIn("typedef int RetainedWord;", shared)
 
     def test_abi_supplement_retains_map_and_is_content_pinned(self) -> None:
         from unbake.typemap.mapping import Analysis

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
+from tests.typemap.split_support import expanded
 from unbake.project.config import Held
 from unbake.typemap import database, declarations
 from unbake.typemap.solver import Constraints, _merge_records
@@ -17,6 +18,9 @@ class HeaderRenderTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
         self.project, self.policy, _ = fixture(Path(directory.name).resolve(), case=self)
+        shared = self.project.include[0] / "shared"
+        shared.mkdir(exist_ok=True)
+        (shared / "typemap.h").write_text("")
 
     def render(self, source, *, partial=False):
         seed = declarations.extract(source, {})
@@ -34,7 +38,9 @@ class HeaderRenderTests(unittest.TestCase):
         result = {}
 
         def capture(project, outputs, *args, **kwargs):
-            result.update({path.name: content.decode() for path, content in outputs.items()})
+            result.update(
+                {path.relative_to(project.include[0]).as_posix(): content.decode() for path, content in outputs.items()}
+            )
             raise Captured()
 
         with (
@@ -44,7 +50,7 @@ class HeaderRenderTests(unittest.TestCase):
         ):
             database.publish(self.project, value, {}, policy=self.policy)
         stage.assert_not_called()
-        return result["typemap.h"]
+        return expanded(result, "shared/typemap.h")
 
     def test_generated_alias_and_definition_precede_recursive_header_consumer(self):
         consumer = self.project.include[0] / "consumer.h"
@@ -54,7 +60,7 @@ class HeaderRenderTests(unittest.TestCase):
         )
         text = self.render("typedef struct Vector { float x, y, z; } Vector;")
         self.assertLess(text.index("typedef struct Vector Vector;"), text.index("struct Vector {"))
-        self.assertLess(text.index("struct Vector {"), text.index('#include "consumer.h"'))
+        self.assertLess(text.index("struct Vector {"), text.index("struct Holder {"))
         self.assertEqual(text.count("typedef struct Vector Vector;"), 1)
 
     def test_partial_union_keeps_multiple_aliases_and_unaliased_struct(self):
@@ -258,7 +264,7 @@ class HeaderRenderTests(unittest.TestCase):
         outputs = {}
 
         def capture(project, content, *args, **kwargs):
-            outputs.update({p.name: data.decode() for p, data in content.items()})
+            outputs.update({p.relative_to(project.include[0]).as_posix(): data.decode() for p, data in content.items()})
             raise ValueError("captured")
 
         with (
@@ -266,8 +272,8 @@ class HeaderRenderTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "captured"),
         ):
             database.publish(self.project, value, {}, policy=self.policy)
-        self.assertIn("extern struct Record *f(s32 value);", outputs["prototypes.h"])
-        self.assertIn("extern struct Record *g;", outputs["prototypes.h"])
+        self.assertIn("extern struct Record *f(s32 value);", expanded(outputs, "shared/prototypes.h"))
+        self.assertIn("extern struct Record *g;", expanded(outputs, "shared/prototypes.h"))
 
     def test_conditional_names_after_functions_and_multiline_macros_are_reserved(self):
         self.importing_source(

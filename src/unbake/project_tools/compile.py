@@ -226,6 +226,12 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
         ]
         if args.non_matching == "1":
             flags.append("-DNON_MATCHING=1")
+        consumer = "UNBAKE_CONSUMER_" + hashlib.sha256(Path(args.unit).stem.encode()).hexdigest()[:16].upper()
+        if any(
+            (Path(include) / "shared/consumers" / (Path(args.unit).stem + ".h")).is_file()
+            for include in data["include"]
+        ):
+            flags.append("-D" + consumer + "=1")
         direct = data["unit_cflags"].get(args.unit)
         stem = data["unit_cflags"].get(Path(args.unit).stem)
         if direct is not None and stem is not None and direct != stem:

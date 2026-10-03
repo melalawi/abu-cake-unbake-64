@@ -118,8 +118,9 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn(": OK", self.make())
 
     def test_generated_type_reuse_by_value_survives_the_submit_solve_refresh(self):
-        generated = self.project.include[0] / "shared/typemap.h"
-        generated.write_text(generated.read_text().replace("#endif", "struct Borrowed {int value;};\n#endif"))
+        generated = self.project.include[0] / "shared/types/borrowed.h"
+        generated.parent.mkdir(exist_ok=True)
+        generated.write_text("#ifndef BORROWED_H\n#define BORROWED_H\nstruct Borrowed {int value;};\n#endif\n")
         source = self.sources[0]
         source.write_text(
             "typedef struct Queue {int field;} Queue;\n"
@@ -130,8 +131,8 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         output = self.cli("submit", source)
         self.assertNotIn("HELD(types)", output)
         self.assertIn("rename Queue -> Borrowed", output)
-        rendered = generated.read_text()
-        self.assertLess(rendered.index("struct Borrowed"), rendered.index('#include "shared/alpha.h"'))
+        rendered = "\n".join(path.read_text() for path in (self.project.include[0] / "shared/types").glob("*.h"))
+        self.assertIn("struct Borrowed", rendered)
         self.assertIn("struct Borrowed queue;", (self.project.include[0] / "shared/alpha.h").read_text())
         self.assertIn(": OK", self.make())
 

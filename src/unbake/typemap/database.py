@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
-from unbake.typemap import header_names, storage
+from unbake.typemap import header_names, split, storage
 
 _decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
@@ -66,7 +66,18 @@ def load(project: Project, *, required: bool = True, allow_stale: bool = False) 
 def context(project: Project, *, function: str | None = None, allow_stale: bool = False) -> str:
     value = load(project, allow_stale=allow_stale)
     assert value is not None
-    lines = ['#include "shared/typemap.h"', '#include "shared/prototypes.h"']
+    homes = value.get("declaration_headers", {})
+    selected = [homes[function]] if function in homes else sorted(homes.values())
+    lines = [f'#include "{path}"' for path in selected]
+    if not homes:
+        root = project.include[0]
+        if (root / "shared/typemap.h").is_file():
+            lines = ['#include "shared/typemap.h"', '#include "shared/prototypes.h"']
+        else:
+            lines = [
+                f'#include "{path.relative_to(root).as_posix()}"'
+                for path in sorted((root / "shared/types").glob("*.h"))
+            ]
     lines.extend("/* unknown: " + row.replace("*/", "* /") + " */" for row in value["unknown"])
     lines.extend("/* conflict: " + row["key"].replace("*/", "* /") + " */" for row in value["conflicts"])
     for name, record in sorted(value["functions"].items()):
@@ -114,7 +125,7 @@ def _semantic(value: Any) -> Any:
 
 
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
-    from unbake.decomp.draft_context import ordered_headers
+    from unbake.decomp.header_declarations import declaration_source
     from unbake.decomp.header_declarations import declarations as header_declarations
     from unbake.typemap.declarations import declarator
 
@@ -128,7 +139,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         if not storage.generated(project, path)
     ]
     # Refer to existing homes; only missing generated prerequisites are emitted.
-    reserved = header_names.source_names(project, root / "shared/typemap.h", policy)
+    consumer_names: dict[Path, set[str]] = {}
+    reserved = header_names.source_names(project, root / "shared/typemap.h", policy, consumers=consumer_names)
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
     components = {path: path.read_text() for path in authored}
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
@@ -256,28 +268,140 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             rendered[path] = (
                 f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown; {reason} */"
             )
-    type_lines = ["#ifndef UNBAKE_TYPEMAP_H", "#define UNBAKE_TYPEMAP_H"]
-    # Callback prerequisites may mention an aggregate before its definition;
-    # declare its tag at file scope rather than inside a parameter list.
-    type_lines.extend(f"{generated[name]['type']};" for name in sorted(generated))
-    type_lines.extend(rendered[path] for path in ordered_headers(components, aliases=alias_targets))
-    type_lines.extend(("#endif", ""))
-    prototypes = ["#ifndef UNBAKE_PROTOTYPES_H", "#define UNBAKE_PROTOTYPES_H", '#include "typemap.h"']
-    for _name, record in sorted(value["functions"].items()):
+    # Source compatibility wrappers contain no declarations. They must not
+    # become providers (or drag their old umbrella into a type header).
+    wrappers = {
+        path: originals[path]
+        for path in authored
+        if re.search(r'#\s*include\s*"(?:(?:shared/)?typemap.h|shared/(?:types|consumers)/[^"]+)"', originals[path])
+    }
+    for path in wrappers:
+        if not header_declarations(components[path]).typedefs and not header_declarations(components[path]).exports:
+            components.pop(path)
+            rendered.pop(path)
+        else:
+            rendered[path] = split.narrow(components[path], "")
+    consumer_aliases = {}
+    for alias, type_ in {**value.get("typedefs", {}), **alias_targets}.items():
+        if header_names.placeholder(alias) or (alias in authored_aliases and alias not in reserved):
+            continue
+        if alias not in reserved and (alias in generated_aliases or alias in prerequisites):
+            continue
+        path = root / "shared" / (".consumer-alias-" + alias + ".h")
+        components[path] = rendered[path] = "typedef " + declarator(header_names.resolve(type_, concrete), alias) + ";"
+        if alias in reserved:
+            consumer_aliases[alias] = path
+    layout = split.Layout(components, rendered, root, aliases=alias_targets)
+    outputs: dict[Path, bytes | Path] = dict(layout.headers)
+    umbrella_path = root / "shared/typemap.h"
+    legacy = umbrella_path.is_file() or bool(wrappers)
+    outputs[umbrella_path] = layout.umbrella(
+        root / "shared/typemap.h", excluded={layout.homes[path] for path in consumer_aliases.values()}
+    )
+    declarations_by_name = {}
+    for name, record in sorted(value["functions"].items()):
         if record["state"] == "known":
             prototype = header_names.rewrite(record["prototype"], replacements, reserved)
-            prototypes.append(prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype)
-    for _name, record in sorted(value["globals"].items()):
+            declarations_by_name[name] = (
+                prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype
+            )
+    for name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
-            prototypes.append(header_names.rewrite(record["declaration"], replacements, reserved))
+            declarations_by_name[name] = header_names.rewrite(record["declaration"], replacements, reserved)
     for name, record in sorted(value["arrays"].items()):
         if record["state"] == "known" and record.get("partial") and ":" not in name:
-            prototypes.append(header_names.rewrite(f"extern {record['type']} {name}[];", replacements, reserved))
-    prototypes.extend(("#endif", ""))
-    outputs: dict[Path, bytes | Path] = {
-        root / "shared/typemap.h": "\n".join(type_lines).encode(),
-        root / "shared/prototypes.h": "\n".join(prototypes).encode(),
-    }
+            declarations_by_name[name] = header_names.rewrite(
+                f"extern {record['type']} {name}[];", replacements, reserved
+            )
+    declaration_headers = []
+    for name, text in declarations_by_name.items():
+        path = root / "shared/decls" / (name + ".h")
+        source = project.src / (name + ".c")
+        record = value["functions"].get(name, {})
+        selection = record.get("prototype", text)
+        if source.is_file():
+            selection += "\n" + source.read_text()
+        homes = layout.required(selection, blocked=consumer_names.get(source, set()))
+        outputs[path] = split.guarded(path, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
+        declaration_headers.append(layout.include(path))
+    outputs[root / "shared/prototypes.h"] = split.guarded(root / "shared/prototypes.h", "\n".join(declaration_headers))
+    if not legacy:
+        outputs.pop(umbrella_path)
+        outputs.pop(root / "shared/prototypes.h")
+    source_context: dict[Path, str] = {}
+    source_imports: dict[str, list[Path]] = defaultdict(list)
+    for source in project.src.rglob("*.c"):
+        text = source.read_text()
+        source_context[source] = text
+        for name in re.findall(r'^\s*#\s*include\s*"([^"\n]+)"', text, re.M):
+            source_imports[Path(name).name].append(source)
+    legacy_compat: dict[str, Path] = {}
+    if legacy:
+        for alias in ("M2C_UNK", "M2C_UNK8", "M2C_UNK16", "M2C_UNK32", "M2C_UNK64"):
+            if any(
+                alias in re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))
+                and alias not in consumer_names.get(source, set())
+                for source, text in source_context.items()
+            ):
+                destination = root / "shared/consumers" / ("compat_" + alias + ".h")
+                outputs[destination] = layout.consumer(
+                    destination, "typedef " + declarator(replacements[alias], alias) + ";"
+                )
+                legacy_compat[alias] = destination
+
+    def compatibility(source: Path, text: str) -> set[Path]:
+        names = set(re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))) - consumer_names.get(source, set())
+        return {path for alias, path in legacy_compat.items() if alias in names}
+
+    if legacy:
+        alias_homes = {layout.homes[path] for path in consumer_aliases.values()}
+        direct_branches: list[str] = []
+        for source, text in sorted(source_context.items()):
+            if not re.search(r'#\s*include\s*"shared/typemap.h"', text):
+                continue
+            selected = (layout.required(text, blocked=consumer_names.get(source, set())) & alias_homes) | compatibility(
+                source, text
+            )
+            if not selected:
+                continue
+            destination = root / "shared/consumers" / (source.stem + ".h")
+            outputs[destination] = split.guarded(
+                destination, "\n".join(layout.include(home) for home in sorted(selected))
+            )
+            direct_branches.extend(
+                (f"#if defined({split.consumer_macro(source.stem)})", layout.include(destination), "#endif")
+            )
+        umbrella = outputs[umbrella_path]
+        assert isinstance(umbrella, bytes)
+        outputs[umbrella_path] = ("\n".join(direct_branches) + "\n").encode() + umbrella
+    for path, original in wrappers.items():
+        branches: list[str] = []
+        for source in sorted(set(source_imports[path.name])):
+            text = source_context[source]
+            homes = layout.required(
+                text + "\n" + split.narrow(components.get(path, ""), ""), blocked=consumer_names.get(source, set())
+            )
+            homes.update(compatibility(source, text))
+            destination = root / "shared/consumers" / (source.stem + ".h")
+            includes = "\n".join(layout.include(home) for home in sorted(homes))
+            # Several wrappers may contribute declarations to one consumer.
+            previous_text = outputs.get(destination, b"")
+            assert isinstance(previous_text, bytes)
+            if previous_text:
+                existing = re.findall(r'^#include "([^"]+)"', previous_text.decode(), re.M)
+                homes.update(root / name for name in existing)
+                includes = "\n".join(layout.include(home) for home in sorted(homes))
+            outputs[destination] = split.guarded(destination, includes)
+            directive = "#if" if not branches else "#elif"
+            branches.extend((f"{directive} defined({split.consumer_macro(source.stem)})", layout.include(destination)))
+        fallback = layout.required(split.narrow(components.get(path, ""), ""), blocked=reserved)
+        if branches:
+            branches.append("#else")
+        branches.extend(layout.include(home) for home in sorted(fallback))
+        if source_imports[path.name]:
+            branches.append("#endif")
+        outputs[path] = ("\n".join(branches) + "\n" + split.narrow(original, "")).encode()
+    value["declaration_headers"] = {name: f"shared/decls/{name}.h" for name in declarations_by_name}
     value["shared_aliases"] = replacements
     abi_context = "\n".join(
         header_names.rewrite(record["abi_declaration"]["prototype"], replacements, reserved)
@@ -288,12 +412,18 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated)
     variants = [record.get("abi_declaration", {}).get("variants", {}) for record in value["functions"].values()]
     for register in sorted({reg for choices in variants for reg in choices}):
-        selected = "\n".join(
+        selected_context = "\n".join(
             header_names.rewrite(choices[register]["prototype"], replacements, reserved)
             for choices in variants
             if register in choices
         )
-        validate_headers(project, outputs, policy, abi_context=abi_context + "\n" + selected, validated=validated)
+        validate_headers(
+            project, outputs, policy, abi_context=abi_context + "\n" + selected_context, validated=validated
+        )
+    for path, content in outputs.items():
+        relative = str(path.relative_to(project.root))
+        if isinstance(content, bytes) and relative in value.get("inputs_sha256", {}):
+            value["inputs_sha256"][relative] = storage.digest(content)
     value["rendered_sha256"] = {
         str(path.relative_to(project.root)): storage.digest(content)
         for path, content in outputs.items()
@@ -348,9 +478,15 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     for mark in marks.values():
         mark.update(revision=value["revision"], type_db_sha256=digest)
     outputs[project.build / "types/redraft.json"] = storage.encoded({**storage.identity(project), "functions": marks})
+    obsolete = {
+        path
+        for directory in (root / "shared/types", root / "shared/decls", root / "shared/consumers")
+        for path in directory.rglob("*.h")
+        if path not in outputs
+    }
     backups: dict[Path, Path | None] = {}
     try:
-        for path in outputs:
+        for path in set(outputs) | obsolete:
             if path.is_file():
                 descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
                 os.close(descriptor)
@@ -364,6 +500,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 storage.install(path, content)
             else:
                 storage.write(path, content)
+        for path in obsolete:
+            path.unlink()
     except BaseException:
         for path, backup in backups.items():
             if backup is None:
@@ -499,7 +637,16 @@ def validate_headers(
                     staged.write_bytes(content)
         staged_project = replace(project, include=tuple(roots))
         source = scratch / "context.c"
-        source.write_text('#include "shared/typemap.h"\n#include "shared/prototypes.h"\n')
+        if project.include[0] / "shared/typemap.h" in outputs:
+            source.write_text('#include "shared/typemap.h"\n#include "shared/prototypes.h"\n')
+        else:
+            source.write_text(
+                "".join(
+                    f'#include "{path.relative_to(project.include[0]).as_posix()}"\n'
+                    for path in outputs
+                    if path.is_relative_to(project.include[0])
+                )
+            )
         assembly = scratch / "validate.s"
         assembly.write_text(".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
         for version in project.versions:

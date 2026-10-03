@@ -128,8 +128,9 @@ def _draft(
     project = draft_work.overlay(project, work)
     headers = _headers(project)
     if not use_type_db:
-        generated = {root / "shared" / name for root in project.include for name in ("typemap.h", "prototypes.h")}
-        headers = [(path, name) for path, name in headers if path not in generated]
+        from unbake.typemap.storage import generated
+
+        headers = [(path, name) for path, name in headers if not generated(project, path)]
     context = work / "context.c"
     examples = similar.retrieve(project, function, v)
     examples_context = similar.context(examples)
@@ -243,7 +244,14 @@ def _draft(
     output = lower(output, context.read_text(), allow_fields=True)
     layouts = database["structs"] if database is not None else None
     output, shared = share(project, function, output, context.read_text(), layouts=layouts)
-    selected = required_headers({path: read_text(path, "m2c") for path, _ in headers}, output)
+    selected = required_headers(
+        {
+            path: read_text(path, "m2c")
+            for path, name in headers
+            if name not in ("shared/typemap.h", "shared/prototypes.h")
+        },
+        output,
+    )
     context.write_text(_context(headers, selected), encoding="utf-8")
     context.write_text(preprocess_context(context, project, policy, v, function), encoding="utf-8")
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:

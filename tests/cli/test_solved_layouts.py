@@ -91,7 +91,7 @@ class SolvedLayoutCliTests(unittest.TestCase):
             # Restore the fixture's fixed-return C receipt. Its included
             # generated declarations must not erase source bindings on solve.
             published = project.src / "gamma.c"
-            published.write_text('#include "shared/typemap.h"\nint gamma(void) { return 3; }\n')
+            published.write_text('#include "shared/decls/gamma.h"\nint gamma(void) { return 3; }\n')
             cartridge.split.write_text(cartridge.split.read_text().replace(", asm, gamma]", ", c, gamma]"))
             cli("map")
             mapped = json.loads((project.build / "map/facts.json").read_text())
@@ -113,12 +113,12 @@ class SolvedLayoutCliTests(unittest.TestCase):
             self.assertEqual(repeated["common_base"], shape["common_base"])
             self.assertEqual(repeated["base_nodes"], shape["base_nodes"])
             self.assertIsNone(repeated["size"])
-            header = project.include[0] / "shared/typemap.h"
+            header = next((project.include[0] / "shared/types").glob("*.h"))
             before = header.read_bytes()
             cli("draft", "alpha")
             draft = (Path(directory) / "draft-scratch/drafts/alpha/alpha.c").read_text()
             self.assertIn("->field_4", draft)
-            self.assertIn("shared/prototypes.h", draft)
+            self.assertNotIn("shared/typemap.h", draft)
             self.assertNotIn("M2C_", draft)
             self.assertNotIn("typedef", draft)
             self.assertFalse([finding for finding in source_rules(draft) if finding.rule == "raw-offset"])
@@ -134,7 +134,7 @@ class SolvedLayoutCliTests(unittest.TestCase):
             callbacks = project.include[0] / "shared/audio_callbacks.h"
             self.assertEqual(callbacks.read_bytes(), (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes())
             protected = [project.build / "types" / path for path in ("database.json", "summary.json", "redraft.json")]
-            protected.extend(project.include[0] / "shared" / path for path in ("typemap.h", "prototypes.h"))
+            protected.extend(path for path in (project.include[0] / "shared").rglob("*.h"))
             previous = {path: path.read_bytes() for path in protected}
             # A parser refusal at publication must preserve the last revision.
             broken = project.include[0] / "types.h"

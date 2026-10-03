@@ -100,7 +100,7 @@ class AbiSignatureCliTests(unittest.TestCase):
             repeated = json.loads((project.build / "types/database.json").read_text())
             self.assertEqual(repeated["functions"]["beta"]["abi_declaration"], callee["abi_declaration"])
             protected = [project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json")]
-            protected.extend(project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
+            protected.extend(path for path in (project.include[0] / "shared").rglob("*.h"))
             previous = {path: path.read_bytes() for path in protected}
             broken = project.include[0] / "types.h"
             broken.write_text(broken.read_text() + "\nthis is invalid C;\n")

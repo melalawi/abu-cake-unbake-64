@@ -120,9 +120,11 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
 
 
 def generated(project: Project, path: Path) -> bool:
-    return bool(project.include) and path in (
-        project.include[0] / "shared/typemap.h",
-        project.include[0] / "shared/prototypes.h",
+    if not project.include:
+        return False
+    shared = project.include[0] / "shared"
+    return path in (shared / "typemap.h", shared / "prototypes.h") or any(
+        path.is_relative_to(shared / directory) for directory in ("types", "decls", "consumers")
     )
 
 
