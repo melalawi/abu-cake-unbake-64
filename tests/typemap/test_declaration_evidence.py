@@ -68,6 +68,17 @@ enum Mode {READY=1, WAITING=2};
         self.assertFalse(any("initialized" in unit.names or "implementation" in unit.names for unit in rows))
         self.assertEqual(evidence.units({Path("/old.h"): "typedef int M2C_UNK;"}), ())
 
+    def test_full_layout_retains_its_separate_authored_typedef(self):
+        project = SimpleNamespace(include=(Path("/live"),), declaration_evidence=())
+        for kind in ("struct", "union"):
+            alias = f"typedef {kind} Record Record;\n"
+            definition = f"{kind} Record {{int value;}};\n"
+            rows = evidence.units({Path("/old.h"): alias + definition})
+            for use in ("Record *alpha(Record *p) {return p;}", f"{kind} Record *alpha(void);"):
+                with self.subTest(kind=kind, use=use), patch.object(evidence, "catalogue", return_value=rows):
+                    selected = evidence.select(project, SimpleNamespace(texts={}), use, "alpha")
+                    self.assertEqual({unit.text for unit in selected}, {alias, definition})
+
     def test_ambiguous_declarations_hold_and_duplicate_evidence_reuses(self):
         root = Path("/include")
         project = SimpleNamespace(include=(root,), declaration_evidence=())

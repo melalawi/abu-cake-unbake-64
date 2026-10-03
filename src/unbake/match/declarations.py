@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from functools import partial
@@ -15,7 +16,7 @@ from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
-from unbake.match import imports, pool_literals, reporting, source_views, type_rewrite
+from unbake.match import imports, pool_literals, reporting, rewrite_view, source_views, type_rewrite
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
@@ -203,6 +204,7 @@ def fold_source(
     versions: tuple[str, ...],
     *,
     prove_headers: bool = True,
+    source_path: Path | None = None,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
     from unbake.typemap import declaration_evidence
@@ -222,7 +224,19 @@ def fold_source(
     if has_evidence:
         evidence_end = evidence_end or 1
     parsers = source_views.parsers(project, policy, text, versions, headers)
-    text, tag_only = _layout_names(project, policy, function, text, parsers, versions, headers)
+    text, tag_only = _layout_names(
+        project,
+        policy,
+        function,
+        text,
+        parsers,
+        versions,
+        headers,
+        source_path=source_path,
+        source_line_offset=(
+            text.count("\n", 0, text.index("/* unbake declaration evidence boundary */")) + 1 if evidence_end else 0
+        ),
+    )
     parsers = source_views.parsers(project, policy, text, versions, headers)
     records = [record for parser in parsers for record in _records(parser)]
     records = [replace(record, aliases=()) if record.name in tag_only else record for record in records]
@@ -297,6 +311,9 @@ def _layout_names(
     parsers: list[Parser],
     versions: tuple[str, ...],
     headers: Headers,
+    *,
+    source_path: Path | None = None,
+    source_line_offset: int = 0,
 ) -> tuple[str, set[str]]:
     """Rewrite active type tokens using complete layout evidence, before merging fields."""
     tag_only = headers.tag_only
@@ -318,6 +335,14 @@ def _layout_names(
         return source_views.typed_context(project, policy, headers, version)
 
     shared_aliases = {name: type_ for value in headers.texts.values() for name, type_ in alias_types(value).items()}
+    def expanded_context(parser: Parser, version: str) -> rewrite_view.View:
+        with tempfile.TemporaryDirectory(prefix="match-types-") as temporary:
+            roots = source_views.header_includes(project, headers, Path(temporary))
+            context_project = replace(project, include=roots, overlay_roots=roots)
+            return rewrite_view.prepare(
+                context_project, policy, parser.source, version, source_path or project.src / f"{function}.c"
+            )
+
     for index, parser in enumerate(parsers):
         local_aliases = {}
         for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
@@ -337,6 +362,9 @@ def _layout_names(
             tag_only,
             cache_root=policy.cache_root,
             typedef_renames=callbacks,
+            preprocess=partial(expanded_context, parser, versions[index]),
+            source_path=source_path or project.src / f"{function}.c",
+            source_line_offset=source_line_offset,
         )
         for span, target in planned.items():
             if span in replacements and replacements[span] != target:

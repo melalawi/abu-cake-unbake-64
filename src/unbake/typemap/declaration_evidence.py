@@ -172,6 +172,15 @@ def select(project: Project, headers: Headers, text: str, function: str) -> tupl
             )
         unit = options[0]
         selected[unit.text] = unit
+        # C's tag and typedef namespaces are distinct. A complete `struct T`
+        # does not supply the authored `typedef struct T T` used by consumers.
+        # Keep that compatible declaration alongside the chosen full layout.
+        if name in unit.tags and name not in unit.types:
+            for alias in by_name.get(name, []):
+                if name in alias.types and re.fullmatch(
+                    rf"typedef\s+(struct|union)\s+{re.escape(name)}\s+{re.escape(name)}\s*;\s*", alias.text
+                ):
+                    selected[alias.text] = alias
         pending.update(unit.uses - blocked - live.names.keys() - live.tags.keys() - seen)
     return tuple(selected.values())
 

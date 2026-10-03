@@ -13,6 +13,7 @@ from pycparser import c_ast, c_lexer, c_parser  # type: ignore[import-untyped]
 
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
+from unbake.match.rewrite_view import View
 from unbake.project.cache import Cache, key
 
 
@@ -129,10 +130,21 @@ def _parse(prefix: str, view: str, cache_root: Path | None = None) -> c_ast.File
     parser._scope_stack = [dict(scope)]
     parser.clex.input("\n" * prefix.count("\n") + view, "")
     parser._tokens = c_parser._TokenStream(parser.clex)
-    tree = parser._parse_translation_unit_or_empty()
-    token = parser._peek()
-    if token is not None:
-        parser._parse_error(f"before: {token.value}", parser._tok_coord(token))
+    try:
+        tree = parser._parse_translation_unit_or_empty()
+        token = parser._peek()
+        if token is not None:
+            parser._parse_error(f"before: {token.value}", parser._tok_coord(token))
+    except c_parser.ParseError as error:
+        # Some pycparser productions omit coordinates. Its buffered token stream
+        # still identifies the current token (or the last consumed token at EOF).
+        if not re.search(r":\d+:\d+:", str(error)):
+            token = parser._peek()
+            if token is None and parser._tokens._index:
+                token = parser._tokens._buffer[parser._tokens._index - 1]
+            if token is not None:
+                raise c_parser.ParseError(f"{parser._tok_coord(token)}: {str(error).lstrip(': ')}") from error
+        raise
     return c_ast.FileAST([*declarations, *tree.ext])
 
 
@@ -144,6 +156,9 @@ def edits(
     *,
     cache_root: Path | None = None,
     typedef_renames: dict[str, str] | None = None,
+    preprocess: Callable[[], View] | None = None,
+    source_path: Path | None = None,
+    source_line_offset: int = 0,
 ) -> dict[tuple[int, int], str]:
     """Use C namespaces and expression types; preserve comments, strings and value identifiers."""
     records = {record.name: record for record in (parser.layout(item) for item in parser.aggregates if item.name)}
@@ -167,17 +182,43 @@ def edits(
         flags=re.S,
     )
     view = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", blank, view, flags=re.M)
-    view = _gnu_blank(view, blank)
     prefix = (context() if callable(context) else context).rstrip() + "\n"
+    expanded = preprocess() if preprocess is not None else None
+    if expanded is not None:
+        view = expanded.text
+    view = _gnu_blank(view, blank)
     try:
         tree = _parse(prefix, view, cache_root)
     except c_parser.ParseError as error:
-        held("source types", f"cannot rewrite resolved layouts: {error}")
+        message = str(error)
+        coord = re.search(r":(\d+):(\d+):\s*", message)
+        filename = str(source_path or "source.c")
+        line, column = 1, 1
+        if coord:
+            index = int(coord[1]) - prefix.count("\n") - 1
+            column = int(coord[2])
+            if expanded is not None and 0 <= index < len(expanded.locations):
+                location = expanded.locations[index]
+                filename, line, column = location.file, location.line, location.column
+                if filename == str(source_path):
+                    line = max(1, line - source_line_offset)
+            elif index >= 0:
+                line = max(1, index + 1 - source_line_offset)
+            message = message[coord.end() :]
+        else:
+            message = message.lstrip(": ")
+        held("source types", f"cannot rewrite resolved layouts: {filename}:{line}:{column}: {message}")
     first_line = prefix.count("\n") + 1
     starts = [0]
     starts.extend(match.end() for match in re.finditer("\n", parser.source))
-    tokens = {token.start(): token for token in parser.tokens}
+    # Macro replacement lists have editable spellings too, although the layout
+    # parser deliberately excludes directives from its declaration token stream.
+    from unbake.layout.structs_parser import _TOKEN
+
+    tokens = {token.start(): token for token in _TOKEN.finditer(parser.source) if not token[0].startswith(("/*", "//"))}
     replacements: dict[tuple[int, int], str] = {}
+    expanded_edits: dict[int, str] = {}
+    spellings = expanded.text.splitlines() if expanded is not None else []
     aliases: dict[str, Any] = {}
     tags: dict[tuple[str, str], Any] = {}
     scopes: list[dict[str, Any]] = [{}]
@@ -187,20 +228,38 @@ def edits(
         if node.coord is None or node.coord.line < first_line:
             return None
         line = node.coord.line - first_line
+        if expanded is not None:
+            return expanded.origins[line] if line < len(expanded.origins) else None
         return starts[line] + node.coord.column - 1 if line < len(starts) else None
 
     def replace(node: Any, original: str, target: str, *, tag: bool = False) -> None:
+        if original == target:
+            return
         at = position(node)
-        if at is None or original == target:
+        index = node.coord.line - first_line if node.coord is not None else -1
+        if expanded is not None and 0 <= index < len(expanded.origins):
+            if tag and spellings[index] != original:
+                index += 1
+            elif isinstance(node, (c_ast.Decl, c_ast.Typedef)) and spellings[index] in ("*", "("):
+                index = next((i for i in range(index + 1, len(spellings)) if spellings[i] == original), index)
+            at = expanded.origins[index] if index < len(expanded.origins) else None
+        if at is None:
+            if node.coord is not None and node.coord.line >= first_line:
+                held(original, "resolved type token has no editable source provenance")
             return
         token = tokens.get(at)
-        if tag and (token is None or token[0] != original):
-            token = next((value for start, value in tokens.items() if start > at), None)
-        if isinstance(node, (c_ast.Decl, c_ast.Typedef)) and token is not None and token[0] in ("*", "("):
-            token = next((value for start, value in tokens.items() if start > at and value[0] == original), None)
+        if expanded is None:
+            if tag and (token is None or token[0] != original):
+                token = next((value for start, value in tokens.items() if start > at), None)
+            if isinstance(node, (c_ast.Decl, c_ast.Typedef)) and token is not None and token[0] in ("*", "("):
+                token = next((value for start, value in tokens.items() if start > at and value[0] == original), None)
         if token is None or token[0] != original:
             held(original, "resolved type token has no editable source provenance")
-        replacements[(token.start(), token.end())] = target
+        span = (token.start(), token.end())
+        if span in replacements and replacements[span] != target:
+            held(original, "macro spelling requires incompatible resolved type edits")
+        replacements[span] = target
+        expanded_edits[index] = target
 
     def resolve(node: Any) -> Any:
         seen = set()
@@ -367,4 +426,13 @@ def edits(
     tags.update(initial_tags)
     scopes[0].update(initial_scope)
     Rewrite().visit(c_ast.FileAST(tree.ext[len(shared) :]))
+    if expanded is not None:
+        for index, at in enumerate(expanded.origins):
+            token = tokens.get(at) if at is not None else None
+            if (
+                token is not None
+                and (target := replacements.get((token.start(), token.end()))) is not None
+                and expanded_edits.get(index, token[0]) != target
+            ):
+                held(token[0], "macro spelling also supplies an unchanged or differently typed token")
     return replacements

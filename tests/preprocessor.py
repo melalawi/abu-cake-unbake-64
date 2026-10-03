@@ -4,18 +4,32 @@ import re
 from pathlib import Path
 
 
-def expand(source, roots=(), macros=None, *, markers=False, origin="<stdin>", directives_only=False):
+def expand(
+    source, roots=(), macros=None, *, markers=False, origin="<stdin>", directives_only=False, preserve_columns=False
+):
     macros = dict(macros or {})
 
     def read(text, home, origin="<stdin>"):
         text = text.replace("\\\n", "")
-        text = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
+        text = re.sub(
+            r"/\*.*?\*/|//[^\n]*",
+            (lambda match: re.sub(r"[^\n]", " ", match[0])) if preserve_columns else " ",
+            text,
+            flags=re.S,
+        )
         result, active = [], [True]
-        for line_number, line in enumerate(text.splitlines(), 1):
+        delta = 0
+        for physical_line, line in enumerate(text.splitlines(), 1):
+            line_number = physical_line + delta
             match = re.match(r"\s*#\s*(\w+)\s*(.*)", line)
             if match:
                 kind, value = match.groups()
-                if kind in ("ifdef", "ifndef", "if"):
+                if kind == "line":
+                    location = re.fullmatch(r'(\d+)\s+"([^"]+)"', value)
+                    if location:
+                        delta = int(location[1]) - physical_line - 1
+                        origin = location[2]
+                elif kind in ("ifdef", "ifndef", "if"):
                     condition = (
                         value in macros
                         if kind != "if"
@@ -82,8 +96,23 @@ def output(command, **kwargs):
         source,
         roots,
         macros,
-        markers="-P" not in command,
+        markers="-P" not in command or "-fdebug-cpp" in command,
         origin=command[-1] if "input" not in kwargs else "<stdin>",
         directives_only="-fdirectives-only" in command,
+        preserve_columns="-fdebug-cpp" in command,
     )
+    if "-fdebug-cpp" in command:
+        from unbake.match.rewrite_view import _TOKEN
+
+        tokens = []
+        origin, number = "<stdin>", 1
+        for line in result.splitlines():
+            marker = re.fullmatch(r'# (\d+) "([^"]+)"', line)
+            if marker:
+                number, origin = int(marker[1]), marker[2]
+                continue
+            for token in re.finditer(_TOKEN, line):
+                tokens.append(f"{{P:{origin};F:<NULL>;L:{number};C:{token.start() + 1};S:0;M:0x1;E:0}}{token[0]}\n")
+            number += 1
+        result = "".join(tokens)
     return subprocess.CompletedProcess(command, 0, result, "")

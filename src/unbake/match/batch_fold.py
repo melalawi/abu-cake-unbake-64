@@ -193,6 +193,7 @@ def _folded(staged: Project, policy: Policy, headers: Headers, candidate: Any) -
         candidate.content.decode("utf-8"),
         candidate.versions,
         prove_headers=False,
+        source_path=candidate.source,
     )
     blockers = [f for f in checks.run(folded.source) if f.fakematch is None]
     if blockers:
