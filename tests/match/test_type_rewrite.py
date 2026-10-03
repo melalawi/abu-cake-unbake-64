@@ -55,6 +55,27 @@ class TypeRewriteTests(unittest.TestCase):
         self.assertIn("p->values[1].value + ((Canon *)raw)->value + get()->value", result)
         self.assertIn("Canon values[2]", result)
 
+    def test_enclosing_layout_does_not_overwrite_resolved_member_type(self):
+        context = "typedef struct Canon { int value; float start; float delta; } Canon;"
+        source = (
+            "typedef struct Old { int width; float base; float scale; } Old;\n"
+            "typedef struct Local { int unused; Old range; } Local;\n"
+            "typedef struct Stream { int bit; Old range; } Stream;\n"
+            "static inline float decode(Old range) { return range.width + range.scale + range.base; }\n"
+            "float alpha(Stream *p) { Local local; local.range = p->range; return decode(local.range); }\n"
+        )
+        parser = Parser(source)
+        records = {record.name: record for record in parser.parse()}
+        canonical = layouts(context)[0]
+        resolution = {
+            "Old": ("Canon", canonical),
+            "Local": ("Local", records["Local"]),
+            "Stream": ("Local", records["Local"]),
+        }
+        for (start, end), target in sorted(type_rewrite.edits(parser, context, resolution).items(), reverse=True):
+            source = source[:start] + target + source[end:]
+        self.assertIn("range.value + range.delta + range.start", source)
+
     def test_string_identifiers_and_values_are_not_type_tokens(self):
         context = "typedef struct Canon { int value; } Canon;"
         source = (

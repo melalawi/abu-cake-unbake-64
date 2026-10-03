@@ -101,8 +101,8 @@ def relative(project: Project, path: Path) -> str:
     if path.is_absolute():
         with contextlib.suppress(ValueError):
             path = path.relative_to(project.root)
-    if path.is_absolute():
-        raise Held("config", "build path must be inside the project")
+    if path.is_absolute() and not any(path.is_relative_to(root) for root in project.overlay_roots):
+        raise Held("config", "build path must be inside the project or an explicit overlay root")
     value = str(path)
     if not value or any(c.isspace() or c in "#$:%\\" for c in value):
         raise Held("config", f"build path {value!r} cannot be represented in Make")

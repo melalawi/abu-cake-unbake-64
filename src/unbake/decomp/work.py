@@ -131,7 +131,7 @@ def overlay_project(project: Project, directory: Path) -> Project:
         )
         for ident, compiler in project.compilers.items()
     }
-    return replace(project, include=roots, compilers=compilers)
+    return replace(project, include=roots, compilers=compilers, overlay_roots=roots)
 
 
 def save_overlay(project: Project, directory: Path) -> None:
@@ -173,8 +173,62 @@ def overlay_data(project: Project, source: Path) -> dict[str, Any]:
 
 
 def compilation_project(project: Project, source: Path) -> Project:
+    view = source.parent / "trial-view.json"
+    if view.is_file():
+        from unbake.match.staging import project_at
+
+        return project_at(project, Path(json.loads(view.read_bytes())["root"]))
     overlay_data(project, source)
     return overlay_project(project, source.parent) if (source.parent / "overlay.json").is_file() else project
+
+
+def overlay_source(project: Project, source: Path, directory: Path, root: Path) -> Path:
+    """Retain an explicit include proposal beside unchanged authored bytes for submit."""
+    root = root.resolve()
+    if not root.is_dir() or any(path.is_symlink() for path in root.rglob("*")):
+        raise Held("try", "trial.overlay_root: required include directory without symlinks")
+    staged = overlay(project, directory)
+    shutil.rmtree(staged.include[0])
+    shutil.copytree(root, staged.include[0])
+    save_overlay(project, directory)
+    destination = directory / source.name
+    shutil.copyfile(source, destination)
+    return destination
+
+
+def trial_view(project: Project, policy: Policy, source: Path, directory: Path) -> Path:
+    """Use submit's single-source fold in an entirely private compilation tree."""
+    from unbake.layout.header_context import Headers
+    from unbake.match import batch_fold, staging
+    from unbake.match.batch import Candidate
+
+    tree = directory / "tree"
+    tree.mkdir(parents=True)
+    shutil.copyfile(project.root / "config.toml", tree / "config.toml")
+    for root in (*project.include, project.root / "versions"):
+        shutil.copytree(root, tree / root.relative_to(project.root))
+    for root in (project.tools, project.roms):
+        (tree / root.relative_to(project.root)).symlink_to(root, target_is_directory=True)
+    staged = staging.project_at(project, tree)
+    staged.src.mkdir(parents=True, exist_ok=True)
+    staged.work.mkdir(parents=True, exist_ok=True)
+    candidate = Candidate(
+        source.stem,
+        source,
+        source.read_bytes(),
+        digest(source.read_bytes()),
+        split.holding_versions(project, source.stem),
+        True,
+    )
+    headers = Headers.read(staged)
+    folded = batch_fold._fold_one(staged, policy, headers, candidate, batch_fold.Changes())
+    for path, text in headers.texts.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    result = staged.src / source.name
+    result.write_text(folded.source)
+    (result.parent / "trial-view.json").write_bytes(encoded({"root": str(tree)}))
+    return result
 
 
 def compiler_identity(project: Project, policy: Policy, ident: str) -> str:
@@ -358,9 +412,7 @@ def identity(
             "needs": {"headers": overlay_inputs["edits"]},
             "entries": entry_inventory,
             "evidence": {
-                "overlay_directory": source.parent.relative_to(project.root).as_posix()
-                if (source.parent / "overlay.json").is_file()
-                else None,
+                "overlay_directory": str(source.parent) if (source.parent / "overlay.json").is_file() else None,
             },
         },
     )

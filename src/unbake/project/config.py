@@ -69,6 +69,7 @@ class Project:
     build: Path
     work: Path
     drafts: Path
+    overlay_roots: tuple[Path, ...] = ()
 
     def compiler_reference(self, unit: str | Path) -> str:
         """An exception unit names its compiler; every other unit uses the default."""

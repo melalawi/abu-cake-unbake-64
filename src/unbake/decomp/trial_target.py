@@ -1,5 +1,6 @@
 """Prepare one real relocatable target through the project's Makefile."""
 
+import fcntl
 import re
 import shlex
 import subprocess
@@ -33,7 +34,14 @@ def owning_versions(project: Project, function: str, versions: list[str] | None)
 
 @contextmanager
 def inputs(
-    project: Project, function: str, versions: list[str], *, source: Path | None = None, policy: Policy | None = None
+    project: Project,
+    function: str,
+    versions: list[str],
+    *,
+    source: Path | None = None,
+    policy: Policy | None = None,
+    scratch: Path | None = None,
+    read_only: bool = False,
 ) -> Iterator[dict[str, tuple[Path, Path]]]:
     """Pin published targets; serialize only missing inventory/object builds."""
     if not versions or len(set(versions)) != len(versions):
@@ -43,30 +51,48 @@ def inputs(
     with ExitStack() as holds:
         pinned = {}
         for version in versions:
-            generation = holds.enter_context(_target_generation(project, version))
-            target = target_object(project, function, version, generation=generation)
+            generation = holds.enter_context(_target_generation(project, version, read_only=read_only))
+            target = target_object(project, function, version, generation=generation, read_only=read_only)
             if source is not None and policy is not None:
                 from unbake.decomp import trial_entries
 
-                target = trial_entries.target(project, policy, source, version, generation, target)
+                target = trial_entries.target(
+                    project, policy, source, version, generation, target, scratch=scratch, read_only=read_only
+                )
             pinned[version] = (generation, target)
         yield pinned
 
 
 @contextmanager
-def _target_generation(project: Project, version: str) -> Iterator[Path]:
+def _target_generation(project: Project, version: str, *, read_only: bool = False) -> Iterator[Path]:
     link = project.build_link(version)
     inventory = project.name + ".ld"
 
     def ready() -> bool:
         return link.is_symlink() and (link / inventory).is_file()
 
+    if read_only:
+        if not ready():
+            raise Held("try", f"trial.target_missing: VERSION {version}: build on a writable copy")
+        generation = build.current_generation(project, version)
+        try:
+            stream = (generation / ".inuse").open("rb")
+        except OSError as error:
+            raise Held("try", f"trial.target_pin: {generation}: {error}") from error
+        with stream:
+            fcntl.flock(stream, fcntl.LOCK_SH)
+            if link.resolve() != generation:
+                raise Held("try", "trial.inputs_changed: generation changed while pinning; try again")
+            yield generation
+        return
     while True:
         if ready():
             with build.pin_current(project, version) as generation:
                 if (generation / inventory).is_file():
                     yield generation
                     return
+        if read_only:
+            raise Held("try", f"trial.target_missing: VERSION {version}: run setup/build on a writable copy")
         with build.lock(project):
             if not ready():
                 make_target(project, version, Path("build") / version / inventory)
@@ -94,11 +120,13 @@ def make_target(
         )
 
 
-def target_object(project: Project, function: str, version: str, *, generation: Path | None = None) -> Path:
+def target_object(
+    project: Project, function: str, version: str, *, generation: Path | None = None, read_only: bool = False
+) -> Path:
     """Read a pinned target, taking the writer lock only to build a missing object."""
     if generation is None:
-        with _target_generation(project, version) as pinned:
-            return target_object(project, function, version, generation=pinned)
+        with _target_generation(project, version, read_only=read_only) as pinned:
+            return target_object(project, function, version, generation=pinned, read_only=read_only)
     configured = project.version(version)
     _, _, segments = split.layout(configured.split)
     _, symbols = split.symbols(configured.symbols)
@@ -129,6 +157,8 @@ def target_object(project: Project, function: str, version: str, *, generation: 
             "try", f"VERSION {version}: {relative} for {function} is absent from {generation / inventory_target.name}"
         )
     target = generation / relative
+    if not target.is_file() and read_only:
+        raise Held("try", f"trial.target_missing: {target}: build on a writable copy")
     if not target.is_file():
         with build.lock(project):
             if not target.is_file():

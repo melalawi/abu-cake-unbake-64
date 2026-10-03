@@ -15,7 +15,7 @@ from unbake.typemap import storage
 _decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
 
-def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
+def load(project: Project, *, required: bool = True, allow_stale: bool = False) -> dict[str, Any] | None:
     path = project.build / "types/database.json"
     if not path.is_file() and not required:
         return None
@@ -31,6 +31,8 @@ def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
         value = storage.read(path, "types.database")
         _decoded[path] = (stamp, value)
     storage.validate_identity(project, value, "types.database")
+    if allow_stale:
+        return value
     if value.get("inputs_sha256") != storage.inputs(project, headers=True):
         raise Held("draft", "types.inputs_stale: run unbake map then unbake solve")
     map_path = project.build / "map/facts.json"
@@ -60,8 +62,8 @@ def load(project: Project, *, required: bool = True) -> dict[str, Any] | None:
     return value
 
 
-def context(project: Project, *, function: str | None = None) -> str:
-    value = load(project)
+def context(project: Project, *, function: str | None = None, allow_stale: bool = False) -> str:
+    value = load(project, allow_stale=allow_stale)
     assert value is not None
     lines = ['#include "shared/typemap.h"', '#include "shared/prototypes.h"']
     lines.extend("/* unknown: " + row.replace("*/", "* /") + " */" for row in value["unknown"])

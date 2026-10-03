@@ -187,7 +187,9 @@ def edits(
             nested = resolve(declaration.type)
             while isinstance(nested, c_ast.ArrayDecl):
                 nested = resolve(nested.type)
-            if old.fields:
+            if old.fields and id(nested) not in members:
+                # A named member type already has its own resolved field map.
+                # Its enclosing layout may still carry the original member names.
                 field_names(nested, old.fields, new.fields)
 
     class Rewrite(c_ast.NodeVisitor):  # type: ignore[misc]

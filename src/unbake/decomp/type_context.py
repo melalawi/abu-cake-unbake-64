@@ -28,6 +28,20 @@ def required(project: Project, function: str | None = None) -> tuple[str, str]:
     return digest(path.read_bytes()), str(context)
 
 
+def snapshot(project: Project, function: str) -> tuple[str, str]:
+    """Read the last solved database without refreshing or publishing headers."""
+    api = provider()
+    try:
+        return required(project, function)
+    except Held as error:
+        if not error.reason.startswith("types.inputs_stale:"):
+            raise
+        api.load(project, allow_stale=True)
+        print("type database snapshot: stale; " + error.reason)
+        path = project.build / "types/database.json"
+        return digest(path.read_bytes()), str(api.context(project, function=function, allow_stale=True))
+
+
 def clear_redraft(project: Project, function: str, database: str) -> None:
     provider().clear_redraft(project, function, database)
 

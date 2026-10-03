@@ -15,7 +15,17 @@ def functions(obj: Object) -> list[Symbol]:
     return [s for table in obj.symbols.values() for s in table if s["section"] and s["info"] & 15 == 2]
 
 
-def target(project: Project, policy: Policy, source: Path, version: str, generation: Path, first: Path) -> Path:
+def target(
+    project: Project,
+    policy: Policy,
+    source: Path,
+    version: str,
+    generation: Path,
+    first: Path,
+    *,
+    scratch: Path | None = None,
+    read_only: bool = False,
+) -> Path:
     """Combine only contiguous, native owners defined by this C item."""
     from unbake.decomp.trial_compile import run_tool
     from unbake.decomp.trial_target import target_object
@@ -28,12 +38,12 @@ def target(project: Project, policy: Policy, source: Path, version: str, generat
         relative = Path("obj/asm") / (row.path + ".o")
         path = generation / relative
         if not path.is_file():
-            path = target_object(project, row.name, version, generation=generation)
+            path = target_object(project, row.name, version, generation=generation, read_only=read_only)
             if not path.is_relative_to(generation):
                 raise Held("try", "trial.entries_target: secondary entry generation changed")
         objects.append(path)
     identity = hashlib.sha256(b"".join(path.read_bytes() for path in objects)).hexdigest()
-    directory = project.work / "entry-targets" / identity
+    directory = (scratch if scratch is not None else project.work) / "entry-targets" / identity
     directory.mkdir(parents=True, exist_ok=True)
     output = directory / "target.o"
     if not output.exists():

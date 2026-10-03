@@ -6,7 +6,7 @@ import json
 import re
 import shlex
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import cast
 
@@ -84,18 +84,24 @@ def retain_draft(
     versions: list[str] | None,
     *,
     flags: bool = False,
+    overlay_root: Path | None = None,
 ) -> Trial:
     """Compare and retain while pinning generations, without holding the writer lock."""
-    directory = scratch_directory(project, scratch.expanduser(), "decomp")
+    directory = scratch_directory(project, scratch, "decomp")
+    policy = replace(policy, state_root=directory / "state", cache_root=directory / "cache")
     source = source.resolve()
-    _source_content(source)
+    original = source
+    authored, _ = _source_content(source)
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=directory))
+    if overlay_root is not None:
+        source = draft_work.overlay_source(project, source, work / "authored", overlay_root)
+    prepared = draft_work.trial_view(project, policy, source, work / "prepared")
     selected = owning_versions(project, source.stem, versions)
     has_groups = any(len(entry_layout.owners(project, policy, source, v)) > 1 for v in selected)
     inputs = (
-        trial_inputs(project, source.stem, selected, source=source, policy=policy)
+        trial_inputs(project, source.stem, selected, source=source, policy=policy, scratch=work, read_only=True)
         if has_groups
-        else trial_inputs(project, source.stem, selected)
+        else trial_inputs(project, source.stem, selected, read_only=True)
     )
     with inputs as pinned:
         from unbake.decomp.trial_compilers import resolve
@@ -104,7 +110,7 @@ def retain_draft(
         configured: Trial | Held
         try:
             configured = try_draft(
-                project, policy, source, work, versions=versions, flags=flags, pinned=pinned, function=source.stem
+                project, policy, prepared, work, versions=versions, flags=flags, pinned=pinned, function=source.stem
             )
         except Held as error:
             if error.phase != "compile" or flags:
@@ -113,7 +119,7 @@ def retain_draft(
         measured, compiler_evidence, result = (
             (project, {}, configured)
             if flags and isinstance(configured, Trial)
-            else resolve(project, policy, source, source, work, pinned, configured)
+            else resolve(project, policy, source, prepared, work, pinned, configured)
         )
         after = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         if after != before:
@@ -123,7 +129,13 @@ def retain_draft(
             after = draft_work.identity(project, source, selected, pinned=pinned, policy=policy)
         after["compiler_evidence"] = compiler_evidence
         result.work_identity = dict(after)
-        draft_work.persist(project, after)
+        if original.read_bytes() != authored or source.read_bytes() != authored:
+            raise Held("try", "trial.inputs_changed: authored source changed during preparation")
+        result.source_sha256 = drafts.source_identity(authored)
+        result.next_command = (
+            result.next_command.replace(str(prepared), str(source)) + " --scratch " + shlex.quote(str(directory))
+        )
+        (work / "manifest.json").write_bytes(draft_work.encoded(after))
         store_trial(project, policy, source, result)
     from unbake.cli.common import suggest
 
@@ -218,19 +230,24 @@ def try_draft(
             target_view, candidate_view, entry_failures = trial_entries.comparison_views(
                 project, policy, source, name, target, candidate, variant_work
             )
-            document = (
-                diff(policy, name, function, target, candidate, variant_work / "objdiff.json", generation=generation)
-                if target_view == target
-                else diff(
-                    policy,
-                    name,
-                    function,
-                    target_view,
-                    candidate_view,
-                    variant_work / "objdiff.json",
-                    generation=generation,
-                    placement_target=target,
-                )
+            from unbake.decomp.trial_data import infer
+
+            inferred = {}
+            try:
+                inferred = infer(project, policy, function, name, candidate)
+            except Held as error:
+                if index == 0:
+                    trial.preconditions.append("trial.data_symbols: " + error.reason)
+            document = diff(
+                policy,
+                name,
+                function,
+                target_view,
+                candidate_view,
+                variant_work / "objdiff.json",
+                generation=generation,
+                placement_target=target,
+                inferred_addresses=inferred,
             )
             comparison = compare_object(name, document, function)
             comparison.typed["changed"] += len(entry_failures)

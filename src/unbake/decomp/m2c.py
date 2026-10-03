@@ -205,7 +205,7 @@ def _draft(
     if type_context and use_type_db:
         from unbake.typemap import load
 
-        database = load(original_project)
+        database = load(original_project, allow_stale=True)
         assert database is not None
     signatures = draft_abi.declarations(
         project, policy, v, body, context.read_text(), function=function, database=database

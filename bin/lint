@@ -2,8 +2,14 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PYTHONPATH=src
+targets=("$@")
+if [[ "$#" -eq 0 ]]; then targets=(src tests); fi
 status=0
-python3 -m ruff check src tests || status=1
-python3 -m ruff format --check src tests || status=1
-python3 -m mypy || status=1
+python3 -m ruff check "${targets[@]}" || status=1
+python3 -m ruff format --check "${targets[@]}" || status=1
+typing=()
+for target in "${targets[@]}"; do
+    if [[ "$target" == src || "$target" == src/* ]]; then typing+=("$target"); fi
+done
+if [[ "${#typing[@]}" -gt 0 ]]; then python3 -m mypy "${typing[@]}" || status=1; fi
 exit "$status"

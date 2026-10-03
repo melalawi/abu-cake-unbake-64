@@ -202,6 +202,7 @@ def diff(
     *,
     generation: Path | None = None,
     placement_target: Path | None = None,
+    inferred_addresses: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """Retain instruction rows from a real relocatable-object comparison."""
     tool = objdiff_cli(policy, "try")
@@ -248,6 +249,7 @@ def diff(
     document["symbol_addresses"] = (
         {} if generation is None else relocation_addresses(generation.resolve(), version, names, refusals=refusals)
     )
+    cast(dict[str, int], document["symbol_addresses"]).update(inferred_addresses or {})
     if generation is not None:
         from unbake.decomp.relocations import (
             jump_table_differences,

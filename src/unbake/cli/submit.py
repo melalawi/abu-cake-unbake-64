@@ -1,6 +1,7 @@
 """Validate, prove and publish tried sources transactionally."""
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
 from unbake.cli.common import Subparsers, receipt, suggest
@@ -13,6 +14,7 @@ from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 def register(phases: Subparsers) -> None:
     parser = phases.add_parser("submit", phase="submit", help="Prove and publish tried sources and its headers.")
     parser.add_argument("source", type=Path, metavar="FILE", nargs="?")
+    parser.add_argument("--scratch", type=Path, help="Read receipts retained by try in this private directory.")
     parser.add_argument("--batch", type=Path, nargs="+", metavar="FILE")
 
 
@@ -26,6 +28,8 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     local = project.tools / "clone-policy.toml"
     if local.is_file():
         policy = load_policy(local)
+    if args.scratch is not None:
+        policy = replace(policy, state_root=args.scratch.resolve() / "state")
     emitted: set[str] = set()
 
     def emit(line: str) -> None:
