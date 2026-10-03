@@ -255,11 +255,22 @@ def place(args: argparse.Namespace) -> None:
         if len(mapped) > 1:
             raise ValueError("layout.pool_span: ambiguous pool mapping")
         row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
+    inventory = resident_slices(pools, mappings) if pools else None
     faults: list[str] = []
     for name in objects:
         try:
             script = place_object(
-                args, name, script, intervals, image, mappings, sections, partial, pools=pools, providers=providers
+                args,
+                name,
+                script,
+                intervals,
+                image,
+                mappings,
+                sections,
+                partial,
+                pools=pools,
+                providers=providers,
+                inventory=inventory,
             )
         except (OSError, ValueError, KeyError, struct.error) as error:
             # Every failing object is named so one link attributes all culprits.
@@ -316,20 +327,28 @@ def place_object(
     *,
     pools: list[dict[str, Any]] | None = None,
     providers: list[Provider] | None = None,
+    inventory: list[dict[str, Any]] | None = None,
 ) -> str:
     unit = Path(name).stem
     if unit not in intervals:
         raise ValueError(f"unit-ranges.{unit} missing")
     obj = Object(args.build / name)
+    if not any(
+        obj.sections[index][5] for section in (".rdata", ".rodata") if (index := obj.section(section)) is not None
+    ) and not any(re.fullmatch(r"\.unbake_pool_[0-9A-F]{8}", section) for section in obj.names):
+        return script
     slices = [row for row in intervals[unit].get("rodata_slices", []) if row["path"].startswith("rodata/")]
     if (slices or pools) and not partial:
-        slices = pools or slices
-        for row in slices:
-            mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
-            if len(mapped) > 1:
-                raise ValueError("layout.pool_span: ambiguous private mapping")
-            row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
-        slices = resident_slices(slices, mappings)
+        if inventory is not None:
+            slices = inventory
+        else:
+            slices = pools or slices
+            for row in slices:
+                mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
+                if len(mapped) > 1:
+                    raise ValueError("layout.pool_span: ambiguous private mapping")
+                row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
+            slices = resident_slices(slices, mappings)
         placed = transfer_private(obj, intervals[unit], image, slices)
         if providers is None and not mappings:
             return transfer_selectors(script, name, slices, placed)

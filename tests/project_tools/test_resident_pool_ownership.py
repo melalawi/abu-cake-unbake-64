@@ -4,6 +4,7 @@ import argparse
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.decomp.support import assemble
 from unbake.project_tools.elf import Object
@@ -70,6 +71,38 @@ class ResidentPoolTests(unittest.TestCase):
                 material = b"".join(relocated(obj, n, 0x80002000) for n in obj.names if n.startswith(".unbake_pool_"))
                 self.assertEqual(material, image[0x40:0x48])
                 self.assertEqual(obj.content(obj.section(".rdata")), b"")
+
+    def test_prepared_inventory_skips_per_object_partition(self):
+        for empty in (True, False):
+            with self.subTest(empty=empty), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = root / "obj/src"
+                target.mkdir(parents=True)
+                text = ".text\njr $ra\nnop\n"
+                if not empty:
+                    text += (
+                        ".section .rdata\n.globl unbake_rodata_80003000_4\nunbake_rodata_80003000_4: .word 0x12345678\n"
+                    )
+                assemble(target, "alpha", text)
+                row = dict(address=0x80003000, start=0x40, end=0x44, path="rodata/shared/80003000")
+                image = bytes(0x40) + bytes.fromhex("12345678")
+                providers = []
+                with patch("unbake.project_tools.layout.resident_slices") as partition:
+                    place_object(
+                        argparse.Namespace(build=root),
+                        "obj/src/alpha.o",
+                        "obj/src/alpha.o(.text)",
+                        {"alpha": dict(start=0, end=8, address=0x80002000)},
+                        image,
+                        [],
+                        [],
+                        False,
+                        pools=[row],
+                        providers=providers,
+                        inventory=[row],
+                    )
+                    partition.assert_not_called()
+                self.assertEqual(len(providers), 0 if empty else 1)
 
     def test_resident_gap_partition_table(self):
         mapping = dict(address=0x80003000, start=0x40, end=0x50, table_entry_bias=7)

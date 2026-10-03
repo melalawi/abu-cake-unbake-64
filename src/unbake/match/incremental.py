@@ -174,6 +174,12 @@ def prepare(
         pool_path = generation / "pool-providers.json"
         pools = json.loads(pool_path.read_text()) if pool_path.is_file() else []
         pools = [row for row in pools if row["path"].startswith("rodata/")]
+        for row in pools:
+            mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
+            if len(mapped) > 1:
+                held("layout.pool_span: ambiguous private mapping")
+            row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
+        inventory = layout.resident_slices(pools, mappings) if pools else None
         for source in sources:
             name = source.stem
             if name in failures:
@@ -230,6 +236,7 @@ def prepare(
                     False,
                     pools=pools,
                     providers=[],
+                    inventory=inventory,
                 )
             except (OSError, ValueError, KeyError) as error:
                 faults.setdefault(name, []).append(f"{version}: object obj/src/{name}.o: {error}")
