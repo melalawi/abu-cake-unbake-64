@@ -131,6 +131,32 @@ class MetadataTests(unittest.TestCase):
                 executor.assert_called_with(max_workers=3)
                 self.assertEqual(pool.__exit__.call_count, 2)
 
+    def test_prefetch_batch_boundaries(self):
+        for count in (0, 1, 64, 65, 129):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                paths = [root / f"{number}.o" for number in range(count)]
+                read = Mock(return_value=b"object")
+                pool = Mock()
+                pool.__enter__ = Mock(return_value=pool)
+                pool.__exit__ = Mock(return_value=False)
+                batches = []
+
+                def execute(function, items, received=batches):
+                    queued = list(items)
+                    received.extend(queued)
+                    return map(function, queued)
+
+                pool.map.side_effect = execute
+                with Objects(root / "metadata", read=read) as load:
+                    load.prefetch([*paths, *paths], executor=Mock(return_value=pool))
+                    self.assertEqual(len(load.pending), count)
+                self.assertEqual(read.call_count, count)
+                self.assertEqual(
+                    [len(batch) for batch in batches], [min(64, count - start) for start in range(0, count, 64)]
+                )
+                pool.__exit__.assert_called_once()
+
     def test_failure_does_not_publish_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

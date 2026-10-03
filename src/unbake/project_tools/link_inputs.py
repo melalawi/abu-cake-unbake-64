@@ -72,7 +72,7 @@ class Objects:
         self,
         paths: Iterable[Path],
         *,
-        workers: int = 8,
+        workers: int = 32,
         executor: Callable[..., Executor] = ThreadPoolExecutor,
     ) -> None:
         """Overlap small-file reads, keeping parser and database work on one thread."""
@@ -83,8 +83,15 @@ class Objects:
             except OSError as error:
                 return path, error
 
+        queued = [path for path in dict.fromkeys(paths) if path not in self.pending]
+        batches = [queued[start : start + 64] for start in range(0, len(queued), 64)]
+
+        def read_batch(batch: list[Path]) -> list[tuple[Path, bytes | OSError]]:
+            return [read(path) for path in batch]
+
         with executor(max_workers=workers) as pool:
-            self.pending.update(pool.map(read, (path for path in dict.fromkeys(paths) if path not in self.pending)))
+            for batch in pool.map(read_batch, batches):
+                self.pending.update(batch)
 
     def __call__(self, path: str | Path) -> Object:
         path = Path(path)
