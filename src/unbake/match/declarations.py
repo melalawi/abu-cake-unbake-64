@@ -225,6 +225,15 @@ def fold_source(
         evidence_context = Headers({**headers.texts, **{edit.path: edit.after for edit in edits}}, root=headers.root)
         final, evidence_edits = declaration_evidence.promote(project, evidence_context, final, evidence_end)
         edits.extend(evidence_edits)
+    from unbake.decomp import gbi_recover
+
+    final = gbi_recover.proven(
+        project,
+        policy,
+        project.src / f"{function}.c",
+        final,
+        {**headers.texts, **{edit.path: edit.after for edit in edits}},
+    )
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
         group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)

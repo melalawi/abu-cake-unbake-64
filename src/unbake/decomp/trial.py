@@ -92,7 +92,10 @@ def retain_draft(
     policy = replace(policy, state_root=directory / "state", cache_root=directory / "cache")
     source = source.resolve()
     original = source
-    authored, _ = _source_content(source)
+    authored, text = _source_content(source)
+    from unbake.decomp import gbi_recover
+
+    gbi_recover.preflight(project, policy, source, text)
     work = Path(tempfile.mkdtemp(prefix=f"{source.stem}-", dir=directory))
     if overlay_root is not None:
         source = draft_work.overlay_source(project, source, work / "authored", overlay_root)

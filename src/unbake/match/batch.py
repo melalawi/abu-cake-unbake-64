@@ -45,7 +45,7 @@ from unbake.report import progress
 from unbake.typemap import storage
 
 # Rules the fold resolves: they are judged on the folded text, not on admission.
-FOLDED_RULES = frozenset({"invented-struct", "local-type-copy", "raw-offset"})
+FOLDED_RULES = frozenset({"invented-struct", "local-type-copy", "raw-offset", "raw-gfx", "local-gbi-macro"})
 
 
 @dataclass
@@ -310,6 +310,9 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
     blockers = [f for f in checks.run(text) if f.fakematch is None and f.rule not in FOLDED_RULES]
     if blockers:
         held("submit.source_rules: " + "; ".join(checks.message(finding) for finding in blockers))
+    from unbake.decomp import gbi_recover
+
+    gbi_recover.preflight(project, policy, source, text)
     sha = drafts.source_identity(content)
     trials = (
         inputs.trials.get(function, []) if inputs.trials is not None else drafts.Store(policy, project).rows(function)
