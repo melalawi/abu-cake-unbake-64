@@ -162,6 +162,7 @@ class CompileInputTests(unittest.TestCase):
                 )
                 expected_digest = key(
                     content,
+                    "middle.i",
                     json.dumps([selected, generation, assembler_flags], sort_keys=True),
                     "unchanged-tools",
                     *assembler_inputs,

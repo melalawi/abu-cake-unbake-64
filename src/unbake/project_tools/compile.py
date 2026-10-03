@@ -44,8 +44,11 @@ Recipe = TypedDict(
 )
 
 
-def run(command: list[str]) -> bytes:
-    result = subprocess.run(command, capture_output=True)
+def run(command: list[str], *, cwd: Path | None = None) -> bytes:
+    if cwd is None:
+        result = subprocess.run(command, capture_output=True)
+    else:
+        result = subprocess.run(command, capture_output=True, cwd=cwd)
     if result.returncode:
         raise ValueError(
             f"{command[0]} exited {result.returncode}: " + (result.stdout + result.stderr).decode(errors="replace")
@@ -350,8 +353,10 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
         if sn64:
             compiler["as"] = resolve_tool(compiler["as"])
             inputs.append(Path(compiler["as"]))
+    source_name = Path(args.unit).stem + (".s" if assembly else ".i")
     digest = key(
         content,
+        source_name,
         json.dumps([selected, generation, assembler_flags], sort_keys=True),
         tool_digest(tuple(inputs)),
         *assembler_inputs,
@@ -360,7 +365,9 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
     def produce(destination: Path) -> None:
         with tempfile.TemporaryDirectory(prefix=".object-", dir=out.parent) as temporary:
             work = Path(temporary)
-            source = work / ("source.s" if assembly else "source.i")
+            # Only a stable unit-relative spelling reaches cc1/as and STT_FILE.
+            # The working directory stays randomly isolated for concurrent jobs.
+            source = work / source_name
             source.write_bytes(content)
             if sn64:
                 assert compiler is not None
@@ -370,7 +377,10 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
 
                 if not assembly:
                     generated = work / "source.s"
-                    run([str(Path(compiler["cc"]).resolve()), "-quiet", *codeflags, str(source), "-o", str(generated)])
+                    run(
+                        [str(Path(compiler["cc"]).resolve()), "-quiet", *codeflags, source.name, "-o", str(generated)],
+                        cwd=work,
+                    )
                     text = generated.read_text()
                 else:
                     text = content.decode()
@@ -382,20 +392,42 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
                     asn64_version="2.81",
                 )
             elif assembly:
-                command = [data["as"], *asflags]
+                # Include roots were interpreted relative to the project before chdir.
+                absolute_flags = []
+                include_next = False
+                for flag in asflags:
+                    if include_next:
+                        absolute_flags.append(str(Path(flag).resolve()))
+                        include_next = False
+                    elif flag == "-I":
+                        absolute_flags.append(flag)
+                        include_next = True
+                    elif flag.startswith("-I"):
+                        absolute_flags.append("-I" + str(Path(flag[2:]).resolve()))
+                    else:
+                        absolute_flags.append(flag)
+                command = [data["as"], *absolute_flags]
                 if args.depfile:
                     command.extend(["--MD", str(args.depfile)])
-                run([*command, "-o", str(destination), str(source)])
+                run([*command, "-o", str(destination), source.name], cwd=work)
                 if args.depfile:
                     text = args.depfile.read_text()
                     args.depfile.write_text(
                         (args.dep_target or str(out))
                         + ":"
-                        + text.split(":", 1)[1].replace(str(source), str(args.source))
+                        + " "
+                        + " ".join(
+                            str(args.source) if word in {str(source), source.name} else word
+                            for word in dependency_paths(text)
+                        )
+                        + "\n"
                     )
             else:
                 assert compiler is not None
-                run([compiler["cc"], *generation, "-c", str(source), "-o", str(destination)])
+                run(
+                    [str(Path(compiler["cc"]).resolve()), *generation, "-c", source.name, "-o", str(destination)],
+                    cwd=work,
+                )
                 from unbake.project_tools.elf import Object
 
                 Object(destination).trim_text()
