@@ -82,6 +82,11 @@ class SplitTests(unittest.TestCase):
             ("void (*)(void (*notify)(int named))", "void (*)(void (*)(int))", True),
             ("void (*)(int values[4])", "void (*)(int *)", True),
             ("void (*)(const int value)", "void (*)(int)", True),
+            ("void (*)(PayloadPointer)", "void (*)(void *)", True),
+            ("PayloadPointer (*)(int)", "void *(*)(int)", True),
+            ("void (*)(ConstWord)", "void (*)(int)", True),
+            ("void (*)(ConstWord *)", "void (*)(const int *)", True),
+            ("void (*)(ConstWord *)", "void (*)(int *)", False),
             ("void (*)(const int *)", "void (*)(int *)", False),
             ("void (*)(int, ...)", "void (*)(int)", False),
             ("void (*)(void)", "void (*)(int)", False),
@@ -89,7 +94,14 @@ class SplitTests(unittest.TestCase):
             ("void (*)(struct One *)", "void (*)(struct Two *)", False),
             ("void (*)(void)", "struct Callback", False),
         )
-        aliases = {"s32": "signed int", "Time": "s32", "u8": "unsigned char", "f32": "float"}
+        aliases = {
+            "s32": "signed int",
+            "Time": "s32",
+            "u8": "unsigned char",
+            "f32": "float",
+            "PayloadPointer": "void *",
+            "ConstWord": "const s32",
+        }
         for left, right, compatible in rows:
             with self.subTest(left=left, right=right):
                 self.assertEqual(

@@ -163,15 +163,17 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
 
     def shape(node: Any, active: tuple[str, ...] = ()) -> object:
         if isinstance(node, c_ast.TypeDecl):
-            return ("type", tuple(sorted(node.quals)), shape(node.type, active))
+            target = shape(node.type, active)
+            if not node.quals:
+                return target
+            if isinstance(target, tuple) and target[0] in ("qualified", "pointer"):
+                return (target[0], tuple(sorted(set(node.quals) | set(target[1]))), target[2])
+            return ("qualified", tuple(sorted(node.quals)), target)
         if isinstance(node, c_ast.IdentifierType):
             name = " ".join(node.names)
             if name in aliases and name not in active:
-                target = shape(parse(aliases[name]), (*active, name))
-                # TypeDecl is a declarator wrapper, not an extra type layer.
-                if isinstance(target, tuple) and target[0] == "type" and not target[1]:
-                    return target[2]
-                return target
+                return shape(parse(aliases[name]), (*active, name))
+            name = " ".join(node.names)
             words = node.names
             if set(words) <= {"signed", "unsigned", "short", "long", "int"}:
                 width = "short" if "short" in words else "long " * words.count("long")
@@ -200,8 +202,10 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
                 return ("pointer", (), value[2])
             if value[0] == "function":
                 return ("pointer", (), value)
-            if value[0] in ("type", "pointer"):
-                return (value[0], (), value[2])
+            if value[0] == "qualified":
+                return value[2]
+            if value[0] == "pointer":
+                return ("pointer", (), value[2])
         return value
 
     try:
