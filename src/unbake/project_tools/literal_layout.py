@@ -80,12 +80,7 @@ def arrange(
             raise ValueError(f"{section}: missing HI16 pair")
         for at, high in highs:
             original, target = target_words.get(at), target_words.get(offset)
-            if original is None or target is None:
-                raise ValueError(f"{section}: missing aligned pool reference at 0x{offset:X}")
-            if (high ^ original) & 0xFFFF0000 or (word ^ target) & 0xFFFF0000:
-                raise ValueError(f"{section}: pool reference instruction differs at 0x{offset:X}")
             own = ((high & 0xFFFF) << 16) + signed(word) + symbol["value"]
-            address = (((original & 0xFFFF) << 16) + signed(target)) & 0xFFFFFFFF
             table = next((pool for pool in tables if pool.offset == own), None)
             string = table is None and word >> 26 in (9, 13)
             if string:
@@ -99,6 +94,21 @@ def arrange(
                 raise ValueError(f"{section}: reference has no literal load or jump table")
             if own < 0 or (not string and own % 4) or own + size > len(source):
                 raise ValueError(f"{section}: reference outside pool words")
+            anchored = {
+                address + own - start
+                for start, address, extent in anchors
+                if start <= own < own + size <= start + extent
+            }
+            if original is None or target is None:
+                if len(anchored) != 1:
+                    raise ValueError(f"{section}: missing aligned pool reference at 0x{offset:X}")
+                address = anchored.pop()
+            else:
+                if (high ^ original) & 0xFFFF0000 or (word ^ target) & 0xFFFF0000:
+                    raise ValueError(f"{section}: pool reference instruction differs at 0x{offset:X}")
+                address = (((original & 0xFFFF) << 16) + signed(target)) & 0xFFFFFFFF
+                if anchored and anchored != {address}:
+                    raise ValueError(f"{section}: pool reference disagrees with explicit storage")
             expected = (read_table or read_memory)(address, size) if table else read_memory(address, size)
             actual = material[own : own + size]
             raw = read_memory(address, size)

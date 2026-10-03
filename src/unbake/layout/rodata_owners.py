@@ -14,6 +14,7 @@ from unbake.layout.rodata_references import Reference, collect, words
 from unbake.project.config import Held, Project
 from unbake.project.makefile import recipe
 from unbake.project_tools.elf import Object
+from unbake.project_tools.rodata import pools, relocated, table_addresses
 
 
 @dataclass(frozen=True)
@@ -115,15 +116,21 @@ def scan(project: Project, version: str) -> Census:
     targets = {u["name"]: build / u["target_path"] for u in units}
     refs: list[Reference] = []
     errors: list[str] = []
+    compiler_tables: list[tuple[str, int, int]] = []
     for f in functions:
-        path = build / "obj/asm" / (f.path + ".o")
+        owner = Path(f.path).stem
+        path = build / ("obj/src" if f.kind == "c" else "obj/asm") / (f.path + ".o")
         if not path.is_file():
-            path = targets.get(Path(f.path).stem, path)
-        found, failures = collect(
-            Path(f.path).stem, image[f.start : f.end], Object(path) if path.is_file() else None, values.get("_gp")
-        )
+            path = targets.get(owner, path)
+        obj = Object(path) if path.is_file() else None
+        found, failures = collect(owner, image[f.start : f.end], obj, values.get("_gp"))
         refs.extend(r for r in found if any(span.address <= r.address < span.stop for span in spans))
         errors.extend(failures)
+        if f.kind == "c" and obj is not None:
+            try:
+                compiler_tables.extend(proved_tables(obj, owner, image[f.start : f.end], f.address, image, spans))
+            except ValueError as error:
+                errors.append(f"{owner}: {error}")
     datarefs: dict[int, set[str]] = defaultdict(set)
     for path in sorted((build / "obj").rglob("*.o")):
         obj = Object(path)
@@ -138,7 +145,7 @@ def scan(project: Project, version: str) -> Census:
                     ) & 0xFFFFFFFF
                     if any(span.address <= address < span.stop for span in spans):
                         datarefs[address].add(path.relative_to(build).as_posix())
-    objects = classify(image, functions, spans, refs, values, datarefs)
+    objects = classify(image, functions, spans, refs, values, datarefs, compiler_tables)
     snapshot = {
         "rom_sha1": hashlib.sha1(image).hexdigest(),
         "split_sha256": hashlib.sha256(configured.split.read_bytes()).hexdigest(),
@@ -156,6 +163,35 @@ def material(project: Project, version: str, item: Constant) -> bytes:
     return project_reader(project, version)(item.address, item.end - item.address)
 
 
+def proved_tables(
+    obj: Object, owner: str, target: bytes, text_address: int, image: bytes, spans: list[Span]
+) -> list[tuple[str, int, int]]:
+    """Byte-check per-version C table extents before using them as ownership."""
+    target_words = {at * 4: word for at, word in enumerate(words(target))}
+    result = []
+    for section in (".rdata", ".rodata"):
+        addresses = table_addresses(obj, section, target_words)
+        if not addresses:
+            continue
+        material = relocated(obj, section, text_address)
+        for pool in pools(obj, section, True):
+            if pool.offset not in addresses:
+                continue
+            address = addresses[pool.offset]
+            mapped = [s for s in spans if s.address <= address < address + pool.size <= s.stop]
+            if len(mapped) != 1:
+                raise ValueError(f"{section}: table has no unique resident mapping at 0x{address:08X}")
+            span = mapped[0]
+            start = span.start + address - span.address
+            raw = image[start : start + pool.size]
+            normalized = b"".join(((word + span.bias) & 0xFFFFFFFF).to_bytes(4, "big") for word in words(raw))
+            actual = material[pool.offset : pool.offset + pool.size]
+            if len(raw) != pool.size or actual not in (raw, normalized):
+                raise ValueError(f"{section}: table bytes disagree at 0x{address:08X}")
+            result.append((owner, address, address + pool.size))
+    return result
+
+
 def classify(
     image: bytes,
     functions: list[split.Function],
@@ -163,10 +199,22 @@ def classify(
     refs: list[Reference],
     values: dict[str, int] | None = None,
     datarefs: dict[int, set[str]] | None = None,
+    compiler_tables: list[tuple[str, int, int]] | None = None,
 ) -> list[Constant]:
     """Partition every mapped constant byte using ROM-only or enriched evidence."""
     values = values or {}
     datarefs = datarefs or {}
+    compiler_tables = compiler_tables or []
+    table_ends: dict[int, int] = {}
+    for _, address, end in compiler_tables:
+        if address in table_ends and table_ends[address] != end:
+            raise Held("rodata", f"conflicting compiler table extents at 0x{address:08X}")
+        span = next((s for s in spans if s.address <= address < end <= s.stop), None)
+        if span is None or address % 4 or (end - address) % 4:
+            raise Held("rodata", f"compiler table outside aligned resident span at 0x{address:08X}")
+        table_ends[address] = end
+    if any(table_ends[a] > b for a, b in itertools.pairwise(sorted(table_ends))):
+        raise Held("rodata", "overlapping compiler table extents")
     text = sorted(functions, key=lambda f: f.address)
     textstarts = [f.address for f in text]
 
@@ -196,7 +244,7 @@ def classify(
             and ("D_" in name or name.startswith("jtbl_"))
         ):
             names[address].append(name)
-    tables = set()
+    tables = set(table_ends)
     for address, rr in byaddr.items():
         span = span_at(address)
         assert span is not None
@@ -219,6 +267,8 @@ def classify(
                 *(a for a in byaddr if span.address <= a < span.stop),
                 *(a for a in datarefs if span.address <= a < span.stop),
                 *(a for a in names if span.address <= a < span.stop),
+                *(a for a in table_ends if span.address <= a < span.stop),
+                *(a for a in table_ends.values() if span.address <= a < span.stop),
             }
         )
         typed: list[Constant] = []
@@ -229,7 +279,9 @@ def classify(
             destinations: set[str] = set()
             if address in tables:
                 following = bisect.bisect_right(tableanchors, address)
-                cap = min(span.stop, tableanchors[following] if following < len(tableanchors) else span.stop)
+                cap = table_ends.get(
+                    address, min(span.stop, tableanchors[following] if following < len(tableanchors) else span.stop)
+                )
                 for value in words(read(address, min(16384, cap - address))):
                     owner = text_at((value + span.bias) & 0xFFFFFFFF) or text_at(value)
                     if owner is None:
@@ -242,6 +294,9 @@ def classify(
                     proof = "local text pointer run capped at next table anchor"
                 else:
                     size = 0
+                if address in table_ends:
+                    size = table_ends[address] - address
+                    kind, proof = "jump table", "byte-proved compiler .rdata/.rodata relocations"
             if not size:
                 if "f64" in types:
                     kind, size, proof = "double", 8, "f64 memory load"
@@ -294,6 +349,10 @@ def classify(
             located.owners.add(ref.owner)
             if ref.write:
                 located.writes.add(ref.owner)
+    for owner, address, _ in compiler_tables:
+        located = object_at(address)
+        assert located is not None
+        located.owners.add(owner)
     for address, paths in datarefs.items():
         located = object_at(address)
         if located is not None:

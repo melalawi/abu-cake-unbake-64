@@ -57,7 +57,7 @@ def signed(word: int) -> int:
     return value - 0x10000 if value & 0x8000 else value
 
 
-def placements(obj: Object, target: bytes, known: set[str], start: int = 0) -> dict[str, int]:
+def placements(obj: Object, target: bytes, known: set[str], start: int = 0, end: int | None = None) -> dict[str, int]:
     """Require agreeing, instruction-identical HI16/LO16 references for each name."""
     text = obj.section(".text")
     if text is None:
@@ -66,6 +66,8 @@ def placements(obj: Object, target: bytes, known: set[str], start: int = 0) -> d
     pending: dict[str, list[int]] = {}
     found: dict[str, int] = {}
     for offset, kind, symbol in obj.relocations(text):
+        if end is not None and not start <= offset < end:
+            continue
         name = symbol["name"]
         if symbol["section"] != 0 or name in known or kind not in (5, 6):
             continue
@@ -104,15 +106,42 @@ def needs(project: Project, function: str, version: str, path: Path) -> list[Sym
     _, known = split.symbols(project.version(version).symbols)
     try:
         obj = Object(path)
+        text = obj.section(".text")
+        if text is None:
+            raise ValueError(f"{function}: missing .text")
         entries = [
             symbol
             for table in obj.symbols.values()
             for symbol in table
-            if symbol["name"] == function and symbol["section"] == obj.section(".text")
+            if symbol["name"] in rows[0].aliases and symbol["section"] == text
         ]
+        if not entries:
+            # A unit's sole exported text entry can retain its source spelling.
+            # The owning split row, not an address-shaped identifier, supplies
+            # ROM identity. Multiple entries still require an explicit alias.
+            entries = [
+                symbol
+                for table in obj.symbols.values()
+                for symbol in table
+                if symbol["section"] == text
+                and symbol["info"] >> 4 == 1
+                and symbol["info"] & 15 in (0, 2)
+                and symbol["name"]
+            ]
         if len(entries) != 1:
             raise ValueError(f"{function}: expected one compiled text entry")
-        found = placements(obj, split.words(project, rows[0]), set(known), entries[0]["value"])
+        start = entries[0]["value"]
+        ends = [
+            symbol["value"]
+            for table in obj.symbols.values()
+            for symbol in table
+            if symbol["section"] == text
+            and symbol["info"] >> 4 == 1
+            and symbol["info"] & 15 in (0, 2)
+            and symbol["value"] > start
+        ]
+        end = start + entries[0]["size"] if entries[0]["size"] else min(ends, default=len(obj.content(text)))
+        found = placements(obj, split.words(project, rows[0]), set(known), start, end)
     except (OSError, ValueError) as error:
         raise Held("match", f"{function}: VERSION {version}: data placement: {error}") from error
     return [
