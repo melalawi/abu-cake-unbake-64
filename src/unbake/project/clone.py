@@ -70,7 +70,8 @@ def copy_regular(
         require(resolved)
         destination.parent.mkdir(parents=True, exist_ok=True)
         copy_reflink(
-            resolved, destination,
+            resolved,
+            destination,
             immutable=immutable_objects and resolved.suffix == ".o" and "assets" not in resolved.parts,
         )
 

@@ -663,10 +663,9 @@ def prepare_setup(
                 "typedef float f32;\ntypedef double f64;\n#endif\n",
             )
         del census, layout, proposal
+
         def prove() -> list[str]:
-            result = _prove_publish(
-                project, tree, policy, fingerprint, fresh=True, supply=supply, before_publish=guard
-            )
+            result = _prove_publish(project, tree, policy, fingerprint, fresh=True, supply=supply, before_publish=guard)
             # compiler.json and confirmation.json hold the published receipt.
             # Do not delete a proposal from an intervening planning command.
             if accepted_path.is_file() and compiler_files.sha(accepted_path) == accepted_sha256:
