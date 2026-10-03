@@ -73,3 +73,7 @@ class LinkReceiptTests(unittest.TestCase):
                     self.assertEqual(log.read_text().splitlines() if log.exists() else [], events)
                     if status:
                         self.assertIn("HELD(compile): missing", result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
