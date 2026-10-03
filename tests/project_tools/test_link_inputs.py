@@ -249,7 +249,9 @@ class SelectorTests(unittest.TestCase):
                 )
                 with patch("unbake.project_tools.layout.place_object", return_value="script") as transform:
                     place(args)
-                self.assertEqual(transform.call_args.kwargs["mapped_pools"], global_catalogue)
+                self.assertNotIn("mapped_pools", transform.call_args.kwargs)
+                inventory = transform.call_args.kwargs["inventory"]
+                self.assertEqual(inventory is not None, global_catalogue)
                 lookup = transform.call_args.kwargs["lookup"]
                 if global_catalogue:
                     self.assertEqual(lookup.containing(10)[0]["path"], row["path"])
@@ -264,6 +266,9 @@ class SelectorTests(unittest.TestCase):
                 raise AssertionError("global mappings scanned again")
 
         obj = parsed(Path("a.o"), data=b"text")
+        obj.names = [".rdata"]
+        inventory = [dict(path="rodata/pool", address=10, start=0, end=1)]
+        lookup = Spans(inventory)
         with patch("unbake.project_tools.layout.transfer_private", return_value=[]) as transfer:
             place_object(
                 Namespace(build=Path("build")),
@@ -277,9 +282,12 @@ class SelectorTests(unittest.TestCase):
                 pools=[{"path": "rodata/pool"}],
                 providers=[],
                 load=Mock(return_value=obj),
-                mapped_pools=True,
+                inventory=inventory,
+                lookup=lookup,
             )
         transfer.assert_called_once()
+        self.assertIs(transfer.call_args.args[3], inventory)
+        self.assertIs(transfer.call_args.kwargs["lookup"], lookup)
 
 
 class SpanTests(unittest.TestCase):

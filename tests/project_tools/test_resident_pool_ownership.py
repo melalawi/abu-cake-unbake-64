@@ -9,6 +9,7 @@ from unittest.mock import patch
 from tests.decomp.support import assemble
 from unbake.project_tools.elf import Object
 from unbake.project_tools.layout import place_object, resident_slices
+from unbake.project_tools.link_inputs import Objects, Selectors, Spans
 from unbake.project_tools.rodata import relocated
 
 
@@ -59,12 +60,15 @@ class ResidentPoolTests(unittest.TestCase):
                     fragments,
                     False,
                 )
+                inventory = resident_slices(pools, [mapping])
+                optimized = dict(inventory=inventory, lookup=Spans(inventory), selectors=Selectors(inputs[2]))
                 if kind == "disagree":
                     with self.assertRaisesRegex(ValueError, "explicit storage disagrees"):
-                        place_object(*inputs, pools=pools, providers=providers)
+                        place_object(*inputs, pools=pools, providers=providers, **optimized)
                     self.assertEqual(objpath.read_bytes(), original)
                     continue
-                place_object(*inputs, pools=pools, providers=providers)
+                with Objects(root / "metadata") as load:
+                    place_object(*inputs, pools=pools, providers=providers, load=load, **optimized)
                 self.assertEqual([p.address for p in providers], [0x80003004] if kind in ("mixed", "crossing") else [])
                 self.assertTrue(fragments)
                 obj = Object(objpath)
