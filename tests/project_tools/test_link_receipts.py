@@ -61,7 +61,8 @@ class LinkReceiptTests(unittest.TestCase):
                     object_name = f"./obj/{kind}/unit.o"
                     receipt_name = f"./obj/{kind}/unit.built"
                     (root / "Makefile").write_text(
-                        f"BUILD := .\nall: linked\nlinked: {object_name}\n"
+                        f"BUILD := .\n_WARM_DIRECTORY_CACHE := $(wildcard ./obj/src/*.o ./obj/asm/*.o)\n"
+                        f"all: linked\nlinked: {object_name}\n"
                         f"\t{python} driver.py link {object_name}\n"
                         f"{receipt_name}: source\n\t{python} driver.py compile {object_name}\n" + rule + "\n"
                     )
