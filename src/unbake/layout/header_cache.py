@@ -92,7 +92,9 @@ def context(
     }
     selection = json.dumps([(names[path], text) for path, text in contents.items()], separators=(",", ":"))
     drivers = (header_context, structs, structs_parser, structs_types, draft_context, header_declarations)
-    identity = key("headers-context-v2", selection, Path(__file__), *(Path(inspect.getfile(module)) for module in drivers))
+    identity = key(
+        "headers-context-v2", selection, Path(__file__), *(Path(inspect.getfile(module)) for module in drivers)
+    )
     computed = None
 
     def produce(output: Path) -> None:
