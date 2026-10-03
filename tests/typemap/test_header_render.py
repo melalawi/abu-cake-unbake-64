@@ -172,6 +172,27 @@ class HeaderRenderTests(unittest.TestCase):
         parsed = declarations.extract(declarations.clean(text), {})
         self.assertEqual(parsed["structs"]["Owner"]["size"], 36)
 
+    def test_consumer_only_alias_survives_a_receipt_without_layout_aliases(self):
+        root = self.project.include[0]
+        generated = root / "shared/types"
+        generated.mkdir(exist_ok=True)
+        seed = declarations.extract("struct Owner { int value; };", {})
+        value = {kind: {} for kind in ("functions", "globals", "arrays")}
+        value["structs"] = {name: {**row, "state": "known", "generated": True} for name, row in seed["structs"].items()}
+        self.assertNotIn("typedef struct Owner Owner;", self.capture(value))
+        (generated / "consumer_alias_Owner.h").write_text("typedef struct Owner Owner;")
+        text = self.capture(value)
+        self.assertIn("typedef struct Owner Owner;", text)
+        declarations.extract(declarations.clean(text) + "struct Holder { Owner value; };", {})
+
+    def test_authored_projection_and_generated_record_share_one_definition(self):
+        provider = self.project.include[0] / "provider.h"
+        provider.write_text("struct Owner { int value; };")
+        text = self.render(provider.read_text())
+        self.assertEqual(text.count("struct Owner {"), 0)
+        self.assertEqual(text.count('#include "provider.h"'), 1)
+        declarations.extract(declarations.clean(provider.read_text() + text), {})
+
     def test_authored_scalar_callback_and_forward_alias_homes_are_reused(self):
         provider = self.project.include[0] / "providers.h"
         provider.write_text("typedef int Word; typedef void (*Callback)(void); typedef struct Owner Owner;\n")

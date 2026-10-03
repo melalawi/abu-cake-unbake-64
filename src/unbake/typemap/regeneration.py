@@ -98,6 +98,9 @@ class Session:
             if original is not None:
                 self.authored[path] = original.read_text()
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
+        self.consumer_aliases = {
+            path: path.read_text() for path in sorted((project.include[0] / "shared/types").glob("consumer_alias_*.h"))
+        }
         self.inputs = key(
             self.environment,
             *(part for path, text in {**self.authored, **self.sources}.items() for part in (str(path), text)),
@@ -217,11 +220,20 @@ class Session:
             "globals": ("state", "declaration"),
             "arrays": ("state", "partial", "type"),
         }
-        projection = {
+        projection: dict[str, Any] = {
             kind: {name: {k: row[k] for k in keys if k in row} for name, row in value[kind].items()}
             for kind, keys in fields.items()
         }
         projection["typedefs"] = value.get("typedefs", {})
+        provided_aliases = set(projection["typedefs"]) | {
+            alias for record in value["structs"].values() for alias in record.get("aliases", [])
+        }
+        projection["consumer_aliases"] = {
+            alias: type_
+            for text in self.consumer_aliases.values()
+            for alias, type_ in header_names.alias_types(text).items()
+            if alias not in provided_aliases
+        }
         projection["declaration_evidence"] = value.get("declaration_evidence", {})
         # The legacy bridge is a render input; fresh projects do not acquire it.
         legacy = (self.project.include[0] / "shared/typemap.h").is_file() or any(

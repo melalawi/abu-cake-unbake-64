@@ -142,6 +142,7 @@ def _render(
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
+    authored_tags = {tag for text in components.values() for tag in header_declarations(text).tags}
     provided = set(authored_aliases)
     generated = {
         name: record
@@ -149,6 +150,7 @@ def _render(
         if record["state"] == "known"
         and (record.get("partial") or record.get("generated"))
         and record.get("declaration")
+        and name not in authored_tags
     }
     for text in components.values():
         replacements.update(
@@ -225,6 +227,16 @@ def _render(
         if record["state"] == "known"
         for alias in record.get("aliases", [])
     }
+    # Compatibility aliases can occur only in a consumer projection, outside
+    # the common declaration prefix. Keep their canonical layout provider when
+    # a later receipt omits that alias from its otherwise identical layout.
+    for text in session.consumer_aliases.values():
+        for alias, type_ in header_names.alias_types(text).items():
+            target = re.fullmatch(r"(?:struct|union) (\w+)", type_)
+            if target is not None:
+                record = value["structs"].get(target[1], {})
+                if record.get("state") == "known" and record.get("type") == type_:
+                    alias_targets.setdefault(alias, type_)
     prerequisites: dict[str, str] = dict(private)
     for record in generated.values():
         for alias, type_ in record.get("typedefs", {}).items():
@@ -249,11 +261,7 @@ def _render(
             "typedef " + declarator(type_, alias) + ";", replacements, reserved
         )
     for name, record in sorted(value["structs"].items()):
-        if (
-            record["state"] == "known"
-            and (record.get("partial") or record.get("generated"))
-            and record.get("declaration")
-        ):
+        if name in generated:
             path = root / "shared" / (".layout-" + name + ".h")
             declaration = session.rewrite(record["declaration"], scoped[name], reserved)
             aliases = "".join(
