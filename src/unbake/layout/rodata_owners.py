@@ -4,6 +4,7 @@ import bisect
 import hashlib
 import itertools
 import json
+import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ from unbake.layout.rodata_references import Reference, collect, words
 from unbake.project.config import Held, Project
 from unbake.project.makefile import recipe
 from unbake.project_tools.elf import Object
+from unbake.project_tools.literal_layout import storage
 from unbake.project_tools.rodata import pools, relocated, table_addresses
 
 
@@ -169,12 +171,30 @@ def proved_tables(
     """Byte-check per-version C table extents before using them as ownership."""
     target_words = {at * 4: word for at, word in enumerate(words(target))}
     result = []
-    for section in (".rdata", ".rodata"):
+    for section in obj.names:
+        explicit = re.fullmatch(r"\.unbake_(?:pool_([0-9A-F]{8})|piece_([0-9A-F]{8})_[0-9A-F]+)", section)
+        if section not in (".rdata", ".rodata") and explicit is None:
+            continue
         addresses = table_addresses(obj, section, target_words)
+        index = obj.section(section)
+        assert index is not None
+        runs = pools(obj, section, True)
+        for pool in runs:
+            anchors = {
+                address + pool.offset - own
+                for own, address, size in storage(obj, index)
+                if own <= pool.offset < pool.offset + pool.size <= own + size
+            }
+            if explicit is not None:
+                anchors.add(int(explicit[1] or explicit[2], 16) + pool.offset)
+            if anchors:
+                if len(anchors) != 1 or (pool.offset in addresses and addresses[pool.offset] not in anchors):
+                    raise ValueError(f"{section}: table reference disagrees with explicit interval")
+                addresses[pool.offset] = anchors.pop()
         if not addresses:
             continue
         material = relocated(obj, section, text_address)
-        for pool in pools(obj, section, True):
+        for pool in runs:
             if pool.offset not in addresses:
                 continue
             address = addresses[pool.offset]

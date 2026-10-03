@@ -23,7 +23,10 @@ class ExplicitPoolReferenceTests(unittest.TestCase):
                 patch("unbake.project_tools.literal_layout.storage", return_value=anchors),
                 patch("unbake.project_tools.literal_layout.write") as publish,
             ):
-                read = lambda address, size: words(0x3F800000)[:size]
+
+                def read(address, size):
+                    return words(0x3F800000)[:size]
+
                 if reason:
                     with self.assertRaisesRegex(ValueError, reason):
                         arrange(obj, ".rdata", target, 0x80001000, read, persist=False)

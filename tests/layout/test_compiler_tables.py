@@ -81,6 +81,33 @@ class CompilerTableTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicting"):
             table_addresses(obj, ".rdata", target)
 
+    def test_explicit_compiler_interval_table(self):
+        for section, anchors, reason in (
+            (".unbake_pool_80003000", [], None),
+            (".unbake_piece_80003000_8", [], None),
+            (".rdata", [(0, 0x80003000, 8)], None),
+            (".rdata", [(0, 0x80003000, 4)], None),
+            (".rdata", [(0, 0x80003000, 8), (0, 0x80003004, 8)], "explicit interval"),
+        ):
+            obj = Object(
+                section=section,
+                data=words(8, 12),
+                text_rels=[],
+                data_rels=[(at, 2, dict(name="", value=0, section=0)) for at in (0, 4)],
+            )
+            image = bytes(0x40) + words(0x80001008, 0x8000100C)
+            spans = [Span(0x80003000, 0x40, 0x48, 0, "resident")]
+            with (
+                self.subTest(section=section, anchors=anchors),
+                patch("unbake.layout.rodata_owners.storage", return_value=anchors),
+            ):
+                if reason:
+                    with self.assertRaisesRegex(ValueError, reason):
+                        proved_tables(obj, "alpha", b"", 0x80001000, image, spans)
+                else:
+                    expected = [] if section == ".rdata" and anchors[0][2] == 4 else [("alpha", 0x80003000, 0x80003008)]
+                    self.assertEqual(proved_tables(obj, "alpha", b"", 0x80001000, image, spans), expected)
+
     def test_authoritative_extent_is_exact_and_retains_other_owners(self):
         from unbake.layout.rodata_references import Reference
 
@@ -94,8 +121,8 @@ class CompilerTableTests(unittest.TestCase):
         self.assertEqual(result[0].owners, {"alpha", "beta"})
         self.assertFalse(result[0].safe_sole_candidate)
         for invalid, reason in (
-            (tables + [("beta", 0x80003000, 0x8000300C)], "conflicting"),
-            (tables + [("beta", 0x80003004, 0x8000300C)], "overlapping"),
+            ([*tables, ("beta", 0x80003000, 0x8000300C)], "conflicting"),
+            ([*tables, ("beta", 0x80003004, 0x8000300C)], "overlapping"),
             ([("alpha", 0x80003001, 0x80003009)], "aligned"),
         ):
             with self.subTest(reason=reason), self.assertRaisesRegex(Held, reason):

@@ -130,6 +130,8 @@ def table_addresses(obj: Object, section: str, target_words: Mapping[int, int]) 
     if index is None or text is None:
         return {}
     starts = {pool.offset for pool in pools(obj, section, True)}
+    if not starts:
+        return {}
     code = obj.content(text)
     pending: dict[tuple[int, int], list[int]] = {}
     result: dict[int, int] = {}
