@@ -227,6 +227,22 @@ class DeclarationTests(MatchFixture):
         self.assertTrue(all(tree == trees[0] for tree in trees))
         self.assertFalse(trees[0][0].exists())
 
+    def test_rewrite_context_contains_promoted_type_components(self):
+        root = self.project.include[0]
+        (root / "canonical.h").write_text("typedef struct Canon {int value;} Canon;\n")
+        generated = root / "shared/types"
+        generated.mkdir(parents=True)
+        (generated / "layout_Imported.h").write_text(
+            "#ifndef IMPORTED_H\n#define IMPORTED_H\ntypedef struct Imported {int a; int b;} Imported;\n#endif\n"
+        )
+        source = "typedef struct Old {int old;} Old; int alpha(Old *p, Imported *q) {return p->old+q->a;}"
+        headers = Headers.read(self.project)
+        parser = headers.parse(source)[0]
+        rewritten, _ = declarations._layout_names(
+            self.project, self.policy, "alpha", source, [parser], self.versions, headers
+        )
+        self.assertIn("alpha(Canon *p, Imported *q) {return p->value+q->a;}", rewritten)
+
     def test_equivalent_canonical_source_skips_typed_header_materialization(self) -> None:
         prefix = "typedef struct Canon {int value;} Canon;\n"
         (self.project.include[0] / "canonical.h").write_text(prefix)
