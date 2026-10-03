@@ -225,6 +225,8 @@ class VolatileRewriteTests(unittest.TestCase):
 
         source = '#include "../unresolved.h"\nvoid f(void) {}'
         candidate = SimpleNamespace(function="f", content=source.encode(), versions=("us",))
-        with patch("unbake.match.declarations.fold_source", return_value=SimpleNamespace(source=source)):
-            with self.assertRaisesRegex(Held, "local-include.*unresolved.h"):
-                batch_fold._folded(None, None, None, candidate)
+        with (
+            patch("unbake.match.declarations.fold_source", return_value=SimpleNamespace(source=source)),
+            self.assertRaisesRegex(Held, "local-include.*unresolved.h"),
+        ):
+            batch_fold._folded(None, None, None, candidate)
