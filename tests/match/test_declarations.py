@@ -55,6 +55,33 @@ class DeclarationTests(MatchFixture):
                 self.assertIn("typedef struct Private Private;", folded.source)
                 self.assertIn('#include "canonical.h"', folded.source)
 
+    def test_split_layout_imports_its_alias_home_and_preserves_body(self):
+        from pycparser import c_parser
+
+        from tests.preprocessor import expand
+
+        for kind in ("struct", "union"):
+            with self.subTest(kind=kind):
+                root = self.project.include[0]
+                (root / "alias.h").write_text(f"typedef {kind} Canon Canon;\n")
+                (root / "layout.h").write_text(f"{kind} Canon {{int value;}};\n")
+                source = f"typedef {kind} Local {{int value;}} Local;\nint alpha(Local *p) {{return p->value;}}\n"
+                folded = declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "alpha",
+                    source,
+                    self.versions,
+                    prove_headers=False,
+                )
+                self.assertIn('#include "alias.h"', folded.source)
+                self.assertIn('#include "layout.h"', folded.source)
+                self.assertIn("int alpha(Canon *p) {return p->value;}", folded.source)
+                c_parser.CParser().parse(expand(folded.source, self.project.include))
+                (root / "alias.h").unlink()
+                (root / "layout.h").unlink()
+
     def test_forward_typedef_for_a_moved_layout_is_removed_only_once(self) -> None:
         from pycparser import c_parser
 

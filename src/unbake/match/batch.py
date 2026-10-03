@@ -23,7 +23,7 @@ from typing import Any
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.decomp import checks, drafts, type_context
+from unbake.decomp import checks, drafts, type_context, work
 from unbake.decomp.needs import SymbolNeed
 from unbake.layout import split, split_apply
 from unbake.layout.header_context import Headers
@@ -267,6 +267,14 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
     if latest is not None and not latest["identical_everywhere"]:
         from unbake.match.nonmatching import admit
 
+        try:
+            work.current_trial(project, policy, source, list(versions), latest["work"])
+        except Held as error:
+            if not error.reason.endswith("changed since latest try"):
+                raise
+            # An old fuzzy refusal cannot veto a fresh exact cartridge proof.
+            # Drop its compiler choice too; the current configured inputs own it.
+            return Candidate(function, source, content, sha, versions, True)
         manifest = admit(project, policy, source)
         return Candidate(function, source, content, sha, versions, False, dict(manifest["compiler_evidence"]))
     if published:

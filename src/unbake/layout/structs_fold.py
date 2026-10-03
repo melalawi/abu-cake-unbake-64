@@ -146,6 +146,15 @@ def _type_includes(
     paths = {
         homes[name] for name in required - own if name in homes and homes[name] != destination and not scalar(name)
     }
+    # A split alias header only forwards the tag. Promoted fields also need
+    # the definition home; importing both preserves by-value layouts.
+    for name in required - own:
+        target = headers.types.get(name)
+        aggregate = target[0] if isinstance(target, tuple) else target
+        if isinstance(aggregate, Aggregate):
+            home = homes.get(f"{aggregate.kind} {aggregate.name}")
+            if home is not None and home != destination:
+                paths.add(home)
     includes = {
         next(path.relative_to(root).as_posix() for root in project.include if path.is_relative_to(root))
         for path in paths

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.decomp.draft_context import ordered_headers
+from unbake.decomp.header_declarations import declaration_source
 from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_identity import Index
 from unbake.layout.structs_parser import Parser
@@ -37,10 +38,72 @@ def context(
     return dict(ordered), parser, records
 
 
+def guarded_source(source: str) -> str:
+    """Replay include guards in a declaration catalogue, retaining raw offsets.
+
+    Split components retain authored guards inside their own outer guards.
+    Repeated guarded bodies are one provider, just as during compilation.
+    Other conditionals remain visible to this version-independent catalogue.
+    """
+    clean = re.sub(r"/\*.*?\*/|//[^\n]*", lambda m: re.sub(r"[^\n]", " ", m[0]), source, flags=re.S)
+    directives = list(re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", clean, re.M))
+    guards = {
+        match[2].strip()
+        for index, match in enumerate(directives[:-1])
+        if match[1] == "ifndef"
+        and re.fullmatch(r"[A-Za-z_]\w*", match[2].strip())
+        and directives[index + 1][1] == "define"
+        and directives[index + 1][2].strip() == match[2].strip()
+        and not clean[match.end() : directives[index + 1].start()].strip()
+    }
+    defined: set[str] = set()
+    # Parent visibility and guard branch (None means an unevaluated conditional).
+    stack: list[tuple[bool, bool | None]] = []
+    visible = True
+    cursor = 0
+    chunks = []
+    for match in directives:
+        text = source[cursor : match.start()]
+        chunks.append(text if visible else re.sub(r"[^\n]", " ", text))
+        was_visible = visible
+        directive, argument = match[1], match[2].strip()
+        if directive in ("if", "ifdef", "ifndef"):
+            branch = argument not in defined if directive == "ifndef" and argument in guards else None
+            stack.append((visible, branch))
+            visible = visible and branch is not False
+        elif directive == "else" and stack:
+            parent, branch = stack[-1]
+            visible = parent and branch is not True
+        elif directive == "endif" and stack:
+            visible = stack.pop()[0]
+        elif directive == "define" and visible and argument in guards:
+            defined.add(argument)
+        elif directive == "undef" and visible:
+            defined.discard(argument)
+        text = source[match.start() : match.end()]
+        chunks.append(text if was_visible else re.sub(r"[^\n]", " ", text))
+        cursor = match.end()
+    text = source[cursor:]
+    chunks.append(text if visible else re.sub(r"[^\n]", " ", text))
+    return "".join(chunks)
+
+
+def _parser(source: str) -> Parser:
+    parser = Parser(guarded_source(source))
+    # Tokens exclude inactive guard bodies; layouts/edits retain authored text.
+    parser.source = source
+    return parser
+
+
 def _context(contents: dict[Path, str], *, root: Path | None) -> tuple[dict[Path, str], Parser, list[Layout]]:
     try:
-        contents = {path: contents[path] for path in ordered_headers(contents)}
-        parser = Parser("\n".join(contents.values()))
+        aliases = {
+            alias: tag
+            for text in contents.values()
+            for tag, alias in re.findall(r"\btypedef\s+((?:struct|union)\s+\w+)\s+(\w+)\s*;", declaration_source(text))
+        }
+        contents = {path: contents[path] for path in ordered_headers(contents, aliases=aliases)}
+        parser = _parser("\n".join(contents.values()))
         records = parser.parse()
     except Held as error:
         reason = error.reason
@@ -48,6 +111,15 @@ def _context(contents: dict[Path, str], *, root: Path | None) -> tuple[dict[Path
             for path in contents:
                 if path.is_relative_to(root):
                     reason = reason.replace(str(path), path.relative_to(root).as_posix())
+        duplicate = re.match(r"((?:struct|union) \w+): duplicate definition", reason)
+        if duplicate:
+            providers = []
+            for path, text in contents.items():
+                for match in re.finditer(r"\b" + re.escape(duplicate[1]) + r"\s*\{", declaration_source(text)):
+                    label = path.relative_to(root) if root is not None and path.is_relative_to(root) else path
+                    number = text.count("\n", 0, match.start()) + 1
+                    providers.append(f"{label}:{number}")
+            reason += "; providers: " + ", ".join(providers)
         line = re.search(r"\bline (\d+)", reason)
         if line is not None:
             number = int(line[1])
@@ -91,16 +163,19 @@ def _homes(texts: dict[Path, str], parser: Parser, records: list[Layout]) -> dic
     for record in records:
         home = owner(record.start)
         if home is not None:
-            for name in (record.name, *record.aliases):
-                homes.setdefault(name, home)
+            homes.setdefault(record.name, home)
+            homes.setdefault(f"{record.kind} {record.name}", home)
     for declaration in parser.declarations:
         value = parser.source[declaration.start : declaration.end]
         if not value.lstrip().startswith("typedef "):
             continue
-        found = re.search(r"\(\s*\*\s*(\w+)\s*\)", value) or re.search(r"\b(\w+)\s*(?:\[[^]]*\]\s*)*;\s*$", value)
         home = owner(declaration.start)
-        if found and home is not None:
-            homes.setdefault(found[1], home)
+        if home is not None:
+            local = Parser(value)
+            local.defines.update(parser.defines)
+            local.take("typedef")
+            for member in local.declaration(typedef=True):
+                homes[member.name] = home
     return homes
 
 
@@ -213,6 +288,14 @@ class Headers:
 
     def apply(self, edits: list[Any]) -> None:
         """Adopt header edits, appending new files and reparsing for changed ones."""
+        before = dict(self.texts)
+        try:
+            self._apply(edits)
+        except Held:
+            self._load(before)
+            raise
+
+    def _apply(self, edits: list[Any]) -> None:
         changed = {edit.path: edit.after for edit in edits if edit.path in self.texts}
         added = {edit.path: edit.after for edit in edits if edit.path not in self.texts}
         if any(self.texts[path] != text for path, text in changed.items()):
@@ -223,7 +306,15 @@ class Headers:
 
     def _append(self, path: Path, text: str) -> None:
         try:
-            parser, records = self.parse(text)
+            delta = len(self.source) + 1
+            masked = guarded_source(self.source + "\n" + text)[delta:]
+            parser = self.seeded(masked)
+            parser.source = text
+            try:
+                records = parser.parse()
+            finally:
+                for aggregate in self._aliased.values():
+                    aggregate.aliases[:] = list(dict.fromkeys(aggregate.aliases))
         except Held as error:
             label = path.relative_to(self.root) if self.root is not None and path.is_relative_to(self.root) else path
             raise Held("structs", f"headers.declaration: {label}: {error.reason}") from error

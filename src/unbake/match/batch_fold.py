@@ -106,6 +106,7 @@ def fold(
         with closing(trials):
             for candidate, (lines, trial) in zip(members, trials, strict=False):
                 start += 1
+                before = dict(headers.texts)
                 try:
                     if changes.admits(trial):
                         reused += 1
@@ -116,6 +117,10 @@ def fold(
                         again += 1
                         folded = _fold_one(staged, policy, headers, candidate, changes)
                 except Held as error:
+                    # A refused candidate owns every overlay/fold edit it made.
+                    # Rebuild the last accepted context, including seeded types.
+                    headers._load(before)
+                    changes.reloaded = True
                     receipts.append(f"HELD(submit): {candidate.function}: submit.fold: {error.reason}")
                 else:
                     accepted.append((candidate, folded))

@@ -87,12 +87,19 @@ def final_source(
         added = {edit.path for edit in edits if edit.path not in headers.texts}
         spans: list[tuple[int, int]] = []
         for record in records:
-            home = headers.homes.get(record.name) or (destination if destination in added else None)
+            home = headers.homes.get(f"{record.kind} {record.name}") or headers.homes.get(record.name)
+            home = home or (destination if destination in added else None)
             if home is None:
                 held(f"{record.name}: shared declaration home missing after fold")
-            includes.add(
-                next(home.relative_to(root).as_posix() for root in project.include if home.is_relative_to(root))
-            )
+            providers = {home, *(headers.homes[name] for name in record.aliases if name in headers.homes)}
+            for provider in providers:
+                includes.add(
+                    next(
+                        provider.relative_to(root).as_posix()
+                        for root in project.include
+                        if provider.is_relative_to(root)
+                    )
+                )
         for declaration in (item for parser in parsers for item in parser.declarations):
             base = declaration.base
             name = base if isinstance(base, str) else base.name
