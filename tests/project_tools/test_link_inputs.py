@@ -1,5 +1,6 @@
 """Link input caches preserve content identity and isolate mutable transforms."""
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -10,8 +11,8 @@ from unittest.mock import Mock, patch
 
 from tests.decomp.support import assemble
 from unbake.project_tools.elf import Object
-from unbake.project_tools.layout import place_object, transfer_private
-from unbake.project_tools.link_inputs import Objects, Selectors, clone
+from unbake.project_tools.layout import place, place_object, transfer_private
+from unbake.project_tools.link_inputs import Objects, Selectors, Spans, clone
 from unbake.project_tools.literal_layout import arrange, replace
 
 
@@ -222,6 +223,39 @@ class SelectorTests(unittest.TestCase):
             )
         load.assert_called_once_with(Path("build/obj/src/a.o"))
 
+    def test_global_and_unit_catalogue_table(self):
+        from argparse import Namespace
+
+        row = dict(path="rodata/pool", address=10, start=0, end=1)
+        for global_catalogue in (False, True):
+            with self.subTest(global_catalogue=global_catalogue), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source = root / "obj/src/a.o"
+                source.parent.mkdir(parents=True)
+                source.write_bytes(b"object")
+                (root / "script").write_text("obj/src/a.o(.text)")
+                (root / "ranges").write_text(json.dumps({"a": {"rodata_slices": [row]}}))
+                (root / "rom").write_bytes(b"image")
+                if global_catalogue:
+                    (root / "pool-providers.json").write_text(json.dumps([row]))
+                args = Namespace(
+                    build=root,
+                    script=root / "script",
+                    ranges=root / "ranges",
+                    baserom=root / "rom",
+                    recipe=None,
+                    non_matching="0",
+                    output=root / "output",
+                )
+                with patch("unbake.project_tools.layout.place_object", return_value="script") as transform:
+                    place(args)
+                self.assertEqual(transform.call_args.kwargs["mapped_pools"], global_catalogue)
+                lookup = transform.call_args.kwargs["lookup"]
+                if global_catalogue:
+                    self.assertEqual(lookup.containing(10)[0]["path"], row["path"])
+                else:
+                    self.assertIsNone(lookup)
+
     def test_global_mapping_annotation_is_not_repeated(self):
         from argparse import Namespace
 
@@ -246,6 +280,24 @@ class SelectorTests(unittest.TestCase):
                 mapped_pools=True,
             )
         transfer.assert_called_once()
+
+
+class SpanTests(unittest.TestCase):
+    def test_point_lookup_table(self):
+        rows = [
+            dict(address=10, start=0, end=5, name="first"),
+            dict(address=0, start=0, end=20, name="wide"),
+            dict(address=15, start=0, end=5, name="adjacent"),
+            dict(address=10, start=0, end=5, name="duplicate"),
+            dict(address=30, start=0, end=1, name="last"),
+        ]
+        for address in (-1, 0, 9, 10, 14, 15, 19, 20, 29, 30, 31):
+            with self.subTest(address=address):
+                expected = [
+                    row for row in rows if row["address"] <= address < row["address"] + row["end"] - row["start"]
+                ]
+                self.assertEqual(Spans(rows).containing(address), expected)
+        self.assertEqual(Spans([]).containing(0), [])
 
 
 class TransformTests(unittest.TestCase):

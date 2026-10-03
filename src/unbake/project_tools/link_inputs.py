@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import Executor, ThreadPoolExecutor
@@ -156,3 +157,25 @@ class Selectors:
         if not self.changes:
             return script
         return self.pattern.sub(lambda match: self.changes.get((match["object"], match["section"]), match[0]), script)
+
+
+class Spans:
+    """Index point lookups while preserving every overlapping row and its order."""
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = sorted(enumerate(rows), key=lambda entry: (entry[1]["address"], entry[0]))
+        self.starts = [row["address"] for _, row in self.rows]
+        self.ends = [row["address"] + row["end"] - row["start"] for _, row in self.rows]
+        self.maximum: list[int] = []
+        for end in self.ends:
+            self.maximum.append(max(end, self.maximum[-1] if self.maximum else end))
+
+    def containing(self, address: int) -> list[dict[str, Any]]:
+        stop = bisect_right(self.starts, address)
+        start = bisect_right(self.maximum, address, hi=stop)
+        return [
+            row
+            for _, row in sorted(
+                self.rows[position] for position in range(start, stop) if address < self.ends[position]
+            )
+        ]

@@ -12,7 +12,7 @@ from typing import Any
 from unbake.project_tools.atomic import write
 from unbake.project_tools.elf import Object
 from unbake.project_tools.extract import publish
-from unbake.project_tools.link_inputs import Objects, Selectors, clone
+from unbake.project_tools.link_inputs import Objects, Selectors, Spans, clone
 from unbake.project_tools.literal_layout import arrange, signed, storage
 from unbake.project_tools.pool_slices import Provider, link_pools, split_pool
 from unbake.project_tools.rodata import fragment, insert_fragment, placement, relocated
@@ -132,8 +132,11 @@ def resident_mappings(value: object) -> list[dict[str, int]]:
     return result
 
 
-def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices: list[dict[str, Any]]) -> list[str]:
+def transfer_private(
+    obj: Object, interval: dict[str, Any], image: bytes, slices: list[dict[str, Any]], *, lookup: Spans | None = None
+) -> list[str]:
     """Rehome only compiler-provided bytes; retain other owners in assembly."""
+    lookup = lookup if lookup is not None else Spans(slices)
     original = obj
     if any(obj.sections[index][5] for index in (obj.section(".rdata"), obj.section(".rodata")) if index is not None):
         obj = clone(obj)
@@ -149,7 +152,7 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
         material = bytearray()
         cursor = address
         while cursor < address + size:
-            matches = [row for row in slices if row["address"] <= cursor < row["address"] + row["end"] - row["start"]]
+            matches = lookup.containing(cursor)
             if len(matches) != 1:
                 raise ValueError(f"layout.pool_owner: reference 0x{cursor:08X} is not in one ROM slice")
             row = matches[0]
@@ -164,7 +167,7 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
 
     def table(address: int, size: int) -> bytes:
         raw = read(address, size)
-        row = next(row for row in slices if row["address"] <= address < row["address"] + row["end"] - row["start"])
+        row = lookup.containing(address)[0]
         return b"".join(
             struct.pack(">I", (word[0] + row.get("table_entry_bias", 0)) & 0xFFFFFFFF)
             for word in struct.iter_unpack(">I", raw)
@@ -189,11 +192,7 @@ def transfer_private(obj: Object, interval: dict[str, Any], image: bytes, slices
                 for high in pending.pop(key, []):
                     if high in target and at in target:
                         addresses.add((((target[high] & 65535) << 16) + signed(target[at])) & 0xFFFFFFFF)
-        matching = [
-            row
-            for row in slices
-            if any(row["address"] <= address < row["address"] + row["end"] - row["start"] for address in addresses)
-        ]
+        matching = any(lookup.containing(address) for address in addresses)
         provided: list[dict[str, int]] = []
         if not matching:
             raise ValueError(f"layout.pool_owner: {section}: no mapped compiler constants")
@@ -261,6 +260,7 @@ def place(args: argparse.Namespace) -> None:
     inventory = resident_slices(pools, mappings) if pools else None
     faults: list[str] = []
     selectors = Selectors(script)
+    lookup = Spans(inventory) if inventory is not None else None
     with Objects(args.build / ".elf-metadata.sqlite") as load:
         load.prefetch(args.build / name for name in sorted({name for name, _ in selectors.entries}))
         for name in objects:
@@ -279,6 +279,7 @@ def place(args: argparse.Namespace) -> None:
                     load=load,
                     selectors=selectors,
                     inventory=inventory,
+                    lookup=lookup,
                 )
             except (OSError, ValueError, KeyError, struct.error) as error:
                 # Every failing object is named so one link attributes all culprits.
@@ -343,7 +344,7 @@ def place_object(
     inventory: list[dict[str, Any]] | None = None,
     load: Callable[[Path], Object] = Object,
     selectors: Selectors | None = None,
-    mapped_pools: bool = False,
+    lookup: Spans | None = None,
 ) -> str:
     unit = Path(name).stem
     if unit not in intervals:
@@ -365,7 +366,7 @@ def place_object(
                     raise ValueError("layout.pool_span: ambiguous private mapping")
                 row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
             slices = resident_slices(slices, mappings)
-        placed = transfer_private(obj, intervals[unit], image, slices)
+        placed = transfer_private(obj, intervals[unit], image, slices, lookup=lookup)
         if providers is None and not mappings:
             return transfer_selectors(script, name, slices, placed)
         for section in placed:
