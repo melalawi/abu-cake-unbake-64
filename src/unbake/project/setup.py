@@ -188,7 +188,9 @@ def publish_files(project: Project, files: dict[str, str]) -> None:
 def refresh_helpers(project: Project) -> None:
     """Refresh tool-owned helpers and their pins before mixing build implementations."""
     with build.lock(project):
-        publish_files(project, makefile.helpers(project))
+        publish_files(
+            project, {name: content for name, content in makefile.helpers(project).items() if name.endswith(".py")}
+        )
 
 
 def require_helpers(project: Project, *, tree: Path | None = None) -> None:

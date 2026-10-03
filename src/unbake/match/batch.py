@@ -78,6 +78,10 @@ def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
 
 def _baseline(project: Project, policy: Policy) -> list[str]:
     """Prove the unchanged project through the same retained-object link boundary."""
+    # Keep the previous recipe as provenance: refreshing implementation helpers
+    # must not bless different compiler flags or other changed build inputs.
+    if json.loads((project.tools / "build.json").read_text()) != makefile.description(project):
+        held("submit.baseline_inputs: build recipe changed; run make -j4 check before an empty submit")
     with ExitStack() as holds:
         generations = {
             version: staging.generation(
@@ -85,6 +89,15 @@ def _baseline(project: Project, policy: Policy) -> list[str]:
             )
             for version in project.versions
         }
+        dirty = {
+            version: incremental.changed_sources(project, project, generation, version)
+            for version, generation in generations.items()
+        }
+        if any(dirty.values()):
+            held(
+                "submit.baseline_inputs: published source inputs changed; "
+                "submit the changed sources or run make -j4 check"
+            )
         with ThreadPoolExecutor(max_workers=min(policy.cores, len(generations))) as pool:
             futures = {
                 version: pool.submit(relink.prove, project, policy, version, generation, None, extracted=True)

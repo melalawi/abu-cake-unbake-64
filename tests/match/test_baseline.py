@@ -1,5 +1,6 @@
 """An empty submit is a real retained-object cartridge proof."""
 
+import json
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
@@ -57,6 +58,28 @@ class BaselineTests(MatchFixture):
                 self.assertEqual({v: (p / "object.o").read_bytes() for v, p in before.items()}, objects)
                 for relative, content in makefile.helpers(self.project).items():
                     self.assertEqual((self.root / relative).read_text(), content)
+
+    def test_changed_baseline_inputs_refuse_before_linking(self):
+        for changed in ("recipe", "source"):
+            with (
+                self.subTest(changed=changed),
+                patch.object(relink, "prove") as prove,
+                patch.object(
+                    batch.incremental,
+                    "changed_sources",
+                    return_value=[self.src / "alpha.c"] if changed == "source" else [],
+                ),
+                patch.object(
+                    batch.makefile,
+                    "description",
+                    return_value={"different": True}
+                    if changed == "recipe"
+                    else json.loads((self.project.tools / "build.json").read_text()),
+                ),
+            ):
+                with self.assertRaisesRegex(Held, "submit.baseline_inputs"):
+                    batch.publish(self.project, self.policy, [])
+                prove.assert_not_called()
 
     def test_public_parser_accepts_empty_batch(self):
         args = make_parser().parse_args(["submit", "--batch"])

@@ -1,6 +1,7 @@
 """Installed and rendered link implementations must agree before process creation."""
 
 import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -14,6 +15,22 @@ from unbake.project.config import Held
 
 
 class HelperFreshnessTests(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+
+    def test_refresh_preserves_previous_recipe_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, _policy = fixture(Path(directory).resolve(), case=self)
+            write_rendered(project)
+            recipe = project.tools / "build.json"
+            before = recipe.read_bytes()
+            (project.root / "config.toml").write_text(
+                (project.root / "config.toml").read_text().replace("asflags = []", 'asflags = ["--changed"]')
+            )
+            self.assertNotEqual(json.loads(before), makefile.description(project))
+            setup.refresh_helpers(project)
+            self.assertEqual(recipe.read_bytes(), before)
+
     def test_refresh_and_refusal_table(self):
         for state in ("current", "changed", "missing"):
             with self.subTest(state=state), patch.dict(os.environ), tempfile.TemporaryDirectory() as directory:
@@ -51,7 +68,8 @@ class HelperFreshnessTests(unittest.TestCase):
                 manifest = (project.tools / "compiler.sha256").read_text()
                 for relative, content in makefile.helpers(project).items():
                     self.assertEqual((project.root / relative).read_text(), content)
-                    self.assertIn(f"{hashlib.sha256(content.encode()).hexdigest()}  {relative}\n", manifest)
+                    if relative.endswith(".py"):
+                        self.assertIn(f"{hashlib.sha256(content.encode()).hexdigest()}  {relative}\n", manifest)
                 paths = [helper, project.tools / "compiler.sha256"]
                 timestamps = [p.stat().st_mtime_ns for p in paths]
                 setup.refresh_helpers(project)
