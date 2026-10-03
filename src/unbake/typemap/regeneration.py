@@ -103,6 +103,8 @@ class Session:
             *(part for path, text in {**self.authored, **self.sources}.items() for part in (str(path), text)),
         )
         self.reserved: set[str] = set()
+        self.layout_value: dict[str, Any] | None = None
+        self.consumer_names: dict[Path, set[str]] = {}
         self._rewrite_contexts: dict[tuple[int, int], tuple[dict[str, str], frozenset[str], str, frozenset[str]]] = {}
 
     def source_names(self, consumers: dict[Path, set[str]]) -> set[str]:
@@ -175,6 +177,10 @@ class Session:
             }
 
         value = artifact(self.cache, "typemap-layout", content_key, compute)
+        self.layout_value = value
+        return self.restore_layout(value, root)
+
+    def restore_layout(self, value: dict[str, Any], root: Path) -> split.Layout:
         layout = split.Layout.__new__(split.Layout)
         layout.root = root
         layout.render = self.guarded
@@ -216,16 +222,62 @@ class Session:
         )
         content_key = key(self.inputs, storage.encoded(projection), str(legacy))
 
+        state = self.cache.path("typemap-render-state", key(self.inputs, str(legacy)))
+
+        def delta() -> Any:
+            if not state.is_file():
+                return None
+            previous = json.loads(state.read_bytes())
+            before = previous["projection"]
+            if any(before[kind] != projection[kind] for kind in projection if kind != "functions"):
+                return None
+            if before["functions"].keys() != projection["functions"].keys():
+                return None
+            changed = [name for name, row in projection["functions"].items() if before["functions"][name] != row]
+            if any(
+                before["functions"][name]["state"] != "known" or projection["functions"][name]["state"] != "known"
+                for name in changed
+            ):
+                return None
+            path = self.cache.get("typemap-render", previous["content_key"])
+            if path is None:
+                return None
+            result = json.loads(path.read_bytes())
+            if result.get("layout") is None:
+                return None
+            layout = self.restore_layout(result["layout"], self.project.include[0])
+            blocked = set(result["reserved"])
+            for name in changed:
+                record = value["functions"][name]
+                text = self.rewrite(record["prototype"], result["shared_aliases"], blocked)
+                if not text.startswith(("extern ", "static ")):
+                    text = "extern " + text
+                source = self.project.src / (name + ".c")
+                selection = record["prototype"] + ("\n" + self.sources[source] if source in self.sources else "")
+                homes = layout.required(selection, blocked=set(result["consumers"].get(str(source), [])))
+                output = self.project.include[0] / "shared/decls" / (name + ".h")
+                data = self.guarded(output, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
+                result["outputs"][str(output)] = data.decode()
+            return result
+
         def make() -> Any:
+            result = delta()
+            if result is not None:
+                return result
             outputs = compute()
             return {
                 "outputs": {str(p): data.decode() for p, data in outputs.items() if isinstance(data, bytes)},
                 "declaration_headers": value["declaration_headers"],
                 "shared_aliases": value["shared_aliases"],
                 "reserved": sorted(self.reserved),
+                "layout": self.layout_value,
+                "consumers": {str(p): sorted(names) for p, names in self.consumer_names.items()},
             }
 
         result = artifact(self.cache, "typemap-render", content_key, make)
+        state_content = storage.encoded({"projection": projection, "content_key": content_key})
+        if not state.is_file() or state.read_bytes() != state_content:
+            storage.write(state, state_content)
         for name, text in result["outputs"].items():
             path = Path(name)
             if path in self.authored:

@@ -242,6 +242,12 @@ def source_names(
         if not uses_header(path):
             continue
         text = source_texts[resolved(str(path))]
+        # Only typedefs and aggregate tags can reserve shared declaration names.
+        # With none of these tokens, every conditional view has an empty result.
+        if not re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)):
+            if consumers is not None:
+                consumers[path] = set()
+            continue
         views = {text}
         if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
             if policy is None:

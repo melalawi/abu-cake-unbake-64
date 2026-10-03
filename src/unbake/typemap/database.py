@@ -289,6 +289,7 @@ def _render(
         if alias in reserved:
             consumer_aliases[alias] = path
     layout = session.layout(components, rendered, root, alias_targets)
+    session.consumer_names = consumer_names
     outputs: dict[Path, bytes | Path] = dict(layout.headers)
     umbrella_path = root / "shared/typemap.h"
     legacy = umbrella_path.is_file() or bool(wrappers)
@@ -418,14 +419,18 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         if record.get("abi_declaration", {}).get("prototype")
     )
     validated: set[str] = set()
-    validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated, session=session)
     variants = [record.get("abi_declaration", {}).get("variants", {}) for record in value["functions"].values()]
-    for register in sorted({reg for choices in variants for reg in choices}):
+    registers = sorted({reg for choices in variants for reg in choices})
+    if not registers:
+        validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated, session=session)
+    for register in registers:
         selected_context = "\n".join(
             session.rewrite(choices[register]["prototype"], replacements, reserved)
             for choices in variants
             if register in choices
         )
+        # Each variant includes the default ABI and all staged headers, so the
+        # first batch also certifies the default without a separate compiler run.
         validate_headers(
             project,
             outputs,
@@ -444,9 +449,9 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         if isinstance(content, bytes)
     }
     database = project.build / "types/database.json"
-    staged = storage.stage_json(database, value)
-    outputs[database] = staged
-    digest = storage.file_digest(staged)
+    staged, digest = storage.database_json(database, value)
+    if staged is not None:
+        outputs[database] = staged
     summary: dict[str, Any] = {**storage.identity(project), "revision": value["revision"], "database_sha256": digest}
     changed: set[str] = set()
     for kind in ("functions", "globals", "structs", "arrays"):
@@ -545,7 +550,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 os.replace(backup, path)
         raise
     finally:
-        staged.unlink(missing_ok=True)
+        if staged is not None:
+            storage.discard_json(staged)
         for backup in backups.values():
             if backup is not None:
                 backup.unlink(missing_ok=True)

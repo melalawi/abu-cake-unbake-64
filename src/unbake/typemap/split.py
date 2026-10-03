@@ -129,7 +129,9 @@ class Layout:
         return groups
 
     def include(self, path: Path) -> str:
-        return f'#include "{path.relative_to(self.root).as_posix()}"'
+        from unbake.typemap.storage import relative_root
+
+        return f'#include "{relative_root(self.root, path)}"'
 
     def required(self, text: str, *, blocked: set[str] | None = None) -> set[Path]:
         """Select body/signature type names, then let header includes close them."""

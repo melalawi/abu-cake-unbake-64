@@ -18,12 +18,26 @@ def digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _stamp(path: Path) -> tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+
+_file_digests: dict[Path, tuple[tuple[int, int, int, int, int], str]] = {}
+
+
 def file_digest(path: Path) -> str:
+    stamp = _stamp(path)
+    cached = _file_digests.get(path)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
     hash_ = hashlib.sha256()
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             hash_.update(block)
-    return hash_.hexdigest()
+    result = hash_.hexdigest()
+    _file_digests[path] = stamp, result
+    return result
 
 
 def encoded(value: object) -> bytes:
@@ -138,13 +152,17 @@ def generated(project: Project, path: Path) -> bool:
 
 def relative(project: Project, path: Path) -> str:
     """Use already normalized project paths without scanning pathlib ancestors."""
-    name, root = str(path), str(project.root)
+    return relative_root(project.root, path)
+
+
+def relative_root(root_path: Path, path: Path) -> str:
+    name, root = str(path), str(root_path)
     if name == root:
         return "."
     prefix = root + os.sep
     if name.startswith(prefix):
         return name[len(prefix) :]
-    return str(path.relative_to(project.root))
+    return str(path.relative_to(root_path))
 
 
 class FactLog:
@@ -173,35 +191,80 @@ class FactLog:
         self.temporary.unlink(missing_ok=True)
 
 
-def stage_json(path: Path, value: object) -> Path:
-    """Encode one JSON token at a time, without a database-sized string/bytes copy."""
+def _json_chunks(value: object) -> tuple[bytes, ...]:
+    from unbake.project.cache import serialized
+
+    if not isinstance(value, dict):
+        return serialized("typemap.database", value), b"\n"
+    chunks = [b"{"]
+    for index, field in enumerate(sorted(value)):
+        if index:
+            chunks.append(b",")
+        chunks.extend((json.dumps(field).encode() + b":", serialized("typemap.database." + field, value[field])))
+    chunks.append(b"}\n")
+    return tuple(chunks)
+
+
+_json_stages: dict[Path, tuple[tuple[bytes, ...], str]] = {}
+_json_installed: dict[Path, tuple[tuple[bytes, ...], tuple[int, int, int, int, int], str]] = {}
+
+
+def _stage_json(path: Path, chunks: tuple[bytes, ...]) -> tuple[Path, str]:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise Held("solve", f"types.database: generated path is a symlink: {path}")
-    from unbake.project.cache import serialized
-
+    hash_ = hashlib.sha256()
     descriptor, name = tempfile.mkstemp(prefix=".typemap-json-", dir=path.parent)
     temporary = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as stream:
-            if isinstance(value, dict):
-                stream.write(b"{")
-                for index, field in enumerate(sorted(value)):
-                    if index:
-                        stream.write(b",")
-                    stream.write(json.dumps(field).encode() + b":")
-                    stream.write(serialized("typemap.database." + field, value[field]))
-                stream.write(b"}\n")
-            else:
-                stream.write(serialized("typemap.database", value) + b"\n")
-        return temporary
+            for chunk in chunks:
+                stream.write(chunk)
+                hash_.update(chunk)
+        digest_ = hash_.hexdigest()
+        _json_stages[temporary] = chunks, digest_
+        _file_digests[temporary] = _stamp(temporary), digest_
+        return temporary, digest_
     except BaseException:
         temporary.unlink(missing_ok=True)
+        _json_stages.pop(temporary, None)
+        _file_digests.pop(temporary, None)
         raise
+
+
+def stage_json(path: Path, value: object) -> Path:
+    """Stage canonical JSON without a database-sized concatenation or deep copy."""
+    return _stage_json(path, _json_chunks(value))[0]
+
+
+def database_json(path: Path, value: object) -> tuple[Path | None, str]:
+    """Skip staging only when both the serialized value and installed file match."""
+    chunks = _json_chunks(value)
+    installed = _json_installed.get(path)
+    if installed is not None and installed[0] == chunks and not path.is_symlink():
+        try:
+            if installed[1] == _stamp(path):
+                return None, installed[2]
+        except OSError:
+            pass
+    return _stage_json(path, chunks)
 
 
 def install(path: Path, staged: Path) -> None:
     os.replace(staged, path)
+    record = _json_stages.pop(staged, None)
+    _file_digests.pop(staged, None)
+    if record is not None:
+        chunks, digest_ = record
+        stamp = _stamp(path)
+        _json_installed[path] = chunks, stamp, digest_
+        _file_digests[path] = stamp, digest_
+
+
+def discard_json(staged: Path) -> None:
+    staged.unlink(missing_ok=True)
+    _json_stages.pop(staged, None)
+    _file_digests.pop(staged, None)
 
 
 _verified: dict[Path, tuple[tuple[int, int, int, int], str]] = {}

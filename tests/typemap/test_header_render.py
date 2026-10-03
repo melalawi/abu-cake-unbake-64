@@ -352,11 +352,11 @@ class HeaderRenderTests(unittest.TestCase):
         }
         with (
             patch.object(database, "validate_headers") as validate,
-            patch("unbake.typemap.storage.stage_json", side_effect=ValueError("stop")),
+            patch("unbake.typemap.storage.database_json", side_effect=ValueError("stop")),
             self.assertRaisesRegex(ValueError, "stop"),
         ):
             database.publish(self.project, value, {}, policy=self.policy)
-        self.assertEqual(validate.call_count, 2)
+        self.assertEqual(validate.call_count, 1)
         for call in validate.call_args_list:
             self.assertIn("struct Record *f(s32 value);", call.kwargs["abi_context"])
             self.assertNotIn("M2C_UNK", call.kwargs["abi_context"])

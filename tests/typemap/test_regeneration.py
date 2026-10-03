@@ -102,7 +102,7 @@ class RegenerationTests(unittest.TestCase):
                 change()
                 with patch.object(database, "_render", wraps=database._render) as render:
                     self.publish()
-                self.assertEqual(render.call_count, 1)
+                self.assertEqual(render.call_count, 0 if name == "function" else 1)
                 self.value = baseline
                 (self.root / "extra.h").unlink(missing_ok=True)
                 (self.project.src / "f.c").unlink(missing_ok=True)
@@ -242,7 +242,7 @@ class RegenerationTests(unittest.TestCase):
                 value["nodes"]["a"][1]["b"] = 3
             staged = storage.stage_json(path, value)
             self.assertEqual(staged.read_bytes(), storage.encoded(value))
-            staged.unlink()
+            storage.discard_json(staged)
 
     def test_serialized_cache_hit_skips_encoder_and_failed_compute_keeps_snapshot(self):
         value = {"a": [1]}
@@ -559,3 +559,176 @@ class RegenerationTests(unittest.TestCase):
                     value[0]["a"].append(2)
                 self.assertEqual(cache.json.loads(before), snapshot)
                 self.assertNotEqual(cache.serialized("independent", value), before)
+
+    def test_prototype_delta_matches_full_render_across_processes_and_type_dependencies(self):
+        self.value["typedefs"] = {"A": "int", "B": "short"}
+        source = self.project.src / "f.c"
+        source.write_text('#include "shared/decls/f.h"\ntypedef int Local;\n')
+        self.publish()
+        for prototype in ("A f(B value);", "static B f(A value);", "extern int f(void);"):
+            with self.subTest(prototype=prototype):
+                self.value["functions"]["f"]["prototype"] = prototype
+                with (
+                    patch.object(cache, "_remembered", {}),
+                    patch.object(database, "_render", side_effect=AssertionError("full render on prototype edit")),
+                ):
+                    self.publish()
+                session = regeneration.Session(self.project, self.policy)
+                reference = database._render(self.project, copy.deepcopy(self.value), self.policy, session)
+                self.assertEqual(
+                    self.headers(), {p: data for p, data in reference.items() if storage.generated(self.project, p)}
+                )
+
+    def test_prototype_delta_falls_back_when_state_or_render_artifact_is_missing(self):
+        for missing in ("state", "artifact"):
+            with self.subTest(missing=missing):
+                self.publish()
+                session = regeneration.Session(self.project, self.policy)
+                state = session.cache.path(
+                    "typemap-render-state", cache.key(session.inputs, str((self.root / "shared/typemap.h").is_file()))
+                )
+                record = cache.json.loads(state.read_bytes())
+                if missing == "state":
+                    state.unlink()
+                else:
+                    session.cache.path("typemap-render", record["content_key"]).unlink()
+                self.value["functions"]["f"]["prototype"] = "short f(void);" if missing == "state" else "long f(void);"
+                with (
+                    patch.object(cache, "_remembered", {}),
+                    patch.object(database, "_render", wraps=database._render) as render,
+                ):
+                    self.publish()
+                self.assertEqual(render.call_count, 1)
+
+    def test_default_abi_is_batched_with_each_variant_and_failures_remain_atomic(self):
+        self.value["functions"]["f"]["abi_declaration"] = {
+            "prototype": "int f(void);",
+            "variants": {"a0": {"prototype": "int first(void);"}, "a1": {"prototype": "int second(void);"}},
+        }
+        contexts = []
+        original = database.validate_headers
+
+        def validate(*args, **kwargs):
+            contexts.append(kwargs["abi_context"])
+            return original(*args, **kwargs)
+
+        with patch.object(database, "validate_headers", side_effect=validate):
+            cpp, parser = self.publish()
+        self.assertEqual((len(contexts), cpp.call_count, parser.call_count), (2, 2, 2))
+        for text, name in zip(contexts, ("first", "second"), strict=True):
+            self.assertIn("int f(void);", text)
+            self.assertIn(name, text)
+        before = self.headers()
+        self.value["functions"]["f"]["prototype"] = "short f(void);"
+        with (
+            patch("unbake.decomp.draft_context.preprocess_context", return_value="changed"),
+            patch("unbake.decomp.trial_compile.run_tool", side_effect=Held("solve", "bad default ABI")),
+            self.assertRaisesRegex(Held, "types.header_parse"),
+        ):
+            database.publish(self.project, copy.deepcopy(self.value), {}, policy=self.policy)
+        self.assertEqual(before, self.headers())
+
+    def test_unchanged_database_skips_staging_and_rehashing_without_missing_file_edits(self):
+        path = self.project.build / "types/cache.json"
+        value = {"schema": 1, "nodes": {"a": [1]}}
+        staged, digest = storage.database_json(path, value)
+        self.assertIsNotNone(staged)
+        storage.install(path, staged)
+        with patch.object(storage, "_stage_json", side_effect=AssertionError("staged unchanged JSON")):
+            current, actual = storage.database_json(path, copy.deepcopy(value))
+        self.assertEqual((current, actual), (None, digest))
+        original = path.stat()
+        for content in (b"broken", None):
+            with self.subTest(content=content):
+                if content is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(content)
+                    os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+                staged, actual = storage.database_json(path, value)
+                self.assertIsNotNone(staged)
+                self.assertEqual(staged.read_bytes(), storage.encoded(value))
+                storage.install(path, staged)
+                self.assertEqual(actual, digest)
+        value["nodes"]["a"].append(2)
+        staged, actual = storage.database_json(path, value)
+        self.assertNotEqual(actual, digest)
+        storage.discard_json(staged)
+        self.assertNotIn(staged, storage._json_stages)
+
+    def test_database_snapshot_is_invalidated_by_failed_publication_rollback(self):
+        self.publish()
+        before = (self.project.build / "types/database.json").read_bytes()
+        self.value["functions"]["f"]["prototype"] = "short f(void);"
+        original = storage.write
+
+        def fail(path, data):
+            if path.name == "summary.json":
+                raise OSError("summary install failed")
+            return original(path, data)
+
+        with patch.object(storage, "write", side_effect=fail), self.assertRaises(OSError):
+            self.publish()
+        self.assertEqual((self.project.build / "types/database.json").read_bytes(), before)
+        self.value["functions"]["f"]["prototype"] = "int f(void);"
+        self.publish()
+        self.assertEqual((self.project.build / "types/database.json").read_bytes(), before)
+
+    def test_file_digest_reuses_verified_stamp_and_observes_same_mtime_and_atomic_replacement(self):
+        path = self.project.root / "digest.bin"
+        path.write_bytes(b"first")
+        expected = storage.file_digest(path)
+        with patch.object(Path, "open", side_effect=AssertionError("rehashed unchanged file")):
+            self.assertEqual(storage.file_digest(path), expected)
+        stamp = path.stat()
+        path.write_bytes(b"other")
+        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        self.assertNotEqual(storage.file_digest(path), expected)
+        replacement = path.with_suffix(".new")
+        replacement.write_bytes(b"first")
+        replacement.replace(path)
+        self.assertEqual(storage.file_digest(path), expected)
+
+    def test_database_staging_failures_and_symlinks_do_not_publish_or_poison_snapshots(self):
+        path = self.project.build / "types/new.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        target = path.with_name("target.json")
+        target.write_bytes(b"existing")
+        path.symlink_to(target)
+        for stage in (storage.stage_json, storage.database_json):
+            with self.subTest(stage=stage.__name__), self.assertRaisesRegex(Held, "symlink"):
+                stage(path, {"a": 1})
+        self.assertEqual(target.read_bytes(), b"existing")
+        path.unlink()
+        with patch.object(storage.hashlib, "sha256", side_effect=OSError("digest failed")), self.assertRaises(OSError):
+            storage.database_json(path, {"a": 1})
+        self.assertFalse(path.exists())
+        # The failing digest must not leave an open descriptor or temporary file.
+        self.assertEqual(list(path.parent.iterdir()), [target])
+
+    def test_source_without_owned_type_tokens_skips_parser_and_conditional_preprocessor(self):
+        source = self.project.src / "f.c"
+        source.write_text('#include "shared/decls/f.h"\n#if UNKNOWN_HEADER_MACRO\nint f(void) { return 1; }\n#endif\n')
+        with (
+            patch.object(header_names._Declarations, "parse", side_effect=AssertionError("empty name parse")),
+            patch(
+                "unbake.match.source_views._preprocessed_lines", side_effect=AssertionError("empty name preprocessing")
+            ),
+        ):
+            consumers = {}
+            names = header_names.source_names(
+                self.project, self.root / "shared/typemap.h", self.policy, consumers=consumers
+            )
+        self.assertEqual((names, consumers[source]), (set(), set()))
+
+    def test_include_strings_preserve_relative_paths_without_ancestor_scans(self):
+        layout = split.Layout.__new__(split.Layout)
+        layout.root = self.root
+        for name in ("shared/types/a.h", "shared/types/deep/b.h", "."):
+            with (
+                self.subTest(name=name),
+                patch.object(Path, "relative_to", side_effect=AssertionError("relative scan")),
+            ):
+                self.assertEqual(layout.include(self.root / name), f'#include "{name}"')
+        with self.assertRaises(ValueError):
+            layout.include(self.root.with_name("outside") / "types/a.h")
