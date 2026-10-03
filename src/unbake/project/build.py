@@ -194,7 +194,16 @@ def preprocess_object(project: Project, policy: Policy, source: Path, v: str) ->
         recipe = makefile.recipe(project)
         preprocess, _ = partition_flags(flags)
         cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
-        return _run([cpp, *recipe.cppflags, *preprocess, str(source)], project.root)
+        return _run(
+            [
+                cpp,
+                *("-I" + makefile.relative(project, p) for p in project.include),
+                *recipe.cppflags,
+                *preprocess,
+                str(source),
+            ],
+            project.root,
+        )
     return _run([str(compiler.cc), *[flag for flag in flags if flag != "-c"], "-E", str(source)], project.root)
 
 

@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import re
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from unbake.decomp import drafts, needs
-from unbake.layout import entries, split, structs
+from unbake.layout import entries, shared, split, structs
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
-from unbake.layout.structs_fold import fold, scalar_edits
+from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_parser import Parser
 from unbake.match import pool_literals, reporting, source_views, type_rewrite
 from unbake.match.common import held
@@ -78,6 +79,56 @@ class Folded:
     removed_rows: dict[str, tuple[str, ...]]
 
 
+def _local_typedefs(
+    project: Project, headers: Headers, parsers: list[Parser], records: list[structs.Layout], destination: Path
+) -> tuple[Headers, list[Edit], set[tuple[int, int]]]:
+    """Move local scalar and callback aliases needed by promoted fields with them."""
+    wanted = set(re.findall(r"\b\w+\b", " ".join(field.declaration for record in records for field in record.fields)))
+    declarations: dict[str, str] = {}
+    spans: dict[str, set[tuple[int, int]]] = {}
+    for parser in parsers:
+        for item in parser.declarations:
+            value = parser.source[item.start : item.end]
+            local = Parser(value)
+            if local.peek() != "typedef":
+                continue
+            local.take()
+            for member in local.declaration(typedef=True):
+                if member.name in headers.types or not isinstance(member.base, str):
+                    continue
+                declaration = "typedef " + member.declaration
+                if member.name in declarations and declarations[member.name] != declaration:
+                    structs.held(member.name, "version-dependent local typedef")
+                declarations[member.name] = declaration
+                spans.setdefault(member.name, set()).add((item.start, item.end))
+    selected: dict[str, str] = {}
+    while pending := wanted & declarations.keys() - selected.keys():
+        for name in sorted(pending):
+            selected[name] = declarations[name]
+            wanted.update(re.findall(r"\b\w+\b", declarations[name]))
+            wanted.update(other for other in declarations if spans[other] & spans[name])
+    if not selected:
+        return headers, [], set()
+    # Declaration order follows the source, including chains of scalar aliases.
+    names = sorted(selected, key=lambda name: min(spans[name]))
+    before = headers.texts.get(destination, "")
+    after = before or (
+        f"#ifndef UNBAKE_{destination.stem.upper()}_H\n#define UNBAKE_{destination.stem.upper()}_H\n"
+        + _scalar_include(project, headers, records)
+        + "\n#endif\n"
+    )
+    required = wanted & headers.homes.keys()
+    for path in sorted({headers.homes[name] for name in required} - {destination}):
+        include = next(path.relative_to(root).as_posix() for root in project.include if path.is_relative_to(root))
+        directive = f'#include "{include}"\n'
+        if directive.strip() not in after:
+            after = directive + after
+    after = shared.append(after, "\n".join(selected[name] for name in names) + "\n")
+    edit = Edit(destination, before, after, tuple(project.versions))
+    context = Headers({**headers.texts, destination: after}, root=headers.root)
+    return context, [edit], set().union(*(spans[name] for name in selected))
+
+
 def fold_source(
     project: Project,
     policy: Policy,
@@ -96,8 +147,22 @@ def fold_source(
     records = [record for parser in parsers for record in _records(parser)]
     records = [replace(record, aliases=()) if record.name in tag_only else record for record in records]
     destination = project.include[0] / "shared" / f"{function.lower()}.h"
-    edits = fold(records, project, destination=destination, prove_headers=prove_headers, context=headers)
-    final = final_source(project, text, parsers, edits, headers, destination)
+    context, promoted, moved_spans = _local_typedefs(project, headers, parsers, records, destination)
+    edits = fold(records, project, destination=destination, prove_headers=prove_headers, context=context)
+    if promoted:
+        by_path = {edit.path: edit for edit in promoted}
+        for edit in edits:
+            by_path[edit.path] = replace(edit, before=by_path[edit.path].before) if edit.path in by_path else edit
+        edits = list(by_path.values())
+        context = Headers({**headers.texts, **{edit.path: edit.after for edit in edits}}, root=headers.root)
+        # Blank moved typedefs without changing the aggregate edit offsets.
+        for start, end in sorted(moved_spans, reverse=True):
+            text = text[:start] + "".join("\n" if char == "\n" else " " for char in text[start:end]) + text[end:]
+    final = final_source(project, text, parsers, edits, context, destination)
+    if promoted:
+        include = destination.relative_to(project.include[0]).as_posix()
+        if not re.search(rf'^\s*#\s*include\s*[<"]{re.escape(include)}[>"]', final, re.M):
+            final = f'#include "{include}"\n' + final
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
         group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)
@@ -166,7 +231,12 @@ def _layout_names(
         resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
         if not resolution:
             continue
-        planned = type_rewrite.edits(parser, typed_headers(project, policy, versions[index]), resolution, tag_only)
+        with tempfile.TemporaryDirectory(prefix="match-types-") as temporary:
+            roots = source_views.header_includes(project, headers, Path(temporary))
+            context_project = replace(project, include=roots, overlay_roots=roots)
+            planned = type_rewrite.edits(
+                parser, typed_headers(context_project, policy, versions[index]), resolution, tag_only
+            )
         for span, target in planned.items():
             if span in replacements and replacements[span] != target:
                 structs.held(function, "version-dependent layout rename at the same source token")

@@ -279,6 +279,7 @@ def gcc_input(
         recipe = makefile.recipe(project)
         command = [
             makefile.host_executable(policy, recipe.cpp or "", "cpp"),
+            *(f"-I{root}" for root in project.include),
             *(flag for flag in recipe.cppflags if not (preserve_lines and flag == "-P")),
             *options,
             "-DNON_MATCHING=1",

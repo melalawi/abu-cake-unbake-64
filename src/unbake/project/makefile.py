@@ -135,11 +135,12 @@ def host_executable(policy: Policy | SetupPolicy, value: str, field: str) -> str
 
 
 def flags(project: Project, version: str, unit: str | Path) -> tuple[str, ...]:
-    result = list(project.compiler_for(unit).cflags)
+    result: list[str] = []
     for include in project.include:
         flag = "-I" + relative(project, include)
         if flag not in result:
             result.append(flag)
+    result.extend(flag for flag in project.compiler_for(unit).cflags if flag not in result)
     result.extend("-D" + macro for macro in project.version(version).macros)
     overrides = recipe(project).unit_cflags
     path = Path(unit)

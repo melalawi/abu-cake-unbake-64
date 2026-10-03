@@ -35,7 +35,7 @@ def parsers(
     for version in versions:
         active = _version_lines(project, policy, text, version)
         if active is None:
-            active = _preprocessed_lines(project, policy, text, version)
+            active = _preprocessed_lines(project, policy, text, version, context)
         key = frozenset(active)
         if key not in parsed:
             view = "".join(
@@ -47,16 +47,34 @@ def parsers(
     return result
 
 
-def _preprocessed_lines(project: Project, policy: Policy, text: str, version: str) -> set[int]:
+def header_includes(project: Project, headers: Headers, directory: Path) -> tuple[Path, ...]:
+    """Materialize the fold's effective include tree for every declaration preprocessor."""
+    roots = []
+    for index, root in enumerate(project.include):
+        staged = directory / "include" / str(index)
+        staged.mkdir(parents=True)
+        for path, content in headers.texts.items():
+            if path.is_relative_to(root):
+                destination = staged / path.relative_to(root)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(content)
+        roots.append(staged)
+    return tuple(roots)
+
+
+def _preprocessed_lines(
+    project: Project, policy: Policy, text: str, version: str, headers: Headers | None = None
+) -> set[int]:
     lines = text.splitlines(keepends=True)
     with tempfile.TemporaryDirectory(prefix="match-view-") as temporary:
         source = Path(temporary) / "source.c"
         source.write_text(text)
+        include = header_includes(project, headers, Path(temporary)) if headers is not None else ()
         command = [
             str(policy.cpp),
+            *(f"-I{root}" for root in (*include, *project.include)),
             *(flag for flag in policy.cppflags if flag != "-P"),
             "-fdirectives-only",
-            *(f"-I{root}" for root in project.include),
             *(f"-D{macro}" for macro in project.version(version).macros),
             str(source),
         ]

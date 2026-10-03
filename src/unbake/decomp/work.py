@@ -131,7 +131,7 @@ def overlay_project(project: Project, directory: Path) -> Project:
         )
         for ident, compiler in project.compilers.items()
     }
-    return replace(project, include=roots, compilers=compilers, overlay_roots=roots)
+    return replace(project, include=(*roots, *project.include), compilers=compilers, overlay_roots=roots)
 
 
 def save_overlay(project: Project, directory: Path) -> None:
@@ -161,9 +161,9 @@ def overlay_data(project: Project, source: Path) -> dict[str, Any]:
             raise Held("try", "trial.overlay: header path escapes overlay")
         if path.is_file():
             actual[str(path.relative_to(directory))] = digest(path.read_bytes())
-    if any(relative not in actual for relative in data["base"]):
-        raise Held("try", "trial.overlay: staged header deletion requires an explicit edit")
-    if any(data["base"].get(name) != value and actual.get(name) != value for name, value in current.items()):
+    if any(
+        name in actual and data["base"].get(name) != value and actual[name] != value for name, value in current.items()
+    ):
         raise Held("try", "trial.overlay_stale: project headers changed; draft again")
     # A preceding publication may already have installed this exact proposal.
     # Bind its proved bytes as the current base instead of proposing it again.
@@ -188,8 +188,7 @@ def overlay_source(project: Project, source: Path, directory: Path, root: Path) 
     if not root.is_dir() or any(path.is_symlink() for path in root.rglob("*")):
         raise Held("try", "trial.overlay_root: required include directory without symlinks")
     staged = overlay(project, directory)
-    shutil.rmtree(staged.include[0])
-    shutil.copytree(root, staged.include[0])
+    shutil.copytree(root, staged.include[0], dirs_exist_ok=True)
     save_overlay(project, directory)
     destination = directory / source.name
     shutil.copyfile(source, destination)

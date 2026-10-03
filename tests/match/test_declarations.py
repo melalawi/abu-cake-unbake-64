@@ -47,6 +47,33 @@ class DeclarationTests(MatchFixture):
             check=True,
         )
 
+    def test_local_scalar_and_callback_aliases_move_with_promoted_fields(self) -> None:
+        text = (
+            "typedef int Count, Spare;\ntypedef Count Amount;\n"
+            "typedef void (*Callback)(void *, Amount);\n"
+            "struct Holder { Amount count; Callback handler; };\n"
+            "int alpha(struct Holder *p) { Spare value = p->count; return value; }\n"
+        )
+        edits = declarations.folded_edits(self.project, self.policy, "alpha", text, self.versions)
+        destination = self.root / "include/shared/alpha.h"
+        generated = next(edit.after for edit in edits if edit.path == destination)
+        parsed = Parser(generated)
+        record = parsed.parse()[0]
+        self.assertEqual((record.size, record.alignment), (8, 4))
+        self.assertEqual([(field.offset, field.size) for field in record.fields], [(0, 4), (4, 4)])
+        source = next(edit.after for edit in edits if edit.path == self.src / "alpha.c")
+        self.assertNotIn("typedef void (*Callback)", source)
+        self.assertIn("typedef void (*Callback)", generated)
+        for edit in edits:
+            edit.path.parent.mkdir(parents=True, exist_ok=True)
+            edit.path.write_text(edit.after)
+        subprocess.run(
+            ["cc", "-std=c89", "-fsyntax-only", "-I", str(self.root / "include"), str(self.src / "alpha.c")],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
     def test_opaque_pointer_alias_does_not_escape_into_shared_header(self) -> None:
         text = "typedef struct Opaque_s Opaque;\nstruct Holder {Opaque *pointer;struct Opaque_s *other;};\n"
         text += "int alpha(struct Holder *p) {return p->pointer != 0;}\n"

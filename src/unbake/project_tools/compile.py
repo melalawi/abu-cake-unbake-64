@@ -179,8 +179,8 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
     if not assembly:
         assert compiler is not None
         flags = [
-            *compiler["cflags"],
             *("-I" + p for p in data["include"]),
+            *compiler["cflags"],
             *("-D" + macro for macro in data["macros"][version]),
         ]
         if args.non_matching == "1":
@@ -210,7 +210,16 @@ def compile_object(args: argparse.Namespace, data: Recipe | None = None) -> None
                     text = args.depfile.read_text().replace(temporary.name, str(args.source))
                     args.depfile.write_text(text)
         else:
-            content = run([data["cpp"], *cppflags, *preprocess, *dependencies, str(args.source)])
+            content = run(
+                [
+                    data["cpp"],
+                    *("-I" + p for p in data["include"]),
+                    *cppflags,
+                    *preprocess,
+                    *dependencies,
+                    str(args.source),
+                ]
+            )
         if assembly:
             from unbake.project_tools.resolve_external_branches import read_symbols, resolve
 

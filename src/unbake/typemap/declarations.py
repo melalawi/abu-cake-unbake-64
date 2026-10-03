@@ -97,12 +97,12 @@ def _headers(
             flags.append(flag)
     command = [
         str(policy.cpp),
+        *(f"-I{root}" for root in project.include),
         *(flag for flag in policy.cppflags if not line_markers or flag != "-P"),
         *flags,
         *(("-P",) if extra is None and not line_markers else ()),
         "-x",
         "c",
-        *(f"-I{root}" for root in project.include),
         *(f"-D{macro}" for macro in project.version(version).macros),
         *(("-DUNBAKE_PROTOTYPES_H",) if extra is not None else ()),
         "-",
