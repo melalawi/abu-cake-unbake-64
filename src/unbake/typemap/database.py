@@ -114,6 +114,8 @@ def _semantic(value: Any) -> Any:
 
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
     from unbake.decomp.draft_context import ordered_headers
+    from unbake.decomp.header_declarations import declarations as header_declarations
+    from unbake.typemap.declarations import declarator
 
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
@@ -124,14 +126,41 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         for path in sorted(include.rglob("*.h"))
         if not storage.generated(project, path)
     ]
-    # Refer to existing homes. No scalar typedef or SDK aggregate is copied.
+    # Refer to existing homes; only missing generated prerequisites are emitted.
     components = {path: path.read_text() for path in authored}
+    authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
+    provided = set(authored_aliases)
+    generated = {
+        name: record
+        for name, record in value["structs"].items()
+        if record["state"] == "known"
+        and (record.get("partial") or record.get("generated"))
+        and record.get("declaration")
+    }
+    provided.update(alias for record in generated.values() for alias in record.get("aliases", []))
+    alias_targets = {
+        alias: record["type"]
+        for record in value["structs"].values()
+        if record["state"] == "known"
+        for alias in record.get("aliases", [])
+    }
+    prerequisites: dict[str, str] = {}
+    for record in generated.values():
+        for alias, type_ in record.get("typedefs", {}).items():
+            if alias in provided:
+                continue
+            if alias in prerequisites and prerequisites[alias] != type_:
+                raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
+            prerequisites[alias] = type_
     rendered = {}
     for path in authored:
         relative = next(
             path.relative_to(include).as_posix() for include in project.include if path.is_relative_to(include)
         )
         rendered[path] = f'#include "{relative}"'
+    for alias, type_ in sorted(prerequisites.items()):
+        path = root / "shared" / (".typedef-" + alias + ".h")
+        components[path] = rendered[path] = "typedef " + declarator(type_, alias) + ";"
     for name, record in sorted(value["structs"].items()):
         if (
             record["state"] == "known"
@@ -139,8 +168,16 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             and record.get("declaration")
         ):
             path = root / "shared" / (".layout-" + name + ".h")
-            components[path] = record["declaration"]
-            rendered[path] = record["declaration"]
+            declaration = record["declaration"]
+            aliases = "".join(
+                f"typedef {record['type']} {alias};\n"
+                for alias in record.get("aliases", [])
+                if alias not in authored_aliases
+            )
+            if aliases:
+                alias_path = root / "shared" / (".aliases-" + name + ".h")
+                components[alias_path] = rendered[alias_path] = aliases
+            components[path] = rendered[path] = declaration
         elif record["state"] == "unknown":
             reason = record.get("reason", "layout evidence is incomplete").replace("*/", "* /")
             path = root / "shared" / (".layout-" + name + ".h")
@@ -149,7 +186,10 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown; {reason} */"
             )
     type_lines = ["#ifndef UNBAKE_TYPEMAP_H", "#define UNBAKE_TYPEMAP_H"]
-    type_lines.extend(rendered[path] for path in ordered_headers(components))
+    # Callback prerequisites may mention an aggregate before its definition;
+    # declare its tag at file scope rather than inside a parameter list.
+    type_lines.extend(f"{generated[name]['type']};" for name in sorted(generated))
+    type_lines.extend(rendered[path] for path in ordered_headers(components, aliases=alias_targets))
     type_lines.extend(("#endif", ""))
     prototypes = ["#ifndef UNBAKE_PROTOTYPES_H", "#define UNBAKE_PROTOTYPES_H", '#include "typemap.h"']
     for _name, record in sorted(value["functions"].items()):

@@ -396,6 +396,14 @@ class DatabaseTests(unittest.TestCase):
         shapes = [name for name, row in first["structs"].items() if row["state"] == "known"]
         self.assertEqual(len(shapes), 1)
         shape = shapes[0]
+        header = project.include[0] / "shared/typemap.h"
+        text = header.read_text().replace("int field_0;", "RetainedWord field_0;")
+        header.write_text(
+            text.replace(
+                f"struct {shape} {{",
+                f"typedef int RetainedWord;\ntypedef struct {shape} RetainedShape;\nstruct {shape} {{",
+            )
+        )
         source = project.src / "beta.c"
         source.write_text('#include "shared/typemap.h"\n' + f"int beta(struct {shape} *p) {{ return p->field_0; }}\n")
         cartridge.split.write_text(cartridge.split.read_text().replace(", asm, beta]", ", c, beta]"))
@@ -409,12 +417,16 @@ class DatabaseTests(unittest.TestCase):
             result = feedback(project, "beta", source, versions=["us"], proof=proof, policy=policy)
         self.assertEqual(result["structs"][shape]["state"], "known")
         self.assertTrue(result["structs"][shape]["generated"])
+        self.assertEqual(result["structs"][shape]["aliases"], ["RetainedShape"])
+        self.assertEqual(result["structs"][shape]["typedefs"], {"RetainedWord": "int"})
         self.assertEqual(result["structs"][shape]["common_base"], first["structs"][shape]["common_base"])
         self.assertIsNone(result["structs"][shape]["size"])
         repeated = solve(project, policy)
         self.assertEqual(repeated["structs"][shape]["base_nodes"], result["structs"][shape]["base_nodes"])
         self.assertIsNone(repeated["structs"][shape]["size"])
-        self.assertIn(f"struct {shape} {{", (project.include[0] / "shared/typemap.h").read_text())
+        self.assertIn(f"struct {shape} {{", header.read_text())
+        self.assertIn(f"typedef struct {shape} RetainedShape;", header.read_text())
+        self.assertIn("typedef int RetainedWord;", header.read_text())
 
     def test_abi_supplement_retains_map_and_is_content_pinned(self) -> None:
         from unbake.typemap.mapping import Analysis

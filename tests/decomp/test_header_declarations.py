@@ -22,9 +22,11 @@ class HeaderDeclarationsTests(unittest.TestCase):
             first = declarations(source)
             first.typedefs.clear()
             first.uses.add("unrelated")
+            first.complete_alias_uses.clear()
             second = declarations(source)
             self.assertEqual(second.typedefs, {"CachedWord"})
             self.assertEqual(second.uses, {"CachedWord"})
+            self.assertEqual(second.complete_alias_uses, {"CachedWord"})
             parse.assert_called_once()
             declarations(source.replace("CachedWord", "EditedWord"))
             self.assertEqual(parse.call_count, 2)
@@ -111,6 +113,29 @@ class HeaderDeclarationsTests(unittest.TestCase):
     def test_real_typedef_dependency_cycle_still_refuses(self) -> None:
         with self.assertRaisesRegex(Held, "cyclic shared type context: a.h -> b.h -> a.h"):
             ordered_headers({Path("a.h"): "typedef B A;", Path("b.h"): "typedef A B;"})
+
+    def test_complete_aliases_order_definitions_but_pointer_aliases_only_need_typedefs(self) -> None:
+        consumer, aliases, value = Path("consumer.h"), Path("aliases.h"), Path("value.h")
+        contents = {
+            consumer: "struct Holder { Value item; Value *next; Value (*pointer)[2]; };",
+            aliases: "typedef struct Item Value;",
+            value: "struct Item { struct Holder *owner; };",
+        }
+        self.assertEqual(ordered_headers(contents, aliases={"Value": "struct Item"}), [aliases, value, consumer])
+        parsed = declarations("extern Value (*callback)(Value *, Value); extern Value *pointer; typedef Value Alias;")
+        self.assertEqual(parsed.complete_alias_uses, {"Value"})
+        self.assertEqual(
+            declarations("struct Holder { Value *next; Value (*pointer)[2]; };").complete_alias_uses, set()
+        )
+
+    def test_complete_alias_cycles_still_refuse(self) -> None:
+        contents = {
+            Path("aliases.h"): "typedef struct A A; typedef struct B B;",
+            Path("a.h"): "struct A { B value; };",
+            Path("b.h"): "struct B { A value; };",
+        }
+        with self.assertRaisesRegex(Held, "cyclic shared type context: a.h -> b.h -> a.h"):
+            ordered_headers(contents, aliases={"A": "struct A", "B": "struct B"})
 
     def test_aggregates_forward_tags_enums_and_unnamed_bitfields(self) -> None:
         parsed = declarations(

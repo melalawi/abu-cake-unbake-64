@@ -14,6 +14,7 @@ from typing import Any
 from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
 
 from unbake.decomp.draft_context import ordered_headers
+from unbake.decomp.header_declarations import declarations as header_declarations
 from unbake.layout.structs_parser import Parser
 from unbake.project.config import Held, Policy, Project
 from unbake.project.headers import include_headers
@@ -468,7 +469,7 @@ def extract(
             variants = _prefix.setdefault("layout_overrides", {})
             selection = tuple(incoming.items())
             if selection not in variants:
-                rows, unknown = _layout_records(_prefix["layout_source"] + source, {})
+                rows, unknown = _layout_records(_prefix["layout_source"] + source, {}, aliases)
                 if unknown:
                     raise _FullDeclarationUnit
                 variants[selection] = rows
@@ -570,7 +571,7 @@ def extract(
                     "provenance": provenance,
                 }
     if not complete_layout:
-        rows, unknown = _layout_records(source, provenance)
+        rows, unknown = _layout_records(source, provenance, aliases)
         if _prefix is not None and (unknown or rows):
             raise _FullDeclarationUnit
         for name, row in rows.items():
@@ -579,7 +580,20 @@ def extract(
     return result
 
 
-def _layout_records(source: str, provenance: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _layout_typedefs(declaration: str, aliases: dict[str, str]) -> dict[str, str]:
+    """Keep the typedef prerequisites of a retained aggregate's C spelling."""
+    # Resolve prerequisite spellings so a pointer callback can precede the
+    # aggregate whose fields use it, without introducing a typedef cycle.
+    return {
+        name: canonical(aliases[name], aliases)
+        for name in sorted(header_declarations(declaration).uses)
+        if name in aliases
+    }
+
+
+def _layout_records(
+    source: str, provenance: dict[str, Any], aliases: dict[str, str]
+) -> tuple[dict[str, Any], list[str]]:
     records: dict[str, Any] = {}
     unknown = []
     layout_source = clean(source)
@@ -587,12 +601,14 @@ def _layout_records(source: str, provenance: dict[str, Any]) -> tuple[dict[str, 
         for layout in Parser(layout_source).parse():
             if not layout.fields:
                 continue
+            declaration = layout_source[layout.start : layout.end] + ";"
             records[layout.name] = {
                 "type": f"{layout.kind} {layout.name}",
                 "size": layout.size,
                 "alignment": layout.alignment,
                 "aliases": list(layout.aliases),
-                "declaration": layout_source[layout.start : layout.end] + ";",
+                "declaration": declaration,
+                "typedefs": _layout_typedefs(declaration, aliases),
                 "fields": [
                     {"name": f.name, "type": f.type, "offset": f.offset, "size": f.size, "extent": list(f.extent)}
                     for f in layout.fields

@@ -17,7 +17,7 @@ def _typedefs(text: str) -> set[str]:
     return declarations(text).typedefs
 
 
-def ordered_headers(contents: dict[Path, str]) -> list[Path]:
+def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None = None) -> list[Path]:
     """Put shared types before consumers even when headers omit includes."""
     parsed = {}
     for path, text in contents.items():
@@ -43,7 +43,12 @@ def ordered_headers(contents: dict[Path, str]) -> list[Path]:
         for name in header.tags:
             tag_providers.setdefault(name, set()).add(path)
     for path, header in parsed.items():
-        for name in header.complete_uses - header.tags:
+        complete = set(header.complete_uses)
+        for alias in header.complete_alias_uses:
+            target = (aliases or {}).get(alias, "")
+            if re.fullmatch(r"(?:struct|union) \w+", target):
+                complete.add(target.split()[1])
+        for name in complete - header.tags:
             dependencies[path].update(provider for provider in tag_providers.get(name, set()) if provider != path)
     ordered: list[Path] = []
     active: list[Path] = []

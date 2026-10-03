@@ -147,7 +147,15 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
-                ignored = ("provenance", "prototype", "declaration", "aliases", "registers", "declaration_conflict")
+                ignored = (
+                    "provenance",
+                    "prototype",
+                    "declaration",
+                    "aliases",
+                    "typedefs",
+                    "registers",
+                    "declaration_conflict",
+                )
                 old = {k: v for k, v in previous.items() if k not in ignored}
                 new = {k: v for k, v in record.items() if k not in ignored}
                 if key == "functions":
@@ -769,6 +777,8 @@ def infer(
                 "state": "conflict" if record.get("declaration_conflict") else "known",
                 "type": record["type"],
                 "declaration": record["declaration"],
+                "aliases": record.get("aliases", []),
+                "typedefs": record.get("typedefs", {}),
                 "fields": [
                     {
                         **field,

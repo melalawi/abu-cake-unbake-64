@@ -35,6 +35,7 @@ class Declarations:
     exports: set[str] = field(default_factory=set)
     tags: set[str] = field(default_factory=set)
     complete_uses: set[str] = field(default_factory=set)
+    complete_alias_uses: set[str] = field(default_factory=set)
 
 
 class Parser:
@@ -70,8 +71,9 @@ class Parser:
                 self.skip({pairs[token]})
                 self.take(pairs[token])
 
-    def specifiers(self) -> str:
+    def specifiers(self) -> tuple[str, str]:
         referenced_tag = ""
+        referenced_alias = ""
         while self.peek() in _QUALIFIERS:
             self.take()
         if self.peek() in ("struct", "union", "enum"):
@@ -99,10 +101,11 @@ class Parser:
             if not _IDENTIFIER.fullmatch(name):
                 raise Held("m2c", f"header declaration: expected type, found {name!r}")
             self.result.uses.add(name)
+            referenced_alias = name
         while self.peek() in _QUALIFIERS:
             self.take()
 
-        return referenced_tag
+        return referenced_tag, referenced_alias
 
     def declarator(self, *, abstract: bool = False) -> tuple[str, bool]:
         pointer = False
@@ -135,10 +138,12 @@ class Parser:
                     else:
                         while self.peek() in _STORAGE:
                             self.take()
-                        tag = self.specifiers()
+                        tag, alias = self.specifiers()
                         _, indirect = self.declarator(abstract=True)
                         if tag and not indirect:
                             self.result.complete_uses.add(tag)
+                        if alias and not indirect:
+                            self.result.complete_alias_uses.add(alias)
                     if self.peek() != ",":
                         break
                     self.take(",")
@@ -149,7 +154,7 @@ class Parser:
         storage = set()
         while self.peek() in _STORAGE | _QUALIFIERS:
             storage.add(self.take())
-        tag = self.specifiers()
+        tag, alias = self.specifiers()
         if self.peek() == ";":
             self.take()
             return
@@ -157,6 +162,8 @@ class Parser:
             name, indirect = ("", False) if self.peek() == ":" else self.declarator()
             if tag and not indirect and "typedef" not in storage:
                 self.result.complete_uses.add(tag)
+            if alias and not indirect and "typedef" not in storage:
+                self.result.complete_alias_uses.add(alias)
             if external and "typedef" in storage:
                 self.result.typedefs.add(name)
             elif external and "extern" in storage:
@@ -191,5 +198,10 @@ def declarations(source: str) -> Declarations:
     # this analysis. Keep caller-owned sets outside the shared cache.
     parsed = remembered("headers.declarations", source, lambda: Parser(source).parse(), keep=2048)
     return Declarations(
-        set(parsed.typedefs), set(parsed.uses), set(parsed.exports), set(parsed.tags), set(parsed.complete_uses)
+        set(parsed.typedefs),
+        set(parsed.uses),
+        set(parsed.exports),
+        set(parsed.tags),
+        set(parsed.complete_uses),
+        set(parsed.complete_alias_uses),
     )
