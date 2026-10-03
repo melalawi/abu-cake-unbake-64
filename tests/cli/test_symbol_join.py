@@ -2,12 +2,12 @@
 
 import hashlib
 import json
-import subprocess
 import sys
 import unittest
 
 from tests.cli import test_symbol_rules as rules
 from tests.cli.test_symbol_rules import LEFT, RIGHT, leaf
+from tests.process_fakes import cli_process
 
 
 class SymbolJoinTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class SymbolJoinTests(unittest.TestCase):
         self.project = self.fixture.project
 
     def command(self, *args, expected=0):
-        result = subprocess.run(
+        result = cli_process(
             [sys.executable, str(self.fixture.launcher), "--project", str(self.project), *args],
             env=self.fixture.environment,
             capture_output=True,
@@ -158,15 +158,11 @@ class SymbolJoinTests(unittest.TestCase):
             "--map",
             str(path),
         ]
-        callers = [
-            subprocess.Popen(
-                command, env=self.fixture.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            )
-            for _ in range(2)
-        ]
-        for caller in callers:
-            out, error = caller.communicate(timeout=90)
-            self.assertEqual(caller.returncode, 0, out + error)
+        from tests.process_fakes import cli_process
+
+        for _ in range(2):
+            result = cli_process(command, env=self.fixture.environment, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         artifacts = list((self.project / "build/setup").glob("join-*/proposal.json"))
         self.assertEqual(len(artifacts), 2)
         for artifact in artifacts:

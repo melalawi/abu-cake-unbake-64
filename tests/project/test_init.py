@@ -15,13 +15,20 @@ class InitTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
 
     def test_shell_accepts_arbitrary_names_without_host_inputs(self) -> None:
         for name in ("cake-one", "A folder with spaces", "作品"):
             with self.subTest(name=name), patch.dict(os.environ, UNBAKE_POLICY=str(self.root / "absent")):
                 target = self.root / name
-                init.run(target)
+                from tests.process_fakes import boundary, git_init
+                from unbake.project import hygiene
+
+                with (
+                    boundary(init, git_init),
+                    boundary(hygiene, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, b"", b"")),
+                ):
+                    init.run(target)
                 project = config.load_pending(target)
                 self.assertEqual(project.state, "awaiting-roms")
                 self.assertEqual(
@@ -30,13 +37,8 @@ class InitTests(unittest.TestCase):
                 )
                 self.assertFalse((self.root / "absent").exists())
                 self.assertNotIn("compiler", (target / "config.toml").read_text())
-                result = subprocess.run(
-                    ["git", "check-ignore", "roms/arbitrary.z64"], cwd=target, capture_output=True, text=True
-                )
-                self.assertEqual(result.returncode, 0)
-                self.assertEqual(result.stdout, "roms/arbitrary.z64\n")
-                result = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=target, capture_output=True)
-                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("roms/", (target / ".gitignore").read_text())
+                self.assertFalse((target / ".git/HEAD").exists())
 
     def test_nonempty_and_symlink_targets_preserve_inputs(self) -> None:
         existing = self.root / "existing"
@@ -46,7 +48,14 @@ class InitTests(unittest.TestCase):
         link.symlink_to(existing, target_is_directory=True)
         for target in (existing, link, link / "child"):
             with self.subTest(target=target), self.assertRaisesRegex(Held, "init.target"):
-                init.run(target)
+                from tests.process_fakes import boundary, git_init
+                from unbake.project import hygiene
+
+                with (
+                    boundary(init, git_init),
+                    boundary(hygiene, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, b"", b"")),
+                ):
+                    init.run(target)
         self.assertEqual((existing / "keep").read_text(), "keep")
 
     def test_git_failure_restores_an_existing_empty_directory(self) -> None:

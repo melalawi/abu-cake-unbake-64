@@ -4,7 +4,7 @@ import fcntl
 import tempfile
 import threading
 import unittest
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -20,9 +20,38 @@ class TrialTargetTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(temporary.name)
-        self.project, _policy = fixture(self.root)
+        self.root = Path(temporary.name).resolve()
+        self.project, _policy = fixture(self.root, case=self)
         write_rendered(self.project)
+        import subprocess
+
+        from tests.helper_fixture import extraction
+        from tests.process_fakes import boundary, script_output
+        from unbake.decomp import trial_target
+
+        def make(command, **kwargs):
+            self.assertEqual(command[:2], ["make", "-j4"])
+            self.assertIn("C_COLD=", command)
+            target = Path(command[-2] if command[-1].startswith("BUILD=") else command[-1])
+            if target.name == "game.ld":
+                return extraction(self.project)
+            target = target if target.is_absolute() else self.root / target
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if "obj/src" in str(target):
+                build.compile_object(self.project, _policy, self.project.src / "middle.c", "us", target)
+                result = subprocess.CompletedProcess(command, 0, "", "")
+            else:
+                source = self.project.asm / "us/first.s"
+                result = script_output(
+                    [str(self.root / "tools/as"), "--MD", str(target.with_suffix(".d")), "-o", str(target), str(source)]
+                )
+            if result.returncode == 0:
+                target.with_suffix(".built").touch()
+            return result
+
+        mock = boundary(trial_target, make)
+        mock.start()
+        self.addCleanup(mock.stop)
 
     def test_missing_generation_builds_inventory_and_only_requested_assembly_object(self) -> None:
         self.assertFalse((self.root / "build").exists())
@@ -92,8 +121,7 @@ class TrialTargetTests(unittest.TestCase):
                 future = pool.submit(read)
                 try:
                     self.assertTrue(waiting.wait(timeout=5))
-                    with self.assertRaises(TimeoutError):
-                        future.result(timeout=0.2)
+                    self.assertFalse(future.done())
                     # Simulate publication while the cold target waits for the writer.
                     replacement = generation.with_name("us.1")
                     replacement.mkdir()

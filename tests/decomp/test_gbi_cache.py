@@ -17,8 +17,8 @@ class GbiCacheTests(unittest.TestCase):
 
     def test_repeated_proof_and_build_compile_each_content_only_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy = fixture(root)
+            root = Path(temporary).resolve()
+            project, policy = fixture(root, case=self)
             unit = project.src / "middle.c"
             before, after = "int middle(void) { return 1; }", "int middle(void) { return 2; }"
             gbi_proof.preserve(project, policy, unit, before, after)
@@ -37,8 +37,8 @@ class GbiCacheTests(unittest.TestCase):
         from unbake.project.config import Held, Policy
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy, _ = decomp_fixture(root, versions=("us", "eu"))
+            root = Path(temporary).resolve()
+            project, policy, _ = decomp_fixture(root, versions=("us", "eu"), case=self)
             unit = project.src / "alpha.c"
             for differing_version, guarded in (("us", True), ("eu", False)):
                 calls = []

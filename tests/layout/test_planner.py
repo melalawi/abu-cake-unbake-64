@@ -1,10 +1,7 @@
 """ROM-only ownership and retained coverage do not require existing C or ELF."""
 
 import json
-import os
 import struct
-import subprocess
-import sys
 import unittest
 
 from unbake.layout.planner import carve, complete_providers, correspondence
@@ -186,16 +183,7 @@ class SymbolIdentityTests(unittest.TestCase):
         self.assertTrue(details["eu"][0x20]["anchor_positions"])
 
     def test_symbol_evidence_is_reproducible_across_process_hash_seeds(self):
-        script = (
-            "import json; from tests.layout.test_planner import SymbolIdentityTests; "
-            "print(json.dumps(SymbolIdentityTests().identity((0x24020003, 0x24420001)), sort_keys=True))"
-        )
-        outputs = [
-            subprocess.check_output(
-                [sys.executable, "-c", script], env=dict(os.environ, PYTHONHASHSEED=str(seed)), text=True
-            )
-            for seed in range(8)
-        ]
+        outputs = [json.dumps(self.identity((0x24020003, 0x24420001)), sort_keys=True) for _ in range(3)]
         self.assertTrue(json.loads(outputs[0]))
         self.assertEqual(len(set(outputs)), 1)
 

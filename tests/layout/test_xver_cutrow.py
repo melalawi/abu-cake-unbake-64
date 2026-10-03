@@ -22,7 +22,7 @@ class TrialCutRowTests(unittest.TestCase):
             ("c", 4, True),
         ):
             with self.subTest(kind=kind, padding=padding, merged=merged), tempfile.TemporaryDirectory() as directory:
-                project = Project(Path(directory))
+                project = Project(Path(directory).resolve())
                 for version in project.versions:
                     project.layout(
                         version,

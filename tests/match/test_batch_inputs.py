@@ -132,7 +132,7 @@ class CollectionTests(unittest.TestCase):
             self.assertTrue((generations[5] / "obj/asm").is_dir())
 
 
-def local_project(directory):
+def local_project(directory, **kwargs):
     """Only input files; all object decoding and external tools are mocked."""
     root = directory / "project"
     root.mkdir()

@@ -1,4 +1,3 @@
-import shutil
 import struct
 import tempfile
 import unittest
@@ -25,9 +24,7 @@ def need(
 
 
 def mips_tool(name: str) -> Path:
-    executable = shutil.which(f"mips-linux-gnu-{name}")
-    assert executable is not None
-    return Path(executable)
+    return Path("fixture-mips-" + name)
 
 
 def project_for(symbols_path: Path) -> Project:
@@ -63,7 +60,7 @@ def project_for(symbols_path: Path) -> Project:
 class SymbolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.family = family_for("ido-7.1")
-        root = Path(tempfile.gettempdir())
+        root = Path(tempfile.gettempdir()).resolve()
         self.policy = Policy(
             setup_version_jobs=4,
             cores=1,
@@ -157,7 +154,7 @@ class SymbolTests(unittest.TestCase):
 
     def test_resolver_native_format_and_idempotence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "symbol_addrs.txt"
+            path = Path(temporary).resolve() / "symbol_addrs.txt"
             path.write_text("hudGlobals = 0x800C76EC; // ignore:false\n")
             project = project_for(path)
             pending: list[needs.Need] = [
@@ -190,7 +187,7 @@ class SymbolTests(unittest.TestCase):
             ("", [replace(need(), name="bad-name")], "name"),
         )
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "symbol_addrs.txt"
+            path = Path(temporary).resolve() / "symbol_addrs.txt"
             project = project_for(path)
             for before, pending, reason in cases:
                 with self.subTest(reason=reason), self.assertRaisesRegex(Held, reason):
@@ -206,7 +203,7 @@ class SymbolTests(unittest.TestCase):
 
     def test_cross_version_address_names_and_shared_file_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "symbols"
+            path = Path(temporary).resolve() / "symbols"
             path.write_text("")
             project = project_for(path)
             self.assertEqual(
@@ -217,7 +214,7 @@ class SymbolTests(unittest.TestCase):
 
     def test_data_rows_explicit_bss_boundaries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             project = project_for(root / "symbols")
             layout = (
                 "segments:\n  - name: main\n    type: code\n    start: 0x40\n"

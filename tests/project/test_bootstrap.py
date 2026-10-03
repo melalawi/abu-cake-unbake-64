@@ -121,7 +121,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_probe_preserves_project_flags_and_header_context(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "project"
+            root = Path(temporary).resolve() / "project"
             shutil.copytree(Path(__file__).parents[1] / "fixture", root)
             project = config.load(root)
             project.roms.mkdir(exist_ok=True)
@@ -171,7 +171,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_report_refreshes_existing_partial_object_in_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "project"
+            root = Path(temporary).resolve() / "project"
             shutil.copytree(Path(__file__).parents[1] / "fixture", root)
             project = config.load(root)
             project.roms.mkdir(exist_ok=True)

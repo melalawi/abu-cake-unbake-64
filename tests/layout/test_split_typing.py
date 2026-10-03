@@ -11,7 +11,7 @@ from unbake.layout import split, split_partition
 class TextTypingTests(unittest.TestCase):
     def classify(self, bodies: list[str]) -> str:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             assembly = root / "asm/us"
             assembly.mkdir(parents=True)
             text = ".section .text\nglabel handler\n"

@@ -1,4 +1,4 @@
-"""Temporary policies and explicitly required external test tools."""
+"""Temporary policies and names for mocked tool boundaries."""
 
 import json
 import os
@@ -21,8 +21,6 @@ def tool(name: str) -> str:
         raise config.Held("test", f"test policy tool {name}: unknown key")
     field = fields[name]
     executable = getattr(config.load_policy(), field)
-    if not executable.is_file():
-        raise config.Held("test", f"test policy {field}: missing executable {executable}")
     return str(executable)
 
 
@@ -47,6 +45,4 @@ def test_policy(root: Path | None = None) -> config.Policy:
         if root is not None
         else config.load_policy(Path(explicit) if explicit else None)
     )
-    if not policy.objdiff_cli.is_file():
-        raise config.Held("test", f"objdiff_cli: missing executable {policy.objdiff_cli}")
     return policy

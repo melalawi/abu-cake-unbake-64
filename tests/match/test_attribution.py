@@ -11,7 +11,7 @@ from unbake.match.attribution import diagnose
 class AttributionTests(unittest.TestCase):
     def test_multiline_link_error_names_current_owner_and_candidate_provider(self):
         with tempfile.TemporaryDirectory() as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             generation = project.build / "us.generation"
             (generation / "build.log").write_text(
                 "ld: obj/src/alpha.o: in function `constant':\n"
@@ -26,14 +26,14 @@ class AttributionTests(unittest.TestCase):
 
     def test_chunk_compile_failure_names_source_without_linked_image(self):
         with tempfile.TemporaryDirectory() as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             generation = project.build / "us.generation"
             (generation / "build.log").write_text("HELD(compile): batch objects failed: src/beta.c: invalid C\n")
             self.assertEqual(set(diagnose(project, ["us"], {"us": generation}, {"alpha", "beta"})), {"beta"})
 
     def test_compiler_lines_follow_the_failed_source_without_paths(self):
         with tempfile.TemporaryDirectory() as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             generation = project.build / "us.generation"
             (generation / "build.log").write_text(
                 "HELD(compile): batch objects failed:\n"
@@ -51,7 +51,7 @@ class PlacementTests(unittest.TestCase):
     def _objects(self, directory, *, short=True, bad=False):
         from tests.decomp.support import assemble, assembly
 
-        project, _, _ = fixture(directory)
+        project, _, _ = fixture(directory, case=self)
         generation = project.build / "us.generation"
         source = generation / "obj/src"
         source.mkdir()
@@ -72,9 +72,6 @@ class PlacementTests(unittest.TestCase):
         return project, generation
 
     def _link(self, project, generation, body=None):
-        import subprocess
-
-        from tests.decomp.support import LINKER
 
         script = generation / "proof.ld"
         script.write_text(
@@ -82,11 +79,26 @@ class PlacementTests(unittest.TestCase):
             + (body or "obj/src/alpha.o(.text) obj/src/beta.o(.text) obj/src/gamma.o(.text)")
             + " } /DISCARD/ : { *(.reginfo) *(.MIPS.abiflags) *(.pdr) } }"
         )
-        subprocess.run(
-            [LINKER, "-T", script.name, "-Map", f"{project.name}.map", "-o", f"{project.name}.elf"],
-            cwd=generation,
-            check=True,
-            capture_output=True,
+        import re
+
+        from tests.elf_fixture import write_object
+        from unbake.project_tools.elf import Object
+
+        text, symbols = bytearray(), []
+        for object_name, section_name in re.findall(r"(obj/src/\w+\.o)\((\.\w+)\)", script.read_text()):
+            obj = Object(generation / object_name)
+            offset = len(text)
+            text.extend(obj.content(obj.section(section_name)))
+            for table in obj.symbols.values():
+                for symbol in table:
+                    if symbol["section"] == obj.section(section_name) and symbol["info"] >> 4:
+                        symbols.append((symbol["name"], ".text", 0x80001000 + offset + symbol["value"], symbol["size"]))
+        write_object(
+            generation / f"{project.name}.elf",
+            {".text": bytes(text)},
+            symbols,
+            addresses={".text": 0x80001000},
+            linked=True,
         )
 
     def test_short_origin_does_not_hold_later_placement_victims(self):
@@ -159,7 +171,7 @@ class PlacementTests(unittest.TestCase):
             )
             faults = diagnose(project, ["us"], {"us": generation}, {"alpha", "beta", "gamma"})
             self.assertEqual(set(faults), {"alpha"})
-            self.assertIn(".data: consumed 4 bytes, target span 12", "; ".join(faults["alpha"]))
+            self.assertIn(".data: size 4, target span 12", "; ".join(faults["alpha"]))
 
     def test_automatic_bss_growth_uses_proved_original_providers(self):
         from tests.decomp.support import assemble, assembly
@@ -168,7 +180,7 @@ class PlacementTests(unittest.TestCase):
             project, generation = self._objects(Path(directory), short=False)
             reference = Path(directory) / "reference"
             reference.mkdir()
-            original, _, _ = fixture(reference)
+            original, _, _ = fixture(reference, case=self)
             baseline = original.build / "us.generation"
             (generation / f"{project.name}.ld").write_text("SECTIONS { .bss : { obj/src/alpha.o(.bss) } }")
             assemble(

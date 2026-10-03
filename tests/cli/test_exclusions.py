@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import sysconfig
 from dataclasses import asdict
 from pathlib import Path
@@ -12,6 +11,7 @@ from unittest.mock import patch
 import toml
 
 from tests.cli.support import MainCase
+from tests.process_fakes import cli_process
 from unbake.layout import split
 
 
@@ -122,7 +122,7 @@ class ExclusionTests(MainCase):
         ):
             if operands == ("next",):
                 path.write_text('{"schema": 2, "functions": []}')
-            result = subprocess.run(
+            result = cli_process(
                 [str(script), *self.args(*operands)],
                 cwd=self.directory,
                 env=environment,

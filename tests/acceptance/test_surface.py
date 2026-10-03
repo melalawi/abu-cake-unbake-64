@@ -10,12 +10,26 @@ import tomllib
 import unittest
 from pathlib import Path
 
+from tests.process_fakes import cli_process
+
 
 class CutoverSurfaceTests(unittest.TestCase):
     def setUp(self) -> None:
+        from unittest.mock import patch
+
+        from tests.process_fakes import boundary, git_init
+        from unbake.project import hygiene, init
+
+        for mock in (
+            boundary(init, git_init),
+            boundary(hygiene, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, b"", b"")),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
+        self.addCleanup(patch.stopall)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.source = Path(__file__).resolve().parents[2] / "src"
         self.env = dict(
             os.environ,
@@ -25,7 +39,7 @@ class CutoverSurfaceTests(unittest.TestCase):
         )
 
     def command(self, *arguments: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        result = subprocess.run(
+        result = cli_process(
             [sys.executable, "-m", "unbake", *arguments],
             cwd=cwd or self.root,
             env=self.env,
@@ -58,11 +72,8 @@ class CutoverSurfaceTests(unittest.TestCase):
         self.assertNotIn("toolkit", expected.decode().lower())
         for heading in ("Install", "New project", "Next command"):
             self.assertIn("## " + heading, expected.decode())
-        result = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=project, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
-        rom = project / config["paths"]["roms"] / "arbitrary.z64"
-        result = subprocess.run(["git", "check-ignore", str(rom)], cwd=project, capture_output=True)
-        self.assertEqual(result.returncode, 0)
+        self.assertFalse((project / ".git/HEAD").exists())
+        self.assertIn("/roms/", (project / ".gitignore").read_text())
         result = self.command("setup", cwd=project)
         self.assertEqual(result.returncode, 1)
         self.assertIn("setup.roms:", result.stdout)

@@ -21,13 +21,15 @@ OTHER_CODE = bytes.fromhex("3c0280003442000124420001ac8200008c820000104000010000
 def cartridge(
     *, region: str = "E", revision: int = 0, code: Any = "EX", seed: int = 0, instructions: Any = CODE
 ) -> Any:
-    data = bytearray(0x101000)
+    data = bytearray(0x2400)
     struct.pack_into(">4I", data, 0, 0x80371240, 15, 0x80001000, 0x1444)
     data[0x20:0x34] = b"Example Game        "
     data[0x3B:0x40] = b"N" + code.encode() + region.encode() + bytes([revision])
     data[0x1000 : 0x1000 + len(instructions)] = instructions
     data[0x1100] = seed
-    struct.pack_into(">2I", data, 0x10, *header.checksum(data, "6102/7101"))
+    struct.pack_into(
+        ">2I", data, 0x10, *__import__("tests.rom_fixture", fromlist=["checksum"]).checksum(data, "6102/7101")
+    )
     return bytes(data)
 
 
@@ -37,9 +39,12 @@ def inventory(*cartridges: Any, ranges: Any = ((0x1000, 0x1020),)) -> Any:
 
 class RomTests(unittest.TestCase):
     def setUp(self) -> None:
+        from tests.rom_fixture import install
+
+        install(self)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         table = patch.object(header, "RETAIL", BOOTCODES)
         table.start()
         self.addCleanup(table.stop)

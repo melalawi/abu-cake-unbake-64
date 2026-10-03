@@ -41,7 +41,7 @@ class GateCliTests(MainCase):
                     self.assertIn(f"typed.{difference}=1", out)
                 else:
                     self.assertIn("Next: unbake", out)
-                    self.assertIn("submit", out.split("Next:")[-1])
+                    self.assertIn("next", out.split("Next:")[-1])
 
     def test_try_uses_each_containing_version_and_does_not_trust_objdiff_score(self):
         comparisons = {v: comparison(v, exact=9) for v in self.project.versions}

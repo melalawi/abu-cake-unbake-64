@@ -5,7 +5,6 @@ import json
 import os
 import shutil
 import struct
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -14,6 +13,7 @@ from pathlib import Path
 
 import toml
 
+from tests.process_fakes import cli_process
 from tests.project.test_rom import cartridge
 
 
@@ -31,9 +31,20 @@ INSERT = [0xAC830004, 0x03E00008, 0]
 
 class SymbolRuleTests(unittest.TestCase):
     def setUp(self):
+        from tests.rom_fixture import install
+
+        install(self)
+        import zlib
+        from unittest.mock import patch
+
+        from unbake.project import header
+
+        mock = patch.dict(header.RETAIL, {zlib.crc32(bytes(0xFC0)): "6102/7101"})
+        mock.start()
+        self.addCleanup(mock.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.project = self.directory / "Symbols"
         shutil.copytree(Path(__file__).parents[1] / "fixture", self.project)
         (self.project / "roms").mkdir(exist_ok=True)
@@ -95,7 +106,7 @@ class SymbolRuleTests(unittest.TestCase):
         path.write_text(json.dumps(layout))
 
     def preview(self, *, seed=0, expected=0):
-        result = subprocess.run(
+        result = cli_process(
             [sys.executable, str(self.launcher), "--project", str(self.project), "setup", "--replan-symbols"],
             env=dict(self.environment, PYTHONHASHSEED=str(seed)),
             capture_output=True,

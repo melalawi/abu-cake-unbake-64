@@ -31,8 +31,8 @@ class ResidentJumpTableTests(unittest.TestCase):
     def test_draft_reads_biased_resident_entries_and_stops_at_mapping_end(self) -> None:
         for bias in (0, 0x80000000):
             with self.subTest(bias=bias), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
-                project, _, _ = fixture(root, words=[0] * 10)
+                root = Path(temporary).resolve()
+                project, _, _ = fixture(root, words=[0] * 10, case=self)
                 recipe = resident(project, bias)
                 assembly = "glabel alpha\nlui $at, %hi(jtbl_80003000)\n/* 000058 80001018 00000000 */ nop\n"
                 with patch.object(makefile, "recipe", return_value=recipe):

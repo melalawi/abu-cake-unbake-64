@@ -12,7 +12,7 @@ from unbake.project_tools import compile as compiler
 class CompileChunkTests(unittest.TestCase):
     def test_compile_failure_keeps_objects_after_both_bad_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "src"
             source.mkdir()
             units = [source / (name + ".c") for name in ("good_a", "bad_a", "good_b", "bad_b", "good_c")]

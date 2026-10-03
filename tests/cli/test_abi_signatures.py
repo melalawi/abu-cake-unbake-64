@@ -5,27 +5,26 @@ import json
 import os
 import shutil
 import struct
-import subprocess
 import sysconfig
 import tempfile
 import unittest
-from dataclasses import asdict
 from pathlib import Path
 
 import toml
 
 from tests.decomp.support import fixture
-from unbake.project.config import load_policy
+from tests.process_fakes import cli_process
 
 
 class AbiSignatureCliTests(unittest.TestCase):
     def test_installed_conflicting_callee_types_draft_and_parse_rollback(self):
+        self.m2c_output = "int alpha(int value) { return beta(value, 2); }\n"
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
             # alpha forwards an integer; gamma tail-forwards a pointer to beta.
             words = [0x27BDFFE8, 0xAFBF0014, 0, 0, 0x24050002, 0x8FBF0014, 0x27BD0018, 0x03E00008, 0]
             address = 0x80001000 + len(words) * 4
             words[3] = 0x0C000000 | ((address >> 2) & 0x3FFFFFF)
-            project, _, _ = fixture(Path(directory), words=words)
+            project, _, _ = fixture(Path(directory).resolve(), words=words, case=self)
             (project.asm / "us/nonmatchings/alpha.s").write_text(
                 ".text\nglabel alpha\n addiu $sp,$sp,-24\n sw $ra,20($sp)\n nop\n"
                 " jal beta\n addiu $a1,$zero,2\n lw $ra,20($sp)\n"
@@ -66,7 +65,9 @@ class AbiSignatureCliTests(unittest.TestCase):
             environment.pop("PYTHONPATH", None)
 
             def cli(*arguments, expected=0):
-                result = subprocess.run(
+                if arguments and arguments[0] == "draft":
+                    arguments = (*arguments, "--scratch", str(Path(directory) / "draft-scratch"))
+                result = cli_process(
                     [str(script), "--project", str(project.root), *arguments],
                     env=environment,
                     capture_output=True,
@@ -89,7 +90,7 @@ class AbiSignatureCliTests(unittest.TestCase):
             self.assertEqual(callee["abi_declaration"]["prototype"], "int beta(int, int);")
             self.assertEqual(callee["abi"]["call_sites"], 2)
             cli("draft", "alpha")
-            source = (project.drafts / "alpha/alpha.c").read_text()
+            source = (Path(directory) / "draft-scratch/drafts/alpha/alpha.c").read_text()
             self.assertIn("extern int beta(int, int);", source)
             self.assertIn("types.abi.word:", source)
             self.assertNotIn("M2C_UNK", source)
@@ -101,15 +102,7 @@ class AbiSignatureCliTests(unittest.TestCase):
             protected = [project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json")]
             protected.extend(project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
             previous = {path: path.read_bytes() for path in protected}
-            parser = project.tools / "reject-context"
-            parser.write_text("#!/bin/sh\nprintf 'invalid shared context' >&2\nexit 1\n")
-            parser.chmod(0o755)
-            values = asdict(load_policy())
-            values["m2c"] = parser
-            policy = project.root / "reject-policy.toml"
-            policy.write_text(
-                toml.dumps({key: str(value) if isinstance(value, Path) else value for key, value in values.items()})
-            )
-            environment["UNBAKE_POLICY"] = str(policy)
-            self.assertIn("types.header_parse", cli("solve", expected=1))
+            broken = project.include[0] / "types.h"
+            broken.write_text(broken.read_text() + "\nthis is invalid C;\n")
+            self.assertIn("header declaration", cli("solve", expected=1))
             self.assertEqual(previous, {path: path.read_bytes() for path in protected})

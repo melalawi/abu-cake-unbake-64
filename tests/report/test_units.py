@@ -3,14 +3,13 @@
 import json
 import os
 import struct
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture
-from tests.support import test_policy, tool
+from tests.support import test_policy
 from unbake.layout import split
 from unbake.project.config import Project, Version
 from unbake.report.progress import write
@@ -18,11 +17,16 @@ from unbake.report.units import functions, units
 
 
 class UnitsTests(unittest.TestCase):
+    def setUp(self):
+        from tests.report_fixture import install
+
+        install(self)
+
     def test_matched_rows_share_one_split_read_with_segment_addresses(self) -> None:
         self.addCleanup(patch.stopall)
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            root = Path(temporary)
-            project, _ = fixture(root / "project")
+            root = Path(temporary).resolve()
+            project, _ = fixture(root / "project", case=self)
             version = project.version("us")
             version.split.write_text(
                 "segments:\n  - name: main\n    type: code\n    start: 0\n"
@@ -41,26 +45,11 @@ class UnitsTests(unittest.TestCase):
                 '.section .overlay,"ax"\n.globl third\nthird: .word 0\n'
             )
             obj = root / "functions.o"
-            subprocess.run(
-                [tool("mips-linux-gnu-as"), "-EB", "--no-pad-sections", "-o", str(obj), str(assembly)],
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                [
-                    tool("mips-linux-gnu-ld"),
-                    "-Ttext",
-                    "0x80000000",
-                    "--section-start=.overlay=0x80200000",
-                    "-e",
-                    "first",
-                    "-o",
-                    str(generation / "game.elf"),
-                    str(obj),
-                ],
-                capture_output=True,
-                check=True,
-            )
+            from tests.assembly_fixture import object_fixture
+            from tests.elf_fixture import linked_fixture
+
+            object_fixture(obj, assembly.read_text())
+            linked_fixture(generation / "game.elf", [obj], {".text": 0x80000000, ".overlay": 0x80200000})
             for name in ("first", "second", "third"):
                 (project.src / (name + ".c")).write_text(f"void {name}(void) {{}}\n")
                 base = generation / "obj/src" / (name + ".o")
@@ -75,7 +64,7 @@ class UnitsTests(unittest.TestCase):
 
     def test_startup_is_code_and_terminal_bss_is_data(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             version = Version("us", root / "rom", "0" * 40, root / "split.yaml", root / "symbols", ())
             version.split.write_text(
                 "segments:\n  - name: main\n    type: code\n    start: 0x1000\n"
@@ -90,7 +79,7 @@ class UnitsTests(unittest.TestCase):
 
     def test_linked_relocations_and_padding_use_split_totals(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             version = Version(
                 name="us",
                 baserom=root / "baserom.us.z64",
@@ -149,28 +138,17 @@ class UnitsTests(unittest.TestCase):
                     + f".size {name},.-{name}\n"
                     + (".word 0\n" if name == "padding" else "")
                 )
-                subprocess.run(
-                    [tool("mips-linux-gnu-as"), "-EB", "-mips3", "--no-pad-sections", "-o", str(destination)],
-                    input=assembly,
-                    text=True,
-                    capture_output=True,
-                    check=True,
-                )
-            subprocess.run(
-                [
-                    tool("mips-linux-gnu-ld"),
-                    "-Ttext",
-                    "0x80000000",
-                    "--defsym",
-                    "external=0x80008000",
-                    "-e",
-                    "matched",
-                    "-o",
-                    str(generation / "game.elf"),
-                    str(generation / "obj/src/matched.o"),
-                ],
-                capture_output=True,
-                check=True,
+                from tests.assembly_fixture import object_fixture
+
+                object_fixture(destination, assembly)
+            from tests.elf_fixture import write_object
+
+            write_object(
+                generation / "game.elf",
+                {".text": bytes.fromhex("3c0280012442800003e0000800000000")},
+                [("matched", ".text", 0x80000000, 16)],
+                addresses={".text": 0x80000000},
+                linked=True,
             )
             words = (0x3C028001, 0x24428000, 0x03E00008, 0, 0x24020001, 0x03E00008, 0, 0)
             for changed, matched in ((False, 16), (True, 0)):

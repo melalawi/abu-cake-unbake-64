@@ -16,7 +16,7 @@ class PortTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.fixture = ProjectFixture(self.root)
         self.project = cast(Project, self.fixture)
         self.policy = cast(Policy, self.fixture.policy)

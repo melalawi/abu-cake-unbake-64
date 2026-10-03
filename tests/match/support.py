@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import tempfile
 import unittest
 from collections.abc import Callable, Iterable
@@ -22,11 +21,25 @@ from unbake.project import build, makefile
 from unbake.project.config import Compiler, Held, Policy, Project, Version
 from unbake.report import progress
 
-SCRATCH_ROOT = Path(tempfile.gettempdir())
+SCRATCH_ROOT = Path(tempfile.gettempdir()).resolve()
 
 
 class MatchFixture(unittest.TestCase):
     def setUp(self) -> None:
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.layout import structs
+        from unbake.typemap import declarations
+
+        for mock in (boundary(structs, output), boundary(declarations, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+        from tests.process_fakes import boundary, copy
+        from unbake.match import staging
+
+        copier = boundary(staging, copy)
+        copier.start()
+        self.addCleanup(copier.stop)
         for name in ("feedback", "feedback_many"):
             feedback = patch("unbake.decomp.type_context." + name)
             feedback.start()
@@ -34,9 +47,9 @@ class MatchFixture(unittest.TestCase):
         (SCRATCH_ROOT).mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=SCRATCH_ROOT)
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name) / "project"
+        self.root = Path(self.temporary.name).resolve() / "project"
         self.root.mkdir()
-        self.sources = Path(self.temporary.name) / "submitted"
+        self.sources = Path(self.temporary.name).resolve() / "submitted"
         self.sources.mkdir()
         self.src = self.root / "src"
         self.src.mkdir()
@@ -109,13 +122,15 @@ class MatchFixture(unittest.TestCase):
         recipe.write_text(json.dumps(makefile.description(self.project), sort_keys=True, indent=2) + "\n")
         (tools / "compiler.sha256").write_text(hashlib.sha256(recipe.read_bytes()).hexdigest() + "  tools/build.json\n")
         patch("unbake.project.config.load", side_effect=lambda *_: self.project).start()
+        cpp = tools / "fixture-cpp"
+        cpp.write_bytes(b"fixture preprocessor")
         self.policy = Policy(
             setup_version_jobs=4,
             cores=2,
             stall_trials=4,
             assignment_idle_hours=1.0,
-            cache_root=Path(self.temporary.name) / "cache",
-            state_root=Path(self.temporary.name) / "state",
+            cache_root=Path(self.temporary.name).resolve() / "cache",
+            state_root=Path(self.temporary.name).resolve() / "state",
             objdiff_cli=tools / "objdiff",
             objdiff_sha256="b" * 64,
             m2c=tools / "m2c",
@@ -127,7 +142,7 @@ class MatchFixture(unittest.TestCase):
             probe_count=20,
             mips_as=tools / "as",
             mips_objcopy=tools / "objcopy",
-            cpp=Path(shutil.which("cpp") or "cpp"),
+            cpp=cpp,
             asflags=(),
             cppflags=(),
             sn64_asflags=(),

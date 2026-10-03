@@ -144,7 +144,7 @@ class HeaderTests(unittest.TestCase):
     def test_byte_orders_tails_and_load_does_not_write(self) -> None:
         valid = image()
         with patch.object(header, "RETAIL", BOOTCODES), tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             for width in (1, 2, 4):
                 with self.subTest(width=width):
                     swapped = b"".join(valid[i : i + width][::-1] for i in range(0, len(valid), width))

@@ -15,7 +15,7 @@ class DatabaseTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
-        self.project, self.policy, _ = fixture(Path(directory.name), versions=("us", "eu"))
+        self.project, self.policy, _ = fixture(Path(directory.name).resolve(), versions=("us", "eu"), case=self)
 
     def test_map_keeps_all_versions_and_visible_unknown_types(self) -> None:
         mapped = map_program(self.project)
@@ -288,7 +288,9 @@ class DatabaseTests(unittest.TestCase):
 
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
-        project, _, _ = fixture(Path(directory.name), words=[0x3C088000, 0x8D083000, 0x8D020004, 0x03E00008, 0])
+        project, _, _ = fixture(
+            Path(directory.name).resolve(), words=[0x3C088000, 0x8D083000, 0x8D020004, 0x03E00008, 0], case=self
+        )
         original = map_program(project)
         symbols = project.version("us").symbols
         initial = symbols.read_text()
@@ -308,7 +310,9 @@ class DatabaseTests(unittest.TestCase):
 
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
-        project, _, _ = fixture(Path(directory.name), words=[0x3C088000, 0x35081018, 0x01000008, 0, 0x03E00008, 0])
+        project, _, _ = fixture(
+            Path(directory.name).resolve(), words=[0x3C088000, 0x35081018, 0x01000008, 0, 0x03E00008, 0], case=self
+        )
         before = map_program(project)
         self.assertEqual(before["functions"]["alpha"]["versions"]["us"]["calls"][0]["callee"], "beta")
         version = project.version("us")
@@ -346,7 +350,7 @@ class DatabaseTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
         words = [0x00808021, 0x0C000406, 0x02002021, 0x8E020004, 0x03E00008, 0]
-        project, policy, _ = fixture(Path(directory.name), words=words)
+        project, policy, _ = fixture(Path(directory.name).resolve(), words=words, case=self)
         cartridge = project.version("us")
         image = bytearray(cartridge.baserom.read_bytes())
         image[0x58:0x5C] = (0x8C820000).to_bytes(4, "big")
@@ -485,7 +489,7 @@ class DatabaseTests(unittest.TestCase):
         # Alpha's delay slot leaves its incoming argument available to beta.
         directory = Path(self.project.root).parent / "other"
         directory.mkdir()
-        project, policy, _ = fixture(directory, words=[0x0C000404, 0, 0x03E00008, 0])
+        project, policy, _ = fixture(directory, words=[0x0C000404, 0, 0x03E00008, 0], case=self)
         map_program(project)
         solve(project)
         source = project.src / "beta.c"

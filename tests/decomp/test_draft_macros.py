@@ -17,7 +17,7 @@ from unbake.project.config import Held
 class DraftMacroTests(unittest.TestCase):
     def test_placeholders_preserve_signed_nested_lvalues_and_declared_unknowns(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             context = "typedef int s32; typedef int M2C_UNK;"
             output = (
                 "s32 bits; M2C_UNK alpha(char *p) { "
@@ -39,7 +39,7 @@ class DraftMacroTests(unittest.TestCase):
 
     def test_unrelated_local_base_does_not_create_or_change_shared_layout(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             header = project.include[0] / "structs.h"
             original = "struct Layout_alpha_p { char padding[4]; float field_4; };\n"
             header.write_text(original)
@@ -60,7 +60,7 @@ class DraftMacroTests(unittest.TestCase):
 
     def test_declared_base_uses_an_existing_field_without_header_writes(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             context = "typedef int s32; struct Existing { s32 value; };"
             output, shared = share(
                 project, "alpha", "s32 alpha(struct Existing *p) { return M2C_FIELD(p, s32 *, 0); }", context
@@ -74,7 +74,7 @@ class DraftMacroTests(unittest.TestCase):
         from unbake.typemap.layouts import observed
 
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             accesses = [{"function": "alpha", "opcode": 0x23, "width": 4, "signedness": True, "partial": False}]
             shape = observed("Shape_test", "global:source", {4: accesses}, {}, ["alpha", "beta"])
             context = "typedef int s32; extern int source;\n" + shape["declaration"]
@@ -111,7 +111,7 @@ class DraftMacroTests(unittest.TestCase):
         from unbake.typemap.layouts import observed
 
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             access = {"function": "alpha", "opcode": 0x2B, "width": 4, "signedness": None, "partial": False}
             parent = observed("Shape_parent", "global:source", {4: [access]}, {}, ["alpha", "beta"])
             child = observed("Shape_child", "field:global:source:4", {8: [access]}, {}, ["alpha", "beta"])

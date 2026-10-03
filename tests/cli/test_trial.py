@@ -28,7 +28,7 @@ class TrialTests(MainCase):
         )
         self.assertEqual(code, 0, error)
         operation.assert_called_once_with(
-            self.project, self.policy, self.source, self.project.work, versions=None, flags=False
+            self.project, self.policy, self.source, self.scratch, versions=None, flags=False, overlay_root=None
         )
         self.assertIn("retained alpha source_sha256", out)
 
@@ -52,19 +52,19 @@ class TrialTests(MainCase):
             code, out, error = self.run_main(self.args("draft", "alpha"), {"m2c": self.module("m2c", draft=operation)})
         self.assertEqual(code, 0, error)
         operation.assert_called_once_with(
-            self.project,
+            operation.call_args.args[0],
             self.policy,
             "alpha",
             self.project.versions[0],
-            self.project.work,
+            self.policy.state_root / "draft-work",
             generation=generation,
             type_context="",
             announce=False,
             use_type_db=True,
         )
-        persisted.assert_called_once_with(self.project, manifest)
-        self.assertTrue((self.project.drafts / "alpha/alpha.c").is_file())
-        self.assertIn(str(self.project.drafts / "alpha/alpha.c"), out)
+        persisted.assert_not_called()
+        self.assertTrue((self.policy.state_root / "draft-work/drafts/alpha/alpha.c").is_file())
+        self.assertIn(str(self.policy.state_root / "draft-work/drafts/alpha/alpha.c"), out)
 
     def test_draft_accepts_item_absent_from_naming_version(self) -> None:
         from unbake.cli import draft

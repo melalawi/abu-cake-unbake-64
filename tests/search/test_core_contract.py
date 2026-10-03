@@ -89,6 +89,17 @@ class CoreTests(unittest.TestCase):
         self.assertIs(result.trial, baseline)
 
     def setUp(self) -> None:
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+        from unbake.search import core
+
+        for mock in (boundary(core, output), boundary(trial_compile, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+        from tests.objdiff_fixture import install
+
+        install(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

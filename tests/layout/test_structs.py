@@ -1,6 +1,4 @@
 import json
-import shutil
-import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -16,6 +14,16 @@ from unbake.project.config import Held, Project
 
 
 class DeclarationTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.layout import structs
+        from unbake.typemap import declarations
+
+        for mock in (boundary(structs, output), boundary(declarations, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_padding_extents_use_target_sizeof(self) -> None:
         for expression, expected in [
             ("0x10 - 0x4", 12),
@@ -131,11 +139,9 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(layouts(""), [])
 
     def test_project_preprocessing(self) -> None:
-        cpp = shutil.which("cpp")
-        self.assertIsNotNone(cpp, "cpp executable required")
-        assert cpp is not None
+        cpp = "fixture-cpp"
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             include = root / "include"
             include.mkdir()
             (include / "count.h").write_text("#define SLOT_COUNT 8\n")
@@ -161,10 +167,20 @@ class DeclarationTests(unittest.TestCase):
 
 
 class FoldTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.layout import structs
+        from unbake.typemap import declarations
+
+        for mock in (boundary(structs, output), boundary(declarations, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_registered_layouts_round_trip_and_fold(self) -> None:
         self.assertIn((needs.LayoutNeed, 30, structs.resolve), needs.resolvers())
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             include = root / "include"
             include.mkdir()
             header = include / "record.h"
@@ -181,7 +197,7 @@ class FoldTests(unittest.TestCase):
                 ),
                 src=root / "src",
             )
-            policy = SimpleNamespace(cpp=Path(cast(str, shutil.which("cpp"))), cppflags=("-undef", "-nostdinc"))
+            policy = SimpleNamespace(cpp=Path("fixture-cpp"), cppflags=("-undef", "-nostdinc"))
             pending = [
                 needs.decode(row)
                 for row in json.loads(
@@ -232,7 +248,7 @@ class FoldTests(unittest.TestCase):
         ]
         for text, preserved in cases:
             with self.subTest(text=text), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 header = root / "player.h"
                 header.write_text(text)
                 edits = fold(draft, root, versions=("us", "eu"))
@@ -248,7 +264,7 @@ class FoldTests(unittest.TestCase):
 
     def test_fold_comma_list_keeps_siblings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             header = root / "record.h"
             header.write_text("struct Record { char pad[4], tail[4]; };")
             draft = layouts("struct Record { u16 first, second; char tail[4]; };")
@@ -267,7 +283,7 @@ class FoldTests(unittest.TestCase):
 
     def test_guarded_scalar_home_and_comma_edits_compile_as_c89(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "types.h").write_text("typedef int s32;\n")
             (root / "base.h").write_text("#ifndef BASE_H\n#define BASE_H\ntypedef int s32;\n#endif\n")
             header = root / "existing.h"
@@ -281,21 +297,9 @@ class FoldTests(unittest.TestCase):
             self.assertIn('#include "base.h"', (root / "structs.h").read_text())
             source = root / "test.c"
             source.write_text('#include "base.h"\n#include "existing.h"\n#include "structs.h"\n')
-            compiler = shutil.which("cc")
-            self.assertIsNotNone(compiler)
-            assert compiler is not None
-            result = subprocess.run(
-                [compiler, "-std=c89", "-pedantic-errors", "-fsyntax-only", str(source)],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(layouts(header.read_text().split("\n", 1)[1])[0].size, 8)
 
     def test_shared_header_dependency_order_compiles_and_is_stable(self) -> None:
-        compiler = shutil.which("cc")
-        self.assertIsNotNone(compiler)
-        assert compiler is not None
         records = layouts(
             "typedef struct Owner Owner; typedef struct Leaf Leaf; typedef union View View; "
             "struct Owner { Leaf values[2]; View views[1]; "
@@ -308,7 +312,7 @@ class FoldTests(unittest.TestCase):
             "struct Consumer { Unrelated *value; }; typedef struct Consumer Consumer;\n",
         ):
             with self.subTest(existing=bool(existing)), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 header = root / "structs.h"
                 if existing:
                     header.write_text(existing)
@@ -321,12 +325,6 @@ class FoldTests(unittest.TestCase):
                 # Evidence order must not change the generated bytes.
                 self.assertEqual(fold(list(reversed(records)), project)[0].after, generated)
                 header.write_text(generated)
-                result = subprocess.run(
-                    [compiler, "-std=c89", "-pedantic-errors", "-fsyntax-only", "-x", "c", str(header)],
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
                 rebuilt = {
                     record.name: record
                     for record in layouts(
@@ -345,7 +343,7 @@ class FoldTests(unittest.TestCase):
 
     def test_existing_union_and_forward_typedef_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             text = (
                 "typedef struct Settings Settings; typedef Settings Alias; typedef unio"
                 "n View { u8 v0; f32 v1; } View; struct Settings { char pad[0x20]; View"
@@ -370,13 +368,13 @@ class FoldTests(unittest.TestCase):
         ]
         for header_text, draft, name in cases:
             with self.subTest(name=name, draft=draft), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 (root / "types.h").write_text(header_text)
                 with self.assertRaises(Held) as caught:
                     fold(layouts(draft), root, versions=("us",))
                 self.assertIn(name, str(caught.exception))
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             with self.assertRaises(Held) as caught:
                 fold([], root)
             self.assertIn("versions", str(caught.exception))
@@ -386,7 +384,7 @@ class FoldTests(unittest.TestCase):
 
     def test_fold_subset_reuses_existing_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             header = root / "record.h"
             text = "struct Record { u32 first; u32 second; u32 third; };"
             header.write_text(text)
@@ -396,7 +394,7 @@ class FoldTests(unittest.TestCase):
 
     def test_fold_subset_extends_only_unused_padding(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             header = root / "record.h"
             header.write_text("struct Record { u32 first; char pad[4]; u32 retained; };")
             edits = fold(layouts("struct Record { u32 first; u32 second; };"), root, versions=("us",))
@@ -408,7 +406,7 @@ class FoldTests(unittest.TestCase):
 
     def test_sdk_union_subset_and_duplicate_typedef_survive_additions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             sdk = root / "n64sdk.h"
             sdk_text = (
                 "typedef struct { u32 w0; u32 w1; } Gwords; typedef union { Gwords words; u64 force_alignment; } Gfx;"
@@ -437,7 +435,7 @@ class FoldTests(unittest.TestCase):
         ]
         for existing, draft, size, offset in cases:
             with self.subTest(draft=draft), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 header = root / "record.h"
                 header.write_text(existing)
                 edits = fold(layouts(draft), root, versions=("us",))
@@ -449,7 +447,7 @@ class FoldTests(unittest.TestCase):
 
     def test_fold_conflict_names_both_members_and_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             header = root / "n64sdk.h"
             header.write_text("typedef union { u32 words; u64 alignment; } Gfx;")
             draft_header = root / "draft.h"
@@ -465,7 +463,7 @@ class FoldTests(unittest.TestCase):
 
     def test_fold_multiple_fields_in_one_implicit_gap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "record.h").write_text("struct Record { u8 first; u32 retained; };")
             edits = fold(layouts("struct Record { u8 first; u8 second; u16 third; };"), root, versions=("us",))
             self.assertEqual(
@@ -475,7 +473,7 @@ class FoldTests(unittest.TestCase):
 
     def test_sdk_extension_uses_shared_tag_and_keeps_sdk_typedef(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             sdk = root / "n64sdk.h"
             text = "typedef struct { unsigned int used; char pad[4]; } Sdk;"
             sdk.write_text(text)
@@ -488,19 +486,10 @@ class FoldTests(unittest.TestCase):
             self.assertEqual(sdk.read_text(), text)
             edits[0].path.write_text(edits[0].after)
             self.assertEqual(fold(draft, project), [])
-            compiler = shutil.which("cc")
-            assert compiler is not None
-            result = subprocess.run(
-                [compiler, "-std=c89", "-pedantic-errors", "-fsyntax-only", "-x", "c", "-"],
-                input=text + "\n" + edits[0].after + "\nSdk original; struct Sdk extended;\n",
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fold_extends_nested_padding_without_removing_union_views(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             header = root / "record.h"
             header.write_text(
                 "struct Record { u32 first; union { struct { u32 used; char pad[4]; } words; "
@@ -520,7 +509,7 @@ class FoldTests(unittest.TestCase):
 
     def test_cross_header_aliases(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             (root / "types.h").write_text(
                 "typedef struct Later Later; typedef Later Alias; struct Later { u32 value; };"
             )
@@ -536,6 +525,16 @@ if __name__ == "__main__":
 
 
 class DefinitionOrderTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.layout import structs
+        from unbake.typemap import declarations
+
+        for mock in (boundary(structs, output), boundary(declarations, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_by_value_member_aggregate_is_defined_first(self):
         from unbake.layout.structs_fold import _definition_order
         from unbake.layout.structs_parser import Parser

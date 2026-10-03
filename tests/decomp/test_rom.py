@@ -13,9 +13,14 @@ def resident_copy() -> list[dict[str, int]]:
 
 
 class RomTests(unittest.TestCase):
+    def setUp(self):
+        from tests.rom_fixture import install
+
+        install(self)
+
     def test_native_segment_keeps_configured_table_bias_after_migration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             path, image = root / "game.yaml", root / "baserom.z64"
             path.write_text(
                 "segments:\n  - name: constants\n    type: code\n    start: 0x40\n"
@@ -40,7 +45,7 @@ class RomTests(unittest.TestCase):
         )
         words = bytes.fromhex("24020001 03e00008 00000000 00000000")
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             path = root / "game.yaml"
             image = root / "baserom.z64"
             image.write_bytes(bytes(0x40) + words + bytes(0x10))

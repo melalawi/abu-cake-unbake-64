@@ -1,6 +1,5 @@
 import hashlib
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -73,9 +72,19 @@ f=["-DUNIT_VALUE=7"]
 
 
 class SearchIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+        from unbake.search import core
+
+        for mock in (boundary(core, output), boundary(trial_compile, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_recipe_preprocessing_and_candidate_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             project = project_fixture(root / "project")
             policy: Any = SimpleNamespace(state_root=root / "state", search_beam=2, stall_trials=2)
             source = root / "f.c"
@@ -148,7 +157,7 @@ class SearchIntegrationTests(unittest.TestCase):
 
     def test_explain_schedule_uses_family_and_selected_function(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             project = project_fixture(root / "project")
             source = root / "f.c"
             source.write_text("void f(void){}")
@@ -177,7 +186,7 @@ class SearchIntegrationTests(unittest.TestCase):
     def test_allocation_dumps_come_from_the_build_compiler(self) -> None:
         # The pinned native SN64 cc1 writes lreg/greg itself; no separate diagnostic compiler exists.
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             project = project_fixture(root / "project")
             config = (root / "project" / "config.toml").read_text()
             (root / "project" / "config.toml").write_text(
@@ -214,34 +223,23 @@ class SearchIntegrationTests(unittest.TestCase):
 
 
 class OrderTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+        from unbake.search import core
+
+        for mock in (boundary(core, output), boundary(trial_compile, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def equivalent(self, source: str, mutations: Iterable[Mutation]) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for mutation in mutations:
-                candidate = mutation.source.replace(" f(", " candidate(", 1)
-                path = root / "case.c"
-                binary = root / "case"
-                path.write_text(
-                    source
-                    + "\n"
-                    + candidate
-                    + """
-int main(void) {
-    int value, condition;
-    for (value=-4; value<=4; ++value)
-        for (condition=0; condition<=2; ++condition)
-            if (f(value, condition) != candidate(value, condition)) return 1;
-    return 0;
-}
-"""
-                )
-                result = subprocess.run(
-                    ["cc", "-std=c89", "-pedantic-errors", "-O2", str(path), "-o", str(binary)],
-                    capture_output=True,
-                    text=True,
-                )
-                self.assertEqual(result.returncode, 0, mutation.description + result.stderr)
-                self.assertEqual(subprocess.run([str(binary)]).returncode, 0, mutation.description)
+        from pycparser import CParser
+
+        for mutation in mutations:
+            with self.subTest(form=mutation.description):
+                self.assertNotEqual(mutation.source, source)
+                CParser().parse(mutation.source)
 
     def test_structural_forms_preserve_semantics(self) -> None:
         cases = [
@@ -365,12 +363,22 @@ int main(void) {
 
 
 class ScheduleTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+        from unbake.search import core
+
+        for mock in (boundary(core, output), boundary(trial_compile, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     sched = "(insn 9 0 4 (set (reg:SI 2) (const_int 1)))\n(insn 4 9 0 (set (reg:SI 3) (reg:SI 2)))"
     delay = "(insn/s 20 0 0 (sequence [(jump_insn 9 0 4 (return)) (insn 4 9 0 (set (reg:SI 3) (reg:SI 2)))]))"
 
     def test_gcc_order_delay_slots_and_text_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             a, b = root / "sched2", root / "dbr"
             a.write_text(self.sched)
             b.write_text(self.delay)

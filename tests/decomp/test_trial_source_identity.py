@@ -18,6 +18,11 @@ from unbake.project.config import Policy
 
 
 class TrialSourceIdentityTests(unittest.TestCase):
+    def setUp(self):
+        from tests.objdiff_fixture import install
+
+        install(self)
+
     def test_comments_and_includes_before_guard_share_the_published_identity(self) -> None:
         prefix = b'/* renderer */\n#include "types.h"\n\n'
         body = b"#if PAL\nint alpha(void) { return 1; }\n#else\nint alpha(void) { return 2; }\n#endif\n"
@@ -34,8 +39,8 @@ class TrialSourceIdentityTests(unittest.TestCase):
 
     def test_guarded_and_plain_trials_share_identity_without_changing_compiled_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy, source = fixture(root)
+            root = Path(temporary).resolve()
+            project, policy, source = fixture(root, case=self)
             plain = b"#if DEBUG\nint alpha(void) { return 1; }\n#endif\n\n"
             compiled = []
 

@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import struct
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -13,13 +12,22 @@ from pathlib import Path
 
 import toml
 
+from tests.process_fakes import cli_process
 from tests.project.test_rom import cartridge
 
 
 class SymbolJoinProofTests(unittest.TestCase):
+    def setUp(self):
+        from tests.rom_fixture import install
+
+        install(self)
+        from tests.setup_fixture import install as setup_tools
+
+        setup_tools(self)
+
     def test_batch_proof_refresh_replan_and_shared_c(self):
         with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve()
             project = directory / "Correspondence"
             values = toml.loads(Path(os.environ["UNBAKE_POLICY"]).read_text())
             values.update(symbol_similarity_threshold=0.9, symbol_similarity_margin=0.1)
@@ -38,7 +46,9 @@ class SymbolJoinProofTests(unittest.TestCase):
             )
 
             def command(*arguments, expected=0):
-                result = subprocess.run(
+                if "try" in arguments:
+                    arguments = (*arguments, "--scratch", str(directory / "scratch"))
+                result = cli_process(
                     [sys.executable, str(launcher), *arguments],
                     env=environment,
                     cwd=directory,

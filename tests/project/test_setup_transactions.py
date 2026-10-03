@@ -3,7 +3,6 @@
 import hashlib
 import os
 import shutil
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -29,8 +28,8 @@ class SetupTransactionTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
         patch.object(setup_proof, "extract").start()
-        self.root = Path(self.temporary.name)
-        self.project, self.policy = fixture(self.root)
+        self.root = Path(self.temporary.name).resolve()
+        self.project, self.policy = fixture(self.root, case=self)
         data = tomllib.loads((self.root / "config.toml").read_text())
         data.update(
             schema=1,
@@ -125,8 +124,15 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual((self.project.asm / "generated.s").read_bytes(), b".text\n")
 
     def test_ready_refresh_publishes_required_ignore_rules_and_keeps_owner_rules(self) -> None:
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
-        subprocess.run(["git", "add", "-f", "--", "versions/us/baserom.sha1"], cwd=self.root, check=True)
+        from tests.git_fixture import Index
+        from tests.process_fakes import boundary
+        from unbake.project import hygiene
+
+        index = Index(self.root)
+        index.add("versions/us/baserom.sha1")
+        mock = boundary(hygiene, index.run)
+        mock.start()
+        self.addCleanup(mock.stop)
         ignore = self.root / ".gitignore"
         ignore.write_text("# Owner rules\ncustom/\n/roms/\n")
         readme = (self.root / "README.md").read_bytes()
@@ -193,14 +199,17 @@ class SetupTransactionTests(unittest.TestCase):
         )
         environment = dict(os.environ, PYTHONNOUSERSITE="1")
         environment.pop("PYTHONPATH", None)
-        result = subprocess.run(
-            [sys.executable, str(launcher), "--project", str(self.root), "--policy", str(local_policy), "setup"],
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        from tests.process_fakes import cli_process
+
+        with patch.object(setup_proof, "proof", side_effect=self.proof):
+            result = cli_process(
+                [sys.executable, str(launcher), "--project", str(self.root), "--policy", str(local_policy), "setup"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(callback.read_bytes(), template)
         self.assertEqual((self.project.build_link("us") / "game.us.z64").read_bytes(), b"ABC")
@@ -340,7 +349,7 @@ class SetupTransactionTests(unittest.TestCase):
                 raise OSError("injected after ready write")
 
         with tempfile.TemporaryDirectory(dir=self.project.build) as temporary:
-            tree = Path(temporary) / "tree"
+            tree = Path(temporary).resolve() / "tree"
             setup._copy_inputs(self.project, tree, before)
             staged = config.load(tree)
             self.proof(staged, "us", b"ABC", 1, log=self.project.build / "proof.log")

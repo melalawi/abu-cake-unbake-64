@@ -14,7 +14,7 @@ from unbake.project.config import Project
 class AuditTests(unittest.TestCase):
     def check(self, body: str, symbols: str = "") -> tuple[str, list[str]]:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             assembly = root / "asm/us/nested"
             assembly.mkdir(parents=True)
             (assembly / "entry.s").write_text(".section .text\nglabel entry\n" + body)

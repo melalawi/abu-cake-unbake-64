@@ -15,9 +15,14 @@ from unbake.project_tools.elf import Object
 
 
 class NativePoolTests(unittest.TestCase):
+    def setUp(self):
+        from tests.objdiff_fixture import install
+
+        install(self)
+
     def test_duplicate_literals_gap_and_table_require_byte_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             shutil.copyfile(Path(__file__).parents[1] / "fixture/config.toml", root / "config.toml")
             version = root / "versions/us"
             version.mkdir(parents=True)

@@ -3,15 +3,14 @@
 import hashlib
 import json
 import os
-import signal
-import subprocess
-import sys
-import time
 import unittest
+from contextlib import nullcontext
+from unittest.mock import patch
 
 import toml
 
 from tests.cli import test_publication_boundary as fixture
+from unbake.match import incremental
 from unbake.project import config, makefile
 
 
@@ -22,7 +21,6 @@ class BatchPublicationCliTests(unittest.TestCase):
         fixture.PublicationBoundaryCliTests.setUp(self)
         path = self.root / "config.toml"
         data = toml.loads(path.read_text())
-        data["project"]["readme_order"] = list(self.project.versions)
         for version in self.project.versions:
             data["version"][version].update(cartridge_id="NUS-TEST-0", region="USA", description="Synthetic release.")
         path.write_text(toml.dumps(data))
@@ -32,33 +30,23 @@ class BatchPublicationCliTests(unittest.TestCase):
     cli = fixture.PublicationBoundaryCliTests.cli
     make = fixture.PublicationBoundaryCliTests.make
 
-    def planter(self, *, block=False):
-        from dataclasses import replace
+    run_cli = fixture.PublicationBoundaryCliTests.run_cli
 
+    def planter(self, *, block=False):
         bad = {self.names[5], self.names[17], self.names[29]}
-        wrapper = self.directory / "plant-link"
+        self.tools.bad = bad
         marker = self.directory / "subset-link"
-        calls = self.directory / "link-calls.jsonl"
-        wrapper.write_text(
-            f"#!{sys.executable}\n"
-            "import json, os, pathlib, sys, time\n"
-            "from unbake.project_tools.elf import Object\n"
-            f"bad={bad!r}\n"
-            "sources=[pathlib.Path(p) for p in sys.argv[1:] if p.startswith('obj/src/') and p.endswith('.o')]\n"
-            f"with pathlib.Path({str(calls)!r}).open('a') as output:\n"
-            " output.write(json.dumps([p.stem for p in sources])+'\\n')\n"
-            "for path in sources:\n"
-            " if path.stem in bad:\n"
-            "  obj=Object(path); section=obj.section('.text'); at=obj.sections[section][4]+7\n"
-            "  obj.data[at]=2; path.write_bytes(obj.data)\n"
-            f"if {block!r} and len(sources)<{len(self.names)}:\n"
-            f" pathlib.Path({str(marker)!r}).touch()\n"
-            " time.sleep(30)\n"
-            f"os.execv({str(self.policy.mips_ld)!r}, [{str(self.policy.mips_ld)!r}, *sys.argv[1:]])\n"
-        )
-        wrapper.chmod(0o755)
-        self.policy = replace(self.policy, mips_ld=wrapper)
-        self.write_policy()
+        if block:
+
+            def stop(project, names):
+                if len(names) < len(self.names):
+                    marker.touch()
+                    refusals = [row["line"] for row in self.evidence() if row["event"] == "receipt"]
+                    for name in bad:
+                        self.assertTrue(any(f"HELD(match): {name}:" in line for line in refusals))
+                    raise KeyboardInterrupt("stop subset proof")
+
+            self.tools.proof_hook = stop
         return bad, marker
 
     def evidence(self):
@@ -99,7 +87,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.cli("submit", first)
         generations = {v: (self.project.build / v).resolve() for v in self.project.versions}
         header.write_text("#define PROOF_VALUE 2\n")
-        result = subprocess.run(
+        result = self.run_cli(
             [str(self.script), "--project", str(self.root), "submit", str(self.sources[1])],
             env=self.env,
             capture_output=True,
@@ -121,7 +109,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         for source in self.sources:
             if source.stem in bad:
                 source.write_text(source.read_text().replace("return 1", "return 2"))
-        result = subprocess.run(
+        result = self.run_cli(
             [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, self.sources)],
             env=self.env,
             capture_output=True,
@@ -161,7 +149,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         for source in self.sources:
             self.cli("try", source)
         bad, _ = self.planter()
-        result = subprocess.run(
+        result = self.run_cli(
             [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, self.sources)],
             env=self.env,
             capture_output=True,
@@ -196,28 +184,20 @@ class BatchPublicationCliTests(unittest.TestCase):
         for source in self.sources:
             self.cli("try", source)
         bad, marker = self.planter(block=True)
-        output = self.directory / "stopped.out"
-        with output.open("w") as stream:
-            process = subprocess.Popen(
-                [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, self.sources)],
-                env=self.env,
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            try:
-                deadline = time.monotonic() + 90
-                while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
-                    time.sleep(0.05)
-                self.assertTrue(marker.exists(), output.read_text())
-                refusals = [row["line"] for row in self.evidence() if row["event"] == "receipt"]
-                for name in bad:
-                    self.assertTrue(any(f"HELD(match): {name}:" in line for line in refusals))
-                    self.assertIn(f"HELD(match): {name}:", output.read_text())
-            finally:
-                if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=10)
+        import io
+        from contextlib import redirect_stdout
+        from unittest.mock import patch
+
+        from unbake.cli.main import main
+
+        stream = io.StringIO()
+        with patch.dict(os.environ, self.env), redirect_stdout(stream):
+            status = main(["--project", str(self.root), "submit", "--batch", *map(str, self.sources)])
+        self.assertEqual(status, 130, stream.getvalue())
+        self.assertIn("interrupted", stream.getvalue())
+        self.assertTrue(marker.exists())
+        for name in bad:
+            self.assertIn(f"HELD(match): {name}:", stream.getvalue())
         self.assertEqual(len([row for row in self.evidence() if row["event"] == "proof"]), 1)
         self.assertFalse(list(self.project.src.glob("*.c")))
 
@@ -237,19 +217,25 @@ class BatchPublicationCliTests(unittest.TestCase):
                 # The first pass publishes its survivors. Repeating the three
                 # refused inputs exercises the full-build branch on changed flags.
                 sources = [self.sources[i] for i in (5, 17, 29)] if fallback else self.sources
-                before = len(self.evidence())
-                result = subprocess.run(
-                    [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, sources)],
-                    env=self.env,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=False,
-                )
+                before = {json.dumps(row, sort_keys=True) for row in self.evidence()}
+                built = len(self.tools.built)
+                # Make is a fake here: force its fallback boundary while retaining
+                # the real attribution and survivor relink decisions.
+                context = patch.object(incremental, "prepare", return_value=None) if fallback else nullcontext()
+                with context:
+                    result = self.run_cli(
+                        [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, sources)],
+                        env=self.env,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        check=False,
+                    )
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                rows = self.evidence()[before:]
+                rows = [row for row in self.evidence() if json.dumps(row, sort_keys=True) not in before]
+                self.assertEqual(len(self.tools.built) - built, int(fallback))
                 proofs = [row for row in rows if row["event"] == "proof"]
-                self.assertEqual(len(proofs), 1)
+                self.assertEqual(len(proofs), 1, result.stdout + result.stderr)
                 self.assertEqual(bool([row for row in rows if row["event"] == "compile"]), not fallback)
                 attribution = [row for row in rows if row["event"] == "attribution"]
                 culprits = attribution[0]["culprits"]

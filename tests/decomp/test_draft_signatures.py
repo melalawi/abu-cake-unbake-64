@@ -15,7 +15,7 @@ from unbake.project.config import Policy
 class DraftSignatureTests(unittest.TestCase):
     def test_scalar_and_private_pointer_definitions_use_selected_version(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            project, policy, _ = fixture(Path(temporary))
+            project, policy, _ = fixture(Path(temporary).resolve(), case=self)
             source = project.src / "beta.c"
             source.write_text(
                 '#include "types.h"\ntypedef struct { s32 x; } Private;\n'
@@ -28,7 +28,7 @@ class DraftSignatureTests(unittest.TestCase):
 
     def test_database_contract_has_one_owner_when_c_definition_exists(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            project, policy, _ = fixture(Path(temporary))
+            project, policy, _ = fixture(Path(temporary).resolve(), case=self)
             (project.src / "beta.c").write_text("int beta(int value) { return value; }\n")
             database = {
                 "functions": {

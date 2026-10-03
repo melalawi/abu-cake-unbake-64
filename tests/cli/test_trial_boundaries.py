@@ -15,7 +15,7 @@ class TrialBoundaryTests(MainCase):
     def test_try_requires_compiled_definition_matching_the_item_name(self) -> None:
         directory = self.directory / "objects"
         directory.mkdir()
-        self.project, _, source = fixture(directory)
+        self.project, _, source = fixture(directory, case=self)
         wrong = assemble(directory, "wrong", assembly("other", [0x24020001, 0x03E00008, 0]))
 
         def compile_source(project, policy, copied, version, output):

@@ -19,7 +19,7 @@ class DataProjectFixture(ProjectFixture):
 class DataRenameTests(unittest.TestCase):
     def test_missing_rows_follow_aligned_code_and_validated_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            fixture = DataProjectFixture(Path(temporary))
+            fixture = DataProjectFixture(Path(temporary).resolve())
             project = cast(Project, fixture)
             policy = cast(Policy, fixture.policy)
             for version in project.versions:
@@ -64,7 +64,7 @@ class DataRenameTests(unittest.TestCase):
 
     def test_implicit_address_names_follow_their_naming_version_and_refuse_ambiguity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            fixture = DataProjectFixture(Path(temporary), ("us", "us-rev1", "eu", "eu-x", "de"))
+            fixture = DataProjectFixture(Path(temporary).resolve(), ("us", "us-rev1", "eu", "eu-x", "de"))
             project = cast(Project, fixture)
             expected = {}
             for index, version in enumerate(project.versions):
@@ -96,7 +96,7 @@ class DataRenameTests(unittest.TestCase):
 
     def test_indexed_relocation_in_the_locator_preserves_aligned_data_references(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            fixture = DataProjectFixture(Path(temporary))
+            fixture = DataProjectFixture(Path(temporary).resolve())
             project = cast(Project, fixture)
             for version, array_low, value_low in (("us", 0x100, 0x300), ("eu", 0x200, 0x400)):
                 fixture.layout(version, [(0x10, "asm", "alpha" if version == "us" else "peer"), (0x2C, "data", "pool")])

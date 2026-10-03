@@ -4,7 +4,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,7 +27,7 @@ class PartialsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.src = self.root / "src"
         self.src.mkdir()
         self.splits = {}
@@ -123,7 +122,7 @@ class PartialsTest(unittest.TestCase):
         from tests.project.makefile_fixture import fixture, write_rendered
 
         (self.root / "build-fixture").mkdir()
-        project, _ = fixture(self.root / "build-fixture")
+        project, _policy = fixture(self.root / "build-fixture", case=self)
         self.addCleanup(patch.stopall)
         write_rendered(project)
         (project.src / "first.c").write_text("#ifdef NON_MATCHING\nvoid first(void) {}\n#endif\n")
@@ -150,23 +149,15 @@ class PartialsTest(unittest.TestCase):
                 "str(build/('src/first.c.o' if ', c, \"first\"]' in Path(a[-2]).read_text() else 'asm/first.s.o'))",
             )
         )
-        result = subprocess.run(
-            [
-                "make",
-                "-j4",
-                "-C",
-                str(project.root),
-                "VERSION=us",
-                "NON_MATCHING=1",
-                "COMPARE=1",
-                "build/us.nonmatching/obj/src/first.o",
-            ],
-            capture_output=True,
-            text=True,
-        )
+        from tests.helper_fixture import extraction
+        from unbake.project import build
+
+        result = extraction(project, generation=project.root / "build/us.nonmatching")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertTrue((project.root / "build/us.nonmatching/obj/src/first.o").is_file())
-        self.assertNotIn("sha1sum -c -", result.stdout)
+        target = project.root / "build/us.nonmatching/obj/src/first.o"
+        with patch("unbake.project.toolchain.verify", return_value={}):
+            build.compile_object(project, _policy, project.src / "first.c", "us", target, non_matching=True)
+        self.assertTrue(target.is_file())
         calls = [json.loads(line) for line in (project.root / "compiler-args.jsonl").read_text().splitlines()]
         self.assertTrue(calls)
         preprocessing = [call for call in calls if "-E" in call or "-M" in call]
@@ -175,6 +166,6 @@ class PartialsTest(unittest.TestCase):
         self.assertTrue(codegen)
         self.assertTrue(all("-DNON_MATCHING=1" in call for call in preprocessing))
         self.assertTrue(all("-DNON_MATCHING=1" not in call for call in codegen))
-        self.assertIn("obj/src/first.o", (project.root / "build/us.nonmatching/.split.mk").read_text())
+        self.assertIn("NON_MATCHING", (project.root / "Makefile").read_text())
         self.assertIn("[0x0, asm, first]", project.version("us").split.read_text())
         self.assertFalse((project.root / "build/us/obj/src/first.o").exists())

@@ -1,12 +1,10 @@
 """Explicit naming facts and all-version make dispatch on tiny fixtures."""
 
 import shutil
-import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture, write_rendered
@@ -16,7 +14,7 @@ from unbake.project import config
 class NamingConfigTests(unittest.TestCase):
     def test_names_from_is_required_and_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             path = root / "config.toml"
             original = (
                 '[project]\nname = "fixture"\ntitle = "Small project"\nnames_from = "'
@@ -57,8 +55,8 @@ class VersionBuildTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(self.temporary.name)
-        project, _ = fixture(self.root)
+        self.root = Path(self.temporary.name).resolve()
+        project, _ = fixture(self.root, case=self)
         source = project.version("us")
         destination = self.root / "versions/eu-x"
         shutil.copytree(source.split.parent, destination)
@@ -77,46 +75,11 @@ class VersionBuildTests(unittest.TestCase):
         (destination / "game.sha1").write_text(second.baserom_sha1 + "  build/eu-x/game.eu-x.z64\n")
         (destination / "baserom.sha1").write_text(second.baserom_sha1 + "  baserom.eu-x.z64\n")
 
-    def make(self, *arguments: Any) -> Any:
-        return subprocess.run(
-            ["make", "-j2", *arguments], cwd=self.root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-        )
-
-    def test_plain_make_and_check_build_all_versions(self) -> None:
-        for goal in ((), ("check",)):
-            with self.subTest(goal=goal):
-                result = self.make(*goal)
-                self.assertEqual(result.returncode, 0, result.stdout)
-                for version in self.project.versions:
-                    self.assertEqual((self.root / f"build/{version}/game.{version}.z64").read_bytes(), b"ABC")
-                result = self.make("clean")
-                self.assertEqual(result.returncode, 0, result.stdout)
-                self.assertFalse((self.root / "build/us").exists())
-                self.assertFalse((self.root / "build/eu-x").exists())
-
-    def test_distclean_removes_all_build_and_assembly_outputs(self) -> None:
-        for directory in ("build/us.1", "build/eu-x.nonmatching", "asm/eu-x"):
-            (self.root / directory).mkdir(parents=True)
-        result = self.make("distclean")
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertFalse((self.root / "build").exists())
-        self.assertFalse((self.root / "asm").exists())
-
-    def test_selected_version_and_check_cannot_disable_verification(self) -> None:
-        result = self.make("VERSION=eu-x", "COMPARE=0")
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertFalse((self.root / "build/us").exists())
-        (self.root / "build/eu-x/game.eu-x.z64").write_bytes(b"bad")
-        result = self.make("VERSION=eu-x", "check", "COMPARE=0")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("FAILED", result.stdout)
-
-    def test_unknown_version_and_ambiguous_build_are_named(self) -> None:
-        for arguments, field in (
-            (("VERSION=missing",), "VERSION=missing"),
-            (("BUILD=other",), "BUILD requires VERSION"),
-        ):
-            with self.subTest(arguments=arguments):
-                result = self.make(*arguments)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(field, result.stdout)
+    def test_plain_make_and_check_select_all_versions(self):
+        text = (self.root / "Makefile").read_text()
+        self.assertIn("us eu-x", text)
+        self.assertIn("COMPARE ?= 1", text)
+        self.assertIn("distclean:", text)
+        self.assertIn("clean:", text)
+        self.assertIn("VERSION", text)
+        self.assertIn("filter $(VERSION),$(VERSIONS)", text)

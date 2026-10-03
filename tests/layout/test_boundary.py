@@ -16,7 +16,7 @@ from unbake.project.config import Held
 class BoundaryTests(unittest.TestCase):
     def test_offline_signature_seeds_uncalled_library_before_heuristics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "sdk.json"
+            path = Path(temporary).resolve() / "sdk.json"
             path.write_text(
                 json.dumps(
                     {
@@ -80,7 +80,7 @@ class BoundaryTests(unittest.TestCase):
         from unbake.project.config import Project
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             rom = root / "rom"
             rom.write_bytes(struct.pack(">2I", 0x03E00008, 0))
             layout = root / "split.yaml"
@@ -136,7 +136,7 @@ class BoundaryTests(unittest.TestCase):
         from unbake.project.config import Project
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             asm = root / "asm/us"
             asm.mkdir(parents=True)
             (asm / "entry.s").write_text(

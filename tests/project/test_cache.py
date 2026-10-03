@@ -14,7 +14,7 @@ class CacheTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.cache = Cache(self.directory / "cache")
         self.source = self.directory / "source.o"
         self.source.write_bytes(b"object bytes")

@@ -184,10 +184,10 @@ class ChecksTest(unittest.TestCase):
             tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary,
             self.assertRaisesRegex(Held, "source"),
         ):
-            checks.run(Path(temporary) / "missing.c")
+            checks.run(Path(temporary).resolve() / "missing.c")
 
     def test_file_input_and_nested_directives(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            path = Path(temporary) / "f.c"
+            path = Path(temporary).resolve() / "f.c"
             path.write_text("#ifdef VERSION_US\n#if DEBUG\nint x;\n#endif\n#endif\n")
             self.assertEqual(checks.run(path)[0].rule, "file-version-guard")

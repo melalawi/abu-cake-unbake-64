@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import struct
-import subprocess
 import tempfile
 import threading
 import unittest
@@ -18,7 +17,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 from tests.project.makefile_fixture import fixture
-from tests.support import test_policy, tool
+from tests.support import test_policy
 from unbake.cli import check
 from unbake.decomp import score
 from unbake.project.config import Held, Policy, Project, Version
@@ -200,7 +199,7 @@ class ConfiguredReadmeTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         rom = self.root / "baserom.z64"
         rom.write_bytes(b"ABC")
         version = Version(
@@ -351,11 +350,17 @@ class ConfiguredReadmeTests(unittest.TestCase):
 
 class ReportTest(unittest.TestCase):
     def setUp(self) -> None:
+        from tests.report_fixture import install
+
+        install(self)
+        from tests.objdiff_fixture import install as objdiff
+
+        objdiff(self)
         self.temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(self.temporary.name)
-        project, _ = fixture(self.root / "project")
+        self.root = Path(self.temporary.name).resolve()
+        project, _ = fixture(self.root / "project", case=self)
         self.policy = test_policy(self.root)
         self.project = replace(project, name="fixture")
         version = self.project.version("us")
@@ -397,13 +402,9 @@ class ReportTest(unittest.TestCase):
             f".text\n.set noreorder\n.globl {function}\n.type {function},@function\n{function}:\n"
             f"addiu $v0,$zero,1\njr $ra\nnop\n.size {function},.-{function}\n"
         )
-        subprocess.run(
-            [tool("mips-linux-gnu-as"), "-EB", "-mips3", "-o", str(path)],
-            input=body,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        from tests.assembly_fixture import object_fixture
+
+        object_fixture(path, body)
 
     def test_check_refuses_stale_totals_without_publishing_and_report_repairs_them(self) -> None:
         destination = self.project.root / "versions/us/report.json"
@@ -605,16 +606,12 @@ class ReportTest(unittest.TestCase):
             self.assertTrue(out.is_relative_to(self.generation / "report"))
             self.assertEqual(out.name, "draft.o")
             out.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(
-                [tool("mips-linux-gnu-as"), "-EB", "-mips3", "--no-pad-sections", "-o", str(out)],
-                input=(
-                    ".text\n.set noreorder\n.globl draft\n.type draft,@function\ndraft:\n"
-                    "lui $v0,%hi(undefined_draft_symbol)\njr $ra\n"
-                    "addiu $v0,$v0,%lo(undefined_draft_symbol)\n.size draft,.-draft\n"
-                ),
-                text=True,
-                capture_output=True,
-                check=True,
+            from tests.assembly_fixture import object_fixture
+
+            object_fixture(
+                out,
+                ".text\n.globl draft\n.type draft,@function\ndraft:\n"
+                ".word 0x3c020000\n.word 0x03e00008\n.word 0x24420000\n.size draft,.-draft\n",
             )
             return out
 

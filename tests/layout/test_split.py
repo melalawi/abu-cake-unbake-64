@@ -289,6 +289,12 @@ class SplitTests(unittest.TestCase):
         )
 
     def test_create_full_executable_and_title(self) -> None:
+        from tests.process_fakes import boundary
+        from tests.splat_fixture import create
+
+        mock = boundary(split_create, create)
+        mock.start()
+        self.addCleanup(mock.stop)
         from tests.support import test_policy
 
         for title in ("Game: One", "Game #1"):
@@ -349,7 +355,7 @@ class SplitTests(unittest.TestCase):
             ("include/new.h", "eu", ["us", "eu"]),
         ]:
             with self.subTest(location=location, failure=failure), tempfile.TemporaryDirectory() as temporary:
-                project = ProjectFixture(Path(temporary))
+                project = ProjectFixture(Path(temporary).resolve())
                 project.generations()
                 path = project.root / location
                 edit = split.Edit(path, "", "int value;\n", ("us",))
@@ -382,7 +388,7 @@ class RowIdentityTests(unittest.TestCase):
     def test_equal_rows_keep_their_own_boundaries(self) -> None:
         # Rows are identified by position; equal-looking rows must not borrow each other's end.
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "game.yaml"
+            path = Path(temporary).resolve() / "game.yaml"
             path.write_text(
                 "segments:\n  - name: main\n    type: code\n    start: 0x40\n    vram: 0x80000400\n"
                 "    subalign: 4\n    subsegments:\n      - [0x40, asm, alpha]\n      - [0x48, asm, beta]\n"

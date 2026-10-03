@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-import shutil
 import struct
 import subprocess
 import sysconfig
@@ -14,8 +13,8 @@ from pathlib import Path
 import toml
 
 from tests.decomp.support import fixture
+from tests.process_fakes import cli_process
 from unbake.project import toolchain
-from unbake.project.config import load_policy
 from unbake.typemap import shards
 
 
@@ -24,7 +23,7 @@ class MapLayoutCliTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
         words = [0x3C088000, 0x8D083000, 0x8D020004, 0x0C000408, 0, 0x03E00008, 0, 0]
-        project, _, _ = fixture(Path(temporary.name), words=words)
+        project, _, _ = fixture(Path(temporary.name).resolve(), words=words, case=self)
         self.root = project.root
         cartridge = project.version("us")
         cartridge.split.write_text(cartridge.split.read_text().replace("asm, beta", 'data, "rodata/80001020"'))
@@ -45,13 +44,41 @@ class MapLayoutCliTests(unittest.TestCase):
         (project.root / "config.toml").write_text(toml.dumps(config))
         # A tiny proof adapter keeps these tests focused on CLI transaction and
         # map behaviour. Cartridge extraction is separately covered by real builds.
-        spec = toolchain.specification("ido-7.1")
-        cache = toolchain.acquire(spec, load_policy())
-        shutil.copytree(cache, project.tools / spec.id)
-        (project.root / "Makefile").write_text(
-            "all:\n\t@test ! -f refuse\n\t@cp roms/baserom.us.z64 $(BUILD)/fixture.us.z64\n"
-            f"\t@echo '{hashlib.sha1(rom.read_bytes()).hexdigest()}  $(BUILD)/fixture.us.z64' | sha1sum -c -\n"
-        )
+        from unittest.mock import patch
+
+        from tests.process_fakes import boundary
+        from unbake.layout import code_interval
+        from unbake.project import build
+
+        def decode(command, **kwargs):
+            assert command[1:4] == ["-D", "-z", "-b"], command
+            words = struct.unpack(f">{Path(command[-1]).stat().st_size // 4}I", Path(command[-1]).read_bytes())
+            text = "\n".join(
+                f"{i * 4:x}: {word:08x} " + (".word" if word == 1 else "instruction") for i, word in enumerate(words)
+            )
+            return subprocess.CompletedProcess(command, 0, text, "")
+
+        def proof(project, policy, versions, *, tree, generation_for):
+            rows = []
+            for version in versions:
+                generation = generation_for(version)
+                generation.mkdir(parents=True, exist_ok=True)
+                (generation / f"{project.name}.{version}.z64").write_bytes(
+                    project.version(version).baserom.read_bytes()
+                )
+                log = generation / "build.log"
+                log.write_text("fixture proof")
+                rows.append(build.BuildResult(version, not (tree / "refuse").exists(), "fixture: OK", log, generation))
+            return {row.version: row for row in rows}
+
+        for mock in (
+            boundary(code_interval, decode),
+            patch.object(build, "build", side_effect=proof),
+            patch.object(toolchain, "ensure"),
+            patch.object(toolchain, "verify", return_value={}),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
         self.environment = dict(os.environ, PYTHONNOUSERSITE="1")
         self.environment.pop("PYTHONPATH", None)
         self.script = Path(sysconfig.get_path("scripts")) / "unbake"
@@ -60,7 +87,7 @@ class MapLayoutCliTests(unittest.TestCase):
         self.map_path = project.build / "map/facts.json"
 
     def cli(self, *arguments, expected=0):
-        result = subprocess.run(
+        result = cli_process(
             [str(self.script), "--project", str(self.root), *arguments],
             env=self.environment,
             capture_output=True,

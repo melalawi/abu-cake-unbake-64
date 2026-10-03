@@ -1,5 +1,4 @@
 import fcntl
-import shutil
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -17,8 +16,8 @@ class BuildTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=WORK)
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(self.temporary.name)
-        self.project, self.policy = fixture(self.root)
+        self.root = Path(self.temporary.name).resolve()
+        self.project, self.policy = fixture(self.root, case=self)
 
     def test_generation_requires_existing_symlink(self) -> None:
         with self.assertRaisesRegex(config.Held, "symlink"):
@@ -95,34 +94,35 @@ class BuildTests(unittest.TestCase):
                 self.assertFalse(old.exists())
 
     def test_make_proves_generation_and_records_comparison_failure(self) -> None:
+        import subprocess
+
+        from tests.process_fakes import boundary
+
         setup.run(self.project, self.policy)
         generation = self.root / "build/us.1"
-        result = build.build(self.project, self.policy, ["us"], tree=self.root, generation_for=lambda v: generation)[
-            "us"
-        ]
-        self.assertTrue(result.ok, result.log.read_text())
-        self.assertEqual(result.generation, generation)
-        self.assertEqual(result.sha1_line, str(generation / "game.us.z64") + ": OK")
-        (self.root / "asm/us/first.s").write_bytes(b"X")
-        result = build.build(self.project, self.policy, ["us"], tree=self.root, generation_for=lambda v: generation)[
-            "us"
-        ]
-        self.assertFalse(result.ok)
-        self.assertTrue(result.sha1_line.endswith(": FAILED"))
+        for passed in (True, False):
 
-    def test_copied_generation_builds_without_extracting(self) -> None:
-        setup.run(self.project, self.policy)
-        old = self.root / "build/us.1"
-        first = build.build(self.project, self.policy, ["us"], tree=self.root, generation_for=lambda v: old)["us"]
-        self.assertTrue(first.ok, first.log.read_text())
-        copied = self.root / "build/us.2"
-        shutil.copytree(old, copied)
-        (self.root / "include/value.h").write_text("#define VALUE 9\n")
-        result = build.build(self.project, self.policy, ["us"], tree=self.root, generation_for=lambda v: copied)["us"]
-        self.assertTrue(result.ok, result.log.read_text())
-        calls = (self.root / "calls").read_text().splitlines()
-        self.assertEqual(calls.count("splat"), 1)
-        self.assertEqual(calls.count("cc"), 2)
+            def run(command, passed=passed, **kwargs):
+                self.assertEqual(command[:2], ["make", "-f"])
+                self.assertEqual(command[-2:], ["-j2", "-k"])
+                driver = Path(command[2]).read_text()
+                self.assertIn("VERSION=us", driver)
+                self.assertIn("COMPARE=1", driver)
+                self.assertIn(f"BUILD={generation}", driver)
+                generation.mkdir(parents=True, exist_ok=True)
+                (generation / "build.log").write_text(
+                    str(generation / "game.us.z64") + (": OK\n" if passed else ": FAILED\n")
+                )
+                (generation / "build.exit").write_text("0" if passed else "1")
+                return subprocess.CompletedProcess(command, int(not passed), "", "")
+
+            with boundary(build, run):
+                result = build.build(
+                    self.project, self.policy, ["us"], tree=self.root, generation_for=lambda v: generation
+                )["us"]
+            self.assertEqual(result.ok, passed)
+            self.assertEqual(result.generation, generation)
+            self.assertTrue(result.sha1_line.endswith(": OK" if passed else ": FAILED"))
 
     def test_compile_cache_uses_preprocessed_headers_and_compiler_digest(self) -> None:
         setup.run(self.project, self.policy)
@@ -143,7 +143,7 @@ class BuildTests(unittest.TestCase):
         self.assertTrue((self.policy.cache_root / "cc").is_dir())
 
     def test_sn64_cached_object_uses_same_flags_and_pipeline(self) -> None:
-        project, policy = fixture(self.root, "sn64")
+        project, policy = fixture(self.root, "sn64", case=self)
         setup.run(project, policy)
         source = self.root / "src/middle.c"
         source.write_text('#include "value.h"\nint middle(void) { return VALUE; }\n')

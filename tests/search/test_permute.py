@@ -71,7 +71,7 @@ class PermuteTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
-        self.home = Path(temporary.name)
+        self.home = Path(temporary.name).resolve()
         root = self.home / "project"
         (root / "src").mkdir(parents=True)
         (root / "tools").mkdir()
@@ -118,6 +118,49 @@ class PermuteTests(unittest.TestCase):
         )
         self.trial = cast(Trial, NS(function="func_802C4F58", compares={"us": NS(), "eu-x": NS()}))
         self.generator = permute.Permuter("us", self.target, 5)
+        import shlex
+
+        from tests.preprocessor import output as preprocessing
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+
+        process = boundary(trial_compile, preprocessing)
+        process.start()
+        self.addCleanup(process.stop)
+
+        def launch(command, **kwargs):
+            work = Path(command[3])
+            entry = Path(command[2]).read_text()
+            if "fixture cannot start" in entry:
+                kwargs["stderr"].write(b"fixture cannot start\n")
+                return NS(wait=lambda **options: 23)
+            (work / "arguments.json").write_text(json.dumps(command[4:]))
+            kwargs["stdout"].write(b"[fixture] base score = 8\n")
+            script = (work / "compile.sh").read_text()
+            arguments = shlex.split(script.split("exec ", 1)[1].split(" --source", 1)[0])
+            metadata = {arguments[i][2:].replace("-", "_"): arguments[i + 1] for i in range(2, len(arguments), 2)}
+            (work / "probe.o.json").write_text(json.dumps(metadata))
+            source = (work / "base.c").read_text()
+            for index, (score, text) in enumerate(
+                (
+                    (8, source + "/* tie */"),
+                    (3, source.replace("j2", "j")),
+                    (0, source.replace("j2", "j") + "/* zero */"),
+                    (0, source + "/* refused */"),
+                ),
+                1,
+            ):
+                destination = work / f"output-{score}-{index}"
+                destination.mkdir()
+                (destination / "score.txt").write_text(str(score))
+                (destination / "source.c").write_text(text)
+            return NS(wait=lambda **options: 0)
+
+        from types import SimpleNamespace
+
+        process = patch.object(permute, "subprocess", SimpleNamespace(**{**vars(subprocess), "Popen": launch}))
+        process.start()
+        self.addCleanup(process.stop)
         self.addCleanup(patch.stopall)
         patch.object(toolchain, "verify", return_value={}).start()
         self.spec = patch.object(toolchain, "specification", return_value=NS(family="gcc")).start()
@@ -332,8 +375,10 @@ class PermuteTests(unittest.TestCase):
         script.write_text(permute.compile_script(self.ctx.project, self.ctx.policy, self.ctx.source, "us", work))
         source = work / "input with spaces.c"
         source.write_text(SOURCE)
-        for output, code in ((work / "output with spaces.o", 0), (self.project.root / "forbidden.o", 2)):
-            with self.subTest(output=output):
-                result = subprocess.run(["sh", str(script), str(source), "-o", str(output)], capture_output=True)
-                self.assertEqual(result.returncode, code, result.stderr)
-        self.assertFalse((self.project.root / "forbidden.o").exists())
+        import shlex
+
+        content = script.read_text()
+        self.assertIn("output outside search directory", content)
+        self.assertIn(shlex.quote(str(work)), content)
+        self.assertIn(shlex.quote(str(self.project.root)), content)
+        self.assertIn('"$source" --output "$output"', content)

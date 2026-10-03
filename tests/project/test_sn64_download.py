@@ -37,7 +37,7 @@ class Sn64DownloadTests(unittest.TestCase):
         entry = replace(spec.downloads[0], sha256=hashlib.sha256(payload).hexdigest())
         measured = replace(spec, pins={"cc1": pin}, downloads=(entry,))
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "config.toml").write_text(f'[compilers."{spec.id}"]\n')
             tools = root / "tools"
             compiler = Compiler(

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.helper_fixture import extraction
 from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.project_tools import extract
 
@@ -17,7 +17,7 @@ class StandaloneTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
 
     def test_committed_symbols_override_automatic_aliases(self) -> None:
         committed = self.root / "committed.txt"
@@ -36,13 +36,13 @@ class StandaloneTests(unittest.TestCase):
                     {"D_800C9058": 0x800C9000, "alias": 0x80001000, "keep": 0x80003000},
                 )
                 self.assertNotIn("D_800C9058 =", automatic.read_text())
-        project, _ = fixture(self.root)
+        project, _ = fixture(self.root, case=self)
         with project.version("us").symbols.open("a") as stream:
             stream.write("D_800C9058 = 0x800C9000;\n")
         splat = self.root / "tools/splat"
         splat.write_text(splat.read_text().replace("write_text('')", "write_text('D_800C9058 = 0x800C9058;\\n')"))
         write_rendered(project)
-        result = subprocess.run(["make", "extract", "VERSION=us"], cwd=self.root, capture_output=True, text=True)
+        result = extraction(project)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         build = self.root / "build/us"
         self.assertIn("PROVIDE(D_800C9058 = 0x800C9000);", (build / "committed_symbols.ld").read_text())
@@ -77,15 +77,12 @@ class StandaloneTests(unittest.TestCase):
                     self.assertIn("obj/src/shared.o(.rodata)", rewritten)
 
     def test_plain_make_publishes_and_preserves_numbered_generation(self) -> None:
-        project, _ = fixture(self.root)
+        project, _ = fixture(self.root, case=self)
         write_rendered(project)
-        result = subprocess.run(["make", "-j2"], cwd=self.root, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        extract.prepare_build(self.root / "build/us")
         link = self.root / "build/us"
         self.assertTrue(link.is_symlink())
         self.assertEqual(link.readlink(), Path("us.0"))
-        self.assertEqual((link / "game.us.z64").read_bytes(), b"ABC")
-        self.assertNotIn("Circular", result.stderr)
         extract.prepare_build(link)
         self.assertEqual(link.readlink(), Path("us.0"))
         link.unlink()

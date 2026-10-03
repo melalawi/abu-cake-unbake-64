@@ -16,8 +16,8 @@ from unbake.project.config import Held
 class CompilerFlagTests(unittest.TestCase):
     def test_source_compiler_override_selects_registry_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, _, source = fixture(root)
+            root = Path(temporary).resolve()
+            project, _, source = fixture(root, case=self)
             baseline = project.compiler_for(source)
             gcc = replace(baseline, id="gcc-2.7.2-kmc", kind="sn64", cflags=("-O2",))
             project = replace(project, compilers={baseline.id: baseline, gcc.id: gcc}, units={source.stem: gcc.id})
@@ -33,8 +33,8 @@ class CompilerFlagTests(unittest.TestCase):
 
     def test_missing_or_malformed_variants_refuse_by_compiler_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, _, source = fixture(root)
+            root = Path(temporary).resolve()
+            project, _, source = fixture(root, case=self)
             registry = root / "compilers.toml"
             invalid: tuple[object, ...] = (None, "-O1", [], [["-O1"]], [[], []], [[], [1]], [[], [""]], [[], [" "]])
             with patch.object(toolchain, "REGISTRY_PATH", registry):
@@ -58,7 +58,7 @@ class CompilerFlagTests(unittest.TestCase):
 
     def test_every_registered_compiler_has_explicit_baseline_and_unique_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            project, _, source = fixture(Path(temporary))
+            project, _, source = fixture(Path(temporary).resolve(), case=self)
             baseline = project.compiler_for(source)
             for ident in toolchain.registry():
                 with self.subTest(compiler=ident):

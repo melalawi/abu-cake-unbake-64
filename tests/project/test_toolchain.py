@@ -26,7 +26,7 @@ class ToolchainTests(unittest.TestCase):
     def setUp(self) -> None:
         self.scratch = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(self.scratch.cleanup)
-        self.root = Path(self.scratch.name)
+        self.root = Path(self.scratch.name).resolve()
         self.registry_path = self.root / "compilers.toml"
         self.project_root = self.root / "project"
         self.project_root.mkdir()

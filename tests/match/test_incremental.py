@@ -12,7 +12,7 @@ from unbake.project_tools.extract import unit_ranges
 
 class RetargetTests(unittest.TestCase):
     def _retained(self, directory):
-        project, _, _ = fixture(directory)
+        project, _, _ = fixture(directory, case=self)
         generation = project.build / "us.generation"
         before = project.version("us").split.read_text()
         paths = ["nonmatchings/alpha", "beta", "gamma"]

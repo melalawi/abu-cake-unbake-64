@@ -1,21 +1,25 @@
 """Linked relocation identity and guarded source context regressions."""
 
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.decomp.support import assemble
-from tests.support import test_policy, tool
+from tests.support import test_policy
 from unbake.decomp.score import diff
 from unbake.decomp.trial_compare import compare_object
 from unbake.decomp.trial_source import control_context
 
 
 class RelocationTargetTests(unittest.TestCase):
+    def setUp(self):
+        from tests.objdiff_fixture import install
+
+        install(self)
+
     def test_final_jump_table_and_branch_targets_keep_real_differences(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             generation = root / "build/us.0"
             generation.mkdir(parents=True)
             policy = test_policy(root)
@@ -40,11 +44,9 @@ class RelocationTargetTests(unittest.TestCase):
             )
             script = root / "link.ld"
             script.write_text("SECTIONS { .text 0x80400000 : { *(.text) } .rdata 0x800EFFF0 : { *(.rdata) } }\n")
-            subprocess.run(
-                [tool("mips-linux-gnu-ld"), "-T", str(script), "-o", str(generation / "game.elf"), str(baseline)],
-                check=True,
-                capture_output=True,
-            )
+            from tests.elf_fixture import linked_fixture
+
+            linked_fixture(generation / "game.elf", [baseline], {".text": 0x80400000, ".rdata": 0x800EFFF0})
             (generation / "game.map").write_text(
                 " .text 0x80400000 0x18 obj/src/alpha.o\n .rdata 0x800EFFF0 0x8 obj/src/alpha.o\n"
                 " 0x800EFFF0 jump_table\n 0x80400000 alpha\n"

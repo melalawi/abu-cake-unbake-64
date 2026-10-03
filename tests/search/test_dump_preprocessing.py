@@ -1,7 +1,6 @@
 """Diagnostic dumps must compile the same guarded function as draft trials."""
 
 import os
-import shutil
 import tempfile
 import time
 import unittest
@@ -15,16 +14,25 @@ from unbake.search.core import preprocess
 
 
 class DumpPreprocessingTests(unittest.TestCase):
+    def setUp(self):
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+        from unbake.search import core
+
+        for mock in (boundary(core, output), boundary(trial_compile, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_guarded_function_and_helpers_have_separate_allocation_evidence(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            work = Path(temporary)
+            work = Path(temporary).resolve()
             source = work / "selected.c"
             body = (
                 "static int helper(int x) { return x + 1; }\n"
                 "int selected(int x) { switch (x) { case 1: return helper(x); default: return 0; } }\n"
             )
-            cpp = shutil.which("cpp")
-            self.assertIsNotNone(cpp)
+            cpp = "fixture-cpp"
             for kind in ("sn64", "gcc"):
                 for guarded in (False, True):
                     with self.subTest(kind=kind, guarded=guarded):

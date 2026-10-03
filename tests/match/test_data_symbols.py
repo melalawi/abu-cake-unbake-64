@@ -26,11 +26,11 @@ int alpha(void) {
 
     def test_signed_pairs_and_addends_publish_in_each_owning_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = ".set noreorder\n.text\n.globl alpha\nalpha:\nlui $8,%hi(table+4)\naddiu $8,$8,%lo(table+4)\n"
             obj = assemble(root, "alpha", source)
             words = [0x3C08800F, 0x25088194]
-            project, _policy, _ = fixture(root, words, ("us", "eu"))
+            project, _policy, _ = fixture(root, words, ("us", "eu"), case=self)
             for version in project.versions:
                 found = data_symbols.needs(project, "alpha", version, obj)
                 self.assertEqual(
@@ -40,7 +40,7 @@ int alpha(void) {
 
     def test_disagreeing_references_and_changed_instructions_refuse_placement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             obj = Object(
                 assemble(
                     root,

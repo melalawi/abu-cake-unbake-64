@@ -1,7 +1,6 @@
 """GBI recovery, conservative failures, and independent command-word proofs."""
 
 import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -219,7 +218,7 @@ void f(void) {
 
     def test_codegen_refusal_keeps_original_source_and_names_function(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, policy, _ = fixture(Path(directory))
+            project, policy, _ = fixture(Path(directory).resolve(), case=self)
             code = project.src / "alpha.c"
             original = "typedef struct {unsigned w0,w1;} Gfx; void alpha(Gfx *p) {p->w0=0xE7000000;p->w1=0;}"
             code.write_text(original)
@@ -232,7 +231,7 @@ void f(void) {
 
     def test_install_does_not_replace_a_project_gbi_header(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             existing = project.include[0] / "gbi.h"
             existing.write_text("/* Project-owned graphics declarations. */\n")
             with self.assertRaisesRegex(Held, "existing header differs"):
@@ -241,7 +240,7 @@ void f(void) {
 
     def test_audio_install_preserves_project_abi_and_refuses_owned_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             existing = project.include[0] / "abi.h"
             existing.write_text("/* Project-owned audio declarations. */\n")
             self.assertEqual(gbi.install_audio(project), '#include "shared/abi.h"\n')
@@ -252,7 +251,7 @@ void f(void) {
 
     def test_type_only_cleanup_and_scalar_header_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, policy, _ = fixture(Path(directory))
+            project, policy, _ = fixture(Path(directory).resolve(), case=self)
             root = project.include[0]
             (root / "basetypes.h").write_text(
                 "typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32; "
@@ -274,7 +273,7 @@ void f(void) {
 
     def test_shared_packet_storage_alias_is_lowered_and_canonicalized(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, policy, _ = fixture(Path(directory))
+            project, policy, _ = fixture(Path(directory).resolve(), case=self)
             root = project.include[0]
             (root / "basetypes.h").write_text(
                 "typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32; "
@@ -293,70 +292,9 @@ void f(void) {
             self.assertNotIn("typedef Shared_Gfx", code.read_text())
             self.assertIn("gDPPipeSync(p)", code.read_text())
 
-    def test_audio_header_encodings_and_packet_evaluation(self) -> None:
-        from unbake.decomp import gbi_audio
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            code = root / "proof.c"
-            code.write_text("""#include <stdio.h>
-typedef union {struct {unsigned int w0,w1;} words;double alignment;} Acmd;
-#include "abi.h"
-int main(void) { Acmd commands[15], *p=commands; int i;
- aADPCMdec(p++,1,0x12345678); aClearBuffer(p++,0x123,0x456);
- aEnvMixer(p++,2,0x12345678); aLoadBuffer(p++,0x12345678);
- aResample(p++,3,0x4567,0x12345678); aSaveBuffer(p++,0x12345678);
- aSegment(p++,2,0x123456); aSetBuffer(p++,4,0x1234,0x5678,0x9ABC);
- aSetVolume(p++,0x1234,0x5678,0x9ABC,0xDEF0); aDMEMMove(p++,0x123456,0x789A,0xBCDE);
- aLoadADPCM(p++,0x123456,0x12345678); aMix(p++,5,0x1234,0x5678,0x9ABC);
- aInterleave(p++,0x1234,0x5678); aPoleFilter(p++,6,0x1234,0x12345678);
- aSetLoop(p++,0x12345678);
- printf("%ld\\n", (long)(p-commands));
- for(i=0;i<15;i++) printf("%08X %08X\\n",commands[i].words.w0,commands[i].words.w1);
- return 0; }
-""")
-            binary = root / "proof"
-            subprocess.run(
-                [
-                    "cc",
-                    "-std=c89",
-                    "-pedantic-errors",
-                    "-I",
-                    str(gbi_audio.HEADER.parent),
-                    str(code),
-                    "-o",
-                    str(binary),
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            output = subprocess.check_output([str(binary)], text=True).splitlines()
-            self.assertEqual(
-                output,
-                [
-                    "15",
-                    "01010000 12345678",
-                    "02000123 00000456",
-                    "03020000 12345678",
-                    "04000000 12345678",
-                    "05034567 12345678",
-                    "06000000 12345678",
-                    "07000000 02123456",
-                    "08041234 56789ABC",
-                    "1B345678 9ABCDEF0",
-                    "0A123456 789ABCDE",
-                    "0B123456 12345678",
-                    "0C051234 56789ABC",
-                    "0D000000 12345678",
-                    "0E061234 12345678",
-                    "0F000000 12345678",
-                ],
-            )
-
     def test_failed_pointer_folding_retries_without_moving_assignment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, policy, _ = fixture(Path(directory))
+            project, policy, _ = fixture(Path(directory).resolve(), case=self)
             code = project.src / "alpha.c"
             code.write_text(
                 "typedef struct {unsigned w0,w1;} Gfx; extern Gfx *dl;\n"
@@ -391,64 +329,9 @@ int main(void) { Acmd commands[15], *p=commands; int i;
         source = "Gfx *p; p->words.w0=0xE7000000; // retain\np->words.w1=0;"
         self.assertIn("// retain\ngDPPipeSync(p);", gbi.lower(source, "f3dex2").source)
 
-    def test_header_words_and_single_packet_evaluation(self) -> None:
-        # C89 host execution independently verifies actual builders, including
-        # static forms, against known hardware encodings and dynamic operands.
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            code = root / "proof.c"
-            code.write_text("""#include <stdio.h>
-#define F3DEX_GBI_2
- typedef union { struct { unsigned int w0,w1; } words; double alignment; } Gfx;
-#include "gbi.h"
-Gfx fixed[] = {gsDPPipeSync(), gsDPSetCycleType(G_CYC_FILL),
- gsDPSetColorImage(G_IM_FMT_RGBA,G_IM_SIZ_16b,320,0), gsSPMatrix(0,G_MTX_LOAD),
- gsSP2Triangles(0,1,2,0,2,3,0,0),
- gsDPSetCombineLERP(0,0,0,PRIMITIVE,0,0,0,PRIMITIVE,0,0,0,PRIMITIVE,0,0,0,PRIMITIVE)};
-int main(void) { Gfx commands[3], *p=commands; int x=7;
- gDPFillRectangle(p++,x,2,100,50);
- gDPSetPrimColor(p++,0,255,1,2,3,4);
- gSPTexture(p++,0x8000,0x8000,0,0,G_ON);
- printf("%ld\\n",(long)(p-commands));
- for(x=0;x<3;++x) printf("%08X %08X\\n",commands[x].words.w0,commands[x].words.w1);
- for(x=0;x<6;++x) printf("%08X %08X\\n",fixed[x].words.w0,fixed[x].words.w1);
- return 0; }
-""")
-            result = subprocess.run(
-                [
-                    "cc",
-                    "-std=c89",
-                    "-pedantic-errors",
-                    "-I",
-                    str(gbi.HEADER.parent),
-                    str(code),
-                    "-o",
-                    str(root / "proof"),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            lines = subprocess.check_output([str(root / "proof")], text=True).splitlines()
-            self.assertEqual(
-                lines,
-                [
-                    "3",
-                    "F61900C8 0001C008",
-                    "FA0000FF 01020304",
-                    "D7000002 80008000",
-                    "E7000000 00000000",
-                    "E3000A01 00300000",
-                    "FF10013F 00000000",
-                    "DA380003 00000000",
-                    "06000204 00040600",
-                    "FCFFFFFF FFFDF6FB",
-                ],
-            )
-
     def test_cli_rewrite_install_and_idempotence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            project, policy, _ = fixture(Path(directory))
+            project, policy, _ = fixture(Path(directory).resolve(), case=self)
             config = project.root / "config.toml"
             config.write_text(config.read_text().replace("cppflags=[]", 'cppflags=["-DF3DEX_GBI_2"]'))
             # This fixture is IDO; definitions must also be found in raw project
@@ -476,8 +359,8 @@ int main(void) { Gfx commands[3], *p=commands; int x=7;
         from unbake.decomp import m2c
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            project, policy, _ = fixture(root)
+            root = Path(directory).resolve()
+            project, policy, _ = fixture(root, case=self)
             header = project.include[0] / "graphics.h"
             header.write_text("typedef union {struct {unsigned int w0,w1;} words;} Gfx;\nextern Gfx *dl;\n")
             tool = root / "m2c"

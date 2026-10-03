@@ -19,10 +19,15 @@ from unbake.project.config import Held, Policy, Project
 
 
 class TrialLockingTests(unittest.TestCase):
+    def setUp(self):
+        from tests.objdiff_fixture import install
+
+        install(self)
+
     def test_four_trials_overlap_and_keep_old_generation_through_storage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy, source = fixture(root)
+            root = Path(temporary).resolve()
+            project, policy, source = fixture(root, case=self)
             old = build.current_generation(project, "us")
             old.rename(old.with_name("us.0"))
             old = old.with_name("us.0")
@@ -38,10 +43,10 @@ class TrialLockingTests(unittest.TestCase):
                 with (project.root / "build/.lock").open("a+b") as lock:
                     fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
 
-            def prepare(project: Project, function: str, version: str, *, generation: Path) -> Path:
+            def prepare(project: Project, function: str, version: str, *, generation: Path, read_only=False) -> Path:
                 assert_writer_free()
                 self.assertEqual(generation, old)
-                return original_target(project, function, version, generation=generation)
+                return original_target(project, function, version, generation=generation, read_only=read_only)
 
             def compile_draft(project: object, policy: object, copied: Path, version: str, output: Path) -> Path:
                 barrier.wait(timeout=10)
@@ -51,7 +56,7 @@ class TrialLockingTests(unittest.TestCase):
                 shutil.copyfile(target, output)
                 return output
 
-            def diff(*args: object, generation: Path) -> dict[str, object]:
+            def diff(*args: object, generation: Path, **kwargs) -> dict[str, object]:
                 assert_writer_free()
                 self.assertEqual(generation, old)
                 self.assertTrue(target.is_file())
@@ -103,8 +108,8 @@ class TrialLockingTests(unittest.TestCase):
 
     def test_exception_releases_generation_pin_and_writer_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy, source = fixture(root)
+            root = Path(temporary).resolve()
+            project, policy, source = fixture(root, case=self)
             generation = build.current_generation(project, "us")
             with (
                 patch.object(trial, "compile_draft", side_effect=Held("compile", "failed")),
@@ -117,7 +122,7 @@ class TrialLockingTests(unittest.TestCase):
 
     def test_abandoned_generation_cleanup_also_honors_reader_pins(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            generation = Path(temporary) / "build/us.1"
+            generation = Path(temporary).resolve() / "build/us.1"
             generation.mkdir(parents=True)
             with build.pin(generation):
                 build.discard_generation(generation)

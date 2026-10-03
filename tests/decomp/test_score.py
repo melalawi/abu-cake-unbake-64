@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -12,7 +11,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.support import test_policy, tool
 from unbake.decomp import score
 from unbake.project.config import Held
 
@@ -21,9 +19,10 @@ class ScoreTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        external = test_policy(self.root)
-        executable = external.objdiff_cli
+        self.root = Path(self.temporary.name).resolve()
+        executable = self.root / "objdiff"
+        executable.write_bytes(b"pinned objdiff fixture")
+        external = SimpleNamespace(objdiff_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
         self.policy = SimpleNamespace(
             objdiff_cli=executable, objdiff_sha256=external.objdiff_sha256, cache_root=self.root / "cache"
         )
@@ -32,6 +31,9 @@ class ScoreTest(unittest.TestCase):
         self.base = self.root / "base.o"
         self.object(self.target, 1)
         self.object(self.base, 1)
+        mock = patch.object(score.subprocess, "run", side_effect=self.diff_output)
+        mock.start()
+        self.addCleanup(mock.stop)
         score.verified.clear()
         self.addCleanup(score.verified.clear)
 
@@ -41,25 +43,35 @@ class ScoreTest(unittest.TestCase):
         return SimpleNamespace(name=name)
 
     def object(self, path: Path, value: int) -> None:
-        assembler = tool("mips-linux-gnu-as")
-        body = (
-            ".text\n.set noreorder\n.globl sample\n.type sample,@function\nsample:\n"
-            f"addiu $v0,$zero,{value}\njr $ra\nnop\n.size sample,.-sample\n"
-        )
-        subprocess.run(
-            [assembler, "-EB", "-mips3", "-o", str(path)], input=body, capture_output=True, text=True, check=True
-        )
+        path.write_bytes(bytes([value]))
+
+    def diff_output(self, command, **kwargs):
+        self.assertEqual(command[:3], [str(self.policy.objdiff_cli), "diff", "-1"])
+        self.assertIn("--format", command)
+        self.assertEqual(command[command.index("--format") + 1], "json")
+        document = {
+            "left": {
+                "symbols": [
+                    {
+                        "name": "sample",
+                        "kind": "SYMBOL_FUNCTION",
+                        "match_percent": 100.0 if self.target.read_bytes() == self.base.read_bytes() else 66.0,
+                    }
+                ]
+            }
+        }
+        Path(command[command.index("--output") + 1]).write_text(json.dumps(document))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     def fuzzy(self, function: str = "sample") -> float:
         return score.fuzzy(self.project, self.policy, "us", function, self.target, self.base)
 
     def test_real_scores_and_cache_key_follow_bytes_not_paths(self) -> None:
-        with patch.object(score.subprocess, "run", wraps=subprocess.run) as execute:
+        with patch.object(score.subprocess, "run", side_effect=self.diff_output) as execute:
             self.assertEqual(self.fuzzy(), 100.0)
             self.assertEqual(self.fuzzy(), 100.0)
             self.assertEqual(execute.call_count, 1)
             self.object(self.base, 2)
-            # The independent assembler call also passes through subprocess.run.
             before = execute.call_count
             value = self.fuzzy()
             self.assertGreater(value, 0)

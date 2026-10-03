@@ -22,9 +22,14 @@ from unbake.project.config import Held, Policy
 
 
 class ObjectTrialTests(unittest.TestCase):
+    def setUp(self):
+        from tests.objdiff_fixture import install
+
+        install(self)
+
     def test_resolved_relocations_keep_naming_separate_from_code_differences(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             policy = test_policy(root)
             body = (
                 ".set noreorder\n.text\n.globl alpha\n.type alpha,@function\nalpha:\n"
@@ -77,8 +82,8 @@ class ObjectTrialTests(unittest.TestCase):
 
     def test_flag_probe_ranks_real_objects_per_version_without_changing_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy, source = fixture(root, versions=("us", "eu"))
+            root = Path(temporary).resolve()
+            project, policy, source = fixture(root, versions=("us", "eu"), case=self)
             compiler = project.compiler_for(source)
             project = replace(project, compilers={compiler.id: replace(compiler, cflags=("-O2",))})
             config = project.root / "config.toml"
@@ -132,7 +137,7 @@ class ObjectTrialTests(unittest.TestCase):
 
     def test_symbol_names_are_differences_without_linking_or_symbol_addresses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             policy = test_policy(root)
             body = (
                 ".set noreorder\n.text\n.globl alpha\n.type alpha,@function\nalpha:\n"
@@ -158,8 +163,8 @@ class ObjectTrialTests(unittest.TestCase):
 
     def test_compile_wrapper_all_versions_and_missing_target_are_named(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, policy, source = fixture(root, versions=("us", "eu"))
+            root = Path(temporary).resolve()
+            project, policy, source = fixture(root, versions=("us", "eu"), case=self)
             content = "#ifdef NON_MATCHING\nint alpha(void) { return 1; }\n#endif\n"
             source.write_text(content)
             compiled = []
@@ -180,8 +185,8 @@ class ObjectTrialTests(unittest.TestCase):
 
     def test_matched_unit_selects_relocatable_input_from_linker_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            project, _policy, _source = fixture(root)
+            root = Path(temporary).resolve()
+            project, _policy, _source = fixture(root, case=self)
             generation = build.current_generation(project, "us")
             configured = project.version("us")
             configured.split.write_text(configured.split.read_text().replace("asm, nonmatchings/alpha", "c, shared"))
@@ -197,7 +202,7 @@ class ObjectTrialTests(unittest.TestCase):
 
     def test_register_and_instruction_edits_feed_allocator_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             policy = test_policy(root)
             target = assemble(root, "target", assembly("alpha", [0x8E020018, 0x03E00008, 0]))
             for words, kind in (

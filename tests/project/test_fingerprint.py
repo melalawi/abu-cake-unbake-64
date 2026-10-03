@@ -19,7 +19,8 @@ def move(funct: int, source: Path = 4, destination: int = 2) -> int:
     return source << 21 | destination << 11 | funct
 
 
-FACTS = header.parse(cartridge(code="EX"), BOOTCODES)
+with patch.object(header, "checksum", side_effect=__import__("tests.rom_fixture", fromlist=["checksum"]).checksum):
+    FACTS = header.parse(cartridge(code="EX"), BOOTCODES)
 
 
 def image(data: bytes) -> bytes:
@@ -48,6 +49,11 @@ def object_bytes(body: bytes, relocations: Any = (), name: str = "probe") -> byt
 
 
 class FingerprintTests(unittest.TestCase):
+    def setUp(self):
+        from tests.rom_fixture import install
+
+        install(self)
+
     def test_counts_only_register_copies_and_requires_eight_moves_and_eighty_percent(self) -> None:
         words = [move(0x21)] * 8 + [move(0x25)] * 2 + [move(0x21, 0), move(0x21) | 1 << 16, 0x24020021]
         cartridge = image(struct.pack(">" + "I" * len(words), *words))
@@ -130,7 +136,7 @@ class FingerprintTests(unittest.TestCase):
             (expected + bytes(4), (), False),
         ]
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "probe.o"
+            path = Path(temporary).resolve() / "probe.o"
             for body, relocations, result in cases:
                 with self.subTest(body=body.hex()):
                     path.write_bytes(object_bytes(body, relocations))
@@ -138,7 +144,7 @@ class FingerprintTests(unittest.TestCase):
 
     def test_prove_drafts_once_and_preserves_configured_compiler_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "project"
+            root = Path(temporary).resolve() / "project"
             root.mkdir()
             data = cartridge(instructions=struct.pack(">I", 0x0C000000) + bytes(28))
             baserom = root / "baserom.us.z64"

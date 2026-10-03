@@ -21,7 +21,7 @@ from unbake.search.core import Context
 class EmptyAllocationOrderTests(unittest.TestCase):
     def test_empty_global_order_allows_tiny_function_mutations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             project = cast(Project, project_fixture(root / "project"))
             source = root / "f.c"
             source.write_text("int f(unsigned char *base, int index){return (base + index)[24];}")

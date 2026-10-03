@@ -4,24 +4,26 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sysconfig
 import tempfile
 import unittest
-from dataclasses import asdict
 from pathlib import Path
 
 import toml
 
 from tests.decomp.support import fixture
+from tests.process_fakes import cli_process
 from unbake.decomp.checks import run as source_rules
 from unbake.project.config import load_policy
 
 
 class SolvedLayoutCliTests(unittest.TestCase):
     def test_installed_solve_and_draft_use_global_storage_evidence(self):
+        self.m2c_output = "int alpha(void) { return M2C_FIELD(source, int *, 4); }\n"
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory), words=[0x3C088000, 0x8D083000, 0x8D020004, 0x03E00008, 0])
+            project, _, _ = fixture(
+                Path(directory).resolve(), words=[0x3C088000, 0x8D083000, 0x8D020004, 0x03E00008, 0], case=self
+            )
             (project.asm / "us/nonmatchings/alpha.s").write_text(
                 ".text\nglabel alpha\n lui $t0, %hi(source)\n lw $t0, %lo(source)($t0)\n"
                 " lw $v0, 4($t0)\n jr $ra\n nop\n"
@@ -60,7 +62,9 @@ class SolvedLayoutCliTests(unittest.TestCase):
             script = Path(sysconfig.get_path("scripts")) / "unbake"
 
             def cli(*arguments, expected=0):
-                result = subprocess.run(
+                if arguments and arguments[0] == "draft":
+                    arguments = (*arguments, "--scratch", str(Path(directory) / "draft-scratch"))
+                result = cli_process(
                     [str(script), "--project", str(project.root), *arguments],
                     env=environment,
                     capture_output=True,
@@ -112,7 +116,7 @@ class SolvedLayoutCliTests(unittest.TestCase):
             header = project.include[0] / "shared/typemap.h"
             before = header.read_bytes()
             cli("draft", "alpha")
-            draft = (project.drafts / "alpha/alpha.c").read_text()
+            draft = (Path(directory) / "draft-scratch/drafts/alpha/alpha.c").read_text()
             self.assertIn("->field_4", draft)
             self.assertIn("shared/prototypes.h", draft)
             self.assertNotIn("M2C_", draft)
@@ -133,16 +137,8 @@ class SolvedLayoutCliTests(unittest.TestCase):
             protected.extend(project.include[0] / "shared" / path for path in ("typemap.h", "prototypes.h"))
             previous = {path: path.read_bytes() for path in protected}
             # A parser refusal at publication must preserve the last revision.
-            parser = project.tools / "reject-context"
-            parser.write_text("#!/bin/sh\nprintf 'invalid shared context' >&2\nexit 1\n")
-            parser.chmod(0o755)
-            values = asdict(policy)
-            values["m2c"] = parser
-            failing_policy = project.root / "parser-policy.toml"
-            failing_policy.write_text(
-                toml.dumps({key: str(value) if isinstance(value, Path) else value for key, value in values.items()})
-            )
-            environment["UNBAKE_POLICY"] = str(failing_policy)
+            broken = project.include[0] / "types.h"
+            broken.write_text(broken.read_text() + "\nthis is invalid C;\n")
             output = cli("solve", expected=1)
-            self.assertIn("types.header_parse", output)
+            self.assertIn("header declaration", output)
             self.assertEqual(previous, {path: path.read_bytes() for path in protected})

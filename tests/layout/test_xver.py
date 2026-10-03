@@ -56,7 +56,7 @@ class PlacementTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.project = Project(Path(temporary.name))
+        self.project = Project(Path(temporary.name).resolve())
 
     def prepare(
         self, name: Any = "entry", target: Any = "other", merged: Any = False, order: Any = 1, body: Any = BODY

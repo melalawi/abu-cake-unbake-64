@@ -26,7 +26,7 @@ class RodataCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.fixture = ProjectFixture(self.root)
         self.project = cast(Project, self.fixture)
         self.fixture.src.mkdir()

@@ -17,7 +17,7 @@ from unbake.project.config import Held
 class SignatureCatalogTests(unittest.TestCase):
     def test_pinned_builder_matches_only_relocation_bits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             notice = root / "LICENSE"
             notice.write_text("Permission is hereby granted, free of charge")
             source, output = root / "input.json", root / "catalog.json"
@@ -61,7 +61,7 @@ class SignatureCatalogTests(unittest.TestCase):
 
     def test_builder_refuses_bad_pins_relocations_and_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             source, output, notice = root / "input", root / "output", root / "license"
             notice.write_text("Permission is hereby granted, free of charge")
             for change, relocation, error in [

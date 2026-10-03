@@ -20,9 +20,23 @@ class MainCase(unittest.TestCase):
     real_guidance = False
 
     def setUp(self) -> None:
+        from tests.process_fakes import compiler_registry
+
+        compiler_registry(self)
+        import subprocess
+
+        from tests.process_fakes import boundary, git_init
+        from unbake.project import hygiene, init
+
+        for mock in (
+            boundary(init, git_init),
+            boundary(hygiene, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, b"", b"")),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.root = self.directory / "project"
         shutil.copytree(Path(__file__).parents[1] / "fixture", self.root)
         self.project = config.load(self.root)
@@ -79,7 +93,16 @@ class MainCase(unittest.TestCase):
         return (code, output, error)
 
     def args(self, *operands: str) -> list[str]:
-        return ["--project", str(self.root), *operands]
+        return [
+            "--project",
+            str(self.root),
+            *operands,
+            *(
+                ["--scratch", str(self.scratch)]
+                if operands and operands[0] == "try" and "--scratch" not in operands
+                else []
+            ),
+        ]
 
     def trial_modules(self, *, change_generation: bool = False, omit_artifact: bool = False) -> Any:
         generation = self.root / "build/us.1"

@@ -17,7 +17,7 @@ class LiteralLayoutTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             obj = Object(
                 assemble(
-                    Path(temporary),
+                    Path(temporary).resolve(),
                     "anonymous",
                     ".set noreorder\n.text\n"
                     "lui $t0,%hi(first)\nlui $t1,%hi(second)\n"
@@ -46,7 +46,7 @@ class LiteralLayoutTests(unittest.TestCase):
 
     def anchored(self, values: list[tuple[int, bytes]], *, external: bool = True) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             asm = ".set noreorder\n.text\n.globl alpha\nalpha:\n"
             if external:
                 asm += "lui $at,%hi(external+4)\nlwc1 $f0,%lo(external+4)($at)\n"
@@ -103,7 +103,7 @@ class LiteralLayoutTests(unittest.TestCase):
 
     def test_existing_short_string_pool_has_explicit_nonzero_tail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             obj = Object(
                 assemble(
                     root,
@@ -128,7 +128,7 @@ class LiteralLayoutTests(unittest.TestCase):
     def test_shared_duplicates_and_misaligned_table_prove_each_word(self) -> None:
         for biased in (False, True):
             with self.subTest(biased=biased), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 obj = Object(
                     assemble(
                         root,

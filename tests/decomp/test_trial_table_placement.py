@@ -1,18 +1,22 @@
 """Draft-owned tables must match resident contents, extent, placement, and use."""
 
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.decomp.support import assemble
-from tests.support import test_policy, tool
+from tests.support import test_policy
 from unbake.decomp.score import diff
 from unbake.decomp.trial import comparison_identical
 from unbake.decomp.trial_compare import compare_object
 
 
 class TrialTablePlacementTests(unittest.TestCase):
+    def setUp(self):
+        from tests.objdiff_fixture import install
+
+        install(self)
+
     def test_resident_tables_resolve_only_with_exact_entries_offsets_and_use(self) -> None:
         body = (
             ".set noreorder\n.text\n.globl alpha\n.type alpha,@function\nalpha:\n"
@@ -23,7 +27,7 @@ class TrialTablePlacementTests(unittest.TestCase):
         entries = ".section .rdata\n.word .Lend, alpha, alpha, .Lend\n"
         for version, start in (("us", 0x80400000), ("eu", 0x80402000)):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 generation = root / "build" / f"{version}.0"
                 generation.mkdir(parents=True)
                 policy = test_policy(root)
@@ -35,11 +39,9 @@ class TrialTablePlacementTests(unittest.TestCase):
                     f"SECTIONS {{ .text 0x{start:X} : {{ *(.text) }} .rdata 0x800E0000 : {{ *(.rdata) }} }}"
                 )
                 elf = generation / "game.elf"
-                subprocess.run(
-                    [tool("mips-linux-gnu-ld"), "-T", str(script), "-o", str(elf), str(baseline)],
-                    check=True,
-                    capture_output=True,
-                )
+                from tests.elf_fixture import linked_fixture
+
+                linked_fixture(elf, [baseline], {".text": start, ".rdata": 0x800E0000})
                 (generation / "game.map").write_text(
                     f" 0x{start:X} alpha\n 0x800E0000 first_table\n 0x800E0008 second_table\n"
                 )

@@ -64,7 +64,7 @@ class SimilarTests(unittest.TestCase):
 
     def test_retrieval_uses_only_landed_c_and_returns_ranked_source_and_assembly(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             split = project.version("us").split
             split.write_text(split.read_text().replace("asm, beta", "c, beta").replace("asm, gamma", "c, gamma"))
             (project.src / "beta.c").write_text("int beta(void) { return 2; }\n")
@@ -100,7 +100,7 @@ class SimilarTests(unittest.TestCase):
 
     def test_named_refusals_for_missing_and_ambiguous_targets(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
-            project, _, _ = fixture(Path(directory))
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
             for function in (None, "", "unknown"):
                 with self.subTest(function=function), self.assertRaisesRegex(Held, "function"):
                     similar.retrieve(project, function, "us")

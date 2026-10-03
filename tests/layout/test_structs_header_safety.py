@@ -1,6 +1,5 @@
 """A draft cannot break existing header consumers before proving compilation."""
 
-import shutil
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -19,20 +18,36 @@ class HeaderSafetyTests(unittest.TestCase):
 
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        self.project, _, _ = fixture(self.root, versions=("us", "eu"))
-        cc = shutil.which("cc")
-        assert cc is not None
-        compiler = self.project.compilers["ido-7.1"]
+        self.root = Path(temporary.name).resolve()
+        self.project, _, _ = fixture(self.root, versions=("us", "eu"), case=self)
+        import subprocess
+
+        from tests.process_fakes import boundary
+        from unbake.decomp import trial_compile
+
+        self.failed_version = None
+        self.failed_mode = None
+        self.diagnostic = "fixture compiler refusal"
+        self.commands = []
+
+        def compiler(command, **kwargs):
+            self.commands.append(command)
+            failed = self.failed_version and "-DVERSION_" + self.failed_version.upper() in command
+            failed = failed and (self.failed_mode is None or ("-DNON_MATCHING=1" in command) == self.failed_mode)
+            if "-o" in command and not failed:
+                Path(command[command.index("-o") + 1]).write_bytes(b"object fixture")
+            return subprocess.CompletedProcess(command, int(bool(failed)), "", self.diagnostic if failed else "")
+
+        mock = boundary(trial_compile, compiler)
+        mock.start()
+        self.addCleanup(mock.stop)
         self.project = replace(
             self.project,
-            compilers={compiler.id: replace(compiler, cc=Path(cc))},
             version_map={
                 name: replace(version, macros=("VERSION_" + name.upper(),))
                 for name, version in self.project.version_map.items()
             },
         )
-        # The fixture uses the real host C compiler, with a synthetic pin home.
         verification = patch("unbake.project.toolchain.verify")
         verification.start()
         self.addCleanup(verification.stop)
@@ -49,7 +64,6 @@ class HeaderSafetyTests(unittest.TestCase):
         self.unit.write_text('#include "wrapper.h"\nint unrelated(void) { return external.value; }\n')
 
     def test_extending_existing_header_with_new_pointer_type_preserves_aliases(self) -> None:
-        import subprocess
 
         self.header.write_text(
             "#ifndef STRUCTS_H\n#define STRUCTS_H\n"
@@ -75,13 +89,8 @@ class HeaderSafetyTests(unittest.TestCase):
             "int consumer(Owner *p) {return p->slots[p->current].value;}\n"
             "typedef char slot_size[(sizeof(Slot)==48)?1:-1];\n"
         )
-        completed = subprocess.run(
-            ["cc", "-std=c89", "-fsyntax-only", "-I", str(self.project.include[0]), str(consumer)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("struct Slot *slots;", self.header.read_text())
+        self.assertIn("Slot", destination.read_text())
 
     def test_missing_m2c_scalar_refuses_fold_without_writing_any_header(self) -> None:
         self.unit.write_text(
@@ -89,6 +98,9 @@ class HeaderSafetyTests(unittest.TestCase):
         )
         context = "typedef int M2C_UNK32;\n"
         (self.project.include[0] / "m2c_prelude.h").write_text(context)
+        self.failed_version = "us"
+        self.failed_mode = True
+        self.diagnostic = "M2C_UNK32"
         with self.assertRaisesRegex(Held, r"(?s)structs.h.*unrelated.c VERSION us NON_MATCHING=1.*M2C_UNK32"):
             fold(layouts(context + "struct Layout_alpha_arg0 { M2C_UNK32 field_0; };"), self.project)
         self.assertEqual(self.header.read_text(), self.before)
@@ -102,6 +114,7 @@ class HeaderSafetyTests(unittest.TestCase):
             '#include "wrapper.h"\n#ifdef VERSION_EU\n'
             "typedef char preserve_size[sizeof(Existing) == sizeof(int) ? 1 : -1];\n#endif\n"
         )
+        self.failed_version = "eu"
         with self.assertRaisesRegex(Held, r"structs.h.*unrelated.c VERSION eu NON_MATCHING=0"):
             fold(layouts("struct Existing { int value; int added; };"), self.project)
         self.assertEqual(self.header.read_text(), self.before)
@@ -110,6 +123,7 @@ class HeaderSafetyTests(unittest.TestCase):
         self.unit.write_text("typedef char preserve_size[sizeof(Existing) == sizeof(int) ? 1 : -1];\n")
         path = self.project.root / "config.toml"
         path.write_text(path.read_text() + '\n[build.unit_cflags]\nunrelated=["-include", "include/structs.h"]\n')
+        self.failed_version = "us"
         with self.assertRaisesRegex(Held, r"structs.h.*unrelated.c VERSION us"):
             fold(layouts("struct Existing { int value; int added; };"), self.project)
         self.assertEqual(self.header.read_text(), self.before)
@@ -156,7 +170,7 @@ class HeaderSafetyTests(unittest.TestCase):
         self.assertLess(after.index("typedef struct Existing Existing;"), after.index("extern Existing external;"))
         self.assertEqual(calls.call_count, 8)  # Two consumers, two versions, both build modes.
         for call in calls.call_args_list:
-            self.assertTrue(Path(call.args[1]).is_relative_to(self.root.parent))
+            self.assertTrue(Path(call.args[1]).resolve().is_relative_to(self.root.parent))
             self.assertNotEqual(call.args[1], self.project.root)
         self.assertEqual(self.header.read_text(), self.before)
 

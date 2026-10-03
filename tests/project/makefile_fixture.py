@@ -14,7 +14,7 @@ from unittest.mock import patch
 from tests.support import tool, write_policy
 from unbake.project import config, makefile
 
-WORK = Path(tempfile.gettempdir())
+WORK = Path(tempfile.gettempdir()).resolve()
 
 
 def helper(name: str) -> Any:
@@ -32,8 +32,39 @@ def executable(path: Path, code: str) -> None:
     path.chmod(0o755)
 
 
-def fixture(root: Path, kind: str = "ido") -> Any:
-    root = Path(root)
+def fixture(root: Path, kind: str = "ido", *, case) -> Any:
+    import subprocess
+
+    from tests.process_fakes import boundary
+    from unbake.project import hygiene
+
+    index = boundary(hygiene, lambda command, **kwargs: subprocess.CompletedProcess(command, 0, b"", b""))
+    index.start()
+    case.addCleanup(index.stop)
+    from tests.process_fakes import compile_helper, fixture_tool
+    from unbake.project import build
+    from unbake.project_tools import compile as compiler
+    from unbake.project_tools import extract
+
+    def run(command, **kwargs):
+        if Path(command[0]).name.startswith("python"):
+            return compile_helper(command, **kwargs)
+        return fixture_tool(command, **kwargs)
+
+    for mock in (boundary(build, run), boundary(compiler, fixture_tool), boundary(extract, fixture_tool)):
+        mock.start()
+        case.addCleanup(mock.stop)
+
+    def sn64_assemble(text, destination, assembler, flags, **kwargs):
+        case.assertIn("-EB", flags)
+        destination.write_bytes(text.replace("\n", "\r\n").encode())
+        with (root / "calls").open("a") as stream:
+            stream.write("as\n")
+
+    adapter = patch("abumasn64.assemble.assemble", side_effect=sn64_assemble)
+    adapter.start()
+    case.addCleanup(adapter.stop)
+    root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     policy_path = write_policy(root)
     patch.dict(os.environ, UNBAKE_POLICY=str(policy_path)).start()

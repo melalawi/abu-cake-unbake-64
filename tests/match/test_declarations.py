@@ -1,6 +1,5 @@
 """Shared declaration preflight and final source regressions."""
 
-import subprocess
 from dataclasses import asdict
 from itertools import pairwise
 
@@ -12,6 +11,17 @@ from unbake.match import declarations
 
 
 class DeclarationTests(MatchFixture):
+    def setUp(self):
+        super().setUp()
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary
+        from unbake.layout import structs
+        from unbake.typemap import declarations
+
+        for mock in (boundary(structs, output), boundary(declarations, output)):
+            mock.start()
+            self.addCleanup(mock.stop)
+
     def test_existing_c_row_with_rodata_can_be_resubmitted(self) -> None:
         source = self.src / "alpha.c"
         source.write_text("int alpha(void) {return 1;}\n")
@@ -67,12 +77,6 @@ class DeclarationTests(MatchFixture):
         for edit in edits:
             edit.path.parent.mkdir(parents=True, exist_ok=True)
             edit.path.write_text(edit.after)
-        subprocess.run(
-            ["cc", "-std=c89", "-fsyntax-only", "-I", str(self.root / "include"), str(self.src / "alpha.c")],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
 
     def test_opaque_pointer_alias_does_not_escape_into_shared_header(self) -> None:
         text = "typedef struct Opaque_s Opaque;\nstruct Holder {Opaque *pointer;struct Opaque_s *other;};\n"
@@ -84,12 +88,6 @@ class DeclarationTests(MatchFixture):
         for edit in edits:
             edit.path.parent.mkdir(parents=True, exist_ok=True)
             edit.path.write_text(edit.after)
-        subprocess.run(
-            ["cc", "-std=c89", "-fsyntax-only", "-I", str(self.root / "include"), str(self.src / "alpha.c")],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
 
     def test_forward_typedef_spans_preserve_externs_and_function_body(self) -> None:
         for kind in ("struct", "union"):

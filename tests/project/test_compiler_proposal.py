@@ -29,9 +29,24 @@ LEAF = instructions(0x03E00008, 0)
 
 class ProposalTests(unittest.TestCase):
     def setUp(self) -> None:
+        from tests.rom_fixture import install
+
+        install(self)
+        from tests.process_fakes import boundary, git_init
+
+        git = boundary(init, git_init)
+        git.start()
+        from unbake.project import hygiene
+
+        empty_index = boundary(
+            hygiene, lambda command, **kwargs: __import__("subprocess").CompletedProcess(command, 0, b"", b"")
+        )
+        empty_index.start()
+        self.addCleanup(empty_index.stop)
+        self.addCleanup(git.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.base = Path(self.temporary.name)
+        self.base = Path(self.temporary.name).resolve()
         with contextlib.redirect_stdout(io.StringIO()):
             init.run(self.base / "game")
         self.project = config.load_pending(self.base / "game")

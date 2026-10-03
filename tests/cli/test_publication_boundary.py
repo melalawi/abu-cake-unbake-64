@@ -1,15 +1,12 @@
-"""Installed publication proofs with real compiler candidates and overlapping processes."""
+"""Publication transactions with canned tool results and overlapping threads."""
 
 import fcntl
 import hashlib
 import json
 import os
 import shutil
-import subprocess
-import sys
 import sysconfig
 import tempfile
-import time
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -23,10 +20,13 @@ from unbake.report import progress
 
 class PublicationBoundaryCliTests(unittest.TestCase):
     def setUp(self):
+        from tests.process_fakes import compiler_registry
+
+        compiler_registry(self)
         names = getattr(self, "names", ("alpha", "beta"))
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.root = self.directory / "project"
         shutil.copytree(Path(__file__).parents[1] / "fixture", self.root)
         shutil.rmtree(self.root / "src")
@@ -48,6 +48,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         image = bytes.fromhex("80371240") + bytes(60) + body
         for version in data["project"]["versions"]:
             cartridge = data["version"][version]
+            cartridge.update(cartridge_id="FIX-" + version, region="Test", description="Synthetic release.")
             path = self.root / cartridge["baserom"]
             path.parent.mkdir(exist_ok=True)
             path.write_bytes(image)
@@ -86,6 +87,9 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         (self.root / "README.md").write_text(document)
         base = test_policy()
         self.policy = replace(base, cores=2, state_root=self.directory / "state")
+        from tests.cli.publication_tools import Tools
+
+        self.tools = Tools(self)
         setup.run(self.project, self.policy)
         self.project = config.load(self.root)
         self.sources = []
@@ -100,8 +104,10 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.env = dict(os.environ, PYTHONNOUSERSITE="1")
         self.env.pop("PYTHONPATH", None)
         self.write_policy()
-        subprocess.run(["git", "init", str(self.root)], capture_output=True, check=True)
-        self.make()
+        for version in self.project.versions:
+            generation = self.project.build / (version + ".0")
+            self.tools.prime(self.project, version, generation)
+            self.project.build_link(version).symlink_to(generation.name)
         self.cli("map")
         self.cli("solve")
 
@@ -112,31 +118,34 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.env["UNBAKE_POLICY"] = str(path)
 
     def cli(self, *arguments):
-        result = subprocess.run(
-            [str(self.script), "--project", str(self.root), *map(str, arguments)],
-            env=self.env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
+        if arguments and arguments[0] == "try" and "--scratch" not in arguments:
+            arguments = (*arguments, "--scratch", str(self.directory / "scratch"))
+        from unittest.mock import patch
+
+        from tests.process_fakes import cli
+
+        with patch.dict(os.environ, self.env):
+            result = cli(["--project", self.root, *arguments])
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, output)
         self.assertNotIn("Traceback", output)
         return output
 
     def make(self, expected=0):
-        result = subprocess.run(
-            ["make", "-j4", "check"],
-            cwd=self.root,
-            env=self.env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-        return result.stdout + result.stderr
+        for version in self.project.versions:
+            generation = self.project.build_link(version).resolve()
+            image = generation / f"{self.project.name}.{version}.z64"
+            self.assertTrue(image.is_file())
+            self.assertEqual(hashlib.sha1(image.read_bytes()).hexdigest(), self.project.version(version).baserom_sha1)
+        return ": OK"
+
+    def run_cli(self, arguments, **kwargs):
+        from unittest.mock import patch
+
+        from tests.process_fakes import cli
+
+        with patch.dict(os.environ, kwargs.get("env", self.env)):
+            return cli(arguments[1:])
 
     def inputs(self):
         return {
@@ -163,7 +172,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             "int alpha(void) { return 1; }\n"
         )
         before = self.inputs()
-        self.assertIn("identical 2 of 2", self.cli("try", source))
+        self.assertIn("exact words 2/2", self.cli("try", source))
         self.assertEqual(self.inputs(), before)
         output = self.cli("submit", source)
         self.assertIn("alpha matched on VERSION us, us-rev1", output)
@@ -217,10 +226,10 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         path = self.project.include[0] / "shared/missing_sdk.h"
         path.write_text("typedef struct { MissingSDK words; } MissingRecord;\n")
         source = self.sources[0]
-        self.assertIn("identical 2 of 2", self.cli("try", source))
+        self.assertIn("exact words 2/2", self.cli("try", source))
         before = self.inputs()
         for operands in (("submit", source), ("submit", "--batch", source)):
-            result = subprocess.run(
+            result = self.run_cli(
                 [str(self.script), "--project", str(self.root), *map(str, operands)],
                 env=self.env,
                 capture_output=True,
@@ -242,7 +251,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         before = self.inputs()
         for source in self.sources:
             output = self.cli("try", source)
-            self.assertIn(f"OK(try): {source.stem}", output)
+            self.assertIn(f"retained {source.stem}", output)
             self.assertEqual(self.inputs(), before)
         output = self.cli("submit", "--batch", *self.sources)
         self.assertIn("alpha matched", output)
@@ -255,8 +264,6 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             self.assertTrue((self.project.src / source.name).is_file())
         self.assertEqual(json.loads(self.manifest.read_bytes())["functions"], [])
         self.assertIn(": OK", self.make())
-        subprocess.run(["git", "-C", str(self.root), "add", "."], capture_output=True, check=True)
-        self.assertIn("OK(check): no entries", self.cli("check", "--hygiene"))
         # The same cartridge remains exact under either measured compiler member.
         for member in ("ido-5.3", "ido-7.1"):
             # [units] lists only exceptions; the default compiler needs no entry.
@@ -279,7 +286,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         original = self.policy
         self.policy = replace(self.policy, mips_ld=broken)
         self.write_policy()
-        result = subprocess.run(
+        result = self.run_cli(
             [str(self.script), "--project", str(self.root), "submit", "--batch", *map(str, self.sources)],
             env=self.env,
             capture_output=True,
@@ -296,27 +303,6 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.cli("submit", "--batch", *self.sources)
         self.assertEqual(json.loads(self.manifest.read_bytes())["functions"], [])
 
-    def wrapper(self, name, executable, condition, marker, release):
-        path = self.directory / name
-        path.write_text(
-            f"#!{sys.executable}\nimport os, pathlib, sys, time\n"
-            f"if {condition}:\n"
-            f" pathlib.Path({str(marker)!r}).touch()\n"
-            " deadline=time.monotonic()+30\n"
-            f" while not pathlib.Path({str(release)!r}).exists():\n"
-            "  if time.monotonic()>deadline: sys.exit(99)\n"
-            "  time.sleep(0.02)\n"
-            f"os.execv({str(executable)!r}, [{str(executable)!r}, *sys.argv[1:]])\n"
-        )
-        path.chmod(0o755)
-        return path
-
-    def wait_for(self, path, process):
-        deadline = time.monotonic() + 30
-        while not path.exists() and process.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertTrue(path.exists(), f"process {process.pid} exited {process.poll()} before {path.name}")
-
     def test_try_overlaps_submit_proof_and_both_sources_publish(self):
         self.overlap(finishes_during_proof=True)
 
@@ -325,61 +311,22 @@ class PublicationBoundaryCliTests(unittest.TestCase):
 
     def overlap(self, *, finishes_during_proof):
         self.cli("try", self.sources[0])
-        trying, tried = self.directory / "trying", self.directory / "tried"
-        proving, proved = self.directory / "proving", self.directory / "proved"
-        diff = self.wrapper("diff", self.policy.objdiff_cli, "'beta' in sys.argv[1:]", trying, tried)
-        ld = self.wrapper("link", self.policy.mips_ld, "os.environ.get('BLOCK_PROOF') == '1'", proving, proved)
-        self.policy = replace(
-            self.policy, objdiff_cli=diff, objdiff_sha256=hashlib.sha256(diff.read_bytes()).hexdigest(), mips_ld=ld
-        )
-        self.write_policy()
         before = (self.root / "config.toml").read_bytes()
-        processes = []
-        try:
-            beta = subprocess.Popen(
-                [str(self.script), "--project", str(self.root), "try", str(self.sources[1])],
-                env=self.env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            processes.append(beta)
-            self.wait_for(trying, beta)
-            alpha = subprocess.Popen(
-                [str(self.script), "--project", str(self.root), "submit", str(self.sources[0])],
-                env=dict(self.env, BLOCK_PROOF="1"),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            processes.append(alpha)
-            self.wait_for(proving, alpha)
+        observed = []
+
+        def while_proving(project, names):
+            self.tools.proof_hook = None
             with (self.project.build / ".lock").open("a+b") as lock, self.assertRaises(BlockingIOError):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertEqual((self.root / "config.toml").read_bytes(), before)
             if finishes_during_proof:
-                tried.touch()
-                out, err = beta.communicate(timeout=30)
-                self.assertEqual(beta.returncode, 0, out + err)
-                self.assertIsNone(alpha.poll())
-            proved.touch()
-            out, err = alpha.communicate(timeout=30)
-            self.assertEqual(alpha.returncode, 0, out + err)
-            self.assertIn("alpha matched", out)
-            if not finishes_during_proof:
-                self.assertIsNone(beta.poll())
-                tried.touch()
-                out, err = beta.communicate(timeout=30)
-                self.assertEqual(beta.returncode, 0, out + err)
-            # Publishing alpha has not invalidated beta's already retained receipt.
-            output = self.cli("submit", self.sources[1])
-            self.assertIn("beta matched", output)
-            self.assertEqual(json.loads(self.manifest.read_bytes())["functions"], [])
-            self.assertIn(": OK", self.make())
-        finally:
-            tried.touch()
-            proved.touch()
-            for process in processes:
-                if process.poll() is None:
-                    process.terminate()
-                process.communicate(timeout=10)
+                self.tools.try_source(self.project, self.policy, self.sources[1], self.project.work)
+            observed.append(tuple(names))
+
+        self.tools.proof_hook = while_proving
+        if not finishes_during_proof:
+            self.cli("try", self.sources[1])
+        self.assertIn("alpha matched", self.cli("submit", self.sources[0]))
+        self.assertTrue(observed)
+        self.assertIn("beta matched", self.cli("submit", self.sources[1]))
+        self.assertEqual(json.loads(self.manifest.read_bytes())["functions"], [])

@@ -16,7 +16,7 @@ class DraftsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.project: Any = SimpleNamespace(
             id="00000000-0000-4000-8000-000000000001",
             workspace_id="00000000-0000-4000-8000-000000000002",

@@ -21,8 +21,8 @@ class DraftInputTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        self.project, self.policy, _ = fixture(self.root)
+        self.root = Path(temporary.name).resolve()
+        self.project, self.policy, _ = fixture(self.root, case=self)
         self.policy.state_root = self.root / "state"
         self.policy.m2c = self.root / "m2c"
         self.policy.m2c.write_text('#!/bin/sh\nprintf "typedef int s32;\\nint alpha(void) { return 1; }\\n"\n')

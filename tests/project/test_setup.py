@@ -24,10 +24,10 @@ class SetupTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=WORK)
         self.addCleanup(self.temporary.cleanup)
         self.addCleanup(patch.stopall)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         policy_path = write_policy(self.root)
         patch.dict(os.environ, UNBAKE_POLICY=str(policy_path)).start()
-        self.project, self.policy = fixture(self.root)
+        self.project, self.policy = fixture(self.root, case=self)
 
     def test_verified_setup_writes_real_sha1_and_helpers(self) -> None:
         receipt = setup.run(self.project, self.policy)
@@ -138,7 +138,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(len(setup.run(self.project, self.policy)), 1)
 
     def test_sn64_manifest_covers_every_pipeline_executable(self) -> None:
-        project, policy = fixture(self.root, "sn64")
+        project, policy = fixture(self.root, "sn64", case=self)
         setup.run(project, policy)
         self.assertTrue((self.root / "tools/sn64_cc.py").is_file())
         self.assertIn("from abumasn64.assemble import assemble", (self.root / "tools/compile.py").read_text())

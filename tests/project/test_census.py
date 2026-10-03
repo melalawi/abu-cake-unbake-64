@@ -17,9 +17,24 @@ from unbake.project.config import CensusPolicy, Held
 
 class CensusTests(unittest.TestCase):
     def setUp(self) -> None:
+        from tests.rom_fixture import install
+
+        install(self)
+        from tests.process_fakes import boundary, git_init
+
+        git = boundary(init, git_init)
+        git.start()
+        from unbake.project import hygiene
+
+        empty_index = boundary(
+            hygiene, lambda command, **kwargs: __import__("subprocess").CompletedProcess(command, 0, b"", b"")
+        )
+        empty_index.start()
+        self.addCleanup(empty_index.stop)
+        self.addCleanup(git.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name) / "unrelated"
+        self.root = Path(temporary.name).resolve() / "unrelated"
         init.run(self.root)
         self.project = config.load_pending(self.root)
         table = patch.object(header, "RETAIL", BOOTCODES)

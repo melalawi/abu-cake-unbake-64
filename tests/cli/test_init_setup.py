@@ -11,6 +11,12 @@ from unbake.project.config import Held
 
 
 class InitSetupTests(MainCase):
+    def setUp(self):
+        super().setUp()
+        from tests.rom_fixture import install
+
+        install(self)
+
     def test_init_bypasses_project_and_policy(self) -> None:
         target = self.directory / "unrelated name"
         with patch.object(config, "load") as load, patch.object(config, "load_policy") as policy:

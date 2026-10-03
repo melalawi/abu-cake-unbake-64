@@ -14,6 +14,7 @@ from pathlib import Path
 import toml
 
 from tests.decomp.support import assemble, assembly
+from tests.process_fakes import cli_process
 from tests.support import test_policy
 from unbake.layout import split
 from unbake.project import config, makefile, toolchain
@@ -23,7 +24,7 @@ class MultiEntryCliTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.root = self.directory / "project"
         shutil.copytree(Path(__file__).parents[1] / "fixture", self.root)
         self.policy = test_policy()
@@ -34,6 +35,10 @@ class MultiEntryCliTests(unittest.TestCase):
         data = toml.loads((self.root / "config.toml").read_text())
         data["compilers"]["ido-7.1"]["cflags"] = ["-c", "-G0", "-non_shared", "-mips2", "-O2", "-Iinclude"]
         data["build"]["splat"] = "policy:splat"
+        for version in data["project"]["versions"]:
+            data["version"][version].update(
+                cartridge_id="TEST-" + version, region="Test", description="Fixture release."
+            )
         self.words = [0xAC800000, 0x03E00008, 0xAC800004, 0xA4800344, 0xA080034A, 0x03E00008, 0xA0800348]
         for version in data["project"]["versions"]:
             header = bytearray(0x40)
@@ -62,11 +67,104 @@ class MultiEntryCliTests(unittest.TestCase):
             objects.mkdir(parents=True)
             assemble(objects, "alpha", assembly("alpha", self.words[:3]) + assembly("tail", self.words[3:]))
             (generation / ".split.mk").touch()
+            (generation / ".inuse").touch()
             (generation / "fixture.ld").write_text("SECTIONS { .text : { obj/asm/alpha.o(.text) } }\n")
             (self.root / "build" / version).symlink_to(generation.name)
         (self.root / "config.toml").write_text(toml.dumps(data))
         self.project = config.load(self.root)
-        toolchain.ensure(self.project, self.policy)
+        from unittest.mock import patch
+
+        from tests.objdiff_fixture import install
+        from tests.preprocessor import output
+        from tests.process_fakes import boundary, copy
+        from unbake.decomp import trial_compile
+        from unbake.layout import entries
+        from unbake.match import staging
+        from unbake.project import build
+        from unbake.typemap import declarations
+
+        install(self)
+        from tests.report_fixture import install as reports
+
+        reports(self)
+        for compiler in self.project.compilers.values():
+            compiler.cc.parent.mkdir(parents=True, exist_ok=True)
+            compiler.cc.write_bytes(b"fixture compiler")
+            compiler.as_.write_bytes(b"fixture assembler")
+            compiler.sha256.write_text("")
+
+        def compiled(project, policy, source, version, destination):
+            words = list(self.words)
+            content = source.read_text()
+            if "void tail" not in content:
+                words = words[:3]
+            elif "s->a = 1" in content:
+                words[-1] = 0xA0800349
+            text = assembly("alpha", words[:3])
+            if len(words) > 3:
+                text += assembly("tail", words[3:])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            return assemble(destination.parent, destination.stem, text)
+
+        def merged(command, **kwargs):
+            if "-r" not in command:
+                return output(command, **kwargs)
+            self.assertEqual(command[1], "-r")
+            self.assertIn("-T", command)
+            destination = Path(command[command.index("-o") + 1])
+            objects = command[command.index("-o") + 2 :]
+            from tests.elf_fixture import write_object
+            from unbake.project_tools.elf import Object
+
+            code, symbols = bytearray(), []
+            for path in objects:
+                obj = Object(path)
+                offset = len(code)
+                code.extend(obj.content(obj.section(".text")))
+                symbols.extend(
+                    (row["name"], ".text", offset + row["value"], row["size"], row["info"])
+                    for table in obj.symbols.values()
+                    for row in table
+                    if row["section"] == obj.section(".text") and row["info"] >> 4
+                )
+            write_object(destination, {".text": bytes(code)}, symbols)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        def proof(project, policy, versions, *, tree, generation_for):
+            from unbake.match import staging
+            from unbake.project_tools.extract import unit_ranges
+
+            staged = staging.project_at(project, tree)
+            results = {}
+            for version in versions:
+                generation = generation_for(version)
+                generation.mkdir(parents=True, exist_ok=True)
+                for source in staged.src.glob("*.c"):
+                    compiled(staged, policy, source, version, generation / "obj/src" / (source.stem + ".o"))
+                (generation / "unit-ranges.json").write_text(
+                    json.dumps(unit_ranges(staged.version(version).split.read_text()))
+                )
+                (generation / ".inuse").touch()
+                log = generation / "build.log"
+                log.write_text("fixture proof")
+                (generation / f"{project.name}.{version}.z64").write_bytes(
+                    project.version(version).baserom.read_bytes()
+                )
+                results[version] = build.BuildResult(version, True, "fixture: OK", log, generation)
+            return results
+
+        for mock in (
+            patch.object(build, "build", side_effect=proof),
+            boundary(trial_compile, merged),
+            patch.object(toolchain, "ensure"),
+            patch.object(toolchain, "verify", return_value={}),
+            patch.object(build, "compile_object", side_effect=compiled),
+            boundary(entries, output),
+            boundary(declarations, output),
+            boundary(staging, copy),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
         for name, text in makefile.helpers(self.project).items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,8 +181,17 @@ class MultiEntryCliTests(unittest.TestCase):
         script = Path(sysconfig.get_path("scripts")) / "unbake"
         environment = dict(os.environ, PYTHONNOUSERSITE="1")
         environment.pop("PYTHONPATH", None)
-        result = subprocess.run(
-            [str(script), "--project", str(self.root), "try", str(self.source)],
+        before = set((self.directory / "scratch").glob("alpha-*/manifest.json"))
+        result = cli_process(
+            [
+                str(script),
+                "--project",
+                str(self.root),
+                "try",
+                str(self.source),
+                "--scratch",
+                str(self.directory / "scratch"),
+            ],
             cwd=self.directory,
             env=environment,
             capture_output=True,
@@ -94,7 +201,9 @@ class MultiEntryCliTests(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, output)
         self.assertEqual(sum(line.startswith("Next:") for line in output.splitlines()), 1, output)
-        manifest = json.loads((self.project.drafts / "alpha/manifest.json").read_text())
+        created = set((self.directory / "scratch").glob("alpha-*/manifest.json")) - before
+        self.assertEqual(len(created), 1)
+        manifest = json.loads(next(iter(created)).read_text())
         return output, manifest
 
     def test_merged_owner_accepts_two_definitions_and_rejects_tail_changes(self):
@@ -139,7 +248,7 @@ class MultiEntryCliTests(unittest.TestCase):
         script = Path(sysconfig.get_path("scripts")) / "unbake"
         environment = dict(os.environ, PYTHONNOUSERSITE="1")
         environment.pop("PYTHONPATH", None)
-        mapped = subprocess.run(
+        mapped = cli_process(
             [str(script), "--project", str(self.root), "map"],
             cwd=self.directory,
             env=environment,
@@ -156,7 +265,7 @@ class MultiEntryCliTests(unittest.TestCase):
         script = Path(sysconfig.get_path("scripts")) / "unbake"
         environment = dict(os.environ, PYTHONNOUSERSITE="1")
         environment.pop("PYTHONPATH", None)
-        result = subprocess.run(
+        result = cli_process(
             [str(script), "--project", str(self.root), "submit", str(self.source)],
             cwd=self.directory,
             env=environment,

@@ -44,7 +44,7 @@ class ConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = Path(self.temporary.name).resolve()
         self.root = self.directory / "project"
         shutil.copytree(FIXTURE, self.root)
         self.path = self.root / "config.toml"

@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import struct
-import subprocess
 import sys
 import sysconfig
 import tempfile
@@ -13,13 +12,22 @@ from pathlib import Path
 
 import toml
 
+from tests.process_fakes import cli_process
 from tests.project.test_rom import cartridge
 
 
 class SetupIdentityTests(unittest.TestCase):
+    def setUp(self):
+        from tests.rom_fixture import install
+
+        install(self)
+        from tests.setup_fixture import install as setup_tools
+
+        setup_tools(self)
+
     def test_indexed_addresses_repeated_stubs_and_changed_bodies(self):
         with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve()
             project = directory / "Identity"
             script = Path(sysconfig.get_path("scripts")) / "unbake"
             values = toml.loads(Path(os.environ["UNBAKE_POLICY"]).read_text())
@@ -40,7 +48,7 @@ class SetupIdentityTests(unittest.TestCase):
             )
 
             def command(*arguments):
-                return subprocess.run(
+                return cli_process(
                     [sys.executable, str(launcher), *arguments],
                     env=environment,
                     cwd=directory,
@@ -85,7 +93,7 @@ class SetupIdentityTests(unittest.TestCase):
 
     def test_changed_body_has_one_symbol_and_shared_caller_compiles_in_both_versions(self):
         with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
+            directory = Path(temporary).resolve()
             project = directory / "Symbols"
             script = Path(sysconfig.get_path("scripts")) / "unbake"
             values = toml.loads(Path(os.environ["UNBAKE_POLICY"]).read_text())
@@ -104,7 +112,9 @@ class SetupIdentityTests(unittest.TestCase):
             )
 
             def command(*arguments, expected=0):
-                result = subprocess.run(
+                if "try" in arguments:
+                    arguments = (*arguments, "--scratch", str(directory / "scratch"))
+                result = cli_process(
                     [sys.executable, str(launcher), *arguments],
                     env=environment,
                     cwd=directory,
