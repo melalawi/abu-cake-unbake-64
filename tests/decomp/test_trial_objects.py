@@ -195,7 +195,8 @@ class ObjectTrialTests(unittest.TestCase):
 
             with patch.object(build, "compile_object", side_effect=compile_source), redirect_stdout(io.StringIO()):
                 result = try_draft(project, cast(Policy, policy), source, root / "scratch")
-            self.assertEqual(compiled, ["us", "eu"])
+            # Versions compile concurrently; results are keyed by version, call order is not a contract.
+            self.assertCountEqual(compiled, ["us", "eu"])
             self.assertTrue(result.identical_everywhere)
             self.assertEqual(source.read_text(), content)
             self.assertFalse(list((root / "scratch").rglob("*.elf")))
