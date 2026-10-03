@@ -133,8 +133,9 @@ def build(
     tree = Path(tree).resolve()
     if not (tree / "Makefile").is_file():
         raise Held("build", f"{tree / 'Makefile'} is missing")
-    from unbake.project import toolchain
+    from unbake.project import setup, toolchain
 
+    setup.require_helpers(project, tree=tree)
     for ident in project.compilers:
         toolchain.verify(tree / project.tools.relative_to(project.root) / ident, toolchain.specification(ident))
     results = {}

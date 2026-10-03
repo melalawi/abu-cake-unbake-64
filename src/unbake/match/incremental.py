@@ -171,6 +171,9 @@ def prepare(
         script = (generation / f"{staged.name}.ld").read_text()
         configured = makefile.description(staged).get("resident_mappings", {})
         mappings = layout.resident_mappings(configured.get(version, []))
+        pool_path = generation / "pool-providers.json"
+        pools = json.loads(pool_path.read_text()) if pool_path.is_file() else []
+        pools = [row for row in pools if row["path"].startswith("rodata/")]
         for source in sources:
             name = source.stem
             if name in failures:
@@ -216,7 +219,18 @@ def prepare(
             if unknown:
                 faults.setdefault(name, []).append(f"{version}: undefined reference to {', '.join(unknown)}")
             try:
-                layout.place_object(args, f"obj/src/{name}.o", script, intervals, image, mappings, [], False)
+                layout.place_object(
+                    args,
+                    f"obj/src/{name}.o",
+                    script,
+                    intervals,
+                    image,
+                    mappings,
+                    [],
+                    False,
+                    pools=pools,
+                    providers=[],
+                )
             except (OSError, ValueError, KeyError) as error:
                 faults.setdefault(name, []).append(f"{version}: object obj/src/{name}.o: {error}")
         return [p.stem for p in sources], faults

@@ -273,6 +273,37 @@ def place(args: argparse.Namespace) -> None:
     publish(args.output.with_suffix(".flags"), b"--no-check-sections" if sections else b"")
 
 
+def resident_slices(slices: list[dict[str, Any]], mappings: list[dict[str, int]]) -> list[dict[str, Any]]:
+    """Keep resident gaps distinct from structural assembly pool ownership."""
+    result = list(slices)
+    occupied = sorted((row["address"], row["address"] + row["end"] - row["start"]) for row in slices)
+    for mapping in mappings:
+        start = mapping["address"]
+        end = start + mapping["end"] - mapping["start"]
+        cursor = start
+        gaps = []
+        for left, right in occupied:
+            if right <= cursor or left >= end:
+                continue
+            if cursor < left:
+                gaps.append((cursor, left))
+            cursor = max(cursor, min(right, end))
+        if cursor < end:
+            gaps.append((cursor, end))
+        for left, right in gaps:
+            offset = mapping["start"] + left - start
+            result.append(
+                dict(
+                    address=left,
+                    start=offset,
+                    end=offset + right - left,
+                    table_entry_bias=mapping["table_entry_bias"],
+                    resident=True,
+                )
+            )
+    return result
+
+
 def place_object(
     args: argparse.Namespace,
     name: str,
@@ -298,12 +329,19 @@ def place_object(
             if len(mapped) > 1:
                 raise ValueError("layout.pool_span: ambiguous private mapping")
             row["table_entry_bias"] = mapped[0]["table_entry_bias"] if mapped else 0
+        slices = resident_slices(slices, mappings)
         placed = transfer_private(obj, intervals[unit], image, slices)
-        if providers is None:
+        if providers is None and not mappings:
             return transfer_selectors(script, name, slices, placed)
         for section in placed:
             address = int(section.rsplit("_", 1)[1], 16)
-            providers.append(Provider(name, section, address, intervals[unit]["address"]))
+            row = next(row for row in slices if row["address"] <= address < row["address"] + row["end"] - row["start"])
+            if row.get("resident"):
+                sections.append(fragment([dict(object=name, section=section, address=address)]))
+            elif providers is not None:
+                providers.append(Provider(name, section, address, intervals[unit]["address"]))
+            else:
+                script = transfer_selectors(script, name, slices, [section])
         return script
     local = intervals[unit].get("rodata_address")
     if not partial and local is not None:

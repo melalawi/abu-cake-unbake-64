@@ -17,7 +17,7 @@ def register(phases: Subparsers) -> None:
     )
     parser.add_argument("source", type=Path, metavar="FILE", nargs="?")
     parser.add_argument("--scratch", type=Path, help="Read receipts retained by try in this private directory.")
-    parser.add_argument("--batch", type=Path, nargs="+", metavar="FILE")
+    parser.add_argument("--batch", type=Path, nargs="*", metavar="FILE")
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:

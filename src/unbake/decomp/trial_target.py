@@ -103,6 +103,9 @@ def _target_generation(project: Project, version: str, *, read_only: bool = Fals
 def make_target(
     project: Project, version: str, target: Path, *, changed: Path | None = None, generation: Path | None = None
 ) -> None:
+    from unbake.project import setup
+
+    setup.require_helpers(project)
     # Disable the Makefile's cold C batch so one target cannot compile its peers.
     command = ["make", "-j4", f"VERSION={version}", "C_COLD="]
     if changed is not None:

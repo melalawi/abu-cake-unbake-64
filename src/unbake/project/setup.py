@@ -185,6 +185,26 @@ def publish_files(project: Project, files: dict[str, str]) -> None:
         compiler_files.atomic_bytes(manifest, pins.encode())
 
 
+def refresh_helpers(project: Project) -> None:
+    """Refresh tool-owned helpers and their pins before mixing build implementations."""
+    with build.lock(project):
+        publish_files(project, makefile.helpers(project))
+
+
+def require_helpers(project: Project, *, tree: Path | None = None) -> None:
+    """Refuse a link before it can combine installed and rendered helper versions."""
+    root = tree if tree is not None else project.root
+    for relative, content in makefile.helpers(project).items():
+        if Path(relative).suffix != ".py":
+            continue
+        path = root / relative
+        if not path.is_file() or path.read_text() != content:
+            import shlex
+
+            command = shlex.join(["unbake", "--project", str(root), "setup"])
+            raise Held("build", f"project helpers stale: run {command}")
+
+
 def _inputs(project: PendingProject | Project) -> dict[str, str]:
     """Pin every repository input, including human documents, during the proof."""
     result = {}

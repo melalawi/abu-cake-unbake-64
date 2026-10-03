@@ -39,7 +39,7 @@ from unbake.match import (
 )
 from unbake.match.common import atomic, held
 from unbake.match.publication import swap
-from unbake.project import build, compiler_choice, config, makefile, workspace
+from unbake.project import build, compiler_choice, config, makefile, setup, workspace
 from unbake.project.config import Held, Policy, Project
 from unbake.report import progress
 from unbake.typemap import storage
@@ -69,7 +69,32 @@ def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
     if len(set(names)) != len(names):
         held("submit.source: duplicate function names in --batch")
     with reporting.session(project), build.lock(project):
-        return _publish(config.load(project.root), policy, [source.resolve() for source in sources])
+        project = config.load(project.root)
+        setup.refresh_helpers(project)
+        if not sources:
+            return _baseline(project, policy)
+        return _publish(project, policy, [source.resolve() for source in sources])
+
+
+def _baseline(project: Project, policy: Policy) -> list[str]:
+    """Prove the unchanged project through the same retained-object link boundary."""
+    with ExitStack() as holds:
+        generations = {
+            version: staging.generation(
+                project, version, holds.enter_context(build.pin_current(project, version)), holds, retained=True
+            )
+            for version in project.versions
+        }
+        with ThreadPoolExecutor(max_workers=min(policy.cores, len(generations))) as pool:
+            futures = {
+                version: pool.submit(relink.prove, project, policy, version, generation, None, extracted=True)
+                for version, generation in generations.items()
+            }
+            results = {version: future.result() for version, future in futures.items()}
+        failed = [version for version, result in results.items() if not result.ok]
+        if failed:
+            held("submit.dependencies: unchanged baseline failed on " + ", ".join(failed))
+        return [f"OK(submit): {version}: {result.sha1_line}" for version, result in results.items()]
 
 
 def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:

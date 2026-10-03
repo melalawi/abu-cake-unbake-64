@@ -134,7 +134,9 @@ def fragment(rows: Iterable[Mapping[str, object]]) -> str:
         name, section, address = row["object"], row["section"], row["address"]
         if not isinstance(name, str) or not re.fullmatch(r"[\w./-]+\.o", name) or ".." in name.split("/"):
             raise ValueError("rodata.object: expected object path")
-        if section not in (".rdata", ".rodata"):
+        if section not in (".rdata", ".rodata") and not (
+            isinstance(section, str) and re.fullmatch(r"\.unbake_pool_[0-9A-F]{8}", section)
+        ):
             raise ValueError("rodata.section: expected .rdata or .rodata")
         if isinstance(address, bool) or not isinstance(address, int) or not 0 <= address <= 0xFFFFFFFF:
             raise ValueError("rodata.address: expected 32-bit address")

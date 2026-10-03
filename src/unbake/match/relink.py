@@ -54,6 +54,9 @@ def prove(
 
     retained None means this transaction built every object from these staged sources.
     """
+    from unbake.project import setup
+
+    setup.require_helpers(project)
     log = generation / "build.log"
     image = generation / f"{project.name}.{version}.z64"
     elf = generation / f"{project.name}.elf"
