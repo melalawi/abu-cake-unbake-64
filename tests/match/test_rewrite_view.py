@@ -39,6 +39,30 @@ def expanded(source, filename="/source.c", extras=None):
 
 
 class RewriteViewTests(unittest.TestCase):
+    def test_callback_alias_collision_rewrites_macro_spelling_and_preserves_values(self):
+        source = (
+            "typedef int (*Callback)(int);\n"
+            "#define LOCAL_CALLBACK Callback\n"
+            "int alpha(void) {LOCAL_CALLBACK local; int Callback = 1; return Callback;}\n"
+        )
+        view = expanded(source, extras={"LOCAL_CALLBACK": [("Callback", "/source.c", 2, 24)]})
+        parser = Parser(source)
+        parser.parse()
+        planned = type_rewrite.edits(
+            parser,
+            "typedef float (*Callback)(float);",
+            {},
+            typedef_renames={"Callback": "Callback_alpha"},
+            preprocess=lambda: view,
+            source_path=Path("/source.c"),
+            source_text=source,
+        )
+        for (start, end), target in sorted(planned.items(), reverse=True):
+            source = source[:start] + target + source[end:]
+        self.assertIn("(*Callback_alpha)(int)", source)
+        self.assertIn("#define LOCAL_CALLBACK Callback_alpha", source)
+        self.assertIn("LOCAL_CALLBACK local; int Callback = 1; return Callback;", source)
+
     def test_macro_arguments_repeated_expansions_and_header_tokens_have_exact_origins(self):
         source = "\tint f(Old *p) {return TWICE(p->old);}\n"
         tokens = [
