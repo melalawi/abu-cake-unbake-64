@@ -160,34 +160,55 @@ def rewrite(source: str, replacements: dict[str, str], blocked: set[str]) -> str
 
 
 def source_names(
-    project: Project, header: Path, policy: Policy | None, *, consumers: dict[Path, set[str]] | None = None
+    project: Project,
+    header: Path,
+    policy: Policy | None,
+    *,
+    consumers: dict[Path, set[str]] | None = None,
+    texts: dict[Path, str] | None = None,
 ) -> set[str]:
     """Reserve file-scope names in every C source importing HEADER transitively.
 
     Conditional source bodies must be viewed per version: simply deleting cpp
     directives can leave both arms' opening braces and hide later declarations.
     """
+    import json
+
     from unbake.match.source_views import _preprocessed_lines, _version_lines
+    from unbake.project.cache import Cache, key
     from unbake.typemap.declarations import clean
 
-    texts: dict[Path, str] = {}
+    supplied = texts
+    canonical: dict[Path, Path] = {}
+
+    def resolved(path: Path) -> Path:
+        if path not in canonical:
+            canonical[path] = path.resolve()
+        return canonical[path]
+
+    texts = {resolved(path): text for path, text in (texts or {}).items()}
     edges: dict[Path, set[Path]] = {}
-    prototypes = (project.include[0] / "shared/prototypes.h").resolve()
+    prototypes = resolved(project.include[0] / "shared/prototypes.h")
+    header = resolved(header)
+    generated_roots = tuple(header.parent / name for name in ("types", "decls", "consumers"))
+    cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
 
     def imports(path: Path) -> set[Path]:
-        path = path.resolve()
+        path = resolved(path)
         if path not in edges:
-            text = texts.setdefault(path, path.read_text() if path.is_file() else "")
-            edges[path] = {header.resolve()} if path == prototypes else set()
+            if path not in texts:
+                texts[path] = path.read_text() if path.is_file() else ""
+            text = texts[path]
+            edges[path] = {header} if path == prototypes else set()
             for name in _INCLUDE.findall(re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)):
                 candidates = [path.parent / name, *(root / name for root in project.include)]
                 target = next(
                     (
-                        item.resolve()
+                        resolved(item)
                         for item in candidates
                         if item.is_file()
-                        or item.resolve() in (header.resolve(), prototypes)
-                        or item.resolve().is_relative_to(header.parent.resolve() / "decls")
+                        or resolved(item) in (header, prototypes)
+                        or any(resolved(item).is_relative_to(root) for root in generated_roots)
                     ),
                     None,
                 )
@@ -196,15 +217,10 @@ def source_names(
         return edges[path]
 
     def uses_header(path: Path) -> bool:
-        pending, seen = [path.resolve()], set()
+        pending, seen = [resolved(path)], set()
         while pending:
             current = pending.pop()
-            if (
-                current == header.resolve()
-                or current.is_relative_to(header.parent.resolve() / "types")
-                or current.is_relative_to(header.parent.resolve() / "decls")
-                or current.is_relative_to(header.parent.resolve() / "consumers")
-            ):
+            if current == header or any(current.is_relative_to(root) for root in generated_roots):
                 return True
             if current not in seen:
                 seen.add(current)
@@ -212,10 +228,15 @@ def source_names(
         return False
 
     names: set[str] = set()
-    for path in sorted(project.src.rglob("*.c")):
+    sources = (
+        (path for path in supplied if path.is_relative_to(project.src) and path.suffix == ".c")
+        if supplied is not None
+        else project.src.rglob("*.c")
+    )
+    for path in sorted(sources):
         if not uses_header(path):
             continue
-        text = texts[path.resolve()]
+        text = texts[resolved(path)]
         views = {text}
         if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
             if policy is None:
@@ -229,12 +250,18 @@ def source_names(
                 views.add("".join(line for index, line in enumerate(lines) if index in active))
         owned: set[str] = set()
         for view in views:
-            parser = _Declarations(clean(declaration_source(view)))
-            try:
-                parser.parse()
-            except Held as error:
-                raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
-            owned.update(parser.names)
+            content = clean(declaration_source(view))
+            content_key = key(Path(__file__), content)
+
+            def compute(output: Path, content: str = content, path: Path = path) -> None:
+                parser = _Declarations(content)
+                try:
+                    parser.parse()
+                except Held as error:
+                    raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
+                output.write_text(json.dumps(sorted(parser.names)))
+
+            owned.update(json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes()))
         names.update(owned)
         if consumers is not None:
             consumers[path] = owned

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from unbake.decomp.draft_context import ordered_headers
@@ -18,11 +19,18 @@ class Layout:
     """One component per declaration home; pointer cycles share a guarded cluster."""
 
     def __init__(
-        self, contents: dict[Path, str], rendered: dict[Path, str], root: Path, *, aliases: dict[str, str] | None = None
+        self,
+        contents: dict[Path, str],
+        rendered: dict[Path, str],
+        root: Path,
+        *,
+        aliases: dict[str, str] | None = None,
+        render: Callable[[Path, str], bytes] | None = None,
     ):
         self.aliases = {name: target for text in contents.values() for name, target in alias_types(text).items()}
         self.aliases.update(aliases or {})
         self.root = root
+        self.render = render or guarded
         self.contents = contents
         self.parsed = {path: declarations(text) for path, text in contents.items()}
         self.providers: dict[str, set[Path]] = {}
@@ -86,7 +94,7 @@ class Layout:
                 lines.append(
                     _INCLUDE.sub(lambda m: "" if m[1] in ("shared/typemap.h", "typemap.h") else m[0], rendered[path])
                 )
-            self.headers[destination] = guarded(destination, "\n".join(lines))
+            self.headers[destination] = self.render(destination, "\n".join(lines))
 
     def _clusters(self) -> list[set[Path]]:
         index: dict[Path, int] = {}
@@ -141,10 +149,12 @@ class Layout:
 
     def consumer(self, path: Path, text: str) -> bytes:
         includes = "\n".join(self.include(home) for home in sorted(self.required(text)))
-        return guarded(path, includes + "\n" + text)
+        return self.render(path, includes + "\n" + text)
 
     def umbrella(self, path: Path, *, excluded: set[Path] | None = None) -> bytes:
-        return guarded(path, "\n".join(self.include(home) for home in sorted(set(self.headers) - (excluded or set()))))
+        return self.render(
+            path, "\n".join(self.include(home) for home in sorted(set(self.headers) - (excluded or set())))
+        )
 
 
 def guarded(path: Path, text: str) -> bytes:

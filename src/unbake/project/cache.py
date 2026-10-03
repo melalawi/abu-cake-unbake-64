@@ -1,6 +1,8 @@
 """Content-keyed reuse: atomic file artifacts across projects, parsed inputs within a process."""
 
+import copy
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -143,3 +145,20 @@ class Cache:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+
+_serialized: dict[str, tuple[Any, bytes]] = {}
+
+
+def serialized(kind: str, value: Any) -> bytes:
+    """Encode a mutable JSON value only when it differs from the retained snapshot.
+
+    Own the snapshot: edits to the caller's dictionaries must never hit stale bytes.
+    JSON uses the C encoder rather than millions of Python stream writes.
+    """
+    previous = _serialized.get(kind)
+    if previous is not None and previous[0] == value:
+        return previous[1]
+    content = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    _serialized[kind] = copy.deepcopy(value), content
+    return content

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
-from unbake.typemap import header_names, split, storage
+from unbake.typemap import header_names, regeneration, split, storage
 
 _decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
@@ -124,7 +124,9 @@ def _semantic(value: Any) -> Any:
     return value
 
 
-def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
+def _render(
+    project: Project, value: dict[str, Any], policy: Policy | None, session: regeneration.Session
+) -> dict[Path, bytes | Path]:
     from unbake.decomp.header_declarations import declaration_source
     from unbake.decomp.header_declarations import declarations as header_declarations
     from unbake.typemap.declarations import declarator
@@ -132,17 +134,12 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
     root = project.include[0]
-    authored = [
-        path
-        for include in project.include
-        for path in sorted(include.rglob("*.h"))
-        if not storage.generated(project, path)
-    ]
+    authored = list(session.authored)
     # Refer to existing homes; only missing generated prerequisites are emitted.
     consumer_names: dict[Path, set[str]] = {}
-    reserved = header_names.source_names(project, root / "shared/typemap.h", policy, consumers=consumer_names)
+    reserved = session.source_names(consumer_names)
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
-    components = {path: path.read_text() for path in authored}
+    components = dict(session.authored)
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
     provided = set(authored_aliases)
     generated = {
@@ -237,11 +234,11 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             prerequisites[alias] = type_
     originals = dict(components)
     for path in authored:
-        components[path] = header_names.rewrite(components[path], replacements, reserved)
+        components[path] = session.rewrite(components[path], replacements, reserved)
     rendered = header_names.imports(project, originals, components)
     for alias, type_ in sorted(prerequisites.items()):
         path = root / "shared" / (".typedef-" + alias + ".h")
-        components[path] = rendered[path] = header_names.rewrite(
+        components[path] = rendered[path] = session.rewrite(
             "typedef " + declarator(type_, alias) + ";", replacements, reserved
         )
     for name, record in sorted(value["structs"].items()):
@@ -251,7 +248,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             and record.get("declaration")
         ):
             path = root / "shared" / (".layout-" + name + ".h")
-            declaration = header_names.rewrite(record["declaration"], scoped[name], reserved)
+            declaration = session.rewrite(record["declaration"], scoped[name], reserved)
             aliases = "".join(
                 f"typedef {record['type']} {alias};\n"
                 for alias in record.get("aliases", [])
@@ -291,7 +288,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         components[path] = rendered[path] = "typedef " + declarator(header_names.resolve(type_, concrete), alias) + ";"
         if alias in reserved:
             consumer_aliases[alias] = path
-    layout = split.Layout(components, rendered, root, aliases=alias_targets)
+    layout = session.layout(components, rendered, root, alias_targets)
     outputs: dict[Path, bytes | Path] = dict(layout.headers)
     umbrella_path = root / "shared/typemap.h"
     legacy = umbrella_path.is_file() or bool(wrappers)
@@ -301,18 +298,16 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     declarations_by_name = {}
     for name, record in sorted(value["functions"].items()):
         if record["state"] == "known":
-            prototype = header_names.rewrite(record["prototype"], replacements, reserved)
+            prototype = session.rewrite(record["prototype"], replacements, reserved)
             declarations_by_name[name] = (
                 prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype
             )
     for name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
-            declarations_by_name[name] = header_names.rewrite(record["declaration"], replacements, reserved)
+            declarations_by_name[name] = session.rewrite(record["declaration"], replacements, reserved)
     for name, record in sorted(value["arrays"].items()):
         if record["state"] == "known" and record.get("partial") and ":" not in name:
-            declarations_by_name[name] = header_names.rewrite(
-                f"extern {record['type']} {name}[];", replacements, reserved
-            )
+            declarations_by_name[name] = session.rewrite(f"extern {record['type']} {name}[];", replacements, reserved)
     declaration_headers = []
     for name, text in declarations_by_name.items():
         path = root / "shared/decls" / (name + ".h")
@@ -320,18 +315,19 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         record = value["functions"].get(name, {})
         selection = record.get("prototype", text)
         if source.is_file():
-            selection += "\n" + source.read_text()
+            selection += "\n" + session.sources[source]
         homes = layout.required(selection, blocked=consumer_names.get(source, set()))
-        outputs[path] = split.guarded(path, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
+        outputs[path] = session.guarded(path, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
         declaration_headers.append(layout.include(path))
-    outputs[root / "shared/prototypes.h"] = split.guarded(root / "shared/prototypes.h", "\n".join(declaration_headers))
+    outputs[root / "shared/prototypes.h"] = session.guarded(
+        root / "shared/prototypes.h", "\n".join(declaration_headers)
+    )
     if not legacy:
         outputs.pop(umbrella_path)
         outputs.pop(root / "shared/prototypes.h")
     source_context: dict[Path, str] = {}
     source_imports: dict[str, list[Path]] = defaultdict(list)
-    for source in project.src.rglob("*.c"):
-        text = source.read_text()
+    for source, text in session.sources.items():
         source_context[source] = text
         for name in re.findall(r'^\s*#\s*include\s*"([^"\n]+)"', text, re.M):
             source_imports[Path(name).name].append(source)
@@ -365,7 +361,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             if not selected:
                 continue
             destination = root / "shared/consumers" / (source.stem + ".h")
-            outputs[destination] = split.guarded(
+            outputs[destination] = session.guarded(
                 destination, "\n".join(layout.include(home) for home in sorted(selected))
             )
             direct_branches.extend(
@@ -391,7 +387,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 existing = re.findall(r'^#include "([^"]+)"', previous_text.decode(), re.M)
                 homes.update(root / name for name in existing)
                 includes = "\n".join(layout.include(home) for home in sorted(homes))
-            outputs[destination] = split.guarded(destination, includes)
+            outputs[destination] = session.guarded(destination, includes)
             directive = "#if" if not branches else "#elif"
             branches.extend((f"{directive} defined({split.consumer_macro(source.stem)})", layout.include(destination)))
         fallback = layout.required(split.narrow(components.get(path, ""), ""), blocked=reserved)
@@ -403,22 +399,40 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         outputs[path] = ("\n".join(branches) + "\n" + split.narrow(original, "")).encode()
     value["declaration_headers"] = {name: f"shared/decls/{name}.h" for name in declarations_by_name}
     value["shared_aliases"] = replacements
+    return outputs
+
+
+def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
+    from unbake.project.cache import remembered, serialized
+
+    if not project.include:
+        raise Held("solve", "paths.include: required shared type destination")
+    root = project.include[0]
+    session = regeneration.Session(project, policy)
+    outputs = session.render(value, lambda: _render(project, value, policy, session))
+    replacements = value["shared_aliases"]
+    reserved = session.reserved
     abi_context = "\n".join(
-        header_names.rewrite(record["abi_declaration"]["prototype"], replacements, reserved)
+        session.rewrite(record["abi_declaration"]["prototype"], replacements, reserved)
         for record in value["functions"].values()
         if record.get("abi_declaration", {}).get("prototype")
     )
     validated: set[str] = set()
-    validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated)
+    validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated, session=session)
     variants = [record.get("abi_declaration", {}).get("variants", {}) for record in value["functions"].values()]
     for register in sorted({reg for choices in variants for reg in choices}):
         selected_context = "\n".join(
-            header_names.rewrite(choices[register]["prototype"], replacements, reserved)
+            session.rewrite(choices[register]["prototype"], replacements, reserved)
             for choices in variants
             if register in choices
         )
         validate_headers(
-            project, outputs, policy, abi_context=abi_context + "\n" + selected_context, validated=validated
+            project,
+            outputs,
+            policy,
+            abi_context=abi_context + "\n" + selected_context,
+            validated=validated,
+            session=session,
         )
     for path, content in outputs.items():
         relative = str(path.relative_to(project.root))
@@ -438,10 +452,21 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     for kind in ("functions", "globals", "structs", "arrays"):
         before = previous.get(kind, {})
         after = value[kind]
-        summary[kind] = {
-            name: {"semantic_sha256": storage.digest(storage.encoded(_semantic(row))), "users": row.get("users", [])}
-            for name, row in after.items()
-        }
+
+        def summarize(after: dict[str, Any] = after) -> dict[str, Any]:
+            return {
+                name: {
+                    "semantic_sha256": storage.digest(storage.encoded(_semantic(row))),
+                    "users": list(row.get("users", [])),
+                }
+                for name, row in after.items()
+            }
+
+        summary[kind] = remembered(
+            "typemap.summary." + kind,
+            storage.digest(serialized("typemap.database." + kind, after)),
+            summarize,
+        )
         for name in set(before) | set(after):
             old = before.get(name, {})
             old_digest = old.get("semantic_sha256") or storage.digest(storage.encoded(_semantic(old)))
@@ -483,6 +508,16 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         for directory in (root / "shared/types", root / "shared/decls", root / "shared/consumers")
         for path in directory.rglob("*.h")
         if path not in outputs
+    }
+    outputs = {
+        path: content
+        for path, content in outputs.items()
+        if not path.is_file()
+        or (
+            storage.file_digest(path) != storage.file_digest(content)
+            if isinstance(content, Path)
+            else path.read_bytes() != content
+        )
     }
     backups: dict[Path, Path | None] = {}
     try:
@@ -612,85 +647,140 @@ def validate_headers(
     *,
     abi_context: str = "",
     validated: set[str] | None = None,
+    session: regeneration.Session | None = None,
 ) -> None:
     """Parse the staged shared context before any revision or header is published."""
     from dataclasses import replace
 
     from unbake.decomp.draft_context import preprocess_context
     from unbake.decomp.trial_compile import run_tool
+    from unbake.project.cache import Cache, key
     from unbake.typemap import declarations
 
+    cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+    environment = session.environment if session is not None else regeneration.environment(project, policy)
+    authored = (
+        session.authored
+        if session is not None
+        else {
+            path: path.read_text()
+            for root in project.include
+            for path in root.rglob("*.h")
+            if not storage.generated(project, path)
+        }
+    )
+    bundle_key = key(
+        environment,
+        abi_context,
+        *(part for path, text in authored.items() for part in (str(path), text)),
+        *(part for path, content in outputs.items() if isinstance(content, bytes) for part in (str(path), content)),
+    )
+    if cache.get("typemap-validation", bundle_key) is not None:
+        return
+    contents, closures, abi = regeneration.validation_inputs(project, outputs, abi_context, authored=authored)
+    digests = {path: storage.digest(data) for path, data in contents.items()}
     if validated is None:
         validated = set()
-    project.build.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".type-context-", dir=project.build) as temporary:
-        scratch = Path(temporary)
-        roots = []
-        for index, root in enumerate(project.include):
-            staged_root = scratch / str(index)
-            shutil.copytree(root, staged_root)
-            roots.append(staged_root)
-            for path, content in outputs.items():
-                if path.is_relative_to(root) and isinstance(content, bytes):
-                    staged = staged_root / path.relative_to(root)
-                    staged.parent.mkdir(parents=True, exist_ok=True)
-                    staged.write_bytes(content)
-        staged_project = replace(project, include=tuple(roots))
-        source = scratch / "context.c"
-        if project.include[0] / "shared/typemap.h" in outputs:
-            source.write_text('#include "shared/typemap.h"\n#include "shared/prototypes.h"\n')
-        else:
+    for version in project.versions:
+        pending: dict[str, tuple[set[Path], str]] = {}
+        for path, closure in closures.items():
+            if path not in outputs:
+                continue
+            # Include-only indexes add no declarations. Their leaves carry the
+            # transitive validation keys; a leaf edit does not reparse the index.
+            body = re.sub(r"^[ \t]*#[^\n]*|/\*.*?\*/|//[^\n]*", "", contents[path].decode(), flags=re.M | re.S)
+            inputs = closure if body.strip() else {path}
+            content_key = key(
+                environment, version, str(path), *(part for dep in sorted(inputs) for part in (str(dep), digests[dep]))
+            )
+            if content_key not in validated and cache.get("typemap-validated", content_key) is None:
+                pending[content_key] = closure, ""
+        for text, closure in abi:
+            content_key = key(
+                environment, version, text, *(part for dep in sorted(closure) for part in (str(dep), digests[dep]))
+            )
+            if content_key not in validated and cache.get("typemap-validated", content_key) is None:
+                pending[content_key] = closure, text
+        if not pending:
+            continue
+        selected = {path for closure, _ in pending.values() for path in closure}
+        texts = list(dict.fromkeys(text for _, text in pending.values() if text))
+        project.build.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".type-context-", dir=project.build) as temporary:
+            scratch = Path(temporary)
+            roots = [scratch / str(index) for index in range(len(project.include))]
+            for root, staged_root in zip(project.include, roots, strict=True):
+                staged_root.mkdir()
+                for path in selected:
+                    if path.is_relative_to(root):
+                        staged = staged_root / path.relative_to(root)
+                        staged.parent.mkdir(parents=True, exist_ok=True)
+                        staged.write_bytes(contents[path])
+            staged_project = replace(project, include=tuple(roots))
+            source = scratch / "context.c"
+            # Stage dependencies without including authored prerequisites before
+            # their filtered guarded projections.
+            umbrella = project.include[0] / "shared/typemap.h"
+            prototypes = project.include[0] / "shared/prototypes.h"
+            if umbrella in selected and prototypes in selected:
+                entry_points = [umbrella, prototypes]
+            else:
+                generated = selected.intersection(outputs)
+                dependencies = {dep for path in generated for dep in closures[path] if dep != path}
+                entry_points = sorted(generated - dependencies)
+                if not entry_points:
+                    entry_points = sorted(generated)
+                covered = {dep for path in entry_points for dep in closures[path]}
+                entry_points.extend(sorted(selected - covered))
             source.write_text(
                 "".join(
-                    f'#include "{path.relative_to(project.include[0]).as_posix()}"\n'
-                    for path in outputs
-                    if path.is_relative_to(project.include[0])
+                    f'#include "{path.relative_to(root).as_posix()}"\n'
+                    for path in entry_points
+                    for root in project.include
+                    if path.is_relative_to(root)
                 )
             )
-        assembly = scratch / "validate.s"
-        assembly.write_text(".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
-        for version in project.versions:
+            assembly = scratch / "validate.s"
+            assembly.write_text(".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
             try:
                 if policy is None:
-                    text = declarations.headers(project, None, version)
-                    text += "\n" + "\n".join(
-                        declarations.clean(content.decode())
-                        for content in outputs.values()
-                        if isinstance(content, bytes)
-                    )
-                    context_text = text + "\n" + abi_context
-                    key = storage.digest(context_text.encode())
-                    if key not in validated:
-                        declarations.extract(context_text, {"kind": "declared"})
-                        validated.add(key)
+                    expanded = "\n".join(declarations.clean(contents[path].decode()) for path in sorted(selected))
                 else:
                     expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
-                    context_text = expanded + "\n" + abi_context
-                    key = storage.digest(context_text.encode())
-                    if key in validated:
-                        continue
-                    context = scratch / "expanded.c"
-                    context.write_text(context_text)
-                    if not getattr(policy, "m2c", None):
+                context_text = expanded + "\n" + "\n".join(texts)
+                context_key = key(context_text)
+                if context_key not in validated:
+                    if policy is not None and getattr(policy, "m2c", None):
+                        context = scratch / "expanded.c"
+                        context.write_text(context_text)
+                        run_tool(
+                            [
+                                str(policy.m2c),
+                                "--context",
+                                str(context),
+                                "--function",
+                                "__unbake_validate_context",
+                                str(assembly),
+                            ],
+                            project.root,
+                            "solve",
+                        )
+                    else:
                         if isinstance(policy, Policy):
                             raise Held("solve", "policy.m2c: required shared context parser")
                         declarations.extract(context_text, {"kind": "declared"})
-                        validated.add(key)
-                        continue
-                    run_tool(
-                        [
-                            str(policy.m2c),
-                            "--context",
-                            str(context),
-                            "--function",
-                            "__unbake_validate_context",
-                            str(assembly),
-                        ],
-                        project.root,
-                        "solve",
-                    )
-                    validated.add(key)
+                    validated.add(context_key)
+                for content_key in pending:
+
+                    def mark(path: Path) -> None:
+                        path.write_bytes(b"validated\n")
+
+                    cache.produce("typemap-validated", content_key, mark)
+                    validated.add(content_key)
             except Held as error:
-                raise Held(
-                    "solve", f"types.header_parse: {version}: shared/typemap.h, shared/prototypes.h: {error.reason}"
-                ) from error
+                raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
+
+    def complete(path: Path) -> None:
+        path.write_bytes(b"validated\n")
+
+    cache.produce("typemap-validation", bundle_key, complete)

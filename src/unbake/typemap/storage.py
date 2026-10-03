@@ -159,12 +159,22 @@ def stage_json(path: Path, value: object) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise Held("solve", f"types.database: generated path is a symlink: {path}")
+    from unbake.project.cache import serialized
+
     descriptor, name = tempfile.mkstemp(prefix=".typemap-json-", dir=path.parent)
     temporary = Path(name)
     try:
-        with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.write("\n")
+        with os.fdopen(descriptor, "wb") as stream:
+            if isinstance(value, dict):
+                stream.write(b"{")
+                for index, field in enumerate(sorted(value)):
+                    if index:
+                        stream.write(b",")
+                    stream.write(json.dumps(field).encode() + b":")
+                    stream.write(serialized("typemap.database." + field, value[field]))
+                stream.write(b"}\n")
+            else:
+                stream.write(serialized("typemap.database", value) + b"\n")
         return temporary
     except BaseException:
         temporary.unlink(missing_ok=True)
