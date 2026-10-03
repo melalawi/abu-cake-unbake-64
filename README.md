@@ -12,6 +12,8 @@ Run `unbake init NAME` and put your ROM dumps in the printed folder.
 Run `unbake setup` to review the layout and compiler proposal.
 Confirm its digest to prove every cartridge.
 Init and setup leave commits to you.
+Use `unbake setup --refresh-helpers` on a ready project to refresh helpers and all scoped recipes from its saved build recipe.
+Unchanged generated files keep their timestamps; this refresh skips cartridge setup and proof.
 Function items span versions and C can use version conditionals.
 
 Run `unbake map` then `unbake solve` to build the shared type context.

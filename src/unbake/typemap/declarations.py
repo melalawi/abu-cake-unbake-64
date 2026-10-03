@@ -699,6 +699,8 @@ class _PublishedDeclarations:
             seed["layout_source"] = cleaned
             cached = cleaned, parser._scope_stack[0].copy(), seed
             self.prefixes[prefix] = cached
+            while len(self.prefixes) > 4:
+                del self.prefixes[next(iter(self.prefixes))]
         cleaned, scope, seed = cached
         suffix = _declaration_unit(clean(suffix, line_markers=True))
         source_key = None

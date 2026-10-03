@@ -281,3 +281,16 @@ int (*factory(void))(int) { return 0; }
                     results = list(declarations._source_units(headers, tasks))
                 self.assertEqual([task[0] for task, text in results], [str(i) for i in range(25)])
                 self.assertLessEqual(max(sizes), min(2, cores))
+
+    def test_distinct_header_contexts_are_bounded_and_eviction_preserves_declarations(self):
+        batch = declarations._PublishedDeclarations()
+        expected = None
+        for i in range(12):
+            prefix = f"typedef int Word_{i};\n"
+            suffix = f"Word_{i} unit_{i}(void) {{ return {i}; }}"
+            result = batch.extract((prefix, suffix), {}, Path(f"unit_{i}.c"))
+            if i == 0:
+                expected = storage.encoded(result)
+            self.assertLessEqual(len(batch.prefixes), 4)
+        actual = batch.extract(("typedef int Word_0;\n", "Word_0 unit_0(void) { return 0; }"), {}, Path("unit_0.c"))
+        self.assertEqual(storage.encoded(actual), expected)
