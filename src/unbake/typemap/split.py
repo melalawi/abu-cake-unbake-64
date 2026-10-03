@@ -193,6 +193,7 @@ def required_providers(
     """Resolve one consumer's names; both generation and imported C use this closure."""
     selected: set[Path] = set()
     code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', " ", declaration_source(text))
+    explicit_tags = set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", code))
     pending = re.findall(r"\b[A-Za-z_]\w*\b", code)
     seen = set()
     while pending:
@@ -202,7 +203,7 @@ def required_providers(
         seen.add(name)
         if name not in (blocked or set()):
             selected.update(providers.get(name, set()))
-        if name not in (blocked_tags or set()):
+        if name not in (blocked_tags or set()) and (name not in (blocked or set()) or name in explicit_tags):
             selected.update(tags.get(name, set()))
         if name not in (blocked or set()):
             pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", aliases.get(name, "")))

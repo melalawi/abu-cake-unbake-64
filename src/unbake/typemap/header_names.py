@@ -153,7 +153,7 @@ def alias_types(source: str) -> dict[str, str]:
 
 def type_identity(type_: str, aliases: dict[str, str]) -> object:
     """Compare declarator structure, not parameter names or typedef spelling."""
-    from pycparser import c_ast  # type: ignore[import-untyped]
+    from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
     from unbake.typemap.declarations import _SeededParser, canonical, declarator
 
@@ -182,8 +182,6 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
         if isinstance(node, c_ast.PtrDecl):
             return ("pointer", tuple(sorted(node.quals)), shape(node.type, active))
         if isinstance(node, c_ast.ArrayDecl):
-            from pycparser import c_generator  # type: ignore[import-untyped]
-
             return ("array", c_generator.CGenerator().visit(node.dim) if node.dim else "", shape(node.type, active))
         if isinstance(node, c_ast.FuncDecl):
             params = None if node.args is None else tuple(parameter(param, active) for param in node.args.params)

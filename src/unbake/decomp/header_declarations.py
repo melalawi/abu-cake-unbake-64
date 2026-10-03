@@ -42,11 +42,11 @@ def attribute_source(source: str) -> str:
             raise Held("m2c", "header declaration: expected ( after attribute")
         depth = 0
         while index < len(tokens):
-            end = tokens[index]
-            depth += (end[0] == "(") - (end[0] == ")")
+            closing = tokens[index]
+            depth += (closing[0] == "(") - (closing[0] == ")")
             index += 1
             if not depth:
-                edits.append((token.start(), end.end()))
+                edits.append((token.start(), closing.end()))
                 break
         else:
             raise Held("m2c", "header declaration: unclosed attribute")

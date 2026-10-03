@@ -5,13 +5,49 @@ from pathlib import Path
 from unittest.mock import patch
 
 from unbake.decomp.draft_context import ordered_headers, required_headers
-from unbake.decomp.header_declarations import declaration_source, declarations
+from unbake.decomp.header_declarations import attribute_source, declaration_source, declarations
 from unbake.layout.structs_parser import Parser
 from unbake.project import makefile
 from unbake.project.config import Held
 
 
 class HeaderDeclarationsTests(unittest.TestCase):
+    def test_gcc_attribute_positions_and_dependency_names(self):
+        attribute = '__attribute__((format(printf, 1, 2), section(".text)"), aligned(4)))'
+        cases = (
+            (f"{attribute} typedef Word Alias;", {"Alias"}, {"Word"}, set()),
+            (f"typedef {attribute} Word Alias;", {"Alias"}, {"Word"}, set()),
+            (f"typedef Word {attribute} Alias;", {"Alias"}, {"Word"}, set()),
+            (f"typedef Word Alias {attribute};", {"Alias"}, {"Word"}, set()),
+            (f"typedef Word *{attribute} Alias;", {"Alias"}, {"Word"}, set()),
+            (f"typedef Word (*{attribute} Alias)(Input {attribute});", {"Alias"}, {"Word", "Input"}, set()),
+            (f"Word call(Input arg {attribute}) {attribute};", set(), {"Word", "Input"}, {"call"}),
+            (f"struct {attribute} Tag {{ Word field {attribute}; }} {attribute};", set(), {"Word"}, set()),
+            (f"struct Tag {attribute} {{ Word field; }};", set(), {"Word"}, set()),
+            (f"Word values[4] {attribute};", set(), {"Word"}, {"values"}),
+            (f"Word alpha {attribute}, beta {attribute};", set(), {"Word"}, {"alpha", "beta"}),
+            ("typedef Word Alias __attribute((unused));", {"Alias"}, {"Word"}, set()),
+        )
+        for source, typedefs, uses, declared in cases:
+            with self.subTest(source=source):
+                row = declarations(source)
+                self.assertEqual((row.typedefs, row.uses, row.declared), (typedefs, uses, declared))
+        for source in ("int value __attribute__((unused);", "int __attribute__ value;"):
+            with self.subTest(source=source), self.assertRaisesRegex(Held, "attribute"):
+                declarations(source)
+
+    def test_attribute_mask_preserves_offsets_strings_and_rewrite_targets(self):
+        from unbake.typemap.header_names import alias_types, rewrite
+
+        source = 'typedef Word Alias __attribute__((section("Word)"),\n aligned(4)));\n'
+        masked = attribute_source(declaration_source(source))
+        self.assertEqual(len(masked), len(source))
+        self.assertEqual([i for i, c in enumerate(masked) if c == "\n"], [i for i, c in enumerate(source) if c == "\n"])
+        self.assertEqual(alias_types(source), {"Alias": "Word"})
+        self.assertEqual(rewrite(source, {"Word": "int"}, set()), source.replace("Word Alias", "int Alias"))
+        literal = 'static char *text = "__attribute__((unused))";'
+        self.assertEqual(attribute_source(literal), literal)
+
     def test_reused_header_analysis_keeps_callers_mutations_private(self) -> None:
         source = "typedef int CachedWord; extern CachedWord cached_value;"
         expected = declarations(source)

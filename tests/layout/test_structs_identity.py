@@ -3,7 +3,7 @@
 import unittest
 
 from unbake.layout.structs import layouts
-from unbake.layout.structs_identity import identity
+from unbake.layout.structs_identity import Index, identity
 
 
 def ident(record, records):
@@ -37,3 +37,27 @@ class StructIdentityTests(unittest.TestCase):
         new = layouts("typedef char Bytes[4]; struct Other {Bytes data;};")
         self.assertNotEqual(old[0].fields[0].extent, new[0].fields[0].extent)
         self.assertEqual(ident(old[0], old), ident(new[0], new))
+
+
+class PointeeProviderTests(unittest.TestCase):
+    def test_reused_parent_keeps_its_pointee_provider(self):
+        for reversed_order in (False, True):
+            with self.subTest(reversed_order=reversed_order):
+                existing = layouts(
+                    "struct Alpha {int active; int count;};"
+                    "struct Zed {int first; int second;};"
+                    "struct Track {struct Zed *bank; int state;};"
+                )
+                local = layouts("struct Bank {int a; int b;}; struct Track {struct Bank *bank; int state;};")
+                if reversed_order:
+                    local.reverse()
+                resolution = Index(existing).resolve(local, "owner")
+                self.assertEqual(resolution["Track"][0], "Track")
+                self.assertEqual(resolution["Bank"][0], "Zed")
+
+    def test_conflicting_pointee_structure_is_not_reused(self):
+        existing = layouts("struct Bank {float value;}; struct Track {struct Bank *bank;};")
+        local = layouts("struct Bank {int value;}; struct Track {struct Bank *bank;};")
+        resolution = Index(existing).resolve(local, "owner")
+        self.assertEqual(resolution["Track"][0], "Track_owner")
+        self.assertEqual(resolution["Bank"][0], "Bank_owner")

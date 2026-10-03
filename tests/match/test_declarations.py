@@ -24,6 +24,31 @@ class DeclarationTests(MatchFixture):
             mock.start()
             self.addCleanup(mock.stop)
 
+    def test_fold_retires_compatible_callback_typedefs_and_keeps_other_members(self):
+        rows = (
+            ("int (*Handler)(int named)", "signed int (*Handler)(signed int)", True),
+            ("void (*Handler)(void *)", "void (*Handler)(void *named)", True),
+            ("int (*Handler)(int)", "int (*Handler)(float)", False),
+            ("void (*Handler)(const int *)", "void (*Handler)(int *)", False),
+        )
+        for local, shared, compatible in rows:
+            with self.subTest(local=local, shared=shared):
+                (self.project.include[0] / "callback.h").write_text("typedef " + shared + ";\n")
+                source = "typedef " + local + ", (*Other)(int);\nint alpha(void) {return 0;}\n"
+                folded = declarations.fold_source(
+                    self.project,
+                    self.policy,
+                    Headers.read(self.project),
+                    "alpha",
+                    source,
+                    self.versions,
+                    prove_headers=False,
+                )
+                self.assertEqual("*Handler)" not in folded.source, compatible)
+                self.assertIn("*Other)", folded.source)
+                if compatible:
+                    self.assertIn('#include "callback.h"', folded.source)
+
     def test_fold_removes_shared_forward_typedef_and_keeps_distinct_declarators(self) -> None:
         for kind in ("struct", "union"):
             with self.subTest(kind=kind):

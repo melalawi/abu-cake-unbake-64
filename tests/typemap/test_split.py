@@ -24,6 +24,78 @@ class SplitTests(unittest.TestCase):
         components = {self.root / name: text for name, text in texts.items()}
         return Layout(components, components, self.root)
 
+    def test_owned_alias_does_not_expand_into_unrelated_provider(self):
+        layout = self.layout(
+            {"alias.h": "typedef struct Foreign Callback;", "foreign.h": "struct Foreign {int value;};"}
+        )
+        for blocked, tags, expected in (
+            ({"Callback"}, set(), set()),
+            (set(), set(), set(layout.headers)),
+            ({"Callback"}, {"Foreign"}, set()),
+        ):
+            with self.subTest(blocked=blocked, tags=tags):
+                self.assertEqual(layout.required("Callback handler;", blocked=blocked, blocked_tags=tags), expected)
+        # Explicit tag uses still require their definition even when a typedef is local.
+        self.assertEqual(
+            layout.required("struct Foreign *p;", blocked={"Callback"}), {layout.homes[self.root / "foreign.h"]}
+        )
+
+    def test_owned_callback_does_not_select_same_named_aggregate_tag(self):
+        layout = self.layout({"callback.h": "typedef struct Callback Callback; struct Callback {int value;};"})
+        self.assertEqual(layout.required("Callback handler;", blocked={"Callback"}), set())
+        self.assertEqual(layout.required("struct Callback *p;", blocked={"Callback"}), set(layout.headers))
+
+    def test_existing_authored_prototypes_supply_generated_declaration_homes(self):
+        for spelling in (
+            "int api(int value);",
+            "extern int api(int value);",
+            "static int api(int value) {return value;}",
+        ):
+            with self.subTest(spelling=spelling):
+                (self.root / "sdk.h").write_text(spelling)
+                value = {
+                    "structs": {},
+                    "globals": {},
+                    "arrays": {},
+                    "functions": {"api": {"state": "known", "prototype": "int api(int);"}},
+                }
+                outputs = {}
+
+                def capture(project, content, *args, outputs=outputs, **kwargs):
+                    outputs.update({p.relative_to(self.root).as_posix(): data.decode() for p, data in content.items()})
+                    raise ValueError("captured")
+
+                with (
+                    patch.object(database, "validate_headers", side_effect=capture),
+                    self.assertRaisesRegex(ValueError, "captured"),
+                ):
+                    database.publish(self.project, value, {}, policy=self.policy)
+                outputs["sdk.h"] = spelling
+                generated = outputs["shared/decls/api.h"]
+                self.assertNotIn("extern int api", generated)
+                self.assertEqual(expanded(outputs, "shared/decls/api.h").count(spelling), 1)
+
+    def test_callback_compatibility_uses_structure(self):
+        rows = (
+            ("s32 (*)(s32 value, void *p)", "signed int (*)(signed int, void *)", True),
+            ("Time (*)(u8 kind, f32 *value)", "int (*)(unsigned char, float *)", True),
+            ("void (*)(void (*notify)(int named))", "void (*)(void (*)(int))", True),
+            ("void (*)(int values[4])", "void (*)(int *)", True),
+            ("void (*)(const int value)", "void (*)(int)", True),
+            ("void (*)(const int *)", "void (*)(int *)", False),
+            ("void (*)(int, ...)", "void (*)(int)", False),
+            ("void (*)(void)", "void (*)(int)", False),
+            ("int (*)(int)", "unsigned int (*)(int)", False),
+            ("void (*)(struct One *)", "void (*)(struct Two *)", False),
+            ("void (*)(void)", "struct Callback", False),
+        )
+        aliases = {"s32": "signed int", "Time": "s32", "u8": "unsigned char", "f32": "float"}
+        for left, right, compatible in rows:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(
+                    header_names.type_identity(left, aliases) == header_names.type_identity(right, aliases), compatible
+                )
+
     def test_transitive_closure_excludes_unused_layout_and_orders_value_dependencies(self):
         layout = self.layout(
             {
