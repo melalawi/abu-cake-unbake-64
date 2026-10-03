@@ -44,9 +44,15 @@ def advance(project: Project, version: str, generation: Path, before: str, after
     for name, address in sorted(additions.items()):
         bindings += f"PROVIDE({name} = 0x{address:08X});\n"
     definitions.write_text(bindings)
-    if additions:
+    # Retained generations may contain proved bindings absent from the address
+    # inventory. Attribution and assembly must see the same names as the linker.
+    inventory = {line.split()[0]: int(line.split()[1], 0) for line in addresses.read_text().splitlines()}
+    missing = {name: int(value, 0) for name, value in known.items() if name not in inventory}
+    missing.update(additions)
+    if missing:
         with addresses.open("a") as output:
-            output.writelines(f"{name} 0x{address:08X}\n" for name, address in sorted(additions.items()))
+            output.writelines(f"{name} 0x{address:08X}\n" for name, address in sorted(missing.items()))
+    if additions:
         for filename in ("undefined_funcs_auto.txt", "undefined_syms_auto.txt"):
             automatic = generation / filename
             automatic.write_text(extract.automatic_symbols(automatic.read_text(), additions))

@@ -317,3 +317,23 @@ def independent_objects(generation: Path) -> None:
             source = path.resolve()
             path.unlink()
             shutil.copytree(source, path, symlinks=True)
+
+
+def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
+    """Mark the successful proof's graph and objects current after input writes.
+
+    Called under the publication lock: all project inputs still equal the proved
+    staged tree. This changes receipts only, leaving object and ROM bytes intact.
+    Future input edits remain newer and follow ordinary Make dependency rules.
+    """
+    for generation in generations.values():
+        # Retained assembly directories belong to an older generation. Receipt
+        # updates must never write through those shared directory symlinks.
+        independent_objects(generation)
+        for receipt in (generation / "obj").rglob("*.built"):
+            if not receipt.is_symlink():
+                receipt.touch()
+        for name in (".split.mk", ".split"):
+            path = generation / name
+            if path.is_file():
+                path.touch()

@@ -794,6 +794,7 @@ def _commit(
         try:
             for path, content in writes.items():
                 atomic(path, content)
+            staging.publication_stamps(project, generations)
             for version, generation in generations.items():
                 swap(project.build_link(version), generation)
                 swapped.append(version)

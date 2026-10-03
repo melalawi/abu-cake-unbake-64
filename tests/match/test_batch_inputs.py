@@ -25,14 +25,26 @@ class InputTests(unittest.TestCase):
     def test_real_duplicate_address_replaces_old_name_and_keeps_attributes(self):
         edits = data_symbols.resolve([self.need], self.project, object())
         self.assertEqual(len(edits), 1)
-        self.assertEqual(edits[0].after, "D_800E28D4 = 0x800E28D4; // size:0x4 type:data\n")
+        self.assertEqual(
+            edits[0].after,
+            "// unbake linker alias: D_800DE884_de = 0x800E28D4;\nD_800E28D4 = 0x800E28D4; // size:0x4 type:data\n",
+        )
         self.assertEqual(self.symbols.read_text(), edits[0].before)
 
     def test_existing_duplicate_is_coalesced(self):
         self.symbols.write_text(self.symbols.read_text() + "D_800E28D4 = 0x800E28D4; // absolute:True\n")
         edits = data_symbols.resolve([self.need], self.project, object())
-        self.assertEqual(edits[0].after.count("= 0x800E28D4"), 1)
+        self.assertEqual(sum(line.startswith("D_") for line in edits[0].after.splitlines()), 1)
+        self.assertIn("// unbake linker alias: D_800DE884_de = 0x800E28D4;", edits[0].after)
         self.assertIn("size:0x4 type:data", edits[0].after)
+
+    def test_displaced_alias_survives_extraction_and_repeated_resolution(self):
+        from unbake.project_tools import extract
+
+        edit = data_symbols.resolve([self.need], self.project, object())[0]
+        self.symbols.write_text(edit.after)
+        self.assertEqual(extract.symbols_from([self.symbols]), {"D_800DE884_de": 0x800E28D4, "D_800E28D4": 0x800E28D4})
+        self.assertEqual(data_symbols.resolve([self.need], self.project, object()), [])
 
     def test_real_splat_diagnostic_names_only_introducing_sources(self):
         generation = self.root / "us-rev1.1"

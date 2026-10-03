@@ -162,7 +162,7 @@ def preferred_address(project: Project, version: str, name: str) -> int | None:
 
 
 def resolve(needs: list[SymbolNeed], project: Project, policy: Policy) -> list[Edit]:
-    """Replace version-local aliases instead of defining a second Splat symbol."""
+    """Keep displaced linker aliases without defining a second Splat symbol."""
     selected: dict[tuple[str, int], str] = {}
     for need in needs:
         key = (need.version, need.address)
@@ -188,6 +188,12 @@ def resolve(needs: list[SymbolNeed], project: Project, policy: Policy) -> list[E
             name = replacements[address]
             if re.search(r"\btype:(?:func|function)\b", match[3] or ""):
                 raise Held("symbols", f"{name}: data placement aliases a function in {path}")
+            # Splat reads one native name per address. The extractor also
+            # reads assignments in comments and emits their PROVIDE bindings.
+            if match[1] != name:
+                alias = f"// unbake linker alias: {match[1]} = 0x{address:08X};"
+                if alias not in lines and alias not in rendered:
+                    rendered.append(alias)
             if address in emitted:
                 continue
             emitted.add(address)

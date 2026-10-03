@@ -97,9 +97,20 @@ class BatchPublicationCliTests(unittest.TestCase):
         for version, content in retained.items():
             generation = (self.project.build / version).resolve()
             self.assertEqual((generation / "obj/src" / (self.names[0] + ".o")).read_bytes(), content)
-            self.assertTrue((generation / "obj/asm").is_symlink())
+            self.assertFalse((generation / "obj/asm").is_symlink())
             self.assertTrue((generation / "obj/asm").is_dir())
         self.assertIn(": OK", self.make())
+
+    def test_receipt_refresh_failure_rolls_back_inputs_and_generations(self):
+        before = fixture.PublicationBoundaryCliTests.inputs(self)
+        generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
+        with (
+            patch.object(batch.staging, "publication_stamps", side_effect=OSError("receipt refresh failed")),
+            self.assertRaisesRegex(OSError, "receipt refresh failed"),
+        ):
+            batch.publish(self.project, self.policy, self.sources[:2])
+        self.assertEqual(fixture.PublicationBoundaryCliTests.inputs(self), before)
+        self.assertEqual({v: self.project.build_link(v).resolve() for v in self.project.versions}, generations)
 
     def test_changed_header_cannot_reuse_a_now_mismatching_published_object(self):
         header = self.project.include[0] / "value.h"

@@ -29,6 +29,22 @@ class DiscoveredSymbols(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("split and symbols disagree for first", result.stderr)
 
+    def test_linker_alias_comments_survive_fresh_extraction(self) -> None:
+        self.addCleanup(patch.stopall)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            project, _ = fixture(root, case=self)
+            write_rendered(project)
+            symbols = project.version("us").symbols
+            symbols.write_text("native = 0x80001000;\n// unbake linker alias: displaced = 0x80001000;\n")
+            result = extraction(project)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            generation = project.build_link("us")
+            bindings = (generation / "committed_symbols.ld").read_text()
+            for name in ("native", "displaced"):
+                self.assertIn(f"PROVIDE({name} = 0x80001000);", bindings)
+                self.assertIn(f"{name} 0x80001000", (generation / "symbol-addresses.txt").read_text())
+
     def test_c_labels_and_conflicts(self) -> None:
         extract = helper("extract")
         with tempfile.TemporaryDirectory() as directory:
