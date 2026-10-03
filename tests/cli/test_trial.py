@@ -32,6 +32,20 @@ class TrialTests(MainCase):
         )
         self.assertIn("retained alpha source_sha256", out)
 
+    def test_volatile_storage_is_delegated_to_the_proven_fold(self) -> None:
+        from unbake.project.config import Held
+
+        self.source.write_text(' #include "../legacy/scalars.h"\nvoid alpha(void) { volatile int local; local = 1; }\n')
+        operation = Mock(side_effect=Held("volatile", "volatile-storage: volatile int local; rewrite changes codegen"))
+        code, out, error = self.run_main(
+            self.args("try", str(self.source)), {"trial": self.module("trial", retain_draft=operation)}
+        )
+        self.assertEqual(code, 1, error)
+        operation.assert_called_once()
+        self.assertIn("volatile int local", out)
+        self.assertIn("rewrite changes codegen", out)
+        self.assertNotIn("trial.source_rules", out)
+
     def test_draft_uses_configured_naming_version_and_stages_headers(self) -> None:
         from unbake.cli import draft
 

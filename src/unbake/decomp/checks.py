@@ -52,6 +52,11 @@ def _finding(rule: str, source: str, match: re.Match[str]) -> GuardFinding:
             "; accepted form: pointer->field with the typed field at the measured offset"
             " in a shared paths.include header"
         )
+    if rule == "volatile-storage":
+        text += (
+            "; accepted form: qualified shared declaration validated against the symbol inventory,"
+            " device access, or qualifier removal proved identical in every owning VERSION and mode"
+        )
     return GuardFinding(rule, line, text, None)
 
 
@@ -127,7 +132,8 @@ class _Syntax:
         return max(scopes, default=(0, len(self.words)))
 
 
-def _volatile(source: str, code: str) -> list[GuardFinding]:
+def volatile_tokens(code: str) -> list[re.Match[str]]:
+    """Return refused qualifier tokens with their original source offsets."""
     syntax = _Syntax(code)
     words = syntax.words
     allowed: set[int] = set()
@@ -193,11 +199,11 @@ def _volatile(source: str, code: str) -> list[GuardFinding]:
         # A function return qualifier is not a storage declaration.
         if re.match(r"\s*(?:[A-Za-z_]\w*\s+)+[A-Za-z_]\w*\s*\(", code[syntax.tokens[index].end() :]):
             allowed.add(index)
-    return [
-        _finding("volatile-storage", source, token)
-        for index, token in enumerate(syntax.tokens)
-        if token[0] == "volatile" and index not in allowed
-    ]
+    return [token for index, token in enumerate(syntax.tokens) if token[0] == "volatile" and index not in allowed]
+
+
+def _volatile(source: str, code: str) -> list[GuardFinding]:
+    return [_finding("volatile-storage", source, token) for token in volatile_tokens(code)]
 
 
 def _direct_offsets(source: str, code: str) -> list[GuardFinding]:

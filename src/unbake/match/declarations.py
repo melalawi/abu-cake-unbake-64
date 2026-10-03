@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
-from unbake.decomp import drafts, needs
+from unbake.decomp import drafts, gbi_recover, needs, volatile_rewrite
 from unbake.layout import entries, shared, split, structs
 from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.split import Edit
@@ -208,11 +208,19 @@ def fold_source(
     from unbake.typemap import declaration_evidence
 
     authored = text
+    text = gbi_recover.import_aliases(
+        project, text, headers.texts, sdk_aliases=False, rules=frozenset({"volatile-storage"})
+    )
     text, evidence_end = declaration_evidence.inject(project, headers, text, function, versions)
     if evidence_end:
         text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
     text = imports.resolve(project, headers, text, function)
     text = pool_literals.lower(project, function, text, versions)
+    text, has_evidence = volatile_rewrite.proven(
+        project, policy, project.src / f"{function}.c", text, headers, versions
+    )
+    if has_evidence:
+        evidence_end = evidence_end or 1
     parsers = source_views.parsers(project, policy, text, versions, headers)
     text, tag_only = _layout_names(project, policy, function, text, parsers, versions, headers)
     parsers = source_views.parsers(project, policy, text, versions, headers)
@@ -240,8 +248,6 @@ def fold_source(
         evidence_context = Headers({**headers.texts, **{edit.path: edit.after for edit in edits}}, root=headers.root)
         final, evidence_edits = declaration_evidence.promote(project, evidence_context, final, evidence_end)
         edits.extend(evidence_edits)
-    from unbake.decomp import gbi_recover
-
     final = gbi_recover.proven(
         project,
         policy,

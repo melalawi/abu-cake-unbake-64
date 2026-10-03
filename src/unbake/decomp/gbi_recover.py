@@ -528,13 +528,20 @@ def preflight(project: Project, policy: Policy, unit: Path, source: str) -> None
         lower(source, catalogue(project, policy, unit, version, source))
 
 
-def import_aliases(project: Project, source: str, headers: dict[Path, str], *, sdk_aliases: bool = True) -> str:
+def import_aliases(
+    project: Project,
+    source: str,
+    headers: dict[Path, str],
+    *,
+    sdk_aliases: bool = True,
+    rules: frozenset[str] = RULES,
+) -> str:
     """Replace absent SDK/scalar imports with equivalent installed providers.
 
     Evidence is read only. General authored headers, structures, pragmas and
     function declarations are not aliases and remain for ordinary diagnostics.
     """
-    if not any(f.rule in RULES for f in checks.run(source)):
+    if not any(f.rule in rules for f in checks.run(source)):
         return source
     from unbake.match.imports import _INCLUDE, _without_comments
 
@@ -566,7 +573,8 @@ def import_aliases(project: Project, source: str, headers: dict[Path, str], *, s
             remainder = scalar_decl.sub("", text)
             remainder = re.sub(r"^\s*#.*$", "", remainder, flags=re.M).strip()
             used = set(re.findall(r"\b\w+\b", _INCLUDE.sub("", source)))
-            object_names = set(re.findall(r"^\s*#\s*define\s+(\w+)(?:\s|$)", text, re.M)) & used
+            local_macros = set(re.findall(r"^\s*#\s*define\s+(\w+)(?:\s|$)", _without_comments(source), re.M))
+            object_names = set(re.findall(r"^\s*#\s*define\s+(\w+)(?:\s|$)", text, re.M)) & used - local_macros
             if aliases and not remainder and not object_names:
                 candidate = next(
                     (path for path, body in headers.items() if aliases.items() <= scalars(body).items()), None

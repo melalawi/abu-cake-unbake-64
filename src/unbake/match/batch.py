@@ -45,7 +45,17 @@ from unbake.report import progress
 from unbake.typemap import storage
 
 # Rules the fold resolves: they are judged on the folded text, not on admission.
-FOLDED_RULES = frozenset({"invented-struct", "local-type-copy", "raw-offset", "raw-gfx", "local-gbi-macro"})
+FOLDED_RULES = frozenset(
+    {
+        "invented-struct",
+        "local-type-copy",
+        "raw-offset",
+        "raw-gfx",
+        "local-gbi-macro",
+        "volatile-storage",
+        "local-include",
+    }
+)
 
 
 @dataclass
