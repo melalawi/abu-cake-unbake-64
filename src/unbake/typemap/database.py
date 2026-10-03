@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
-from unbake.typemap import storage
+from unbake.typemap import header_names, storage
 
 _decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
@@ -75,7 +75,8 @@ def context(project: Project, *, function: str | None = None, allow_stale: bool 
         carrier = for_caller(record, function)
         if carrier.get("prototype"):
             reasons = "; ".join(carrier["reasons"]).replace("*/", "* /")
-            lines.extend((f"/* {name}: {reasons} */", carrier["prototype"]))
+            prototype = header_names.rewrite(carrier["prototype"], value.get("shared_aliases", {}), set())
+            lines.extend((f"/* {name}: {reasons} */", prototype))
     return "\n".join(lines) + "\n"
 
 
@@ -127,6 +128,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         if not storage.generated(project, path)
     ]
     # Refer to existing homes; only missing generated prerequisites are emitted.
+    reserved = header_names.source_names(project, root / "shared/typemap.h", policy)
+    replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
     components = {path: path.read_text() for path in authored}
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
     provided = set(authored_aliases)
@@ -137,30 +140,98 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         and (record.get("partial") or record.get("generated"))
         and record.get("declaration")
     }
-    provided.update(alias for record in generated.values() for alias in record.get("aliases", []))
+    for text in components.values():
+        replacements.update(
+            (alias, type_)
+            for alias, type_ in header_names.alias_types(text).items()
+            if alias in reserved or header_names.placeholder(alias)
+        )
+    replacements.update(
+        (alias, record["type"])
+        for record in value["structs"].values()
+        if record["state"] == "known"
+        for alias in record.get("aliases", [])
+        if alias in reserved
+    )
+    local_types = {
+        name: {
+            alias: type_
+            for alias, type_ in record.get("typedefs", {}).items()
+            if alias in reserved or header_names.placeholder(alias)
+        }
+        for name, record in generated.items()
+    }
+    evidence: dict[str, set[str]] = defaultdict(set)
+    for types in local_types.values():
+        for alias, type_ in types.items():
+            evidence[alias].add(type_)
+    replacements.update((alias, next(iter(types))) for alias, types in evidence.items() if len(types) == 1)
+    # Resolve chains of source-owned aliases before removing their declarations.
+    for _ in range(len(replacements)):
+        expanded = {name: header_names.resolve(type_, replacements) for name, type_ in replacements.items()}
+        if expanded == replacements:
+            break
+        replacements = expanded
+    else:
+        raise Held("solve", "types.header_parse: cyclic source-owned typedefs")
+    generated_aliases = {alias for record in generated.values() for alias in record.get("aliases", [])}
+    private: dict[str, str] = {}
+    private_names: dict[tuple[str, str], str] = {}
+
+    def shared_type(alias: str, type_: str) -> str:
+        if "(" not in type_ and "[" not in type_:
+            return type_
+        key = (alias, type_)
+        if key not in private_names:
+            name = "UnbakeShared_" + alias
+            while (
+                name in reserved
+                or name in authored_aliases
+                or name in generated_aliases
+                or name in replacements
+                or name in private
+            ):
+                name += "_"
+            private[name] = type_
+            private_names[key] = name
+        return private_names[key]
+
+    concrete = dict(replacements)
+    replacements = {alias: shared_type(alias, type_) for alias, type_ in concrete.items()}
+    scoped = {}
+    for name, types in local_types.items():
+        scope = {**concrete, **types}
+        # Prerequisite metadata is already canonical, but may still refer to a
+        # source-owned aggregate alias. A same-named scalar or callback can have
+        # different targets in different source scopes; preserve each target.
+        scoped[name] = {
+            **replacements,
+            **{alias: shared_type(alias, header_names.resolve(type_, scope)) for alias, type_ in types.items()},
+        }
+    provided.update(generated_aliases)
     alias_targets = {
         alias: record["type"]
         for record in value["structs"].values()
         if record["state"] == "known"
         for alias in record.get("aliases", [])
     }
-    prerequisites: dict[str, str] = {}
+    prerequisites: dict[str, str] = dict(private)
     for record in generated.values():
         for alias, type_ in record.get("typedefs", {}).items():
-            if alias in provided:
+            if alias in provided or alias in reserved or header_names.placeholder(alias):
                 continue
             if alias in prerequisites and prerequisites[alias] != type_:
                 raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
             prerequisites[alias] = type_
-    rendered = {}
+    originals = dict(components)
     for path in authored:
-        relative = next(
-            path.relative_to(include).as_posix() for include in project.include if path.is_relative_to(include)
-        )
-        rendered[path] = f'#include "{relative}"'
+        components[path] = header_names.rewrite(components[path], replacements, reserved)
+    rendered = header_names.imports(project, originals, components)
     for alias, type_ in sorted(prerequisites.items()):
         path = root / "shared" / (".typedef-" + alias + ".h")
-        components[path] = rendered[path] = "typedef " + declarator(type_, alias) + ";"
+        components[path] = rendered[path] = header_names.rewrite(
+            "typedef " + declarator(type_, alias) + ";", replacements, reserved
+        )
     for name, record in sorted(value["structs"].items()):
         if (
             record["state"] == "known"
@@ -168,11 +239,11 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             and record.get("declaration")
         ):
             path = root / "shared" / (".layout-" + name + ".h")
-            declaration = record["declaration"]
+            declaration = header_names.rewrite(record["declaration"], scoped[name], reserved)
             aliases = "".join(
                 f"typedef {record['type']} {alias};\n"
                 for alias in record.get("aliases", [])
-                if alias not in authored_aliases
+                if alias not in authored_aliases and alias not in reserved and not header_names.placeholder(alias)
             )
             if aliases:
                 alias_path = root / "shared" / (".aliases-" + name + ".h")
@@ -194,21 +265,22 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     prototypes = ["#ifndef UNBAKE_PROTOTYPES_H", "#define UNBAKE_PROTOTYPES_H", '#include "typemap.h"']
     for _name, record in sorted(value["functions"].items()):
         if record["state"] == "known":
-            prototype = record["prototype"]
+            prototype = header_names.rewrite(record["prototype"], replacements, reserved)
             prototypes.append(prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype)
     for _name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
-            prototypes.append(record["declaration"])
+            prototypes.append(header_names.rewrite(record["declaration"], replacements, reserved))
     for name, record in sorted(value["arrays"].items()):
         if record["state"] == "known" and record.get("partial") and ":" not in name:
-            prototypes.append(f"extern {record['type']} {name}[];")
+            prototypes.append(header_names.rewrite(f"extern {record['type']} {name}[];", replacements, reserved))
     prototypes.extend(("#endif", ""))
     outputs: dict[Path, bytes | Path] = {
         root / "shared/typemap.h": "\n".join(type_lines).encode(),
         root / "shared/prototypes.h": "\n".join(prototypes).encode(),
     }
+    value["shared_aliases"] = replacements
     abi_context = "\n".join(
-        record["abi_declaration"]["prototype"]
+        header_names.rewrite(record["abi_declaration"]["prototype"], replacements, reserved)
         for record in value["functions"].values()
         if record.get("abi_declaration", {}).get("prototype")
     )
@@ -216,7 +288,11 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     validate_headers(project, outputs, policy, abi_context=abi_context, validated=validated)
     variants = [record.get("abi_declaration", {}).get("variants", {}) for record in value["functions"].values()]
     for register in sorted({reg for choices in variants for reg in choices}):
-        selected = "\n".join(choices[register]["prototype"] for choices in variants if register in choices)
+        selected = "\n".join(
+            header_names.rewrite(choices[register]["prototype"], replacements, reserved)
+            for choices in variants
+            if register in choices
+        )
         validate_headers(project, outputs, policy, abi_context=abi_context + "\n" + selected, validated=validated)
     value["rendered_sha256"] = {
         str(path.relative_to(project.root)): storage.digest(content)

@@ -189,9 +189,6 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 for candidate in candidates
             )
             receipts.extend(f"OK(submit): {version}: {line}" for version, line in sha1.items())
-            if not any(candidate.republication for candidate in candidates):
-                with reporting.phase("type_feedback", sources=len(candidates)):
-                    receipts.extend(_feedback(config.load(project.root), policy, candidates, current))
         return receipts
 
 
@@ -787,14 +784,15 @@ def _commit(
         report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
         touched = set(writes) | {ledger, project.root / "README.md"} | report_paths
         republication = any(candidate.republication for candidate in candidates)
-        if republication:
-            touched.add(project.build / "types/proven.json")
+        touched.update(
+            project.build / "types" / name for name in ("proven.json", "database.json", "summary.json", "redraft.json")
+        )
+        touched.update(project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
         before = {path: path.read_bytes() if path.exists() else None for path in touched}
         swapped = []
         try:
             for path, content in writes.items():
                 atomic(path, content)
-            staging.publication_stamps(project, generations)
             for version, generation in generations.items():
                 swap(project.build_link(version), generation)
                 swapped.append(version)
@@ -815,9 +813,11 @@ def _commit(
                         "at": datetime.now(UTC).isoformat(),
                     }
                     output.write(json.dumps(row, sort_keys=True) + "\n")
-            if republication:
-                with reporting.phase("type_feedback", sources=len(candidates)):
-                    followups = _feedback(config.load(project.root), policy, candidates, current, strict=True)
+            with reporting.phase("type_feedback", sources=len(candidates)):
+                followups = _feedback(config.load(project.root), policy, candidates, current, strict=republication)
+            # Feedback owns shared header writes. Refresh only after its last
+            # write so an immediate independent check reuses the proved objects.
+            staging.publication_stamps(project, generations)
             reporting.record(
                 "published",
                 sources=[candidate.function for candidate in candidates],

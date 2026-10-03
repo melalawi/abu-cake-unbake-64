@@ -101,6 +101,58 @@ class BatchPublicationCliTests(unittest.TestCase):
             self.assertTrue((generation / "obj/asm").is_dir())
         self.assertIn(": OK", self.make())
 
+    def test_feedback_header_writes_precede_receipt_refresh_for_new_and_edited_sources(self):
+        events = []
+        original = batch.staging.publication_stamps
+        header = self.project.include[0] / "shared/typemap.h"
+
+        def feedback(project, policy, candidates, current, *, strict=False):
+            events.append(("feedback", strict))
+            header.write_bytes(header.read_bytes() + b"\n/* feedback wrote header */\n")
+            return ["OK(types): mocked; follow-up: mock"]
+
+        def refresh(project, generations):
+            events.append(("refresh", None))
+            original(project, generations)
+            for generation in generations.values():
+                for stamp in (generation / "obj").rglob("*.built"):
+                    self.assertGreaterEqual(stamp.stat().st_mtime_ns, header.stat().st_mtime_ns)
+
+        with (
+            patch.object(batch, "_feedback", side_effect=feedback),
+            patch.object(batch.staging, "publication_stamps", side_effect=refresh),
+        ):
+            self.assertIn("OK(types): mocked", self.cli("submit", self.sources[0]))
+            published = self.project.src / self.sources[0].name
+            published.write_bytes(published.read_bytes() + b"\n/* republication */\n")
+            self.cli("submit", published)
+        self.assertEqual(events, [("feedback", False), ("refresh", None), ("feedback", True), ("refresh", None)])
+
+    def test_refresh_failure_after_feedback_restores_headers_and_type_receipts(self):
+        before = fixture.PublicationBoundaryCliTests.inputs(self)
+        type_paths = [
+            self.project.build / "types" / name
+            for name in ("proven.json", "database.json", "summary.json", "redraft.json")
+        ]
+        snapshots = {path: path.read_bytes() if path.is_file() else None for path in type_paths}
+        generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
+
+        def feedback(project, *args, **kwargs):
+            (project.include[0] / "shared/typemap.h").write_text("changed after feedback")
+            for path in type_paths:
+                path.write_text("changed after feedback")
+            return []
+
+        with (
+            patch.object(batch, "_feedback", side_effect=feedback),
+            patch.object(batch.staging, "publication_stamps", side_effect=OSError("refresh failed")),
+            self.assertRaisesRegex(OSError, "refresh failed"),
+        ):
+            batch.publish(self.project, self.policy, self.sources[:1])
+        self.assertEqual(fixture.PublicationBoundaryCliTests.inputs(self), before)
+        self.assertEqual({v: self.project.build_link(v).resolve() for v in self.project.versions}, generations)
+        self.assertEqual({path: path.read_bytes() if path.is_file() else None for path in type_paths}, snapshots)
+
     def test_receipt_refresh_failure_rolls_back_inputs_and_generations(self):
         before = fixture.PublicationBoundaryCliTests.inputs(self)
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
