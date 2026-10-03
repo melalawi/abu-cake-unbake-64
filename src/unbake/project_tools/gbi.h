@@ -1400,6 +1400,17 @@
     _GBI_CMD(pkt, _SHIFTL(G_TEXTURE, 24, 8) | _SHIFTL(level, 11, 3) | _SHIFTL(tile, 8, 3) | _SHIFTL(on, 1, 7), _SHIFTL(s, 16, 16) | _SHIFTL(t, 0, 16))
 #define gsSPTexture(s, t, level, tile, on) \
     { { _SHIFTL(G_TEXTURE, 24, 8) | _SHIFTL(level, 11, 3) | _SHIFTL(tile, 8, 3) | _SHIFTL(on, 1, 7), _SHIFTL(s, 16, 16) | _SHIFTL(t, 0, 16) } }
+/* SDK texture extension: preserve the reserved xparam byte. */
+#define gSPTextureL(pkt, s, t, level, xparam, tile, on) \
+    _GBI_CMD(pkt, _SHIFTL(G_TEXTURE,24,8) | _SHIFTL(xparam,16,8) | _SHIFTL(level,11,3) | _SHIFTL(tile,8,3) | _SHIFTL(on,1,7), _SHIFTL(s,16,16) | _SHIFTL(t,0,16))
+#define gsSPTextureL(s, t, level, xparam, tile, on) \
+    {{ _SHIFTL(G_TEXTURE,24,8) | _SHIFTL(xparam,16,8) | _SHIFTL(level,11,3) | _SHIFTL(tile,8,3) | _SHIFTL(on,1,7), _SHIFTL(s,16,16) | _SHIFTL(t,0,16) }}
+#define gSPLineW3D(pkt, v0, v1, wd, flag) \
+    _GBI_CMD(pkt, _SHIFTL(G_LINE3D,24,8) | _SHIFTL(((flag) ? (v1) : (v0)) * 2,16,8) | _SHIFTL(((flag) ? (v0) : (v1)) * 2,8,8) | _SHIFTL(wd,0,8), 0)
+#define gsSPLineW3D(v0, v1, wd, flag) \
+    {{ _SHIFTL(G_LINE3D,24,8) | _SHIFTL(((flag) ? (v1) : (v0)) * 2,16,8) | _SHIFTL(((flag) ? (v0) : (v1)) * 2,8,8) | _SHIFTL(wd,0,8), 0 }}
+#define gSPLine3D(pkt, v0, v1, flag) gSPLineW3D(pkt, v0, v1, 0, flag)
+#define gsSPLine3D(v0, v1, flag) gsSPLineW3D(v0, v1, 0, flag)
 #define gSPVertex(pkt, v, n, v0) \
     _GBI_CMD(pkt, _SHIFTL(G_VTX, 24, 8) | _SHIFTL(n, 12, 8) | _SHIFTL((v0) + (n), 1, 7), (unsigned int)(v))
 #define gsSPVertex(v, n, v0) \
@@ -1427,7 +1438,21 @@
 #define gSPClearGeometryMode(pkt, mode) _GBI_CMD(pkt, _SHIFTL(G_CLEARGEOMETRYMODE,24,8), (unsigned int)(mode))
 #define gsSPSetGeometryMode(mode) {{ _SHIFTL(G_SETGEOMETRYMODE,24,8), (unsigned int)(mode) }}
 #define gsSPClearGeometryMode(mode) {{ _SHIFTL(G_CLEARGEOMETRYMODE,24,8), (unsigned int)(mode) }}
+#if defined(F3D_GBI)
+#define gSP1Triangle(pkt, v0, v1, v2, flag) _GBI_CMD(pkt, _SHIFTL(G_TRI1,24,8), _SHIFTL(flag,24,8) | _SHIFTL((v0)*10,16,8) | _SHIFTL((v1)*10,8,8) | _SHIFTL((v2)*10,0,8))
+#define gsSP1Triangle(v0, v1, v2, flag) {{ _SHIFTL(G_TRI1,24,8), _SHIFTL(flag,24,8) | _SHIFTL((v0)*10,16,8) | _SHIFTL((v1)*10,8,8) | _SHIFTL((v2)*10,0,8) }}
+#else
+#define gSP1Triangle(pkt, v0, v1, v2, flag) _GBI_CMD(pkt, _SHIFTL(G_TRI1,24,8), (((_GBI_V3(v0,v1,v2,flag)) * 2 & 0xFE) << 16) | (((_GBI_V3(v1,v2,v0,flag)) * 2 & 0xFE) << 8) | (((_GBI_V3(v2,v0,v1,flag)) * 2 & 0xFE) << 0))
+#define gsSP1Triangle(v0, v1, v2, flag) {{ _SHIFTL(G_TRI1,24,8), (((_GBI_V3(v0,v1,v2,flag)) * 2 & 0xFE) << 16) | (((_GBI_V3(v1,v2,v0,flag)) * 2 & 0xFE) << 8) | (((_GBI_V3(v2,v0,v1,flag)) * 2 & 0xFE) << 0) }}
 #endif
+#endif
+/* libgfxd single load command and the standard two-command wrappers. */
+#define gLoadUcode(pkt, uc_start, uc_dsize) _GBI_CMD(pkt, _SHIFTL(G_LOAD_UCODE,24,8) | _SHIFTL((uc_dsize)-1,0,16), (unsigned int)(uc_start))
+#define gsLoadUcode(uc_start, uc_dsize) {{ _SHIFTL(G_LOAD_UCODE,24,8) | _SHIFTL((uc_dsize)-1,0,16), (unsigned int)(uc_start) }}
+#define gSPLoadUcodeEx(pkt, uc_start, uc_dstart, uc_dsize) { gDPHalf1(pkt, uc_dstart); gLoadUcode(pkt, uc_start, uc_dsize); }
+#define gsSPLoadUcodeEx(uc_start, uc_dstart, uc_dsize) gsDPHalf1(uc_dstart), gsLoadUcode(uc_start, uc_dsize)
+#define gSPLoadUcode(pkt, uc_start, uc_dstart) gSPLoadUcodeEx(pkt, uc_start, uc_dstart, 0x800)
+#define gsSPLoadUcode(uc_start, uc_dstart) gsSPLoadUcodeEx(uc_start, uc_dstart, 0x800)
 #define gDPPipeSync(pkt) \
     _GBI_CMD(pkt, _SHIFTL(G_RDPPIPESYNC, 24, 8), 0)
 #define gsDPPipeSync() \

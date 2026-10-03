@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.decomp.gbi_source import typedefs
+from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
 from unbake.project.config import Held
@@ -200,7 +200,7 @@ def _volatile(source: str, code: str) -> list[GuardFinding]:
     ]
 
 
-def _offsets(source: str, code: str) -> list[GuardFinding]:
+def _direct_offsets(source: str, code: str) -> list[GuardFinding]:
     syntax = _Syntax(code)
     findings = []
     for index, token in enumerate(syntax.tokens):
@@ -227,6 +227,39 @@ def _offsets(source: str, code: str) -> list[GuardFinding]:
         offsets = re.finditer(r"[+-]\s*\(*\s*(0[xX][\da-fA-F]+|\d+)\b", expression)
         if has_cast and any(int(offset[1], 16 if offset[1].lower().startswith("0x") else 10) for offset in offsets):
             findings.append(_finding("raw-offset", source, token))
+    return findings
+
+
+def _offsets(source: str, code: str) -> list[GuardFinding]:
+    definitions = macros(code)
+    executable = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", lambda m: " " * len(m[0]), code, flags=re.M)
+    findings = _direct_offsets(source, executable)
+
+    def expand_fields(text: str, depth: int = 0) -> str:
+        if depth >= 12:
+            return text
+        for name, macro in definitions.items():
+            for start, end, args in reversed(invocations(text, name)):
+                if len(args) != len(macro.parameters) or "#" in macro.body:
+                    continue
+                replacements = dict(zip(macro.parameters, args, strict=True))
+
+                def replace_token(match: re.Match[str], values: dict[str, str] = replacements) -> str:
+                    return values.get(match[0], match[0])
+
+                body = re.sub(r"\b\w+\b", replace_token, macro.body)
+                text = text[:start] + expand_fields(body, depth + 1) + text[end:]
+        return text
+
+    for name in definitions:
+        for start, end, _ in invocations(executable, name):
+            expanded = expand_fields(code[start:end])
+            if _direct_offsets(expanded, expanded):
+                line = source.count("\n", 0, start) + 1
+                text = source.splitlines()[line - 1].strip()
+                findings.append(
+                    GuardFinding("raw-offset", line, text + "; local macro expands to numeric field access", None)
+                )
     return findings
 
 
@@ -279,7 +312,34 @@ def _empty_loop(source: str, code: str) -> list[GuardFinding]:
 
 
 def _gfx(source: str, code: str) -> list[GuardFinding]:
-    findings = _matches("raw-gfx", r"(?:\.|->)\s*words\s*\.\s*w[01]\s*(?:[|&^+\-]?=|\+\+|--)", source, code)
+    findings = _matches("raw-gfx", r"(?:\.|->)\s*(?:words\s*[._]\s*)?w[01]\s*(?:[|&^+\-]?=(?!=)|\+\+|--)", source, code)
+    # Hidden packets still require SDK exposure. Recognize the command tag in
+    # the first store, and packet-stride copies guarded by a command sentinel.
+    from unbake.decomp.gbi import OP_NAMES
+    from unbake.decomp.gbi_expr import Ambiguous, Word
+
+    opcodes = set(OP_NAMES) | {0x01, 0x05, 0x06, 0x08, 0xAF, 0xB6, 0xB7, 0xB8, 0xBF, 0xDD}
+    pairs = re.finditer(
+        r"(?P<ptr>\b\w+)\s*->\s*(?P<first>\w+)\s*=(?!=)\s*(?P<value>[^;]+);\s*"
+        r"(?P=ptr)\s*->\s*(?P<second>\w+)\s*=(?!=)\s*[^;]+;",
+        code,
+    )
+    packet_sentinel = any(int(m[0], 16) >> 24 in opcodes for m in re.finditer(r"0[xX][0-9A-Fa-f]{8}\b", code))
+    for match in pairs:
+        if match["first"] == match["second"]:
+            continue
+        try:
+            opcode = Word.parse(match["value"]).fixed(24, 8)
+        except Ambiguous:
+            opcode = None
+        stride_copy = (
+            match["first"] == "unk0"
+            and match["second"] == "unk4"
+            and packet_sentinel
+            and re.search(r"->\s*unk8\b", code)
+        )
+        if opcode in opcodes or stride_copy:
+            findings.append(_finding("raw-gfx", source, match))
     lines = source.splitlines()
     # Only the lowering boundary emits this per-line diagnostic for an
     # independently unrepresentable packet; ordinary raw writes stay refused.
@@ -291,7 +351,7 @@ def _gfx(source: str, code: str) -> list[GuardFinding]:
 def _copies(source: str, code: str) -> list[GuardFinding]:
     copies = []
     for name, (start, _, _) in typedefs(code).items():
-        if re.fullmatch(r"[su](?:8|16|32|64)|f(?:32|64)|Gfx", name):
+        if re.fullmatch(r"[su](?:8|16|32|64)|f(?:32|64)|Gfx|M2C_UNK(?:8|16|32|64)?", name):
             line = source.count("\n", 0, start) + 1
             copies.append(GuardFinding("local-type-copy", line, source.splitlines()[line - 1].strip(), None))
     return (

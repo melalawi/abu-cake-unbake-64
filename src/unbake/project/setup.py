@@ -339,9 +339,22 @@ def _sdk_headers(project: Project) -> None:
         "shared/abi.h": (makefile.TEMPLATES / "abi.h").read_text(),
         _AUDIO_CALLBACKS: (makefile.TEMPLATES / "audio_callbacks.h").read_text(),
     }
+    from unbake.decomp.gbi import PREVIOUS_HEADER_SHA256
+
+    previous_gbi = root / "gbi.h"
+    upgrade_gbi = (
+        previous_gbi.is_file()
+        and not previous_gbi.is_symlink()
+        and hashlib.sha256(previous_gbi.read_bytes()).hexdigest() == PREVIOUS_HEADER_SHA256
+    )
     for name, content in files.items():
         target = root / name
-        if name != _AUDIO_CALLBACKS and target.exists() and target.read_bytes() != content.encode():
+        if (
+            name != _AUDIO_CALLBACKS
+            and not (name == "gbi.h" and upgrade_gbi)
+            and target.exists()
+            and target.read_bytes() != content.encode()
+        ):
             key = "setup.gbi_header" if name == "gbi.h" else "setup.gfx_type"
             raise Held(
                 "setup", f"{key}: {target.relative_to(project.root)}: existing header differs; preserve human input"
@@ -349,7 +362,11 @@ def _sdk_headers(project: Project) -> None:
     for name, content in files.items():
         target = root / name
         # Callback contracts are tool-owned and restored during the staged proof.
-        if not target.exists() or (name == _AUDIO_CALLBACKS and target.read_bytes() != content.encode()):
+        if (
+            not target.exists()
+            or (name == "gbi.h" and upgrade_gbi)
+            or (name == _AUDIO_CALLBACKS and target.read_bytes() != content.encode())
+        ):
             _write(project.root, target.relative_to(project.root).as_posix(), content)
 
 

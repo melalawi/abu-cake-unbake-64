@@ -119,9 +119,9 @@ def word_builder(macro: Macro, definitions: dict[str, Macro], packet_type: str =
         return None
     pair = re.search(
         re.escape(pointer[1])
-        + r"\s*->\s*(?:words\.)?w0\s*=\s*([^;]+);\s*"
+        + r"\s*->\s*(?:words\.)?w0\s*=(?!=)\s*([^;]+);\s*"
         + re.escape(pointer[1])
-        + r"\s*->\s*(?:words\.)?w1\s*=\s*([^;]+);",
+        + r"\s*->\s*(?:words\.)?w1\s*=(?!=)\s*([^;]+);",
         body,
     )
     if not pair:

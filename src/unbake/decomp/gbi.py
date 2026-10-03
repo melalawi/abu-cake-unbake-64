@@ -10,11 +10,12 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from hashlib import sha256
 from pathlib import Path
 from typing import TypeAlias
 
 from unbake.decomp import gbi_audio
-from unbake.decomp.gbi_expr import Ambiguous, Word, integer, number, plus_one, pure, split, unwrap
+from unbake.decomp.gbi_expr import Ambiguous, Word, integer, number, plus_one, pure, scalar, split, unwrap
 from unbake.decomp.gbi_source import (
     constants,
     expand,
@@ -31,6 +32,7 @@ from unbake.project.config import Held, Policy, Project
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 
 HEADER = Path(__file__).parents[1] / "project_tools/gbi.h"
+PREVIOUS_HEADER_SHA256 = "b75732e39ebd8e07ba0fbd2ec7c871939b03073dd73b7124c0e38148cb3549aa"
 SYNC = {0xE6: "gDPLoadSync", 0xE7: "gDPPipeSync", 0xE8: "gDPTileSync", 0xE9: "gDPFullSync"}
 FORMATS = {0: "G_IM_FMT_RGBA", 1: "G_IM_FMT_YUV", 2: "G_IM_FMT_CI", 3: "G_IM_FMT_IA", 4: "G_IM_FMT_I"}
 SIZES = {0: "G_IM_SIZ_4b", 1: "G_IM_SIZ_8b", 2: "G_IM_SIZ_16b", 3: "G_IM_SIZ_32b"}
@@ -90,6 +92,35 @@ def flags(value: str, choices: dict[int, str]) -> str:
     return " | ".join(names) or "0"
 
 
+def classic_triangle_word(text: str) -> Word:
+    """Normalize even-index masks without admitting other sparse bit fields."""
+    terms = []
+    for term in split(scalar(text), "|"):
+        shifted = split(unwrap(term), "<<")
+        outer = integer(shifted[1]) if len(shifted) == 2 else 0
+        masked = split(unwrap(shifted[0]), "&")
+        if len(masked) != 2 or outer is None:
+            terms.append(term)
+            continue
+        mask = integer(masked[1])
+        if mask not in (0xFE, 0xFE00, 0xFE0000):
+            terms.append(term)
+            continue
+        offset = {0xFE: 0, 0xFE00: 8, 0xFE0000: 16}[mask]
+        operand = unwrap(masked[0])
+        product = split(operand, "*")
+        inner_shift = split(operand, "<<")
+        if len(product) == 2 and integer(product[1]) == 2 and offset == 0:
+            vertex = product[0]
+        elif len(inner_shift) == 2 and integer(inner_shift[1]) == offset + 1:
+            vertex = inner_shift[0]
+        else:
+            terms.append(term)
+            continue
+        terms.append(f"_SHIFTL(({vertex}) * 2, {outer + offset}, 8)")
+    return Word.parse(" | ".join(terms))
+
+
 def decode(w0: str, w1: str, variant: str | None) -> tuple[str, list[str]]:
     hi = Word.parse(w0)
     opcode = hi.fixed(24, 8)
@@ -112,6 +143,11 @@ def decode(w0: str, w1: str, variant: str | None) -> tuple[str, list[str]]:
         name = {0xF8: "gDPSetFogColor", 0xF9: "gDPSetBlendColor", 0xFA: "gDPSetPrimColor", 0xFB: "gDPSetEnvColor"}[
             opcode
         ]
+    elif opcode == 0xE4:
+        lo = Word.parse(w1)
+        args = [lo.take(12, 12), lo.take(0, 12), hi.take(12, 12), hi.take(0, 12), lo.take(24, 3)]
+        lo.finish()
+        name = "gDPTexRect"
     elif opcode == 0xF6:
         lo = Word.parse(w1)
         args = [lo.take(14, 10), lo.take(2, 10), hi.take(14, 10), hi.take(2, 10)]
@@ -366,7 +402,45 @@ def decode(w0: str, w1: str, variant: str | None) -> tuple[str, list[str]]:
                 number(hi.take(1, 7), {0: "G_OFF", 1: "G_ON"}),
             ]
             lo.finish()
+            xparam = hi.take(16, 8)
             name = "gSPTexture"
+            if integer(xparam) != 0:
+                args.insert(3, xparam)
+                name = "gSPTextureL"
+        elif opcode == (0xDD if variant == "f3dex2" else 0xAF) and variant != "f3d":
+            name, args = "gLoadUcode", [w1, plus_one(hi.take(0, 16))]
+        elif variant == "f3dex2" and opcode == 0x08:
+            vertices = [hi.fixed(shift, 8) for shift in (16, 8)]
+            width = hi.take(0, 8)
+            if any(value % 2 for value in vertices) or integer(w1) != 0:
+                raise Ambiguous("invalid line vertex index or payload")
+            name, args = "gSPLineW3D", [*(str(value // 2) for value in vertices), width, "0"]
+            if integer(width) == 0:
+                name, args = "gSPLine3D", [*args[:2], "0"]
+        elif variant != "f3dex2" and opcode == 0xBF:
+            lo = classic_triangle_word(w1) if variant == "f3dex" else Word.parse(w1)
+            scale = 10 if variant == "f3d" else 2
+            flag = lo.take(24, 8) if variant == "f3d" else "0"
+            args = []
+            for shift in (16, 8, 0):
+                value = lo.take(shift, 8)
+                fixed = integer(value)
+                if fixed is not None:
+                    if fixed % scale:
+                        raise Ambiguous("invalid classic triangle vertex index")
+                    args.append(str(fixed // scale))
+                else:
+                    product = split(unwrap(value), "*")
+                    args.append(
+                        unwrap(product[0])
+                        if len(product) == 2 and integer(product[1]) == scale
+                        else f"({value}) / {scale}"
+                    )
+            args.append(flag)
+            lo.finish()
+            name = "gSP1Triangle"
+        elif variant != "f3dex2" and opcode in (0xB6, 0xB7):
+            name, args = ("gSPClearGeometryMode" if opcode == 0xB6 else "gSPSetGeometryMode"), [w1]
         elif variant == "f3dex2" and opcode == 0x01:
             n, end = hi.fixed(12, 8), hi.fixed(1, 7)
             if end < n:
@@ -436,20 +510,21 @@ LEXICAL = re.compile(
 ACCESS = r"(?P<ptr>[A-Za-z_]\w*(?:\s*\[[^\]\n]+\])*)\s*(?P<access>->|\.)(?:\s*words\s*[._])?\s*w0"
 PAIR = re.compile(
     ACCESS
-    + r"\s*=\s*(?P<w0>[^;]+);\s*"
+    + r"\s*=(?!=)\s*(?P<w0>[^;]+);\s*"
     + r"(?P<middle>(?:[A-Za-z_]\w*\s*=\s*[^;{}]+;\s*)*?)"
-    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*[._])?\s*w1\s*=\s*(?P<w1>[^;]+);",
+    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*[._])?\s*w1\s*=(?!=)\s*(?P<w1>[^;]+);",
     re.S,
 )
 REVERSE_PAIR = re.compile(
     ACCESS.removesuffix("w0")
-    + r"w1\s*=\s*(?P<w1>[^;]+);\s*(?P<middle>)"
-    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*[._])?\s*w0\s*=\s*(?P<w0>[^;]+);",
+    + r"w1\s*=(?!=)\s*(?P<w1>[^;]+);\s*(?P<middle>)"
+    + r"(?P=ptr)\s*(?P=access)(?:\s*words\s*[._])?\s*w0\s*=(?!=)\s*(?P<w0>[^;]+);",
     re.S,
 )
 
 
 def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True) -> Lowered:
+    variant = source_microcode(source, variant)
     result = Lowered(source)
     definitions = macros(source)
     object_macros = constants(source)
@@ -625,7 +700,7 @@ def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True
         if converted == len(sites):
             edits.append((macro.start, macro.end, ""))
     # Report unmatched writes as well as paired commands.
-    for match in re.finditer(ACCESS.removesuffix("w0") + r"w[01]\s*=", masked):
+    for match in re.finditer(ACCESS.removesuffix("w0") + r"w[01]\s*=(?!=)", masked):
         if not any(pair.start() <= match.start() < pair.end() for pair in pairs):
             result.raw.append(
                 Raw(
@@ -639,6 +714,28 @@ def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True
         source = source[:start] + text + source[end:]
     result.source = source
     return result
+
+
+def source_microcode(source: str, default: str | None) -> str | None:
+    """Honor unconditional selectors before the first GBI include."""
+    active = {default} if default else set()
+    depth = 0
+    mapping = {"F3DEX_GBI_2": "f3dex2", "F3DEX_GBI": "f3dex", "F3D_GBI": "f3d"}
+    for line in source.splitlines():
+        if re.match(r'\s*#\s*include\s*[<"]gbi.h[>"]', line):
+            break
+        if re.match(r"\s*#\s*(?:if|ifdef|ifndef)\b", line):
+            depth += 1
+        elif re.match(r"\s*#\s*endif\b", line):
+            depth -= 1
+        elif not depth and (match := re.match(r"\s*#\s*(define|undef)\s+(F3DEX_GBI_2|F3DEX_GBI|F3D_GBI)\b", line)):
+            if match[1] == "define":
+                active.add(mapping[match[2]])
+            else:
+                active.discard(mapping[match[2]])
+    if len(active) > 1:
+        raise Ambiguous("conflicting source microcode definitions")
+    return next(iter(active), None)
 
 
 def microcode(project: Project) -> str | None:
@@ -663,8 +760,12 @@ def install(project: Project) -> str:
         raise Held("gbi", "paths.include: required include directory")
     destination = project.include[0] / "gbi.h"
     content = HEADER.read_text()
-    if destination.is_symlink() or (destination.exists() and destination.read_text() != content):
+    if destination.is_symlink():
         raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
+    if destination.exists() and destination.read_text() != content:
+        if sha256(destination.read_bytes()).hexdigest() != PREVIOUS_HEADER_SHA256:
+            raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
+        destination.write_text(content)
     for root in project.include:
         sdk = root / "n64sdk.h"
         if sdk.is_file() and not re.search(r"^\s*#\s*(?:ifndef|pragma\s+once)\b", sdk.read_text(), re.M):
