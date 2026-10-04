@@ -334,15 +334,21 @@ def run(
                     row = rows[function]
                     result = _result(done)
                     if not result["ok"]:
-                        row.stage, row.diagnostic = "held", result["diagnostic"]
+                        written = project.work / function / f"{function}.c"
                         emitter.emit(
                             "fn.draft.done",
                             function=function,
                             ok=False,
-                            file="",
+                            file=str(written) if written.is_file() else "",
                             seconds=round(result["seconds"], 3),
                             diagnostic=result["diagnostic"],
                         )
+                        if written.is_file():
+                            # An unproven draft was written: compare it, then wait for edits like any other.
+                            stopper.note_activity()
+                            start(row)
+                            continue
+                        row.stage, row.diagnostic = "held", result["diagnostic"]
                         emitter.emit(
                             "fn.held",
                             function=function,

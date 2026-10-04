@@ -284,8 +284,7 @@ def _draft(
     except Held as error:
         raise Held(
             error.phase,
-            f"m2c/type compile proof failed: {error.reason}; draft kept at {candidate}. "
-            "Repair the shared header types identified above and redraft.",
+            f"m2c/type compile proof failed: {error.reason}",
         ) from error
     return content
 

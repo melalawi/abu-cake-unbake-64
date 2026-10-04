@@ -48,9 +48,23 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
         shutil.rmtree(directory / "include")
     # The draft's own header directory comes first on its include path (config.draft_view).
     (directory / "include").mkdir(parents=True, exist_ok=True)
-    content = m2c.draft(
-        draft_view(project, function), host, function, version, scratch, extracted, type_context=context
-    )
+    try:
+        content = m2c.draft(
+            draft_view(project, function), host, function, version, scratch, extracted, type_context=context
+        )
+    except Held as error:
+        # A complete draft that does not compile yet is still the thing to edit: put it where compare and
+        # the cycle watcher look, and say so.
+        unproven = scratch / "compile-proof" / f"{function}.c"
+        if not unproven.is_file():
+            raise
+        atomic_files.text(file, unproven.read_text(encoding="utf-8"), encoding="utf-8")
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise Held(
+            "draft",
+            f"draft.unproven: {file} does not compile yet; edit it: {error.reason}",
+            next_action=f"unbake compare {file}",
+        ) from error
     atomic_files.text(file, content, encoding="utf-8")
     shutil.rmtree(scratch, ignore_errors=True)
     return Drafted(function, file, versions)
