@@ -1,6 +1,6 @@
 """The `headers` step: regenerate group headers and source include lines from layout.toml and the type solution.
 
-- Merge-only: a header change that would remove a name published C spells is refused by name.
+- Merge-only: a header change or deletion that would remove a name published C spells is refused by name.
 - Only files whose bytes change are written; the index is installed last (layout.apply.install).
 - Before writing, every affected unit is compiled for each version that holds it, against staged copies of
   the changed headers and sources in build/work/_headers/ (a draft view shadowing include/ by relative name).
@@ -16,7 +16,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake import cache, steps
 from unbake.config import Held, Host, Project
-from unbake.layout import apply, split
+from unbake.layout import apply, index, split
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 _DECLARED = (
@@ -58,14 +58,17 @@ def includes(path: Path, project: Project, memo: dict[Path, frozenset[Path]]) ->
     return memo[path]
 
 
-def plan(project: Project, host: Host) -> dict[Path, bytes]:
-    """The outputs whose bytes differ from the tree, after the merge-only check."""
-    outputs = apply.render(project, host)
+def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
+    """The outputs whose bytes differ from the tree, after the merge-only check.
+
+    A previously generated header the outputs no longer contain is deleted by apply.install, so it is
+    checked like a change to an empty header."""
     changed = {path: data for path, data in outputs.items() if not path.is_file() or path.read_bytes() != data}
     used: set[str] = set()
     for source in project.src.glob("*.c"):
         used |= apply.spelled(source.read_text())
-    for path, data in changed.items():
+    obsolete = {path: b"" for path in index.headers(project) - outputs.keys()}
+    for path, data in {**changed, **obsolete}.items():
         if path.suffix != ".h" or not path.is_file():
             continue
         removed = (declared(path.read_text()) - declared(data.decode())) & used
@@ -114,9 +117,11 @@ def validate(project: Project, host: Host, changed: dict[Path, bytes]) -> list[s
 def run(project: Project, host: Host) -> list[Path]:
     """Regenerate, validate the affected units, then write the changed files; return them."""
     apply.units(project)
-    changed = plan(project, host)
+    outputs = apply.render(project, host)
+    changed = plan(project, outputs)
     if not changed:
         return []
     validate(project, host, changed)
-    apply.install(project, dict(changed))
+    # install needs every output: a generated header missing from them is deleted as obsolete.
+    apply.install(project, dict(outputs))
     return sorted(changed)
