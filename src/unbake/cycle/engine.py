@@ -230,7 +230,7 @@ def run(
     steps.ensure(
         project,
         host,
-        ["extract", "types", "headers", "buildfiles"],
+        ["resident", "extract", "types", "headers", "buildfiles"],
         report=lambda done: emitter.emit(
             "step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3)
         ),

@@ -176,6 +176,18 @@ def _trim(project: Project, host: Host) -> None:
     cache.trim(host.cache_root, host.cache_max_bytes, host.cache_trim_to_bytes)
 
 
+def _resident_key(project: Project, host: Host) -> str:
+    from unbake.layout import resident
+
+    return resident.input_key(project)
+
+
+def _resident(project: Project, host: Host) -> None:
+    from unbake.layout import resident
+
+    resident.run(project, host)
+
+
 def _merge_units_key(project: Project, host: Host) -> str:
     from unbake.layout import merge_units
 
@@ -197,6 +209,7 @@ STEPS: dict[str, Step] = {
         Step("headers", "layout.toml or the type solution changed", _headers_key, _headers, ("types",)),
         Step("buildfiles", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
         Step("progress", "a land or a boundary edit", _progress_key, _progress),
+        Step("resident", "a published source's resident constants changed", _resident_key, _resident),
         Step("merge-units", "a land made a run of matched members", _merge_units_key, _merge_units),
         Step("trim-cache", "the cache passed [cache].max_bytes", _trim_key, _trim),
     )
@@ -243,7 +256,7 @@ def ensure(
             results.append(StepResult(name, step.trigger, False, 0.0))
             continue
         step.run(project, host)
-        record(project, name, step.key(project, host) if name in ("headers", "buildfiles") else current)
+        record(project, name, step.key(project, host) if name in ("resident", "headers", "buildfiles") else current)
         results.append(StepResult(name, step.trigger, True, time.monotonic() - started))
         if report is not None:
             report(results[-1])

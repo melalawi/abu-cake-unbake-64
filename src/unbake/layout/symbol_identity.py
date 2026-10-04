@@ -608,7 +608,7 @@ def data_slots(
     """
     from unbake.compilers.families.mips import Relocation
     from unbake.objects.elf import Object
-    from unbake.objects.literal_layout import signed
+    from unbake.objects.rodata import signed
 
     if object_path is not None and object_path.is_file():
         obj = Object(object_path)

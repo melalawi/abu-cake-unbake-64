@@ -13,7 +13,6 @@ from unbake.decomp.rom import project_reader
 from unbake.layout import split
 from unbake.layout.rodata_references import Reference, collect, words
 from unbake.objects.elf import Object
-from unbake.objects.literal_layout import storage
 from unbake.objects.rodata import pools, relocated, table_addresses, table_pointer_bias
 
 
@@ -166,21 +165,13 @@ def proved_tables(
         if section not in (".rdata", ".rodata") and explicit is None:
             continue
         addresses = table_addresses(obj, section, target_words)
-        index = obj.section(section)
-        assert index is not None
         runs = pools(obj, section, True)
-        for pool in runs:
-            anchors = {
-                address + pool.offset - own
-                for own, address, size in storage(obj, index)
-                if own <= pool.offset < pool.offset + pool.size <= own + size
-            }
-            if explicit is not None:
-                anchors.add(int(explicit[1] or explicit[2], 16) + pool.offset)
-            if anchors:
-                if len(anchors) != 1 or (pool.offset in addresses and addresses[pool.offset] not in anchors):
+        if explicit is not None:
+            for pool in runs:
+                anchor = int(explicit[1] or explicit[2], 16) + pool.offset
+                if addresses.get(pool.offset, anchor) != anchor:
                     raise ValueError(f"{section}: table reference disagrees with explicit interval")
-                addresses[pool.offset] = anchors.pop()
+                addresses[pool.offset] = anchor
         if not addresses:
             continue
         material = relocated(obj, section, text_address)

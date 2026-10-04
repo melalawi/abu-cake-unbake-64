@@ -54,7 +54,7 @@ def _word(data: bytes | bytearray, offset: int, label: str) -> int:
     return int(struct.unpack_from(">I", data, offset)[0])
 
 
-def _signed(word: int) -> int:
+def signed(word: int) -> int:
     value = word & 0xFFFF
     return value - 0x10000 if value & 0x8000 else value
 
@@ -91,8 +91,8 @@ def placement(obj: Object, section: str, target_words: Mapping[int, int | None])
                     continue
                 if high & 0xFFFF0000 != original & 0xFFFF0000 or word & 0xFFFF0000 != target & 0xFFFF0000:
                     continue
-                own = ((high & 0xFFFF) << 16) + _signed(word) + symbol["value"]
-                address = ((original & 0xFFFF) << 16) + _signed(target)
+                own = ((high & 0xFFFF) << 16) + signed(word) + symbol["value"]
+                address = ((original & 0xFFFF) << 16) + signed(target)
                 votes[(address - own) & 0xFFFFFFFF] += 1
         else:
             raise ValueError(f"{section}.relocation[{offset}]: unsupported type {kind}")
@@ -148,7 +148,7 @@ def table_addresses(obj: Object, section: str, target_words: Mapping[int, int]) 
             low = _word(code, offset, ".text")
             for at in highs:
                 high = _word(code, at, ".text")
-                own = ((high & 65535) << 16) + _signed(low) + symbol["value"]
+                own = ((high & 65535) << 16) + signed(low) + symbol["value"]
                 if own not in starts:
                     continue
                 original, target = target_words.get(at), target_words.get(offset)
@@ -156,7 +156,7 @@ def table_addresses(obj: Object, section: str, target_words: Mapping[int, int]) 
                     raise ValueError(f"{section}: missing aligned table reference at 0x{offset:X}")
                 if (high ^ original) & 0xFFFF0000 or (low ^ target) & 0xFFFF0000:
                     raise ValueError(f"{section}: table reference instruction differs at 0x{offset:X}")
-                address = (((original & 65535) << 16) + _signed(target)) & 0xFFFFFFFF
+                address = (((original & 65535) << 16) + signed(target)) & 0xFFFFFFFF
                 if own in result and result[own] != address:
                     raise ValueError(f"{section}: conflicting table placements")
                 result[own] = address
