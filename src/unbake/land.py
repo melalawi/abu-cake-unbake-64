@@ -108,6 +108,13 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
     include = stage / "include"
     for name, text in headers.items():
         atomic_files.text(include / name, text)
+    # A staged header's quoted includes ("../types.h") resolve beside it, so the rest of the tree is linked in.
+    root = project.include[-1]
+    for path in root.rglob("*"):
+        mirror = include / path.relative_to(root)
+        if path.is_file() and not mirror.exists():
+            mirror.parent.mkdir(parents=True, exist_ok=True)
+            mirror.symlink_to(path)
     file = stage / "src" / f"{function}.c"
     atomic_files.text(file, source)
     view = replace(project, work_include=(include,))
