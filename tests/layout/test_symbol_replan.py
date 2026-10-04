@@ -1,5 +1,6 @@
 """Configured-name review verifies byte pins and preserves data publication."""
 
+import copy
 import hashlib
 import unittest
 from types import SimpleNamespace

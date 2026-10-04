@@ -29,6 +29,6 @@ class UnitBoundaries(unittest.TestCase):
         with patch.object(forked, "ProcessPoolExecutor", wraps=Pool) as executor:
             outcomes = list(forked.ordered(work, 10, [3, 1, 2], 8))
         self.assertEqual(outcomes, [(["receipt 3"], 13), (["receipt 1"], 11), (["receipt 2"], 12)])
-        self.assertEqual(executor.call_args.kwargs["max_workers"], forked.MAX_WORKERS)
+        self.assertEqual(executor.call_args.kwargs["max_workers"], min(3, forked.MAX_WORKERS))
         self.assertEqual(executor.call_args.kwargs["mp_context"].get_start_method(), "fork")
         self.assertIsNone(forked._work)
