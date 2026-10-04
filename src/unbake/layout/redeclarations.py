@@ -117,9 +117,11 @@ def _signature(text: str, items: tuple[tuple[str, str], ...]) -> str:
 
 
 def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
-    """Compare declarator types, ignoring parameter names and extern spelling."""
+    """Compare declarator types, ignoring parameter names and extern spelling.
+
+    An empty parameter list `f()` is compatible with `f(void)`; it is never equivalent to any other list."""
     items = tuple(sorted(mapping.items()))
-    return _signature(left, items) == _signature(right, items)
+    return _signature(left, items).replace("()", "(void)") == _signature(right, items).replace("()", "(void)")
 
 
 def variants(text: str) -> tuple[str, ...]:
@@ -259,7 +261,11 @@ def privatize_tags(text: str, imported: list[str], owner: str) -> tuple[str, dic
     return text, renamed
 
 
-def strip(text: str, imported: list[str]) -> str:
+def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, str]] | None = None) -> str:
+    """Remove local declarations the imported headers already make.
+
+    A local declaration whose type differs from the header's is refused, or, given DISAGREEMENTS, removed and
+    recorded there as name -> (local, header) so the caller proves the header form against the ROM."""
     text, _ = privatize_tags(text, imported, "local")
     shared: dict[str, str] = {}
     mapping = aliases(imported)
@@ -286,7 +292,9 @@ def strip(text: str, imported: list[str]) -> str:
             ):
                 shared_declaration = shared_declaration[:left] + shared_declaration[right:]
             if not equivalent(local[name], shared_declaration, local_mapping):
-                raise Held("layout", f"layout.redeclaration.{name}: local:\n{declaration}\nshared:\n{shared[name]}")
+                if disagreements is None:
+                    raise Held("layout", f"layout.redeclaration.{name}: local:\n{declaration}\nshared:\n{shared[name]}")
+                disagreements[name] = (local[name].strip(), shared[name].strip())
         if collisions != local.keys():
             raise Held("layout", "layout.redeclaration: partially imported conditional declaration\n" + declaration)
         # Remove declaration bytes only; retain preceding comments and directives.

@@ -96,6 +96,7 @@ def source(
     ownership: map.Map | None = None,
     lookup: dict[str, Any] | None = None,
     previous: set[str] | None = None,
+    disagreements: dict[str, tuple[str, str]] | None = None,
 ) -> str:
     if lookup is None:
         import json
@@ -118,11 +119,16 @@ def source(
     text = rewrite(text, member, ownership, lookup, previous=previous)
     bodies = imported(text, project.include[0], outputs)
     text, _ = redeclarations.privatize_tags(text, bodies, member)
-    return redeclarations.strip(text, bodies)
+    return redeclarations.strip(text, bodies, disagreements)
 
 
-def render(project: Project, policy: Host) -> dict[Path, bytes]:
-    """Every generated header, the header index and each source's rewritten include lines, by path."""
+def render(
+    project: Project, policy: Host, disagreements: dict[Path, dict[str, tuple[str, str]]] | None = None
+) -> dict[Path, bytes]:
+    """Every generated header, the header index and each source's rewritten include lines, by path.
+
+    With DISAGREEMENTS, a source's local declaration that differs from its header's is removed and recorded
+    per source, for the caller to prove; without it, such a source is refused."""
     import json
 
     from unbake.typemap import database, regeneration
@@ -139,9 +145,19 @@ def render(project: Project, policy: Host) -> dict[Path, bytes]:
     lookup = json.loads(outputs[index.path(project)])
     previous = set(index.load(project)["headers"])
     for path, text in session.sources.items():
+        found: dict[str, tuple[str, str]] | None = {} if disagreements is not None else None
         outputs[path] = source(
-            project, text, path.stem, outputs, ownership=session.ownership, lookup=lookup, previous=previous
+            project,
+            text,
+            path.stem,
+            outputs,
+            ownership=session.ownership,
+            lookup=lookup,
+            previous=previous,
+            disagreements=found,
         ).encode()
+        if found and disagreements is not None:
+            disagreements[path] = found
     return outputs
 
 

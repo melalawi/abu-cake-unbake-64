@@ -151,13 +151,13 @@ class PlanTests(unittest.TestCase):
                 [("a", ["cap"]), ("bcd", ["cap", "rodata"]), ("e", [])],
             ),
             (
-                "a joined run longer than the cap is split at the cap",
+                "a joined run longer than the cap stays whole",
                 "abcde",
                 "",
                 {"us": Evidence(joins=[("a", "e", "callee")]), "eu": Evidence()},
                 2,
                 set(),
-                [("ab", ["callee", "cap"]), ("cd", ["callee", "cap"]), ("e", [])],
+                [("abcde", ["callee"])],
             ),
             ("an agreed padding cut splits", "abcd", "", cut_bc, 8, set(), [("ab", ["padding"]), ("cd", [])]),
             (

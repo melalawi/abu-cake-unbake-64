@@ -4,6 +4,8 @@
 - Only files whose bytes change are written; the index is installed last (layout.apply.install).
 - Before writing, every affected unit is compiled for each version that holds it, against staged copies of
   the changed headers and sources in build/work/_headers/ (a draft view shadowing include/ by relative name).
+- Each symbol has one declaration, in its owning header. A source's local declaration of a header-declared
+  symbol is removed; where its type differs, the unit must still match the ROM with the header form.
 """
 
 from __future__ import annotations
@@ -81,9 +83,18 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     return changed
 
 
-def validate(project: Project, host: Host, changed: dict[Path, bytes]) -> list[str]:
-    """Compile every unit the change reaches against staged copies; return the units compiled."""
+def validate(
+    project: Project,
+    host: Host,
+    changed: dict[Path, bytes],
+    disagreements: dict[Path, dict[str, tuple[str, str]]] | None = None,
+) -> list[str]:
+    """Compile every unit the change reaches against staged copies; return the units compiled.
+
+    A source whose local declaration lost to its header's differing form must still match the ROM in every
+    holding version with the header form; otherwise every such symbol is refused by name."""
     from unbake import runner
+    from unbake.layout import merge_units
 
     stage = project.work / "_headers"
     shutil.rmtree(stage, ignore_errors=True)
@@ -111,19 +122,28 @@ def validate(project: Project, host: Host, changed: dict[Path, bytes]) -> list[s
             for version in split.holding_versions(project, source.stem):
                 runner.compile_unit(view, host, file, version, unit=source.stem)
             compiled.append(source.stem)
+        refused = [
+            f"{name} in {source.name}: local `{local}` matched the ROM; header `{header}` does not"
+            for source, found in sorted((disagreements or {}).items())
+            if not merge_units.prove(view, host, (source.stem,), changed.get(source, source.read_bytes()).decode())
+            for name, (local, header) in sorted(found.items())
+        ]
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+    if refused:
+        raise Held("headers", "headers.declaration: " + "; ".join(refused))
     return compiled
 
 
 def run(project: Project, host: Host) -> list[Path]:
     """Regenerate, validate the affected units, then write the changed files; return them."""
     apply.units(project)
-    outputs = apply.render(project, host)
+    disagreements: dict[Path, dict[str, tuple[str, str]]] = {}
+    outputs = apply.render(project, host, disagreements)
     changed = plan(project, outputs)
     if not changed:
         return []
-    validate(project, host, changed)
+    validate(project, host, changed, disagreements)
     # install needs every output: a generated header missing from them is deleted as obsolete.
     apply.install(project, dict(outputs))
     return sorted(changed)

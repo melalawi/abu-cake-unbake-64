@@ -96,6 +96,12 @@ def _unindexed_headers(root: Path, ownership: Path, stamp: tuple[int, int, int])
         for group in groups:
             segment, name = group["segment"], group["name"]
             names.update((f"{segment}/{name}.h", f"{segment}/types.h", f"{segment}/data.h"))
+            # Inferred modules rename tool-named groups; their old headers are still generated output.
+            names.update(
+                path.relative_to(root).as_posix()
+                for path in (root / segment).glob("code_*.h")
+                if re.fullmatch(r"code_[0-9A-F]{8}\.h", path.name)
+            )
         found = []
         for name in sorted(names):
             safe(name)

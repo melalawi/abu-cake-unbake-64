@@ -209,9 +209,17 @@ class Layout:
         self.groups = self._clusters()
         owners = ownership.owners
         authored = authored or set()
-        fixed = fixed_homes or {}
+        # A published type keeps its recorded home only while that home is still a module header or an authored
+        # header. A function or data declaration always lives in its owner's module header, whatever was recorded.
+        current = {root / group.header for group in ownership.groups} | authored
+        fixed = {
+            path: homes & current
+            for path, homes in (fixed_homes or {}).items()
+            if homes & current and not self.parsed[path].declared & owners.keys()
+        }
         users = {path: {home.relative_to(root).as_posix() for home in fixed.get(path, set())} for path in contents}
         source_providers: dict[Path, set[Path]] = {}
+        self.local_names: dict[str, set[str]] = {}
         for source, text in sources.items():
             owner = owners.get(source.stem)
             if owner is None:
@@ -219,6 +227,7 @@ class Layout:
             from unbake.layout import redeclarations
 
             local = set().union(*(declarations(text[start:end]).declared for start, end in redeclarations.spans(text)))
+            self.local_names.setdefault(owner.header, set()).update(local)
             for provider in required_providers(text, self.providers, self.tags, self.aliases, local):
                 if provider not in fixed:
                     users[provider].add(owner.header)
@@ -239,13 +248,25 @@ class Layout:
                     if added:
                         users[dep].update(added)
                         changed = True
-        # One home per cluster: an authored path, the single using header, the shared header of its
-        # co-usage set, or common/unused.h when nothing uses it.
+        # One home per cluster: an authored path, the module header owning a function or data declaration in it,
+        # the single using header, the shared header of its co-usage set, or common/unused.h when nothing uses it.
+        # Function and data declarations never move into a shared type header.
         shared: dict[int, frozenset[str]] = {}
         for number, cluster in enumerate(self.groups):
             used = set().union(*(users[p] for p in cluster))
             used.update(home.relative_to(root).as_posix() for path in cluster for home in fixed.get(path, set()))
+            owning = {owners[name].header for path in cluster for name in self.parsed[path].declared if name in owners}
             live_authored = cluster & authored
+            if len(owning) > 1 and not live_authored:
+                raise Held(
+                    "layout",
+                    "layout.declaration_home: one declaration component declares symbols of "
+                    + ", ".join(sorted(owning))
+                    + ": "
+                    + ", ".join(str(p) for p in sorted(cluster)),
+                )
+            if owning and not live_authored:
+                used = owning
             if live_authored:
                 if len(cluster) != 1:
                     raise Held(
@@ -295,7 +316,7 @@ class Layout:
             dependencies = {self.homes[dep] for path in cluster for dep in self.dependencies[path]} - {destination}
             edges.setdefault(destination, set()).update(dependencies)
             for path in cluster:
-                for home in (fixed_homes or {}).get(path, set()) - {destination}:
+                for home in fixed.get(path, set()) - {destination}:
                     bodies.setdefault(home, [])
                     edges.setdefault(home, set()).add(destination)
             tags = {
@@ -365,13 +386,15 @@ class Layout:
     def _clusters(self) -> list[set[Path]]:
         return strongly_connected(sorted(self.contents), lambda path: sorted(self.dependencies[path]))
 
-    @staticmethod
-    def _declaration_home(name: str, owners: dict[str, Group], segments: dict[str, str] | None) -> str:
-        """A prototype or extern lives in its owner's group header, else its segment's (or common) data.h."""
+    def _declaration_home(self, name: str, owners: dict[str, Group], segments: dict[str, str] | None) -> str:
+        """A prototype or extern lives in its owner's group header, else its segment's (or common) data.h.
+
+        Every source includes its own group header, so a name that a source of the owner group declares itself
+        lives in the segment's data.h, which only sources spelling the name import."""
         owner = owners.get(name)
-        if owner is not None:
+        if owner is not None and name not in self.local_names.get(owner.header, set()):
             return owner.header
-        segment = (segments or {}).get(name)
+        segment = owner.segment if owner is not None else (segments or {}).get(name)
         return f"{segment}/data.h" if segment is not None else "common/data.h"
 
     def include(self, path: Path, destination: Path | None = None) -> str:

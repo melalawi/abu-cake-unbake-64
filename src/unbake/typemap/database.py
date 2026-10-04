@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import tempfile
@@ -513,7 +514,16 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     staged, _ = types_db.stage(database, value, summary, marks)
     from unbake.layout import index
 
-    obsolete = index.headers(project) - outputs.keys()
+    # Sources still include headers this render no longer produces until the headers step rewrites them, and
+    # that step deletes them in the same install; until then they stay listed as generated.
+    retained = index.headers(project) - outputs.keys()
+    if retained:
+        listing = outputs[index.path(project)]
+        lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
+        for path in retained:
+            if path.is_file():
+                lookup["headers"][path.relative_to(project.include[0]).as_posix()] = inputs.digest(path)
+        outputs[index.path(project)] = index.encoded(lookup)
     outputs = {
         path: content
         for path, content in outputs.items()
@@ -524,7 +534,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     }
     backups: dict[Path, Path | None] = {}
     try:
-        for path in set(outputs) | obsolete | {database}:
+        for path in set(outputs) | {database}:
             if path.is_file():
                 descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
                 os.close(descriptor)
@@ -538,8 +548,6 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 storage.install(path, content)
             else:
                 storage.write(path, content)
-        for path in obsolete:
-            path.unlink()
         types_db.install(database, staged)
     except BaseException:
         for path, backup in backups.items():

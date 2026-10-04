@@ -107,3 +107,24 @@ class PlacementTests(unittest.TestCase):
         second = layout(dict(reversed(self.TYPES.items())), dict(reversed(self.SOURCES.items())))
         self.assertEqual(first.headers, second.headers)
         self.assertEqual(first.index, second.index)
+
+
+class DeclarationHomeTests(unittest.TestCase):
+    def test_function_declarations_stay_in_their_module(self) -> None:
+        types = {"Inner": "typedef struct Inner { int b; } Inner;", "decl": "extern int b(Inner *p);"}
+        stale = {ROOT / ".decl.h": {ROOT / "main/old.h"}, ROOT / ".Inner.h": {ROOT / G["gc"]}}
+        contents = {ROOT / f".{name}.h": text for name, text in types.items()}
+        sources = {"a": "void a(void) { b(0); }", "c": "void c(void) { b(0); }"}
+        result = Layout(
+            contents,
+            contents,
+            ROOT,
+            ownership=GROUPS,
+            sources={Path(f"/project/src/{member}.c"): text for member, text in sources.items()},
+            fixed_homes=stale,
+        )
+        # Used by ga and gc, but declared by gb: the declaration lives in gb's module header, never a shared one.
+        self.assertEqual(home(result, "decl"), G["gb"])
+        # A type's recorded home that is still a module header keeps providing it; a vanished one is not recreated.
+        self.assertIn(f'#include "{home(result, "Inner")}"', result.headers[ROOT / G["gc"]].decode())
+        self.assertNotIn(ROOT / "main/old.h", result.headers)

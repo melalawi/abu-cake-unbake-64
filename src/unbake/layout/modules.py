@@ -3,12 +3,12 @@
 Same-object evidence joins adjacent functions; object padding cuts them; the layout cap packs what is left.
 - rodata: two functions that load the same resident constant. Compilers merge equal literals, strings and
   tables only inside one object, so the functions between them belong to that object.
-- callee: a function called only from one nearby window of callers is that window's static helper.
+- callee: a function whose callers all lie within 16 functions of it is that window's static helper.
 - padding: zero words after a function's return that end on a 16-byte boundary are the end of an object.
 - version: a function that only some versions hold stays with its neighbour while the module is under the cap.
 A boundary is a cut only when every version holding both sides agrees; a join from any version holds.
-Joins never cross a cut, and no evidence item reaches further than the cap. Joined runs are kept whole up to the
-cap and packed in address order with the runs around them, so no module exceeds the cap. Only `default` groups
+Joins never cross a cut, and no single evidence item reaches further than the cap, but a run joined by rodata or
+callee evidence stays whole at any length. The cap only packs what evidence leaves unjoined. Only `default` groups
 are inferred; inferred, proven and hypothesis groups stay as they are, so the result is stable and a later proof
 can confirm or split it.
 """
@@ -28,6 +28,9 @@ from unbake.layout.map import Group, Map, Member
 
 _RETURN = 0x03E00008
 _OBJECT_ALIGN = 16
+_CALLEE_REACH = 16
+"""A static helper sits near all of its callers. On BattleTanx, where padding marks every object end, callee
+windows of at most 16 functions cross an object end in 45 of 386 cases; wider windows cross in 438 of 721."""
 _WEAK = {"version"}
 """A weak join holds only while the module is under the cap."""
 
@@ -85,19 +88,19 @@ def version_evidence(
                 if target is not None and target.name != function.name:
                     callers[target.name].add(function.name)
 
-    def join(names: set[str], signal: str) -> None:
+    def join(names: set[str], signal: str, reach: int) -> None:
         if len({by_name[name].segment for name in names}) != 1:
             return
         first, last = min(names, key=position.__getitem__), max(names, key=position.__getitem__)
-        if position[last] - position[first] < cap:
+        if position[last] - position[first] < reach:
             evidence.joins.append((first, last, signal))
 
     by_name = {f.name: f for f in order}
     for address in sorted(loads):
         if len(loads[address]) > 1:
-            join(loads[address], "rodata")
+            join(loads[address], "rodata", cap)
     for callee in sorted(callers):
-        join(callers[callee] | {callee}, "callee")
+        join(callers[callee] | {callee}, "callee", min(cap, _CALLEE_REACH))
     for left, right in itertools.pairwise(order):
         if (
             left.segment == right.segment
@@ -175,7 +178,7 @@ def plan(
             place(None)
         elif cut[position]:
             place(cut[position])
-        elif (joined[position] - _WEAK and len(atom) < cap) or (joined[position] and len(current) + len(atom) < cap):
+        elif joined[position] - _WEAK or (joined[position] and len(current) + len(atom) < cap):
             atom_signals.update(joined[position])
         else:
             place(None)
