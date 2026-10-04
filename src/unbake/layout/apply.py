@@ -21,6 +21,7 @@ def rewrite(text: str, member: str, ownership: map.Map, lookup: dict[str, Any], 
         raise Held("layout", f"layout.member.{member}: source has no group")
     tokens = set(re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text)))
     homes = {owner.header} | {lookup["symbols"][name] for name in tokens if name in lookup["symbols"]}
+    homes.update(home for name in tokens for home in lookup.get("type_headers", {}).get(name, ()))
     includes = "".join(f'#include "{home}"\n' for home in sorted(homes))
     first = True
 

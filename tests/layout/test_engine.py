@@ -157,6 +157,23 @@ class HeaderTests(unittest.TestCase):
         sources = {Path("/project/src") / (name + ".c"): text for name, text in sources.items()}
         return headers.Layout(contents, contents, self.root, ownership=self.ownership, sources=sources, **kwargs)
 
+    def test_source_imports_complete_tag_home_as_well_as_alias_home(self):
+        result = self.render(
+            {"alias.h": "typedef struct Record Record;", "body.h": "struct Record {int value;};"},
+            {"first": "Record *first;", "second": "struct Record *second;"},
+        )
+        homes = result.index["type_headers"]["Record"]
+        self.assertEqual(
+            set(homes),
+            {
+                result.homes[self.root / "alias.h"].relative_to(self.root).as_posix(),
+                result.homes[self.root / "body.h"].relative_to(self.root).as_posix(),
+            },
+        )
+        rewritten = apply.rewrite("Record *first;", "first", self.ownership, result.index, previous=set())
+        for home in homes:
+            self.assertIn('#include "' + home + '"', rewritten)
+
     def test_authored_root_include_cannot_resolve_to_segment_types(self):
         authored = self.root / "types.h"
         result = self.render(

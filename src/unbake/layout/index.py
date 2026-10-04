@@ -29,7 +29,10 @@ def load(project: Project) -> dict[str, Any]:
 def _decoded(target: Path, stamp: tuple[int, int, int]) -> dict[str, Any]:
     try:
         value = json.loads(target.read_bytes())
-        if not isinstance(value, dict) or set(value) != {"schema", "symbols", "clusters", "headers"}:
+        if not isinstance(value, dict) or set(value) not in (
+            {"schema", "symbols", "clusters", "headers"},
+            {"schema", "symbols", "clusters", "headers", "type_headers"},
+        ):
             raise ValueError("invalid index keys")
         if value["schema"] != 1 or any(not isinstance(value[k], dict) for k in ("symbols", "clusters", "headers")):
             raise ValueError("invalid schema")
@@ -41,6 +44,15 @@ def _decoded(target: Path, stamp: tuple[int, int, int]) -> dict[str, Any]:
             safe(name)
             if name not in value["headers"]:
                 raise ValueError("unlisted declaration home")
+        if not isinstance(value.get("type_headers", {}), dict):
+            raise ValueError("invalid type catalogue")
+        for homes in value.get("type_headers", {}).values():
+            if not isinstance(homes, list):
+                raise ValueError("invalid type homes")
+            for home in homes:
+                safe(home)
+                if home not in value["headers"]:
+                    raise ValueError("unlisted type home")
         return value
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise Held("layout", f"layout.index: {target}: {error}") from error

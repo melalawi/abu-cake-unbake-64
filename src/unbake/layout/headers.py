@@ -247,6 +247,15 @@ class Layout:
         self.index: dict[str, Any] = {
             "schema": 1,
             "symbols": self.symbols,
+            "type_headers": {
+                name: sorted({self.homes[p].relative_to(root).as_posix() for p in paths})
+                for name in self.providers.keys() | self.tags.keys()
+                if (
+                    paths := self.providers.get(name, set())
+                    | self.tags.get(name, set())
+                    | self.tags.get(self.aliases.get(name, "").removeprefix("struct ").removeprefix("union "), set())
+                )
+            },
             "clusters": {
                 "\n".join(p.relative_to(root).as_posix() for p in sorted(cluster)): self.homes[next(iter(cluster))]
                 .relative_to(root)
@@ -260,6 +269,10 @@ class Layout:
         }
         # Authored providers stay authored; their homes are not generated output.
         self.index["symbols"] = {name: home for name, home in self.symbols.items() if home in self.index["headers"]}
+        self.index["type_headers"] = {
+            name: [home for home in homes if home in self.index["headers"]]
+            for name, homes in self.index["type_headers"].items()
+        }
 
     def _clusters(self) -> list[set[Path]]:
         index: dict[Path, int] = {}
