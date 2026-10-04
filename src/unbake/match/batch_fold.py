@@ -98,7 +98,7 @@ def fold(
     if policy.cores < 2:
         yield from _serial(staged, policy, headers, candidates, receipts)
         return
-    window = max(1, min(policy.cores, forked.MAX_WORKERS) * 2)
+    window = max(1, forked.workers(policy.cores, len(candidates)) * 2)
     reused = again = 0
     start = 0
     while start < len(candidates):

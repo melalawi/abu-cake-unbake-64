@@ -166,6 +166,17 @@ class FakePool:
 
 
 class BatchPoolTests(unittest.TestCase):
+    def test_policy_cores_and_jobs_are_capped_by_snapshot_memory(self):
+        cases = [(1, 14, 1), (2, 14, 2), (12, 14, 4), (12, 2, 2)]
+        for cores, jobs, expected in cases:
+            with self.subTest(cores=cores, jobs=jobs):
+                count = forked.workers(cores, jobs)
+                self.assertEqual(count, expected)
+                self.assertLessEqual(
+                    forked.PARENT_MEMORY_BYTES + count * forked.WORKER_MEMORY_BYTES,
+                    forked.POOL_MEMORY_BYTES,
+                )
+
     def test_one_pool_for_multiple_snapshots_and_nested_sessions(self):
         pools = []
 
@@ -186,7 +197,7 @@ class BatchPoolTests(unittest.TestCase):
                     second = list(forked.ordered(plus, 20, [1, 2], 8))
                 self.assertEqual(load.call_count, 2)
                 self.assertEqual(len(pools), 1)
-                self.assertEqual(pools[0].options["max_workers"], forked.MAX_WORKERS)
+                self.assertEqual(pools[0].options["max_workers"], forked.workers(8, 3))
                 snapshot = Path(forked._snapshot[0])
                 self.assertFalse(snapshot.exists())
             self.assertFalse(snapshot.exists())

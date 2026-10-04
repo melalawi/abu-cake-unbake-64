@@ -21,7 +21,18 @@ S = TypeVar("S")
 T = TypeVar("T")
 R = TypeVar("R")
 
-MAX_WORKERS = 2
+# Reserve the parent and bound the entire Python worker tree below the submit
+# monitor's 8 GB ceiling. Each worker owns a header snapshot and bounded ASTs.
+POOL_MEMORY_BYTES = 7_000_000_000
+PARENT_MEMORY_BYTES = 2_000_000_000
+WORKER_MEMORY_BYTES = 1_250_000_000
+MAX_WORKERS = max(1, (POOL_MEMORY_BYTES - PARENT_MEMORY_BYTES) // WORKER_MEMORY_BYTES)
+
+
+def workers(cores: int, jobs: int) -> int:
+    """Use policy cores up to the source count and explicit snapshot memory budget."""
+    return max(1, min(cores, jobs, MAX_WORKERS))
+
 
 _work: tuple[Callable[[Any, Any], Any], Any] | None = None
 
@@ -42,9 +53,7 @@ def session(cores: int, jobs: int) -> Iterator[None]:
         return
     with (
         tempfile.TemporaryDirectory(prefix="submit-workers-") as temporary,
-        ProcessPoolExecutor(
-            max_workers=min(cores, jobs, MAX_WORKERS), mp_context=multiprocessing.get_context("fork")
-        ) as pool,
+        ProcessPoolExecutor(max_workers=workers(cores, jobs), mp_context=multiprocessing.get_context("fork")) as pool,
     ):
         token = _pool.set((pool, Path(temporary)))
         try:
@@ -93,15 +102,15 @@ def ordered(work: Callable[[S, T], R], shared: S, items: Sequence[T], cores: int
             pickle.dump((work, shared), stream, protocol=pickle.HIGHEST_PROTOCOL)
             name = stream.name
         try:
-            yield from _bounded(pool, _phase, [(name, item) for item in items], min(cores, MAX_WORKERS))
+            yield from _bounded(pool, _phase, [(name, item) for item in items], workers(cores, len(items)))
         finally:
             Path(name).unlink(missing_ok=True)
         return
     _work = work, shared
     try:
         context = multiprocessing.get_context("fork")
-        with ProcessPoolExecutor(max_workers=min(cores, len(items), MAX_WORKERS), mp_context=context) as pool:
-            yield from _bounded(pool, _call, items, min(cores, MAX_WORKERS))
+        with ProcessPoolExecutor(max_workers=workers(cores, len(items)), mp_context=context) as pool:
+            yield from _bounded(pool, _call, items, workers(cores, len(items)))
     finally:
         _work = None
 
@@ -170,7 +179,13 @@ def release(*, shared: bool = False) -> None:
             if kind not in {"headers.declarations", "headers.aliases"}:
                 del cache._remembered[kind]
         type_rewrite._context.cache_clear()
-    gc.collect()
+    # Candidate parses are short-lived; traversing every retained shared AST
+    # after each candidate dominated the profile. Full collection belongs at
+    # snapshot transitions and pool shutdown, after those graphs are dropped.
+    if shared:
+        gc.collect(0)
+    else:
+        gc.collect()
 
 
 def _call(item: Any) -> tuple[list[str], Any]:

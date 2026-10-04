@@ -64,6 +64,23 @@ class PendingTests(unittest.TestCase):
                     self.assertEqual(forked._run(work, 2, 3), ([], 5))
                 release.assert_called_once_with(shared=True)
 
+    def test_shared_candidate_collects_young_objects_without_clearing_context(self):
+        for shared in (True, False):
+            with (
+                self.subTest(shared=shared),
+                patch.object(cache, "_parsed", {}),
+                patch.object(cache, "_remembered", {}),
+                patch.object(batch_fold.type_rewrite, "_context") as context,
+                patch.object(forked.gc, "collect") as collect,
+            ):
+                forked.release(shared=shared)
+                if shared:
+                    collect.assert_called_once_with(0)
+                    context.cache_clear.assert_not_called()
+                else:
+                    collect.assert_called_once_with()
+                    context.cache_clear.assert_called_once_with()
+
     def test_release_keeps_disk_artifacts_and_clears_memory(self):
         with patch.object(cache, "_parsed", {"source": object()}), patch.object(cache, "_remembered", {"context": {}}):
             with patch.object(batch_fold.type_rewrite, "_context") as context:
