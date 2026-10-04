@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -241,7 +242,7 @@ class Layout:
         # Refuse a downward edge instead of manufacturing a cyclic include.
         validate_edges(root, edges, authored)
         for destination, lines in bodies.items():
-            includes = [self.include(dep) for dep in sorted(edges.get(destination, set()))]
+            includes = [self.include(dep, destination) for dep in sorted(edges.get(destination, set()))]
             self.headers[destination] = self.render(destination, "\n".join(includes + lines))
         self.index: dict[str, Any] = {
             "schema": 1,
@@ -292,10 +293,13 @@ class Layout:
                 visit(path)
         return groups
 
-    def include(self, path: Path) -> str:
+    def include(self, path: Path, destination: Path | None = None) -> str:
         from unbake.typemap.storage import relative_root
 
-        return f'#include "{relative_root(self.root, path)}"'
+        name = relative_root(self.root, path)
+        if destination is not None and path.parent == self.root and destination.parent != self.root:
+            name = posixpath.relpath(path.as_posix(), destination.parent.as_posix())
+        return f'#include "{name}"'
 
     def required(
         self, text: str, *, blocked: set[str] | None = None, blocked_tags: set[str] | None = None

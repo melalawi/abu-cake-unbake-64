@@ -45,7 +45,7 @@ def imported(text: str, root: Path, outputs: dict[Path, bytes | Path]) -> list[s
     pending = [root / m[1] for m in _INCLUDE.finditer(text)]
     seen = set()
     while pending:
-        path = pending.pop()
+        path = pending.pop().resolve()
         if path in seen:
             continue
         seen.add(path)
@@ -62,7 +62,7 @@ def imported(text: str, root: Path, outputs: dict[Path, bytes | Path]) -> list[s
             continue
         result.append(body)
         for match in _INCLUDE.finditer(body):
-            relative = path.parent / match[1]
+            relative = (path.parent / match[1]).resolve()
             pending.append(relative if relative in outputs or relative.is_file() else root / match[1])
     return result
 
@@ -96,7 +96,9 @@ def source(
     ownership = ownership or map.load(project)
     previous = set(index.load(project)["headers"]) if previous is None else previous
     text = rewrite(text, member, ownership, lookup, previous=previous)
-    return redeclarations.strip(text, imported(text, project.include[0], outputs))
+    bodies = imported(text, project.include[0], outputs)
+    text, _ = redeclarations.privatize_tags(text, bodies, member)
+    return redeclarations.strip(text, bodies)
 
 
 def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False) -> int:

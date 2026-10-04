@@ -157,6 +157,15 @@ class SymbolJoinProofTests(unittest.TestCase):
             report = json.loads((project / "build/setup/symbol-proposal.json").read_bytes())
             self.assertEqual(report["replacements"], {})
             self.assertEqual(joined["symbol_assertions"], report["layout"]["symbol_assertions"])
+            from unbake.layout import map as ownership
+            from unbake.project import config
+
+            ready = config.load(project)
+            replacements = {}
+            for at, name in ((0x1120, "first_join"), (0x1140, "second_join")):
+                replacements[ff["us"][at]["name"]] = (name,)
+                replacements[ff["eu"][at]["name"]] = ()
+            ownership.edit_members(ready, replacements)
             for name, extra in (("first_join", 0), ("second_join", 10)):
                 source = project / "src" / (name + ".c")
                 source.parent.mkdir(exist_ok=True)

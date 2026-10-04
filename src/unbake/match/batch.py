@@ -379,6 +379,7 @@ class _Base:
 
     def __init__(self, staged: Project, policy: Policy) -> None:
         self.policy = policy
+        self.layout_map = (staged.root / "layout.toml").read_text()
         self.symbols = {v: staged.version(v).symbols.read_text() for v in staged.versions}
         self.splits = {v: staged.version(v).split.read_text() for v in staged.versions}
         self.config = (staged.root / "config.toml").read_text()
@@ -447,6 +448,23 @@ def _materialize(staged: Project, base: _Base, candidates: list[Candidate]) -> N
         path = staged.version(version).split
         if path.read_text() != rendered:
             split_apply.write(path, rendered)
+    from unbake.layout import map as ownership
+
+    layout_path = staged.root / "layout.toml"
+    if not layout_path.is_file() or layout_path.read_text() != base.layout_map:
+        split_apply.write(layout_path, base.layout_map)
+    folded_members = {
+        Path(split.plain(row["path"])).name
+        for candidate in candidates
+        for lines in candidate.removed_rows.values()
+        for line in lines
+        if (row := split.ROW.fullmatch(line)) is not None
+    }
+    if folded_members:
+        current = ownership.catalog(staged)
+        removed: dict[str, tuple[str, ...]] = {name: () for name in folded_members if name not in current}
+        if removed:
+            ownership.edit_members(staged, removed)
     chosen = [c.compiler for c in candidates if c.matched and c.compiler.get("exact_candidates")]
     config_text = toml.dumps(compiler_choice.fold_units(toml.loads(base.config), chosen)) if chosen else base.config
     if (staged.root / "config.toml").read_text() != config_text:

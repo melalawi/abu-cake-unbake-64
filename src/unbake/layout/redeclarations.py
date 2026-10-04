@@ -5,8 +5,11 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
+from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
+
 from unbake.decomp.header_declarations import declaration_source, declarations
 from unbake.project.config import Held
+from unbake.typemap.declarations import _SeededParser, _type, canonical
 
 
 def spans(text: str) -> list[tuple[int, int]]:
@@ -44,6 +47,68 @@ def normalized(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+@lru_cache(maxsize=8192)
+def _aliases(text: str) -> dict[str, str]:
+    rows = [text[start:end] for start, end in spans(text) if re.match(r"typedef\b", text[start:end])]
+    names = {name for row in rows for name in declarations(row).typedefs}
+    result = {}
+    for row in rows:
+        masked = declaration_source(row)
+        if "{" in masked:
+            named = re.match(r"typedef\s+(?:struct|union|enum)\s+\w+\s*\{", masked)
+            if named is None:
+                # Anonymous aggregates retain their typedef identity.
+                continue
+            begin = named.end() - 1
+            depth = 0
+            for token in re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{}]', masked[begin:]):
+                depth += (token[0] == "{") - (token[0] == "}")
+                if depth == 0 and token[0] == "}":
+                    row = row[:begin] + row[begin + token.end() :]
+                    break
+        try:
+            tree = _SeededParser(dict.fromkeys(names, True)).parse(declaration_source(row))
+        except Exception:
+            continue
+        for node in tree.ext:
+            if isinstance(node, c_ast.Typedef):
+                result[node.name] = _type(node.type)
+    return result
+
+
+def aliases(texts: list[str]) -> dict[str, str]:
+    """Read simple and declarator typedefs; preserve aggregate identities."""
+    return {name: type_ for text in texts for name, type_ in _aliases(text).items()}
+
+
+@lru_cache(maxsize=16384)
+def _signature(text: str, items: tuple[tuple[str, str], ...]) -> str:
+    mapping = dict(items)
+    if "{" in declaration_source(text):
+        return normalized(text)
+    row = declarations(text)
+    scope = dict.fromkeys(row.uses | row.typedefs | mapping.keys(), True)
+    try:
+        tree = _SeededParser(scope).parse(declaration_source(text))
+    except Exception:
+        # Unsupported compiler syntax is equal only when its bytes agree.
+        return normalized(text)
+    result = []
+    for node in tree.ext:
+        if isinstance(node, (c_ast.Decl, c_ast.Typedef)):
+            kind = "typedef" if isinstance(node, c_ast.Typedef) else "extern"
+            result.append(kind + ":" + str(node.name) + ":" + normalized(canonical(_type(node.type), mapping)))
+        else:
+            return normalized(text)
+    return "|".join(result)
+
+
+def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
+    """Compare declarator types, ignoring parameter names and extern spelling."""
+    items = tuple(sorted(mapping.items()))
+    return _signature(left, items) == _signature(right, items)
+
+
 def variants(text: str) -> tuple[str, ...]:
     """Expand declaration-local conditionals without interpreting project macros."""
     lines = text.splitlines(keepends=True)
@@ -75,22 +140,120 @@ def variants(text: str) -> tuple[str, ...]:
 @lru_cache(maxsize=512)
 def catalog(header: str) -> dict[str, str]:
     result: dict[str, str] = {}
+    mapping = aliases([header])
     for start, end in spans(header):
         declaration = header[start:end]
         for variant in variants(declaration):
             row = declarations(variant)
             for name in row.typedefs | row.declared:
-                if name in result and normalized(result[name]) != normalized(variant):
+                if name in result and not equivalent(result[name], variant, mapping):
                     raise Held("layout", f"layout.redeclaration.{name}: shared conflict\n{result[name]}\n{variant}")
                 result[name] = variant
     return result
 
 
+@lru_cache(maxsize=8192)
+def _tags(text: str) -> frozenset[str]:
+    return frozenset(declarations(text).tags)
+
+
+@lru_cache(maxsize=8192)
+def tag_definitions(text: str) -> dict[str, tuple[tuple[int, int], ...]]:
+    """Read complete file-scope tags without parsing implementation bodies."""
+    masked = declaration_source(text)
+    pattern = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\b(?:struct|union|enum)\s+(?P<tag>[A-Za-z_]\w*)\s*(?=\{)|[{}]'
+    depth = 0
+    active = None
+    beginning = 0
+    result: dict[str, list[tuple[int, int]]] = {}
+    for token in re.finditer(pattern, masked):
+        if token.group("tag") and depth == 0:
+            active = token.group("tag")
+        if token[0] == "{" and depth == 0:
+            beginning = token.start()
+        depth += (token[0] == "{") - (token[0] == "}")
+        if token[0] == "}" and depth == 0 and active is not None:
+            result.setdefault(active, []).append((beginning, token.end()))
+            active = None
+    return {name: tuple(rows) for name, rows in result.items()}
+
+
+def local_tags(text: str) -> set[str]:
+    return set(tag_definitions(text))
+
+
+def _body_signature(body: str, mapping: dict[str, str]) -> str:
+    source = "struct DeclarationBody " + declaration_source(body) + ";"
+    try:
+        names = declarations(source).uses | mapping.keys()
+        tree = _SeededParser(dict.fromkeys(names, True)).parse(source)
+    except Exception:
+        return normalized(declaration_source(body))
+
+    class Types(c_ast.NodeVisitor):  # type: ignore[misc]
+        def visit_IdentifierType(self, node: object) -> None:
+            node.names = [canonical(" ".join(node.names), mapping)]  # type: ignore[attr-defined]
+
+    Types().visit(tree)
+    return normalized(c_generator.CGenerator().visit(tree))
+
+
+def privatize_tags(text: str, imported: list[str], owner: str) -> tuple[str, dict[str, str]]:
+    """Strip equal tag bodies; keep conflicting source aggregate identities private."""
+    local = tag_definitions(text)
+    if not local:
+        return text, {}
+    shared = set().union(*(_tags(header) for header in imported))
+    collisions = local.keys() & shared
+    occupied = set(local) | set(re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))) | shared
+    renamed = {}
+    edits = []
+    mapping = aliases([*imported, text])
+    for name in sorted(collisions):
+        own = local[name]
+        bodies = [(header, start, end) for header in imported for start, end in tag_definitions(header).get(name, ())]
+        if len(own) == len(bodies) == 1:
+            start, end = own[0]
+            header, shared_start, shared_end = bodies[0]
+            prefix = r"\b(struct|union|enum)\s+" + re.escape(name) + r"\s*$"
+            own_kind = re.search(prefix, declaration_source(text[:start]))
+            shared_kind = re.search(prefix, declaration_source(header[:shared_start]))
+            if (
+                own_kind is not None
+                and shared_kind is not None
+                and own_kind[1] == shared_kind[1]
+                and _body_signature(text[start:end], mapping)
+                == _body_signature(header[shared_start:shared_end], mapping)
+            ):
+                edits.append((start, end, ""))
+                continue
+        stem = name + "_" + owner
+        target = stem
+        ordinal = 2
+        while target in occupied:
+            target = stem + "_" + str(ordinal)
+            ordinal += 1
+        renamed[name] = target
+        occupied.add(target)
+    masked = declaration_source(text)
+    pattern = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\b(?:struct|union|enum)\s+(?P<tag>[A-Za-z_]\w*)'
+    for match in re.finditer(pattern, masked):
+        name = match.group("tag")
+        if name in renamed:
+            edits.append((match.start("tag"), match.end("tag"), renamed[name]))
+    for start, end, value in sorted(edits, reverse=True):
+        text = text[:start] + value + text[end:]
+    return text, renamed
+
+
 def strip(text: str, imported: list[str]) -> str:
+    text, _ = privatize_tags(text, imported, "local")
     shared: dict[str, str] = {}
+    mapping = aliases(imported)
+    local_mapping = {**mapping, **aliases([text])}
     for header in imported:
         for name, declaration in catalog(header).items():
-            if name in shared and normalized(shared[name]) != normalized(declaration):
+            if name in shared and not equivalent(shared[name], declaration, mapping):
                 raise Held("layout", f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}")
             shared[name] = declaration
     for start, end in reversed(spans(text)):
@@ -104,7 +267,12 @@ def strip(text: str, imported: list[str]) -> str:
         if not collisions:
             continue
         for name in sorted(collisions):
-            if normalized(local[name]) != normalized(shared[name]):
+            shared_declaration = shared[name]
+            for left, right in sorted(
+                (span for rows in tag_definitions(shared_declaration).values() for span in rows), reverse=True
+            ):
+                shared_declaration = shared_declaration[:left] + shared_declaration[right:]
+            if not equivalent(local[name], shared_declaration, local_mapping):
                 raise Held("layout", f"layout.redeclaration.{name}: local:\n{declaration}\nshared:\n{shared[name]}")
         if collisions != local.keys():
             raise Held("layout", "layout.redeclaration: partially imported conditional declaration\n" + declaration)

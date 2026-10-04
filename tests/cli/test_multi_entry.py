@@ -16,7 +16,7 @@ import toml
 from tests.decomp.support import assemble, assembly
 from tests.process_fakes import cli_process
 from tests.support import test_policy
-from unbake.layout import split
+from unbake.layout import map, split
 from unbake.project import config, makefile, toolchain
 
 
@@ -179,13 +179,11 @@ class MultiEntryCliTests(unittest.TestCase):
             "void tail(struct State *s) { s->counter = 0; s->b = 0; s->a = 0; }\n"
         )
         self.source.write_text(self.text)
+        (self.root / "layout.toml").write_bytes(
+            map.encoded(map.default(2, map.catalog(self.project), self.project.versions))
+        )
 
     def run_try(self):
-        from unbake.layout import map
-        from unbake.project.config import load
-
-        project = load(self.root)
-        (self.root / "layout.toml").write_bytes(map.encoded(map.default(2, map.catalog(project), project.versions)))
         script = Path(sysconfig.get_path("scripts")) / "unbake"
         environment = dict(os.environ, PYTHONNOUSERSITE="1")
         environment.pop("PYTHONPATH", None)
@@ -249,6 +247,7 @@ class MultiEntryCliTests(unittest.TestCase):
             (generation / "fixture.ld").write_text(
                 "SECTIONS { .text : { obj/asm/alpha.o(.text) obj/asm/tail.o(.text) } }\n"
             )
+        map.edit_members(self.project, {"alpha": ("alpha", "tail")})
         for name, text in makefile.render(self.project).items():
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)

@@ -212,3 +212,27 @@ def ensure(project: Project) -> None:
     cap = positive(config["project"].get("layout_cap"), "project.layout_cap")
     value = default(cap, catalog(project), project.versions)
     (project.root / "layout.toml").write_bytes(encoded(value))
+
+
+def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> None:
+    """Apply explicit member edits while retaining authored groups and cuts."""
+    target = project.root / "layout.toml"
+    value = tomllib.loads(target.read_text())
+    members = catalog(project)
+    present = {name for group in value["group"] for name in group["members"]}
+    for name in replacements.keys() - present:
+        refuse(f"member.{name}", "edit names an absent member")
+    for group in value["group"]:
+        selected = tuple(dict.fromkeys(child for name in group["members"] for child in replacements.get(name, (name,))))
+        marks = {name: versions for name, versions in group.get("only", {}).items() if name not in replacements}
+        for name in group["members"]:
+            for child in replacements.get(name, ()):
+                if child in members and set(members[child].versions) != set(project.versions):
+                    marks[child] = list(members[child].versions)
+        group["members"] = list(selected)
+        group["only"] = marks
+        group["split"] = list(
+            dict.fromkeys(child for name in group.get("split", []) for child in replacements.get(name, (name,)))
+        )
+    value["group"] = [group for group in value["group"] if group["members"]]
+    target.write_bytes(encoded(validate(value, project.versions, members)))

@@ -110,6 +110,7 @@ class InputTests(unittest.TestCase):
             policy=object(),
             sources={},
             splits={"us-rev1": ""},
+            layout_map="schema = 1\ncap = 32\ngroup = []\n",
             config="",
             exclusions=None,
         )

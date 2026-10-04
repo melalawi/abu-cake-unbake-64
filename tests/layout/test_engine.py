@@ -37,6 +37,23 @@ class MapTests(unittest.TestCase):
             ],
         }
 
+    def test_explicit_member_edits_preserve_group_identity_and_cuts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = SimpleNamespace(root=Path(temporary), versions=("a", "b"))
+            (project.root / "layout.toml").write_bytes(
+                map.encoded(map.validate(self.value, project.versions, self.members))
+            )
+            renamed = {**self.members, "replacement": map.Member("replacement", "span", 0x80001004, ("a",))}
+            del renamed["second"]
+            with patch.object(map, "catalog", return_value=renamed):
+                map.edit_members(project, {"second": ("replacement",)})
+                result = map.load(project)
+            self.assertEqual(result.groups[0].name, "code")
+            self.assertEqual(result.groups[0].members, ("first", "replacement"))
+            self.assertEqual(result.groups[0].split, ("replacement",))
+            self.assertEqual(result.groups[0].only, {"replacement": ("a",)})
+            self.assertEqual(result.groups[1].only, {})
+
     def test_every_refusal_is_named_and_held_in_layout(self):
         cases = [
             ("map.extra", lambda v: v.update(extra=1)),
@@ -139,6 +156,22 @@ class HeaderTests(unittest.TestCase):
         contents = {self.root / name: text for name, text in contents.items()}
         sources = {Path("/project/src") / (name + ".c"): text for name, text in sources.items()}
         return headers.Layout(contents, contents, self.root, ownership=self.ownership, sources=sources, **kwargs)
+
+    def test_authored_root_include_cannot_resolve_to_segment_types(self):
+        authored = self.root / "types.h"
+        result = self.render(
+            {"types.h": "typedef int Scalar;", "record.h": "typedef Scalar Record;"},
+            {"first": "Record value;"},
+            authored={authored},
+        )
+        self.assertIn(b'#include "../types.h"', result.headers[self.root / "span/one.h"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "span").mkdir()
+            (root / "span/types.h").write_text("wrong sibling")
+            output = {root / "span/one.h": b'#include "../types.h"', root / "types.h": b"pending authored root"}
+            self.assertIn("pending authored root", apply.imported('#include "span/one.h"', root, output))
+            self.assertNotIn("wrong sibling", apply.imported('#include "span/one.h"', root, output))
 
     def test_group_segment_common_and_transitive_users(self):
         cases = (
@@ -340,3 +373,64 @@ class ExternalPrototypeTests(unittest.TestCase):
         self.assertIn(shared, caught.exception.reason)
         self.assertEqual(redeclarations.strip("static void api(int x);", [shared]), "static void api(int x);")
         self.assertEqual(redeclarations.strip("int (*callback)(int);", [shared]), "int (*callback)(int);")
+
+
+class CanonicalRedeclarationTests(unittest.TestCase):
+    def test_alias_chains_pointer_types_and_parameter_names(self):
+        shared = "typedef float f32; typedef f32 Scalar; typedef Scalar *Ptr; extern f32 api(Ptr value);"
+        local = "float api(float *argument);"
+        self.assertEqual(redeclarations.strip(local, [shared]), "")
+        self.assertEqual(redeclarations.strip("extern Scalar data;", [shared + " extern float data;"]), "")
+
+    def test_named_aggregate_typedefs_keep_tag_identity(self):
+        shared = "typedef struct Node { Unknown field; } Node, *NodePtr; extern struct Node *api(struct Node *);"
+        self.assertEqual(redeclarations.strip("extern NodePtr api(Node *argument);", [shared]), "")
+        with self.assertRaises(Held):
+            redeclarations.strip("extern struct Other *api(struct Other *);", [shared])
+
+    def test_qualifiers_and_array_extents_remain_conflicts(self):
+        for local, shared in (
+            ("extern const float data;", "extern float data;"),
+            ("extern int data[3];", "extern int data[4];"),
+            ("void api(float x);", "void api(double x);"),
+        ):
+            with self.subTest(local=local), self.assertRaises(Held):
+                redeclarations.strip(local, [shared])
+
+
+class SourceOwnedTagTests(unittest.TestCase):
+    def test_typedef_equal_tag_body_is_stripped_with_field_names_preserved(self):
+        text = "extern struct Entry { f32 value; int f32; } *data;"
+        rewritten, names = redeclarations.privatize_tags(
+            text, ["typedef float f32; struct Entry {float value; int f32;};"], "api"
+        )
+        self.assertEqual(rewritten, "extern struct Entry  *data;")
+        self.assertEqual(names, {})
+
+    def test_equal_inline_extern_aggregate_is_removed_as_one_declaration(self):
+        shared = "extern struct Entry {float value;} *data;"
+        self.assertEqual(redeclarations.strip("extern struct Entry {float value;} *data;", [shared]), "")
+
+    def test_struct_and_union_tags_keep_distinct_identities(self):
+        rewritten, names = redeclarations.privatize_tags(
+            "struct Entry { int value; };", ["union Entry { int value; };"], "api"
+        )
+        self.assertEqual(names, {"Entry": "Entry_api"})
+        self.assertIn("struct Entry_api", rewritten)
+
+    def test_private_tag_rename_preserves_values_comments_and_ordinary_identifiers(self):
+        text = (
+            "extern struct Entry { int value; } *data;\n"
+            'const char *label = "struct Entry"; /* struct Entry */\n'
+            "int api(void) { int Entry = 7; return ((struct Entry *)data)->value + Entry; }"
+        )
+        shared = "struct Entry { float unrelated; };"
+        rewritten, names = redeclarations.privatize_tags(text, [shared], "api")
+        self.assertEqual(names, {"Entry": "Entry_api"})
+        self.assertIn("extern struct Entry_api { int value; } *data;", rewritten)
+        self.assertIn("((struct Entry_api *)data)->value + Entry", rewritten)
+        self.assertIn('"struct Entry"; /* struct Entry */', rewritten)
+        self.assertIn("int Entry = 7", rewritten)
+        again, names = redeclarations.privatize_tags(rewritten, [shared], "api")
+        self.assertEqual(again, rewritten)
+        self.assertEqual(names, {})
