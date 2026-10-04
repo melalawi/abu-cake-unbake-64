@@ -301,7 +301,7 @@ class IndexedStagingTests(unittest.TestCase):
                 )
             )
             symbols.write_text("symbols")
-            driver = tools / "compile/drivers/codegen.py.sha256"
+            driver = tools / "compile/drivers/codegen.cc.native.sha256"
             driver.parent.mkdir(parents=True)
             driver.write_text("scoped generator")
             assembly = tools / "compile" / root.name / "assembly.json"

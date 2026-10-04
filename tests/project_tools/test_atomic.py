@@ -170,6 +170,7 @@ class AtomicTests(unittest.TestCase):
                         patch.object(compile, "run", side_effect=run),
                         patch.object(compile, "resolve_tool", side_effect=lambda value: value),
                         patch.object(compile, "tool_digest", return_value="tools"),
+                        patch.object(compile, "file_signature", return_value=(0, 0, 0, 0, 0)),
                         patch.object(compile.Cache, "produce", side_effect=produce),
                         patch("unbake.project_tools.elf.Object"),
                         patch("abumasn64.assemble.assemble", side_effect=assemble),

@@ -1,6 +1,7 @@
 """Per-step prerequisites survive publication and invalidate only their consumers."""
 
 import copy
+import hashlib
 import json
 import os
 import tempfile
@@ -137,11 +138,13 @@ class CompileScopeTests(unittest.TestCase):
             ("cache.py", set()),
             ("compile.py", set()),
             ("compiler.sha256", set()),
-            ("compile/drivers/codegen.py.sha256", {"src/middle", "src/other", "asm/first"}),
+            ("compile/drivers/codegen.cc.native.sha256", {"src/middle", "src/other"}),
+            ("compile/drivers/codegen.as.native.sha256", {"asm/first"}),
+            ("compile/drivers/codegen.py.sha256", set()),
             ("compile/drivers/elf.py.sha256", {"src/middle", "src/other"}),
             ("compile/drivers/sn64_cc.py.sha256", set()),
-            ("default/cc", {"src/middle"}),
-            ("other/cc", {"src/other"}),
+            ("compile/binaries/default.sha256", {"src/middle"}),
+            ("compile/binaries/other.sha256", {"src/other"}),
             ("compile/us/default.json", {"src/middle"}),
             ("compile/us/other.json", {"src/other"}),
             ("compile/us/assembly.json", {"asm/first"}),
@@ -186,11 +189,14 @@ class CompileScopeTests(unittest.TestCase):
         cases = (
             ("symbols", set()),
             ("asm-symbols/first.txt", {"asm/first"}),
-            ("asbin", {"src/middle", "asm/first"}),
+            (
+                "compile/binaries/" + hashlib.sha256(b"policy:mips_as").hexdigest() + ".sha256",
+                {"src/middle", "asm/first"},
+            ),
             ("compile/drivers/sn64_cc.py.sha256", {"src/middle", "asm/first"}),
             ("compile/drivers/abumasn64.sha256", {"src/middle", "asm/first"}),
             ("compile/drivers/resolve_external_branches.py.sha256", {"asm/first"}),
-            ("default/cc", {"src/middle"}),
+            ("compile/binaries/default.sha256", {"src/middle"}),
             ("compile/drivers/elf.py.sha256", {"src/middle"}),
             ("compile.py", set()),
         )
@@ -220,9 +226,7 @@ class CompileScopeTests(unittest.TestCase):
                     receipts[name] = path
                 changed_path = (generation if changed.startswith("asm-symbols/") else tools) / changed
                 os.utime(changed_path, ns=(200, 200))
-                with patch.object(staging, "resolve_tool", return_value=str(tools / "asbin")) as resolve:
-                    staging.chunk_stale_sources(generation, tools, tools / "symbols")
-                    resolve.assert_called_once_with("policy:mips_as")
+                staging.chunk_stale_sources(generation, tools, tools / "symbols")
                 self.assertEqual({name for name, path in receipts.items() if not path.exists()}, expected)
 
     def test_missing_recipe_and_empty_generation_do_nothing(self):

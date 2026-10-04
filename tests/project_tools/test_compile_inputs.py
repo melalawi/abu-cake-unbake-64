@@ -253,6 +253,7 @@ class CompileInputTests(unittest.TestCase):
                     patch.object(compile, "run", side_effect=preprocess),
                     patch.object(compile, "resolve_tool", side_effect=lambda value: value),
                     patch.object(compile, "tool_digest", return_value="unchanged-tools"),
+                    patch.object(compile, "file_signature", return_value=(0, 0, 0, 0, 0)),
                     patch.object(compile.Cache, "produce", return_value=artifact) as cached,
                 ):
                     compile.compile_object(args, data)
