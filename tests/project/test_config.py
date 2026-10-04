@@ -50,6 +50,32 @@ class ConfigTests(unittest.TestCase):
         self.path = self.root / "config.toml"
         self.original = self.path.read_text()
 
+    def test_workspace_identity_is_local_and_ignores_retired_config(self) -> None:
+        first = config.load(self.root)
+        self.assertEqual(config.load(self.root).workspace_id, first.workspace_id)
+        self.assertEqual(self.path.read_text(), self.original)
+        self.path.write_text(
+            self.original.replace('id = "00000000-0000-4000-8000-000000000002"', 'id = "invalid-retired-id"')
+        )
+        self.assertEqual(config.load(self.root).workspace_id, first.workspace_id)
+        self.assertEqual((self.root / ".unbake/workspace-id").read_text().strip(), first.workspace_id)
+        other = self.directory / "other"
+        shutil.copytree(FIXTURE, other)
+        self.assertNotEqual(config.load(other).workspace_id, first.workspace_id)
+
+    def test_clone_source_load_does_not_create_checkout_state(self) -> None:
+        before = self.path.read_bytes()
+        config.load(self.root, persist_workspace=False)
+        self.assertFalse((self.root / ".unbake").exists())
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_refresh_strips_workspace_once(self) -> None:
+        from unbake.project.setup_config import strip_workspace
+
+        stripped = strip_workspace(self.original)
+        self.assertNotIn("workspace", tomllib.loads(stripped))
+        self.assertEqual(strip_workspace(stripped), stripped)
+
     def held_config(self, text: str, field: str) -> None:
         self.path.write_text(text)
         with self.assertRaises(config.Held) as raised:
@@ -260,7 +286,6 @@ class ConfigTests(unittest.TestCase):
         for line, field in (
             ("schema = 1\n", "schema"),
             ('id = "00000000-0000-4000-8000-000000000001"\n', "project.id"),
-            ('id = "00000000-0000-4000-8000-000000000002"\n', "workspace.id"),
             ('state = "ready"\n', "project.state"),
             ('roms = "roms"\n', "paths.roms"),
             ('build = "build"\n', "paths.build"),

@@ -371,13 +371,10 @@ def _create(
             shutil.rmtree(link)
         link.symlink_to(target.name, target_is_directory=True)
     config_path = destination / "config.toml"
-    text = config_path.read_text()
-    text, count = re.subn(
-        r'(\[workspace\]\s*\nid\s*=\s*)"[^"\n]+"', lambda match: match[1] + '"' + str(uuid4()) + '"', text
-    )
-    if count != 1:
-        raise Held("clone", "workspace.id: required one explicit workspace identity")
-    atomic_files.text(config_path, text)
+    from unbake.project.setup_config import strip_workspace
+
+    atomic_files.text(config_path, strip_workspace(config_path.read_text()))
+    atomic_files.text(destination / ".unbake/workspace-id", str(uuid4()) + "\n")
     cloned = config.load(destination)
     copy_evidence(project, cloned, published_root)
     for path in (cloned.src, cloned.tools, cloned.asm, *cloned.include):

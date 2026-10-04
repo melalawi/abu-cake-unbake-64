@@ -91,7 +91,7 @@ class CloneTests(unittest.TestCase):
                 relative = path.relative_to(self.live)
                 if (
                     path.is_file()
-                    and not any(name in relative.parts for name in (".git", "build", "roms", "asm"))
+                    and not any(name in relative.parts for name in (".git", ".unbake", "build", "roms", "asm"))
                     and relative.as_posix() != "tools/cc"
                 ):
                     self.index.add(relative.as_posix())
@@ -314,6 +314,9 @@ class CloneTests(unittest.TestCase):
             result = clone.create(self.project, self.policy, self.destination, self.project.versions)
         self.assertEqual(result.id, self.project.id)
         self.assertNotEqual(result.workspace_id, self.project.workspace_id)
+        self.assertNotIn("[workspace]", (self.destination / "config.toml").read_text())
+        self.assertEqual(config.load(self.destination).workspace_id, result.workspace_id)
+        self.assertIn("/.unbake/", (self.destination / ".gitignore").read_text())
         self.assertEqual((self.destination / "Makefile").read_bytes(), (self.live / "Makefile").read_bytes())
         self.assertEqual((self.destination / "docs/setup/owner.json").read_bytes(), evidence.read_bytes())
 

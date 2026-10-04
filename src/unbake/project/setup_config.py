@@ -25,6 +25,7 @@ def version_macros(versions: tuple[str, ...]) -> dict[str, str]:
 def facts(project: PendingProject, census: Census, *, name: str | None, title: str | None) -> dict[str, Any]:
     with (project.root / "config.toml").open("rb") as source:
         data = tomllib.load(source)
+    data.pop("workspace", None)
     if name is None:
         name = data["project"].get("name", project.root.name)
     try:
@@ -94,6 +95,11 @@ def render_ready(
         data["units"] = units
     data["build"] = build
     return str(toml.dumps(data))
+
+
+def strip_workspace(text: str) -> str:
+    """Remove retired checkout state while preserving unrelated config formatting."""
+    return re.sub(r"(?ms)^\[workspace\][^\n]*\n.*?(?=^\[|\Z)", "", text)
 
 
 def canonical(text: str) -> str:

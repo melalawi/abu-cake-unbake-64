@@ -23,6 +23,51 @@ class DatabaseTests(unittest.TestCase):
         shared.mkdir(exist_ok=True)
         (shared / "typemap.h").write_text("")
 
+    def test_solve_recovers_workspace_mismatch_and_rebinds_database(self) -> None:
+        from dataclasses import replace
+
+        map_program(self.project)
+        first = solve(self.project)
+        rebound = replace(self.project, workspace_id="00000000-0000-4000-8000-000000000099")
+        with self.assertRaisesRegex(Held, "identity changed"):
+            load(rebound)
+        result = solve(rebound)
+        self.assertEqual(result["workspace_id"], rebound.workspace_id)
+        self.assertEqual(result["revision"], first["revision"] + 1)
+        self.assertEqual(load(rebound)["workspace_id"], rebound.workspace_id)
+        summary = storage.read(rebound.build / "types/summary.json", "types.summary")
+        self.assertEqual(summary["workspace_id"], rebound.workspace_id)
+        self.assertEqual(summary["database_sha256"], storage.file_digest(rebound.build / "types/database.json"))
+
+    def test_workspace_recovery_rebuilds_an_unusable_semantic_index(self) -> None:
+        from dataclasses import replace
+
+        map_program(self.project)
+        solve(self.project)
+        path = self.project.build / "types/database.json"
+        path.write_bytes(path.read_bytes() + b" ")
+        rebound = replace(self.project, workspace_id="00000000-0000-4000-8000-000000000099")
+        result = solve(rebound)
+        self.assertEqual(load(rebound)["workspace_id"], rebound.workspace_id)
+        self.assertEqual(result["revision"], 1)
+
+    def test_solve_refuses_different_project_or_rom_on_recovery(self) -> None:
+        from dataclasses import replace
+
+        map_program(self.project)
+        solve(self.project)
+        for field in ("project_id", "rom_sha1"):
+            with self.subTest(field=field):
+                path = self.project.build / "types/summary.json"
+                summary = storage.read(path, "types.summary")
+                original = summary[field]
+                summary[field] = "different"
+                storage.write(path, storage.encoded(summary))
+                with self.assertRaisesRegex(Held, "identity changed"):
+                    solve(replace(self.project, workspace_id="another-workspace"))
+                summary[field] = original
+                storage.write(path, storage.encoded(summary))
+
     def test_build_extraction_details_do_not_stale_type_inputs(self) -> None:
         build = self.project.build_link("us")
         build.mkdir(parents=True, exist_ok=True)

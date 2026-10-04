@@ -47,7 +47,6 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
             target / "config.toml",
             f"schema = {SCHEMA_VERSION}\n\n[project]\n"
             f'id = {quote(str(uuid4()))}\nstate = "awaiting-roms"\nlayout_cap = {layout_cap}\n\n'
-            f"[workspace]\nid = {quote(str(uuid4()))}\n\n"
             '[paths]\nroms = "roms"\nbuild = "build"\nwork = "build/work"\n'
             'drafts = "build/drafts"\nsrc = "src"\ninclude = ["include"]\nasm = "asm"\ntools = "tools"\n',
         )
@@ -55,6 +54,9 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
 
         atomic_files.write(target / "layout.toml", encoded(Map(layout_cap, ())))
         atomic_files.text(target / ".gitignore", hygiene.base_ignore_text(target))
+        from unbake.project.config import checkout_identity
+
+        checkout_identity(target)
         (target / "roms").mkdir()
         atomic_files.text(target / "README.md", readme_text(target))
         atomic_files.text(target / "CONTRIBUTING.md", contributing)

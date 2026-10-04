@@ -238,7 +238,7 @@ def _positive(value: object, label: str, *, integer: bool) -> int | float:
 
 
 SCHEMA_VERSION = 1
-CONFIG_SECTIONS = frozenset({"schema", "project", "workspace", "paths", "compilers", "units", "version", "build"})
+CONFIG_SECTIONS = frozenset({"schema", "project", "paths", "compilers", "units", "version", "build"})
 
 
 @dataclass(frozen=True)
@@ -282,7 +282,37 @@ def _relative(value: object, label: str, root: Path) -> Path:
     return target
 
 
-def load_pending(root: Path) -> PendingProject:
+def checkout_identity(root: Path, *, persist: bool = True) -> str:
+    """Read checkout-local identity; cloning a source must never create its state."""
+    from uuid import UUID, uuid4
+
+    from unbake.project.build import _lock
+    from unbake.project_tools import atomic as atomic_files
+
+    path = root / ".unbake/workspace-id"
+    if path.is_symlink() or path.parent.is_symlink():
+        raise Held("config", "workspace.id: local state is a symlink")
+    if not persist and not path.exists():
+        return str(uuid4())
+    try:
+        if persist:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with _lock(path.parent / "workspace.lock"):
+                if path.exists():
+                    value = path.read_text().strip()
+                else:
+                    value = str(uuid4())
+                    atomic_files.text(path, value + "\n")
+        else:
+            value = path.read_text().strip()
+        if str(UUID(value)) != value:
+            raise ValueError("expected canonical UUID")
+        return value
+    except (OSError, ValueError) as error:
+        raise Held("config", f"workspace.id: {path}: {error}") from error
+
+
+def load_pending(root: Path, *, persist_workspace: bool = True) -> PendingProject:
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
     data = _read(path)
@@ -290,7 +320,6 @@ def load_pending(root: Path) -> PendingProject:
     if type(schema) is not int or schema != SCHEMA_VERSION:
         raise Held("config", f"schema: expected {SCHEMA_VERSION}")
     project = _table(data, "project", "project")
-    workspace = _table(data, "workspace", "workspace")
     paths = _table(data, "paths", "paths")
     state = _required(project, "state", "project.state")
     if state not in ("awaiting-roms", "ready"):
@@ -332,7 +361,7 @@ def load_pending(root: Path) -> PendingProject:
     return PendingProject(
         root,
         identity(project, "project.id"),
-        identity(workspace, "workspace.id"),
+        checkout_identity(root, persist=persist_workspace),
         state,
         roms,
         build,
@@ -345,11 +374,11 @@ def load_pending(root: Path) -> PendingProject:
     )
 
 
-def load(root: Path, *, text: str | None = None) -> Project:
+def load(root: Path, *, text: str | None = None, persist_workspace: bool = True) -> Project:
     """Load ready configuration; text supplies staged config.toml content for this root."""
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
-    pending = load_pending(root)
+    pending = load_pending(root, persist_workspace=persist_workspace)
     if pending.state != "ready":
         raise Held("config", "project.state: awaiting-roms; run unbake setup")
     if text is None:
@@ -362,7 +391,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
     project = _table(data, "project", f"{path} [project]")
     paths = _table(data, "paths", f"{path} [paths]")
     compiler_tables = _table(data, "compilers", f"{path} [compilers]")
-    retired = sorted(set(data) - CONFIG_SECTIONS)
+    retired = sorted(set(data) - CONFIG_SECTIONS - {"workspace"})
     if retired:
         raise Held("config", f"{path} [{retired[0]}]: not configuration; run unbake setup to refresh config.toml")
     units_table = data.get("units", {})

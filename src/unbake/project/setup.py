@@ -86,7 +86,7 @@ def restore_roms(project: Project, source: Path) -> None:
 
 def run(project: Project, policy: Policy | SetupPolicy, *, supply: Path | None = None) -> list[str]:
     config_path = project.root / "config.toml"
-    config_text = config_path.read_text()
+    config_text = setup_config.strip_workspace(config_path.read_text())
     build = makefile.recipe(project)
     for field, value, name in (
         ("ld", build.ld, "mips_ld"),

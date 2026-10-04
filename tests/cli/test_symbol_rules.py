@@ -15,6 +15,7 @@ import toml
 
 from tests.process_fakes import cli_process
 from tests.project.test_rom import cartridge
+from unbake.project import config
 
 
 def leaf(seed, changed=False):
@@ -69,7 +70,7 @@ class SymbolRuleTests(unittest.TestCase):
         layout = {
             "schema": 1,
             "project_id": self.configuration["project"]["id"],
-            "workspace_id": self.configuration["workspace"]["id"],
+            "workspace_id": config.load(self.project).workspace_id,
             "names_from": "us",
             "rom_sha1": {},
             "versions": {},

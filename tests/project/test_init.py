@@ -33,7 +33,16 @@ class InitTests(unittest.TestCase):
                 self.assertEqual(project.state, "awaiting-roms")
                 self.assertEqual(
                     set(child.name for child in target.iterdir()),
-                    {".git", ".gitignore", "roms", "config.toml", "layout.toml", "README.md", "CONTRIBUTING.md"},
+                    {
+                        ".git",
+                        ".gitignore",
+                        ".unbake",
+                        "roms",
+                        "config.toml",
+                        "layout.toml",
+                        "README.md",
+                        "CONTRIBUTING.md",
+                    },
                 )
                 self.assertFalse((self.root / "absent").exists())
                 self.assertNotIn("compiler", (target / "config.toml").read_text())

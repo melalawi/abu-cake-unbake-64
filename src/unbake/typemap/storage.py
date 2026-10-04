@@ -70,8 +70,12 @@ def identity(project: Project) -> dict[str, Any]:
     }
 
 
-def validate_identity(project: Project, value: dict[str, Any], key: str) -> None:
-    if any(value.get(field) != expected for field, expected in identity(project).items()):
+def validate_identity(project: Project, value: dict[str, Any], key: str, *, allow_workspace: bool = False) -> None:
+    if any(
+        value.get(field) != expected
+        for field, expected in identity(project).items()
+        if field != "workspace_id" or not allow_workspace
+    ):
         raise Held("solve", f"{key}: project/workspace/ROM identity changed")
 
 
@@ -81,7 +85,7 @@ def changed_source(project: Project) -> Path | None:
     if not proven.is_file():
         return None
     value = read(proven, "types.feedback")
-    validate_identity(project, value, "types.feedback")
+    validate_identity(project, value, "types.feedback", allow_workspace=True)
     for row in value.get("records", {}).values():
         source: Path = project.root / row["source"]
         if not source.is_file() or file_digest(source) != row["source_sha256"]:
