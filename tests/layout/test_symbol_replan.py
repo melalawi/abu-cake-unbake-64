@@ -109,3 +109,18 @@ class RetainedAssertionTests(unittest.TestCase):
         args = make_parser().parse_args(["setup", "--replan-symbols", "--retain-symbol-names"])
         self.assertTrue(args.replan_symbols)
         self.assertTrue(args.retain_symbol_names)
+
+    def test_retained_name_review_preserves_data_bindings_without_replaying_renames(self):
+        original = {
+            "objects": [{"name": "shared", "placements": [{"version": "one", "address": 123}]}],
+            "unified": 1,
+            "renames": {"one": {"old": "shared"}},
+            "rename_count": 1,
+        }
+        before = copy.deepcopy(original)
+        reviewed = symbol_replan.retained_data_symbols(original)
+        self.assertEqual(reviewed["objects"], original["objects"])
+        self.assertEqual(reviewed["unified"], 1)
+        self.assertEqual(reviewed["renames"], {})
+        self.assertEqual(reviewed["rename_count"], 0)
+        self.assertEqual(original, before)

@@ -55,6 +55,13 @@ def retained_assertions(
     return assertions, []
 
 
+def retained_data_symbols(existing: dict[str, Any]) -> dict[str, Any]:
+    """Keep established bindings; historical rename receipts are not new edits."""
+    data = {"objects": [], "refusals": [], "unified": 0, "contradictions_by_reason": {}, **existing}
+    data.update(renames={}, rename_count=0)
+    return data
+
+
 def plan(project: Project, policy: SetupPolicy, *, retain_names: bool = False) -> tuple[dict[str, str], dict[str, Any]]:
     """Only instruction/position/graph evidence establishes identity."""
     ff = {v: port.functions(project, v) for v in project.versions}
@@ -150,14 +157,17 @@ def plan(project: Project, policy: SetupPolicy, *, retain_names: bool = False) -
         for record in item["placements"].values():
             record["evidence"]["holding_versions"] = item["versions"]
             record["evidence"]["name_source"] = item["versions"][0]
-    data = symbol_identity.data_identity(
-        images,
-        {v: [replace(f, name=names[v][f.start]) for f in rows] for v, rows in ff.items()},
-        project_data_tables(project),
-        lambda f: port.object_path(project, f),
-        layout.get("data_assertions", []),
-        header_data_types(project),
-    )
+    if retain_names:
+        data = retained_data_symbols(layout.get("data_symbols", {}))
+    else:
+        data = symbol_identity.data_identity(
+            images,
+            {v: [replace(f, name=names[v][f.start]) for f in rows] for v, rows in ff.items()},
+            project_data_tables(project),
+            lambda f: port.object_path(project, f),
+            layout.get("data_assertions", []),
+            header_data_types(project),
+        )
     layout["data_symbols"] = data
     layout["inputs_sha256"]["symbol_replan"] = planner.digest([placements, layout["items"], data])
     report = {
@@ -220,7 +230,7 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None, *, retain_na
         return ["symbol proposal ready; executable boundaries retained"]
     if confirm != token:
         raise Held("setup", "setup.symbol_proposal_stale: symbol proposal or project inputs changed")
-    if not replacements and not report["data_symbols"]["objects"]:
+    if not replacements and not report["data_symbols"]["objects"] and not retain_names:
         (directory / "symbol-proposal.json").unlink(missing_ok=True)
         return ["symbol names unchanged"]
     data_changes = report.get("data_symbols", {}).get("renames", {})
