@@ -18,6 +18,9 @@ Example:
 
 Then: put the ROM files in MyGame/roms/, set [build] asflags, cppflags and sn64_asflags in
 MyGame/config.toml, and run `unbake setup` inside MyGame.
+
+When no host config exists yet (--config FILE, $UNBAKE_CONFIG or ~/.config/unbake/unbake.toml),
+init writes the full example there with every value commented out. An existing file is never touched.
 """
 PROJECT = "none"
 
@@ -34,10 +37,14 @@ def register(parser: argparse.ArgumentParser) -> None:
 
 
 def run(context: Context) -> Result:
+    from unbake import config
     from unbake.project import init
 
     target = context.args.name.expanduser().absolute()
     lines = init.run(target, layout_cap=context.args.functions_per_header)
+    host = config.host_path(context.config_path)
+    if init.write_host_example(host):
+        lines.append(f"host config example: {host} (uncomment and set every key)")
     return Result.ok(
         NAME,
         {"project": str(target), "roms": str(target / "roms")},

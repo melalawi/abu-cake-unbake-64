@@ -1,0 +1,55 @@
+# unbake host config: machine facts only. Every key is required by the commands that use it;
+# a missing one is refused by name. Uncomment each line and set it for this machine.
+# Read from --config FILE, then $UNBAKE_CONFIG, then ~/.config/unbake/unbake.toml.
+
+[resources]
+# cores = 12
+# workers = 8
+# memory_total_bytes = 16000000000
+# memory_parent_bytes = 4000000000
+# memory_worker_bytes = 1500000000
+
+[cache]
+# root = "/abs/cache"
+# max_bytes = 80000000000
+# trim_to_bytes = 60000000000
+# memory_bytes = 2000000000
+
+[tools]
+# make = "/usr/bin/make"
+# path = ["/abs/toolbin"]          # the only PATH for make check; it must not contain python
+# cpp = "/usr/bin/cpp"
+# mips_as = "/usr/bin/mips-linux-gnu-as"
+# mips_ld = "/usr/bin/mips-linux-gnu-ld"
+# mips_objcopy = "/usr/bin/mips-linux-gnu-objcopy"
+# mips_objdump = "/usr/bin/mips-linux-gnu-objdump"
+# mips_readelf = "/usr/bin/mips-linux-gnu-readelf"
+# n64link = "/abs/bin/n64link"
+# splat = "/abs/venv/bin/splat"
+# m2c = "/abs/venv/bin/m2c"
+# permuter_archive = "/abs/decomp-permuter.tar.gz"
+# permuter_sha256 = "<64 hex digits>"
+
+[setup]
+# version_jobs = 2
+# probe_count = 8
+# same_game_similarity = 0.9
+# symbol_similarity_threshold = 0.9
+# symbol_similarity_margin = 0.05
+
+[search]
+# stall_trials = 200
+# beam = 4
+
+[cycle]
+# min_bytes = 16
+# max_bytes = 4096
+# min_history = 5
+# debounce_ms = 300
+
+[publish]
+# remote = "origin"
+# branch = "main"
+# author_name = "Your Name"
+# author_email = "you@example.com"
+# credential_env = "GIT_TOKEN"     # or credential_helper = "store"

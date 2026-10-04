@@ -61,3 +61,12 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
             target.mkdir()
         raise
     return [f"{target}: repository created", f"ROM folder: {target / 'roms'}"]
+
+
+def write_host_example(path: Path) -> bool:
+    """Write the commented host config example at PATH unless a file is already there."""
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_files.text(path, (Path(__file__).parents[1] / "templates" / "unbake.toml").read_text())
+    return True

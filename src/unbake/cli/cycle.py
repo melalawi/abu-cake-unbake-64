@@ -16,8 +16,8 @@ Work one round on several functions at once. Each picked function gets a draft i
 build/work/FUNC/FUNC.c. Every time you save that file it is compared again by itself. A function that
 is exact in every version is landed (ROM proof, commit, push) within seconds, while the others keep going.
 
-stdout carries one JSON event per line (see the README for the event list). With a terminal on stderr
-you also see a live board; without one, choose the functions and the stop condition with flags.
+stdout carries one JSON event per line. With a terminal on stderr you also see a live board; without
+one, choose the functions and the stop condition with flags.
 
   unbake cycle                                   # interactive: pick on screen, board on screen
   unbake cycle --pick 5 --stop idle:900          # take the 5 best candidates; stop after 15 idle minutes
@@ -26,6 +26,14 @@ you also see a live board; without one, choose the functions and the stop condit
   unbake cycle --status                          # the state of the running or last cycle
 
 Stop conditions: all-landed, idle:SECONDS (no save or land for that long), after:MINUTES.
+
+Events: every line has v, seq, t and event, one of cycle.start, fn.queued, fn.draft.start,
+fn.draft.done, fn.edit, fn.compare.start, fn.compare.done (per-version percentages and the first
+difference), fn.exact, fn.landed, fn.land_failed, fn.committed, fn.pushed, fn.held, fn.failed,
+step.run and cycle.end (what landed and the next command).
+
+Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed or is unpushed;
+130 interrupted.
 """
 PROJECT = "ready"
 
