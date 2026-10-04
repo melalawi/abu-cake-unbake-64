@@ -62,6 +62,14 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
     return {"ok": True, "file": str(made.file), "seconds": time.monotonic() - started}
 
 
+FIRST = ("VERSION ", "first divergence: ", "constant: ")
+
+
+def first_difference(lines: list[str]) -> str:
+    """The first line that says why a version is not exact: a compile or link refusal, else the first divergence."""
+    return next((line for line in lines if line.startswith(FIRST)), "")
+
+
 def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     from unbake import config
     from unbake.work import compare
@@ -76,11 +84,12 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         "ok": True,
         "sha256": measured.source_sha256,
         "per_version": {
-            v: {"percent": round(c.match_percent, 6), "exact": c.exact} for v, c in measured.compares.items()
+            v: {"percent": round(c.match_percent, 6), "exact": c.exact, "first": first_difference(c.lines)}
+            for v, c in measured.compares.items()
         },
         "best_percent": measured.best_percent,
         "exact": measured.exact,
-        "diagnostic": next((line for c in measured.compares.values() for line in c.lines[2:3]), ""),
+        "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), ""),
         "seconds": time.monotonic() - started,
     }
 
@@ -398,6 +407,7 @@ def run(
                         best_percent=result["best_percent"],
                         tries=row.tries,
                         seconds=round(result["seconds"], 3),
+                        diagnostic=result["diagnostic"],
                     )
                     stopper.note_activity()
                     if result["exact"]:

@@ -62,3 +62,20 @@ class EventTests(unittest.TestCase):
             [(r["v"], r["seq"], r["event"]) for r in lines], [(1, 1, "fn.draft.start"), (1, 2, "fn.exact")]
         )
         self.assertTrue(all(r["t"] for r in lines))
+
+
+class FirstDifferenceTests(unittest.TestCase):
+    def test_first_reason_a_version_is_not_exact(self) -> None:
+        from unbake.cycle.engine import first_difference
+
+        for lines, expected in [
+            (["VERSION us: cc1 exited 33: too few arguments"], "VERSION us: cc1 exited 33: too few arguments"),
+            (
+                ["us: 10/12 words", "typed: register 2", "first divergence: +0x0010 a != b"],
+                "first divergence: +0x0010 a != b",
+            ),
+            (["us: 12/12 words", "constant: .rodata+0x4 differs"], "constant: .rodata+0x4 differs"),
+            (["us: 12/12 words"], ""),
+        ]:
+            with self.subTest(lines=lines):
+                self.assertEqual(first_difference(lines), expected)
