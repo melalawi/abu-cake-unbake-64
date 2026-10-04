@@ -410,13 +410,32 @@ def write_staged(project: Project, edits: Iterable[split.Edit]) -> None:
         raise
 
 
+def copy_assembly_headers(project: Project, staged: Project) -> None:
+    """Retain assembler includes used by C without hydrating extracted assembly."""
+    if not project.asm.is_dir():
+        return
+    recipe = makefile.recipe(project)
+    roots = [project.asm / version / "include" for version in project.versions]
+    pending = False
+    for flag in (*recipe.asflags, *recipe.sn64_asflags):
+        if flag == "-I" and not pending:
+            pending = True
+        elif pending or flag.startswith("-I"):
+            root = Path(flag if pending else flag[2:])
+            pending = False
+            roots.append(root if root.is_absolute() else project.root / root)
+    for root in dict.fromkeys(roots):
+        if root.is_relative_to(project.asm) and root.is_dir():
+            destination = staged.asm / root.relative_to(project.asm)
+            atomic_files.copytree(root, destination, symlinks=True, dirs_exist_ok=True)
+
+
 def copy_assembly(project: Project, staged: Project) -> None:
     """Hydrate assembly only when a changed boundary requires extraction."""
-    if not staged.asm.exists():
-        if project.asm.is_dir():
-            atomic_files.copytree(project.asm, staged.asm, symlinks=True)
-        else:
-            staged.asm.mkdir(parents=True)
+    if project.asm.is_dir():
+        atomic_files.copytree(project.asm, staged.asm, symlinks=True, dirs_exist_ok=True)
+    else:
+        staged.asm.mkdir(parents=True, exist_ok=True)
 
 
 def independent_objects(generation: Path) -> None:

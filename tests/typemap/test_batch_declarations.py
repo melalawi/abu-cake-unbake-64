@@ -352,7 +352,7 @@ int (*factory(void))(int) { return 0; }
         again = batch.extract((prefix, "Word unit_0(void) { return 0; }"), {}, Path("unit_0.c"), compact=False)
         self.assertEqual(storage.encoded(again), first)
 
-    def test_preprocessor_queue_retains_only_one_unit_per_worker(self):
+    def test_preprocessor_queue_retains_only_a_bounded_batch(self):
         import tempfile
         from types import SimpleNamespace
 
@@ -363,7 +363,7 @@ int (*factory(void))(int) { return 0; }
                 class Pool:
                     def __init__(self, cores=cores, **kwargs):
                         self.workers = kwargs["max_workers"]
-                        self.asserted_workers = min(2, cores)
+                        self.asserted_workers = min(12, cores)
 
                     def __enter__(self):
                         return self
@@ -376,13 +376,16 @@ int (*factory(void))(int) { return 0; }
                         return map(fn, tasks)
 
                 headers = SimpleNamespace(
-                    scratch=Path(directory), policy=SimpleNamespace(cores=cores), source=lambda v, p: str(p)
+                    scratch=Path(directory),
+                    policy=SimpleNamespace(cores=cores),
+                    source=lambda v, p: str(p),
+                    batch=lambda v, sources: [str(source) for source in sources],
                 )
                 tasks = [(str(i), Path(str(i)), "us", {}) for i in range(25)]
                 with patch.object(declarations, "ThreadPoolExecutor", Pool):
                     results = list(declarations._source_units(headers, tasks))
                 self.assertEqual([task[0] for task, text in results], [str(i) for i in range(25)])
-                self.assertLessEqual(max(sizes), min(2, cores))
+                self.assertLessEqual(max(sizes), 128)
 
     def test_distinct_header_contexts_are_bounded_and_eviction_preserves_declarations(self):
         batch = declarations._PublishedDeclarations()

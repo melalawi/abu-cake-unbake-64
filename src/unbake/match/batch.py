@@ -154,6 +154,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 if local_policy.is_file():
                     atomic_files.copy2(local_policy, tree / local_policy.relative_to(project.root))
                 staged = staging.project_at(project, tree)
+                staging.copy_assembly_headers(project, staged)
                 if not all(candidate.compiled for candidate in candidates):
                     staging.write_staged(staged, staging.helper_edits(staged))
                 base = _Base(staged, policy)

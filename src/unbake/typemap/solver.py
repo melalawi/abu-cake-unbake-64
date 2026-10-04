@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Iterator
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
@@ -204,6 +205,27 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
     return records
 
 
+def _alias_maps(seeds: list[dict[str, Any]], *, shared: bool = False) -> Iterator[dict[str, str]]:
+    previous = None
+    for seed in seeds:
+        current = seed.get("shared_typedefs", seed["aliases"]) if shared else seed["aliases"]
+        if current is not previous:
+            yield current
+        previous = current
+
+
+def _typedefs(seeds: list[dict[str, Any]], aliases: dict[str, str]) -> dict[str, str]:
+    # Retain the last known spelling before resolving it. Canonicalization uses
+    # the same final alias environment for every receipt, including overrides.
+    known = {
+        name: type_
+        for values in _alias_maps(seeds, shared=True)
+        for name, type_ in values.items()
+        if not declarations.unknown(type_)
+    }
+    return {name: declarations.canonical(type_, aliases) for name, type_ in known.items()}
+
+
 def infer(
     project: Project,
     facts: dict[str, Any],
@@ -216,7 +238,7 @@ def infer(
     if not isinstance(facts["functions"], dict):
         facts = {**facts, "functions": dict(facts["functions"].items())}
     graph = Constraints(constraint_log)
-    aliases = {name: type_ for seed in seeds for name, type_ in seed["aliases"].items()}
+    aliases = {name: type_ for values in _alias_maps(seeds) for name, type_ in values.items()}
     functions = _merge_records(seeds, "functions", graph)
     globals_ = _merge_records(seeds, "globals", graph)
     structs = _merge_records(seeds, "structs", graph)
@@ -885,12 +907,7 @@ def infer(
     )
     dependencies = {name: sorted(neighbours[name]) for name in facts["functions"]}
     return {
-        "typedefs": {
-            name: declarations.canonical(type_, aliases)
-            for seed in seeds
-            for name, type_ in seed.get("shared_typedefs", seed["aliases"]).items()
-            if not declarations.unknown(type_)
-        },
+        "typedefs": _typedefs(seeds, aliases),
         "functions": output_functions,
         "globals": output_globals,
         "structs": output_structs,
@@ -907,6 +924,19 @@ def infer(
 def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, Any] | None = None) -> dict[str, Any]:
     from unbake.typemap.abi_facts import refine
 
+    database = project.build / "types/database.json"
+    summary = project.build / "types/summary.json"
+    previous = {}
+    if database.is_file():
+        if summary.is_file():
+            previous = storage.read(summary, "types.summary")
+            storage.validate_identity(project, previous, "types.summary")
+            if previous.get("database_sha256") != storage.file_digest(database):
+                raise Held("solve", "types.summary: database changed independently of its semantic index")
+        elif database.stat().st_size <= 64 * 1024 * 1024:
+            previous = storage.read(database, "types.database")
+        else:
+            raise Held("solve", "types.summary: missing bounded semantic index for existing database")
     facts = refine(project, refresh_map(project) if facts is None else facts)
     pinned = storage.inputs(project, headers=True)
     log = storage.FactLog(project.build / "types")
@@ -921,19 +951,6 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
         result["constraints"] = [log.finish(project.root), *result["constraints"]]
     finally:
         log.close()
-    database = project.build / "types/database.json"
-    summary = project.build / "types/summary.json"
-    previous = {}
-    if database.is_file():
-        if summary.is_file():
-            previous = storage.read(summary, "types.summary")
-            storage.validate_identity(project, previous, "types.summary")
-            if previous.get("database_sha256") != storage.file_digest(database):
-                raise Held("solve", "types.summary: database changed independently of its semantic index")
-        elif database.stat().st_size <= 64 * 1024 * 1024:
-            previous = storage.read(database, "types.database")
-        else:
-            raise Held("solve", "types.summary: missing bounded semantic index for existing database")
     revision = int(previous.get("revision", 0)) + 1
     result = {
         **storage.identity(project),
