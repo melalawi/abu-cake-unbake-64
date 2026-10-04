@@ -722,6 +722,7 @@ def extract(
     _prefix: dict[str, Any] | None = None,
     _parser: Any = None,
     _compact: bool = False,
+    _contracts: bool = False,
 ) -> dict[str, Any]:
     source = clean(source, line_markers=owned_source is not None or authored_headers is not None)
     source = _declaration_unit(source)
@@ -791,7 +792,7 @@ def extract(
         "unknown": [],
     }
     if _prefix is not None:
-        for kind in ("functions", "structs"):
+        for kind in ("functions", "globals", "arrays", "structs") if _contracts else ("functions", "structs"):
             if kind != "structs" or not _compact:
                 template = prefix_structs if kind == "structs" else _prefix[kind]
                 result[kind] = {name: {**row, "provenance": provenance} for name, row in template.items()}
@@ -828,7 +829,7 @@ def extract(
         if not isinstance(declaration, c_ast.Decl) or not declaration.name:
             continue
         if isinstance(declaration.type, c_ast.FuncDecl):
-            if definitions and not definition:
+            if "static" in declaration.storage or (definitions and not definition and not _contracts):
                 continue
             params: list[dict[str, Any]] = []
             variadic = False
@@ -850,7 +851,7 @@ def extract(
                 "provenance": provenance,
             }
         elif "static" not in declaration.storage and (
-            not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
+            _contracts or not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
         ):
             type_ = _type(declaration.type)
             declaration = copy.deepcopy(declaration)
@@ -949,7 +950,8 @@ def _portable_signatures(seed: dict[str, Any], shared_aliases: dict[str, str]) -
 class _PublishedDeclarations:
     """Share header parsing without sharing a source's preprocessor or C scope."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, contracts: bool = False) -> None:
+        self.contracts = contracts
         self.prefixes: dict[str, tuple[str, dict[str, bool], dict[str, Any]]] = {}
         self.prefix_errors: dict[str, tuple[str, str]] = {}
         self.sources: dict[tuple[str, str], dict[str, Any]] = {}
@@ -973,7 +975,12 @@ class _PublishedDeclarations:
             parser = c_parser.CParser()
             try:
                 seed = extract(
-                    cleaned, {}, definitions=True, owned_source=Path("__unbake_header_prefix__"), _parser=parser
+                    cleaned,
+                    {},
+                    definitions=True,
+                    owned_source=Path("__unbake_header_prefix__"),
+                    _parser=parser,
+                    _contracts=self.contracts,
                 )
             except Held as error:
                 # The exact prefix fails independently of every source suffix.
@@ -1015,10 +1022,19 @@ class _PublishedDeclarations:
         # extern declarations do not define named layouts and stay incremental.
         try:
             result = extract(
-                suffix, provenance, definitions=True, owned_source=source, _scope=scope, _prefix=seed, _compact=compact
+                suffix,
+                provenance,
+                definitions=True,
+                owned_source=source,
+                _scope=scope,
+                _prefix=seed,
+                _compact=compact,
+                _contracts=self.contracts,
             )
         except _FullDeclarationUnit:
-            result = extract(cleaned + suffix, provenance, definitions=True, owned_source=source)
+            result = extract(
+                cleaned + suffix, provenance, definitions=True, owned_source=source, _contracts=self.contracts
+            )
         if result["shared_typedefs"] is not seed["aliases"]:
             result["shared_typedefs"] = {**seed["aliases"], **result["shared_typedefs"]}
         prototypes = _portable_signatures(result, seed["aliases"])
@@ -1052,6 +1068,55 @@ def _receipt_seed(seed: dict[str, Any], provenance: dict[str, Any], *, compact: 
         result["structs"] = {name: {**row, "provenance": provenance} for name, row in template.items()}
         result.pop("authored_structs", None)
     return result
+
+
+def consumed_contracts(seed: dict[str, Any], text: str) -> dict[str, Any]:
+    """An included header is not proof of its unused inferred declarations."""
+    needed = set(re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text)))
+    result = {**seed}
+    for kind in ("functions", "globals", "arrays"):
+        result[kind] = {name: row for name, row in seed[kind].items() if name in needed}
+        for row in result[kind].values():
+            needed.update(
+                re.findall(
+                    r"\b[A-Za-z_]\w*\b",
+                    row.get("prototype", row.get("declaration", row.get("type", ""))),
+                )
+            )
+    layouts = {}
+    changed = True
+    while changed:
+        changed = False
+        for name in list(needed):
+            if name in seed["aliases"]:
+                added = set(re.findall(r"\b[A-Za-z_]\w*\b", seed["aliases"][name])) - needed
+                needed.update(added)
+                changed |= bool(added)
+        for name, row in seed["structs"].items():
+            if name not in layouts and (name in needed or set(row.get("aliases", ())) & needed):
+                layouts[name] = row
+                needed.update(re.findall(r"\b[A-Za-z_]\w*\b", row["declaration"]))
+                changed = True
+    result["structs"] = layouts
+    result["aliases"] = {name: row for name, row in seed["aliases"].items() if name in needed}
+    result["shared_typedefs"] = {name: row for name, row in seed["shared_typedefs"].items() if name in needed}
+    if "authored_structs" in seed:
+        result["authored_structs"] = [name for name in seed["authored_structs"] if name in layouts]
+    return result
+
+
+def published_sources(project: Project) -> list[tuple[str, Path, str]]:
+    """Use explicit published C ownership, never arbitrary scratch C files."""
+    from unbake.layout import split as inventory
+
+    return sorted(
+        {
+            (row.name, project.src / (row.path + ".c"), version)
+            for version in project.versions
+            for row in inventory.functions(project, version)
+            if row.kind == "c"
+        }
+    )
 
 
 def collect(project: Project, policy: Policy | None) -> list[dict[str, Any]]:
@@ -1178,6 +1243,30 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
             }
             seed["authored_structs"] = sorted(set(seed["authored_structs"]) | declared_layouts)
             seeds.append(seed)
+    # C intervals in the ROM layout are already published matches, including
+    # sources predating feedback receipts. Import their actual compiler context;
+    # an unrelated generated umbrella must not redefine their local contracts.
+    contracts = _PublishedDeclarations(contracts=True)
+    source_headers = _PublishedHeaders(project, policy, scratch, source_context=True)
+    tasks: list[tuple[str, Path, str, dict[str, Any]]] = [
+        (function, source, version, {}) for function, source, version in published_sources(project)
+    ]
+    for (function, source, version, _), contract_text in _source_units(source_headers, tasks):
+        if isinstance(contract_text, Held):
+            raise contract_text
+        provenance = {
+            "kind": "published",
+            "function": function,
+            "version": version,
+            "source": str(source.relative_to(project.root)),
+            "sha256": storage.file_digest(source),
+        }
+        contract = contracts.extract(contract_text, provenance, source, compact=True)
+        seeds.append(consumed_contracts(contract, source.read_text()))
+        # The definition owns the function contract; imported prototypes are
+        # dependencies, and cannot override a ROM-proven definition elsewhere.
+        owned = published.extract(contract_text, {**provenance, "kind": "proven"}, source, compact=True)
+        seeds.append(consumed_contracts(owned, source.read_text()))
     path = project.build / "types/proven.json"
     if path.is_file():
         records = storage.read(path, "types.feedback").get("records", {})

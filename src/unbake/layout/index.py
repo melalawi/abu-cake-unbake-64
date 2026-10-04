@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -71,10 +73,41 @@ def headers(project: Project) -> frozenset[Path]:
         return frozenset()
     target = path(project)
     if not target.is_file():
-        return frozenset()
+        # A warm clone can omit the disposable index while retaining its
+        # installed headers. Recover only guarded, map-owned generation homes;
+        # treating them as authored would overwrite their consumed declarations.
+        ownership = project.root / "layout.toml"
+        if not ownership.is_file():
+            return frozenset()
+        stat = ownership.stat()
+        return _unindexed_headers(project.include[0], ownership, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
     stat = target.stat()
     names = tuple(_decoded(target, (stat.st_ino, stat.st_mtime_ns, stat.st_size))["headers"])
     return _headers(project.include[0], names, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
+
+
+@lru_cache(maxsize=32)
+def _unindexed_headers(root: Path, ownership: Path, stamp: tuple[int, int, int]) -> frozenset[Path]:
+    try:
+        groups = tomllib.loads(ownership.read_text()).get("group", [])
+        names = {"common/types.h"}
+        for group in groups:
+            segment, name = group["segment"], group["name"]
+            names.update((f"{segment}/{name}.h", f"{segment}/types.h", f"{segment}/data.h"))
+        found = []
+        for name in sorted(names):
+            safe(name)
+            path = root / name
+            if not path.is_file():
+                continue
+            if not path.resolve().is_relative_to(root.resolve()):
+                raise ValueError("header symlink escapes include root")
+            guard = "UNBAKE_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+            if re.match(r"\s*#\s*ifndef\s+" + guard + r"\s*\n\s*#\s*define\s+" + guard + r"\b", path.read_text()):
+                found.append(path)
+        return frozenset(found)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Held("layout", f"layout.index: unindexed installed headers: {error}") from error
 
 
 @lru_cache(maxsize=32)

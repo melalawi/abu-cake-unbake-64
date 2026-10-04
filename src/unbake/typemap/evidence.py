@@ -229,7 +229,19 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
         observed = [inputs[name, version] for version in item["versions"]]
         regs = set.union(*observed) if observed else set()
         conflicts = []
-        if any(row != regs for row in observed):
+        # Read every mapped caller, including setup of unused ABI parameters.
+        # An untouched entry register is not evidence of a supplied argument.
+        caller_regs = {
+            reg
+            for call in calls.get(name, [])
+            for reg, value in call["arguments"].items()
+            if reg in ARGUMENTS
+            and value.get("defined", False)
+            and value.get("origins") != [{"id": f"param:{call['function']}:{reg}", "offset": 0}]
+        }
+        if not any(reg.startswith("f") for reg in regs | caller_regs):
+            regs.update(caller_regs)
+        if any(row != set.union(*observed) for row in observed):
             conflicts.append("callee input registers differ across versions")
         missing = []
         for call in calls.get(name, []):
@@ -277,6 +289,7 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
                         return_incomplete = True
         output[name] = {
             "registers": sorted(regs),
+            "caller_registers": sorted(caller_regs),
             "return_register": next(iter(returned)) if len(returned) == 1 else None,
             "void": not returned
             and not return_incomplete

@@ -61,6 +61,23 @@ class RegenerationTests(unittest.TestCase):
         self.assertEqual(stamps, {p: p.stat().st_ino for p in before})
         self.assertFalse(any(storage.generated(self.project, call.args[0]) for call in writes.call_args_list))
 
+    def test_published_contract_snapshot_invalidates_cached_render(self):
+        self.publish()
+        self.value["published_declarations"] = {".published-word.h": "typedef unsigned int Word;"}
+        with patch.object(database, "_render", wraps=database._render) as render:
+            self.publish()
+        self.assertEqual(render.call_count, 1)
+        self.assertIn(b"typedef unsigned int Word;", b"\n".join(self.headers().values()))
+
+    def test_published_macro_orders_array_declaration_dependency(self):
+        self.value["published_declarations"] = {
+            ".published-count.h": "/* unbake published declaration: published_count */\n#define Count 3\n",
+            ".published-array.h": "/* unbake published declaration: published_array */\nextern int array[Count];\n",
+        }
+        self.publish()
+        header = (self.root / "common/types.h").read_text()
+        self.assertLess(header.index("#define Count"), header.index("extern int array[Count]"))
+
     def test_render_input_kinds_invalidate_and_restore_byte_identity(self):
         cases = [
             ("function", lambda: self.value["functions"]["f"].update(prototype="short f(void);")),

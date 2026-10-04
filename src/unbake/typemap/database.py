@@ -135,6 +135,7 @@ def _render(
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
+    components.update({root / path: text for path, text in value.get("published_declarations", {}).items()})
     # Keep a complete installed layout required by an authored by-value member
     # when current machine inference no longer reconstructs that aggregate.
     # Retain it as declared context, never as a matched-function proof.
@@ -173,6 +174,7 @@ def _render(
         for name in header_declarations(text).declared:
             authored_declarations[name].add(path)
     provided = set(authored_aliases)
+    source_owned_tags = set().union(*(redeclarations.local_tags(text) for text in session.sources.values()))
     generated = {
         name: record
         for name, record in value["structs"].items()
@@ -180,6 +182,7 @@ def _render(
         and (record.get("partial") or record.get("generated"))
         and record.get("declaration")
         and name not in authored_tags
+        and name not in source_owned_tags
     }
     for text in components.values():
         replacements.update(
@@ -270,7 +273,11 @@ def _render(
             if alias in prerequisites and canonical(prerequisites[alias], concrete) != type_:
                 raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
             prerequisites[alias] = type_
-    for path in (*authored, *(root / name for name in value.get("declaration_evidence", {}))):
+    for path in (
+        *authored,
+        *(root / name for name in value.get("declaration_evidence", {})),
+        *(root / name for name in value.get("published_declarations", {})),
+    ):
         components[path] = session.rewrite(components[path], replacements, reserved)
     rendered = dict(components)
     for name in value.get("declaration_evidence", {}):
@@ -328,6 +335,10 @@ def _render(
         r"(?P<prototype>^[ \t]*(?:[A-Za-z_]\w*[\s*]+)+(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*)\{",
         re.M,
     )
+    retained_contracts = {
+        root / path: header_declarations(text).declared
+        for path, text in value.get("published_declarations", {}).items()
+    }
     for source_path, text in session.sources.items():
         local: dict[str, list[str]] = {}
         for start, end in redeclarations.spans(text):
@@ -345,6 +356,29 @@ def _render(
                 for variant in local[name]
             ):
                 declarations_by_name.pop(name)
+        # Installed generated declarations are dependencies, not owners of a
+        # source-local or defined contract. Conflicting local views stay local;
+        # inference already records their disagreement as declaration evidence.
+        for path, names in retained_contracts.items():
+            if path in components and any(
+                not redeclarations.equivalent(variant, components[path], local_aliases)
+                for name in local.keys() & names
+                for variant in local[name]
+            ):
+                components.pop(path)
+                rendered.pop(path, None)
+    # A source-private tag is not a shared prototype-scope type. Publishing an
+    # otherwise equal entry prototype can create a distinct parameter tag before
+    # the source's own definition, or import its complete definition twice.
+    for name, declaration in list(declarations_by_name.items()):
+        if source_owned_tags & set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", declaration_source(declaration))):
+            declarations_by_name.pop(name)
+    for path in retained_contracts:
+        if path in components and source_owned_tags & set(
+            re.findall(r"\b(?:struct|union|enum)\s+(\w+)", declaration_source(components[path]))
+        ):
+            components.pop(path)
+            rendered.pop(path, None)
     # An authored provider is already imported through the graph.
     for name in authored_declarations:
         declarations_by_name.pop(name, None)

@@ -303,6 +303,48 @@ def promote(project: Project, headers: Headers, final: str, prefix_end: int) -> 
     return source, edits
 
 
+def published_components(project: Project) -> dict[Path, str]:
+    """Keep installed declaration dependencies used by published C bodies.
+
+    Generated does not mean disposable: a matched body proves the declaration
+    spellings it consumes, including callback arrays and complete queue layouts.
+    Follow declaration dependencies to keep primitive aliases and member types.
+    """
+    from unbake.layout import index
+    from unbake.typemap.declarations import published_sources
+
+    contents = {path: path.read_text() for path in sorted(index.headers(project))}
+    rows = units(contents)
+    by_name: dict[str, list[Unit]] = {}
+    for unit in rows:
+        for name in unit.names | unit.tags:
+            by_name.setdefault(name, []).append(unit)
+    from unbake.layout import redeclarations
+
+    pending = set()
+    local_tags = set()
+    for function, source, _ in published_sources(project):
+        local_tags.update(redeclarations.local_tags(source.read_text()))
+        pending.update(set(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(source.read_text()))) - {function})
+    selected: dict[Path, str] = {}
+    seen = set()
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for unit in by_name.get(name, ()):
+            if unit.tags & local_tags:
+                continue
+            digest = hashlib.sha256(unit.text.encode()).hexdigest()[:24]
+            label = "published_" + digest
+            selected[project.include[0] / ("." + label + ".h")] = (
+                f"/* unbake published declaration: {label} */\n" + unit.text
+            )
+            pending.update(unit.uses - seen)
+    return selected
+
+
 def feedback_components(project: Project) -> dict[Path, str]:
     """Retain ingested evidence through solve/feedback's ordinary split generator."""
     from unbake.layout import index

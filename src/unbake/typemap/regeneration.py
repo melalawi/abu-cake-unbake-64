@@ -209,6 +209,7 @@ class Session:
         }
         projection["typedefs"] = value.get("typedefs", {})
         projection["declaration_evidence"] = value.get("declaration_evidence", {})
+        projection["published_declarations"] = value.get("published_declarations", {})
         content_key = key(self.inputs, storage.encoded(projection))
         state = self.cache.path("typemap-render-state", self.inputs)
 

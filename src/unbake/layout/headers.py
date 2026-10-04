@@ -74,7 +74,9 @@ class Layout:
         evidence_exports: dict[Path, set[str]] = {}
         evidence_macros: dict[Path, dict[str, str]] = {}
         for path, text in contents.items():
-            if "/* unbake declaration evidence:" not in text:
+            if not any(
+                marker in text for marker in ("/* unbake declaration evidence:", "/* unbake published declaration:")
+            ):
                 continue
             macros = {
                 match[1]: match[2]
@@ -104,6 +106,10 @@ class Layout:
         for path, row in self.parsed.items():
             deps = self.dependencies[path]
             expression_types = set(re.findall(r"\bsizeof\s*\(\s*([A-Za-z_]\w*)", declaration_source(contents[path])))
+            # Declarator parsing intentionally omits extent expressions; their
+            # macros/enum constants still have to precede retained declarations.
+            for extent in re.findall(r"\[([^]]*)\]", declaration_source(contents[path])):
+                expression_types.update(re.findall(r"\b[A-Za-z_]\w*\b", extent))
             for name in (row.uses | expression_types) - row.typedefs:
                 deps.update(self.providers.get(name, set()))
             # Full definitions are useful to bodies that dereference signature

@@ -99,7 +99,7 @@ class Constraints:
             # Declared C overrides representations, but inconsistent declarations
             # at the same confidence remain named conflicts.
             def rank(p: dict[str, Any]) -> int:
-                return {"machine": 0, "declared": 1, "proven": 2}.get(str(p.get("kind")), 1)
+                return {"machine": 0, "declared": 1, "published": 2, "proven": 3}.get(str(p.get("kind")), 1)
 
             highest = max((rank(p) for rows in seeds.values() for p in rows), default=0)
             seeds = {t: [p for p in rows if rank(p) == highest] for t, rows in seeds.items()}
@@ -163,19 +163,24 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     # Parameter names have no type meaning.
                     for row in (old, new):
                         row["params"] = [p["type"] for p in row["params"]]
-                if (
-                    old != new
-                    and record["provenance"].get("kind") == "proven"
-                    and previous["provenance"].get("kind") != "proven"
-                ):
-                    records[name] = {**record, "declaration_conflict": False}
-                    continue
-                if (
-                    old != new
-                    and previous["provenance"].get("kind") == "proven"
-                    and record["provenance"].get("kind") != "proven"
-                ):
-                    continue
+                if old != new:
+                    ranks = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
+                    old_rank = ranks.get(previous["provenance"].get("kind"), 1)
+                    new_rank = ranks.get(record["provenance"].get("kind"), 1)
+                    if max(old_rank, new_rank) >= 2 and old_rank != new_rank:
+                        graph.facts.append(
+                            {
+                                "kind": "published_contract_conflict",
+                                "entity": f"{key}:{name}",
+                                "previous": old,
+                                "incoming": new,
+                                "provenance": record["provenance"],
+                                "resolution": "published contract retained",
+                            }
+                        )
+                        if new_rank > old_rank:
+                            records[name] = {**record, "declaration_conflict": False}
+                        continue
                 if old != new:
                     graph.facts.append(
                         {
@@ -277,6 +282,26 @@ def infer(
         and not record.get("declaration_conflict")
     }
     signatures = evidence.abi(facts, declared_returns)
+    # A previously inferred/declarative signature cannot truncate register use
+    # seen in other callers. Published C contracts remain authoritative and the
+    # discrepancy is recorded instead of rewriting their prototype.
+    for name, signature in list(functions.items()):
+        abi = signatures.get(name, {})
+        extra = set(abi.get("registers", ())) - set(signature["registers"])
+        if extra and signature["arity_known"] and not signature["variadic"]:
+            graph.facts.append(
+                {
+                    "kind": "call_arity_conflict",
+                    "entity": "functions:" + name,
+                    "registers": sorted(extra),
+                    "provenance": signature["provenance"],
+                    "resolution": "published contract retained"
+                    if signature["provenance"].get("kind") in ("proven", "published")
+                    else "use all mapped callers",
+                }
+            )
+            if signature["provenance"].get("kind") not in ("proven", "published"):
+                del functions[name]
     neighbours: dict[str, set[str]] = defaultdict(set)
     fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     forwarded: dict[str, set[str]] = defaultdict(set)
@@ -295,7 +320,7 @@ def infer(
                 neighbours[callee].add(function)
                 signature = functions.get(callee)
                 used = (
-                    set(signature["registers"])
+                    set(signature["registers"]) | set(signatures.get(str(callee), {}).get("registers", []))
                     if signature and signature["arity_known"]
                     else set(signatures.get(str(callee), {}).get("registers", []))
                 )
@@ -489,7 +514,11 @@ def infer(
         for seed in seeds
         for name in seed.get(
             "authored_structs",
-            {name for name, record in seed["structs"].items() if record["provenance"].get("kind") != "proven"},
+            {
+                name
+                for name, record in seed["structs"].items()
+                if record["provenance"].get("kind") not in ("proven", "published")
+            },
         )
     }
     # Partial layouts describe only the observed prefix, never the full object extent.
@@ -669,6 +698,11 @@ def infer(
                     {"state": "unknown", "type": None, "provenance": [], "users": [name]},
                 )
             )
+            if returned.get("type") and returned["type"].rstrip().endswith("]"):
+                # A declaration of array storage describes the object, not a C
+                # scalar return value. Keep the constraint, but do not publish
+                # an impossible array-return prototype through value flow.
+                returned = {**returned, "state": "unknown", "type": None, "reason": "array storage is not a C return"}
             known = (
                 abi["arity_known"]
                 and not abi["conflicts"]
@@ -685,9 +719,14 @@ def infer(
             signature["prototype"]
             if known and signature is not None
             else (
-                f"{returned['type']} {name}("
-                + (", ".join(declarations.declarator(p["type"], p["name"]) for p in params) or "void")
-                + ");"
+                declarations.declarator(
+                    returned["type"],
+                    name
+                    + "("
+                    + (", ".join(declarations.declarator(p["type"], p["name"]) for p in params) or "void")
+                    + ")",
+                )
+                + ";"
                 if known
                 else None
             )
@@ -947,6 +986,10 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
         result["declaration_evidence"] = {
             str(path.relative_to(project.include[0])): text
             for path, text in declaration_evidence.feedback_components(project).items()
+        }
+        result["published_declarations"] = {
+            str(path.relative_to(project.include[0])): text
+            for path, text in declaration_evidence.published_components(project).items()
         }
         result["constraints"] = [log.finish(project.root), *result["constraints"]]
     finally:

@@ -61,6 +61,40 @@ class DatabaseTests(unittest.TestCase):
         headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
         self.assertNotIn(b"extern int alpha(int arg0);", headers)
 
+    def test_retained_installed_prototype_cannot_contradict_published_definition(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        (self.project.src / "alpha.c").write_text("void alpha(unsigned int arg0) {}\n")
+        value["published_declarations"] = {".published-alpha.h": "extern int alpha(int arg0);"}
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertNotIn(b"extern int alpha(int arg0);", headers)
+
+    def test_published_local_struct_is_not_defined_again_in_shared_header(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        (self.project.src / "alpha.c").write_text(
+            "struct Local { int word; };\nint alpha(struct Local *p) {return p->word;}\n"
+        )
+        value["functions"]["alpha"].update(state="known", prototype="int alpha(struct Local *p);")
+        value["structs"]["Local"] = {
+            "state": "known",
+            "generated": True,
+            "type": "struct Local",
+            "declaration": "struct Local { int word; };",
+            "aliases": [],
+        }
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertNotIn(b"struct Local { int word; };", headers)
+        self.assertNotIn(b"extern int alpha(struct Local *p);", headers)
+
     def test_required_complete_installed_layout_survives_inference_loss(self) -> None:
         from unbake.typemap import database
 

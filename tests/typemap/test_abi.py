@@ -9,6 +9,14 @@ from unbake.typemap.mips import UNKNOWN, Value
 
 
 class AbiTests(unittest.TestCase):
+    def test_published_contract_without_machine_abi_has_no_caller_variant(self) -> None:
+        from unbake.typemap.abi_declarations import for_caller
+
+        carrier = {"prototype": None, "reasons": ["types.abi.absent"]}
+        record = {"abi": None, "abi_declaration": carrier}
+        self.assertEqual(for_caller(record, "published_caller"), carrier)
+        self.assertIsNot(for_caller(record, "published_caller"), carrier)
+
     def test_join_of_distinct_constants_preserves_definedness_without_selecting_a_value(self):
         joined = Value(constant=1).merge(Value(constant=2))
         self.assertTrue(joined.data()["unknown"])

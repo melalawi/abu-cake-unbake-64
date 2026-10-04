@@ -38,8 +38,8 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
         reasons.append("types.abi.slots: parameter slots unresolved; declaration leaves the argument list unspecified")
     carriers = []
     for reg in ordered or []:
-        param = params[reg]
-        type_ = types[reg]
+        param = params.get(reg, {"state": "unknown", "type": None})
+        type_ = types.get(reg)
         if type_ is not None:
             type_ = declarations.canonical(type_, aliases)
         if reg.startswith("f"):
@@ -108,12 +108,18 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
     else:
         return {"prototype": None, "reasons": ["types.abi.return: consumed result is not proven at every callee exit"]}
     return {
-        "prototype": returned
-        + " "
-        + name
-        + "("
-        + ("" if unspecified else ", ".join(declarations.declarator(type_, "").strip() for type_ in carriers) or "void")
-        + ");",
+        "prototype": declarations.declarator(
+            returned,
+            name
+            + "("
+            + (
+                ""
+                if unspecified
+                else ", ".join(declarations.declarator(type_, "").strip() for type_ in carriers) or "void"
+            )
+            + ")",
+        )
+        + ";",
         "parameters_known": not unspecified,
         "reasons": reasons or ["types.abi.transport: register ABI proven; semantic signature remains unresolved"],
     }
@@ -124,7 +130,7 @@ def for_caller(record: dict[str, Any], function: str | None) -> dict[str, Any]:
     carrier = record.get("abi_declaration", {})
     if carrier.get("prototype") or function is None:
         return dict(carrier)
-    callers = record.get("abi", {}).get("caller_return_uses", {})
+    callers = (record.get("abi") or {}).get("caller_return_uses", {})
     uses = callers.get(function, [])
     if len(uses) == 1:
         return dict(carrier.get("variants", {}).get(uses[0], carrier))
