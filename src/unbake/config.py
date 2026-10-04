@@ -131,6 +131,7 @@ class Project:
     cppflags: tuple[str, ...]
     sn64_asflags: tuple[str, ...]
     resident_mappings: dict[str, tuple[ResidentMapping, ...]] = field(default_factory=dict)
+    unit_flags: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def roms(self) -> Path:
@@ -421,15 +422,22 @@ def load(root: Path, *, text: str | None = None) -> Project:
     if default_compiler not in compilers:
         raise Held("config", f"{path} [project].default_compiler: unknown compiler {default_compiler}")
     units = {}
-    for unit, ident in units_table.items():
-        ident = _text(ident, f"{path} [units].{unit}")
+    unit_flags = {}
+    for unit, row in units_table.items():
+        label = f"{path} [units].{unit}"
         if not re.fullmatch(r"[A-Za-z_]\w*", unit):
-            raise Held("config", f"{path} [units].{unit}: expected a function name")
+            raise Held("config", f"{label}: expected a function name")
+        if not isinstance(row, dict) or set(row) - {"compiler", "flags"} or "compiler" not in row:
+            raise Held("config", f"{label}: expected {{ compiler = ID, flags = [...] }}")
+        ident = _text(row["compiler"], label + ".compiler")
+        flags_row = _strings(row.get("flags", []), label + ".flags")
         if ident not in compilers:
-            raise Held("config", f"{path} [units].{unit}: unknown compiler {ident}")
-        if ident == default_compiler:
-            raise Held("config", f"{path} [units].{unit}: equals default_compiler; list only exception units")
+            raise Held("config", f"{label}.compiler: unknown compiler {ident}")
+        if ident == default_compiler and not flags_row:
+            raise Held("config", f"{label}: equals the default compiler with no flags; remove the row")
         units[unit] = ident
+        if flags_row:
+            unit_flags[unit] = flags_row
     version_map = {}
     for v in versions:
         section = f"version.{v}"
@@ -472,6 +480,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
         flags("cppflags"),
         flags("sn64_asflags"),
         _resident(path, build["resident_mappings"]) if "resident_mappings" in build else {},
+        unit_flags,
     )
 
 

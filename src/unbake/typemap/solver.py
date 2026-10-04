@@ -990,9 +990,17 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
     return content_cache.key(*parts)
 
 
-def solve(project: Project, policy: Host | None = None) -> dict[str, Any] | None:
-    """Merge cached facts and infer types; None when no input changed since the last solve."""
-    from unbake import steps
+def input_key(project: Project, host: Host | None) -> str:
+    """The types step's trigger: every input of merge, infer and header publication."""
+    from unbake.typemap import facts as source_facts
+    from unbake.typemap.abi_facts import refine
+
+    facts = refine(project, refresh_map(project))
+    return _types_key(project, host, facts, source_facts.published_keys(project, host))
+
+
+def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
+    """Merge cached per-source facts with the map and infer types; publish the solution."""
     from unbake.typemap import facts as source_facts
     from unbake.typemap.abi_facts import refine
 
@@ -1012,9 +1020,6 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any] | None
             raise Held("solve", "types.summary: missing bounded semantic index for existing database")
     facts = refine(project, refresh_map(project))
     fact_keys = source_facts.published_keys(project, policy)
-    inputs = _types_key(project, policy, facts, fact_keys)
-    if database.is_file() and steps.recorded(project, "types") == inputs:
-        return None
     log = storage.FactLog(project.build / "types")
     try:
         result = infer(project, facts, declarations.collect(project, policy, fact_keys), constraint_log=log)
@@ -1050,5 +1055,4 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any] | None
     from unbake.typemap.database import publish
 
     publish(project, result, previous, policy=policy)
-    steps.record(project, "types", inputs)
     return result

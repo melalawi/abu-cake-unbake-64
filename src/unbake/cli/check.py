@@ -1,31 +1,37 @@
-"""The check command arguments and execution."""
+"""check: build every version with the generated Makefile (no Python) and check the sources."""
+
+from __future__ import annotations
 
 import argparse
 
-from unbake.cli.common import Subparsers, receipt
-from unbake.project import hygiene
-from unbake.config import Host, Project
-from unbake.report import progress
+from unbake.cli.args import Context
+from unbake.cli.output import Result
+
+NAME = "check"
+HELP = "Build every version with plain make (no Python) and check source rules."
+DESCRIPTION = """\
+Regenerate the build files if their inputs changed, then run `make check` in a clean environment
+whose PATH is [tools].path from unbake.toml (Python must not be on it). Every version's ROM must equal
+the original byte for byte. Also checks repository hygiene and the C source rules.
+
+  unbake check
+  unbake check --files-only     # hygiene and source rules only, no build
+"""
+PROJECT = "ready"
 
 
-def register(phases: Subparsers) -> None:
-    parser = phases.add_parser("check", phase="check", help="Check repository hygiene and C source evidence.")
-    parser.add_argument("--hygiene", action="store_true", help="Check only tracked repository hygiene.")
+def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+    return False
 
 
-def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
-    from unbake.decomp import checks
+def register(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--files-only", action="store_true", help="Skip the build; check files and rules.")
 
-    lines = hygiene.tracked_findings(project, policy)
-    if lines or getattr(args, "hygiene", False):
-        return receipt("check", lines)
-    lines.extend(progress.findings(project, policy))
-    for source in sorted(project.src.rglob("*.c")):
-        for finding in checks.run(source):
-            location = f"{source.relative_to(project.root)}:{finding.line}: {finding.rule}: {finding.text}"
-            lines.append(
-                f"HELD(check): {location}"
-                if finding.fakematch is None
-                else f"OK(check): {location}; FAKEMATCH: {finding.fakematch}"
-            )
-    return receipt("check", lines)
+
+def run(context: Context) -> Result:
+    from unbake import build
+
+    outcome = build.check(context.project(), context.require_host(), files_only=context.args.files_only)
+    if outcome.ok:
+        return Result.ok(NAME, outcome.document(), outcome.lines(), context.cmd("next"))
+    return Result(NAME, "held", "check.failed", outcome.document(), context.cmd("next"), tuple(outcome.lines()))

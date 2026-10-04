@@ -1,4 +1,4 @@
-"""Rank unfinished functions, find matched relatives and deal ledger claims."""
+"""Rank unfinished functions and classify their bodies."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.decomp import assign as assignments
 from unbake.decomp import drafts
 from unbake.decomp.score import percent
 from unbake.layout import split
@@ -230,50 +229,11 @@ def ranked(project: Project, policy: Host) -> list[Row]:
     )
 
 
-def _occupied(ledger: assignments.Ledger) -> set[str]:
-    names = set()
-    for row in ledger.open():
-        names.add(row["function"])
-        names.update(row["names"].values())
-    return names
-
-
-def assign(
-    project: Project, policy: Host, holder: str, tier: str, *, count: int
-) -> list[assignments.AssignmentRecord]:
-    """Deal in ranking order; each named claim is atomic in the ledger API."""
-    holder, tier = _text(holder, "holder"), _text(tier, "tier")
-    if type(count) is not int or count <= 0:
-        raise Held("plan", "count: required positive integer")
-    rows = ranked(project, policy)
-    ledger = assignments.Ledger(project, policy)
-    occupied = _occupied(ledger)
-    records = []
-    for row in rows:
-        if occupied.intersection(row.aliases):
-            continue
-        try:
-            claimed = ledger.assign(holder, tier, function=row.function)
-        except Held:
-            occupied = _occupied(ledger)
-            if occupied.intersection(row.aliases):
-                continue
-            raise
-        records.extend(claimed)
-        occupied.update(row.aliases)
-        if len(records) == count:
-            break
-    if not records:
-        raise Held("plan", "count: no unassigned unmatched functions")
-    return records
-
-
 def actionable(project: Project, policy: Host) -> list[Row]:
     """Keep supported naming-version functions whose unheld owners are assembly."""
-    occupied = _occupied(assignments.Ledger(project, policy))
     output = []
     for row in ranked(project, policy):
-        if row.route != "drafter" or occupied.intersection(row.aliases):
+        if row.route != "drafter":
             continue
         if any(row.names[v] != row.function for v in row.versions):
             continue

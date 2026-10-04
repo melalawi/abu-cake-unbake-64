@@ -19,7 +19,6 @@ _LOCKS = {
 }
 # External policy state, serialized by flock on the ledger itself; never cloned.
 _STATE = {
-    "decomp/assign.py": {'self.path.open("a+" if write else "r", encoding="utf-8")'},
     "decomp/drafts.py": {'(self.root / "trials.jsonl").open("a+", encoding="utf-8")'},
 }
 
