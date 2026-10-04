@@ -29,6 +29,8 @@ class FeedbackPreprocessingTests(unittest.TestCase):
         batch.batch_effects = {}
         batch.batch_directives = {}
         batch.batch_includes = {}
+        batch.batch_macro_names = {}
+        batch.batch_safe = {}
         batch.prepared = {v: ("", ["mock-cpp", "-P", "-x", v, "-"]) for v in ("us", "eu")}
         batch.macros = {v: {"VALUE": f"#define VALUE {value}\n"} for v, value in (("us", "int"), ("eu", "float"))}
         return batch
@@ -205,6 +207,19 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                             self.assertIn(f"{expected} {path.stem}", text)
             self.assertTrue(all(len(entries) <= 4 for entries in batch.batch_effects.values()))
 
+    def test_dynamic_baseline_macros_use_individual_preprocessing(self):
+        for macro in ("__COUNTER__", "_Pragma", "__INCLUDE_LEVEL__"):
+            with self.subTest(macro=macro), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                batch = self.fixture(root)
+                batch.macros["us"]["DYNAMIC"] = "#define DYNAMIC " + macro + "\n"
+                source = root / "alpha.c"
+                source.write_text("int alpha(void) {}\n")
+                with patch.object(batch, "source", return_value=("", "int alpha(void) {}")) as individual:
+                    for _ in range(2):
+                        self.assertEqual(batch.batch("us", [source]), [("", "int alpha(void) {}")])
+                    self.assertEqual(individual.call_count, 2)
+
     def test_source_closure_reuse_preserves_each_versions_guard_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -312,6 +327,17 @@ class DeclarationReuseTests(unittest.TestCase):
         with patch.object(declarations, "unknown", wraps=declarations.unknown) as unknown:
             solver._typedefs(seeds, a)
         self.assertEqual(unknown.call_count, len(a))
+
+    def test_identical_units_reuse_cleaning_with_independent_provenance(self):
+        batch = declarations._PublishedDeclarations()
+        text = ("typedef int Word;", "Word alpha(void) { return 1; }")
+        with patch.object(declarations, "_declaration_unit", wraps=declarations._declaration_unit) as clean_unit:
+            first = batch.extract(text, {"version": "us"}, Path("alpha.c"), compact=True)
+            calls = clean_unit.call_count
+            second = batch.extract(text, {"version": "eu"}, Path("alpha.c"), compact=True)
+            self.assertEqual(clean_unit.call_count, calls)
+        self.assertEqual(first["functions"]["alpha"]["provenance"]["version"], "us")
+        self.assertEqual(second["functions"]["alpha"]["provenance"]["version"], "eu")
 
     def test_compact_receipts_share_only_immutable_header_typedefs(self):
         batch = declarations._PublishedDeclarations()

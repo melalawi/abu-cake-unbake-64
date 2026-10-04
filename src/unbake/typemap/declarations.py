@@ -270,6 +270,8 @@ class _PublishedHeaders:
         ] = {}
         self.batch_directives: dict[Path, list[tuple[str, str]] | None] = {}
         self.batch_includes: dict[tuple[Path, str], Path | None] = {}
+        self.batch_macro_names: dict[str, frozenset[str]] = {}
+        self.batch_safe: dict[str, bool] = {}
 
     def source(self, version: str, source: Path) -> str | tuple[str, str]:
         project, policy = self.project, self.policy
@@ -359,6 +361,10 @@ class _PublishedHeaders:
     def _batch_input(self, version: str, source: Path) -> tuple[str, set[str]] | None:
         """Enumerate macro effects, caching closures under their observed guard state."""
         macros = self.macros[version]
+        macro_names = self.batch_macro_names.get(version)
+        if macro_names is None:
+            macro_names = frozenset(macros)
+            self.batch_macro_names[version] = macro_names
 
         def directives(text: str) -> list[tuple[str, str]] | None:
             logical = re.sub(r"\\\r?\n", "", text)
@@ -435,7 +441,7 @@ class _PublishedHeaders:
         def header(path: Path, changed: set[str], visiting: frozenset[Path]) -> tuple[set[str] | None, set[str]]:
             entries = self.batch_effects.setdefault(path, [])
             for guards, context, defined, cached_effects in entries:
-                if changed.intersection(guards) == context and guards.intersection(macros) == defined:
+                if changed.intersection(guards) == context and guards.intersection(macro_names) == defined:
                     return None if cached_effects is None else set(cached_effects), set(guards)
             if path not in self.batch_headers:
                 text = path.read_text()
@@ -455,7 +461,7 @@ class _PublishedHeaders:
                 (
                     frozenset(observed),
                     frozenset(changed.intersection(observed)),
-                    frozenset(observed.intersection(macros)),
+                    frozenset(observed.intersection(macro_names)),
                     None if effects is None else frozenset(effects),
                 )
             )
@@ -490,9 +496,14 @@ class _PublishedHeaders:
                 return error
 
         prepared = self.prepared.get(version)
-        if prepared is None or any(
-            re.search(r"__COUNTER__|_Pragma|__INCLUDE_LEVEL__", line) for line in self.macros.get(version, {}).values()
-        ):
+        if prepared is None:
+            return [individual(source) for source in sources]
+        if version not in self.batch_safe:
+            self.batch_safe[version] = not any(
+                re.search(r"__COUNTER__|_Pragma|__INCLUDE_LEVEL__", line)
+                for line in self.macros.get(version, {}).values()
+            )
+        if not self.batch_safe[version]:
             return [individual(source) for source in sources]
         prefix, command = prepared
         inputs = [self._batch_input(version, source) for source in sources]
@@ -929,6 +940,7 @@ class _PublishedDeclarations:
         self.prefixes: dict[str, tuple[str, dict[str, bool], dict[str, Any]]] = {}
         self.prefix_errors: dict[str, tuple[str, str]] = {}
         self.sources: dict[tuple[str, str], dict[str, Any]] = {}
+        self.units: dict[str, str] = {}
 
     def extract(
         self, text: str | tuple[str, str], provenance: dict[str, Any], source: Path, *, compact: bool = False
@@ -964,7 +976,13 @@ class _PublishedDeclarations:
             while len(self.prefixes) > 4:
                 del self.prefixes[next(iter(self.prefixes))]
         cleaned, scope, seed = cached
-        suffix = _declaration_unit(clean(suffix, line_markers=True))
+        unit = self.units.get(suffix)
+        if unit is None:
+            unit = _declaration_unit(clean(suffix, line_markers=True))
+            self.units[suffix] = unit
+            while len(self.units) > 8:
+                del self.units[next(iter(self.units))]
+        suffix = unit
         source_key = None
         if not re.search(r'^\s*#\s*\d+\s+"', suffix, re.M):
             # Without line markers, the existing ownership rule excludes source
