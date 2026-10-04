@@ -102,3 +102,20 @@ class ContractTests(TempCase):
             self.assertIn(verb, stderr)
         for verb in ("try", "submit", "clone", "recompute"):
             self.assertNotRegex(stderr, rf"\b{verb}\b")
+
+
+class SourcePrintTests(TempCase):
+    def test_no_print_writes_stdout(self) -> None:
+        """Every print in the tool names its stream; a bare print would corrupt the JSON stdout."""
+        import ast
+        from pathlib import Path
+
+        import unbake
+
+        bare = []
+        for path in sorted(Path(unbake.__file__).parent.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                is_print = isinstance(node, ast.Call) and getattr(node.func, "id", None) == "print"
+                if is_print and not any(keyword.arg == "file" for keyword in node.keywords):
+                    bare.append(f"{path.name}:{node.lineno}")
+        self.assertEqual([], bare)

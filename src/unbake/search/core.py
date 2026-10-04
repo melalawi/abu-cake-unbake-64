@@ -7,6 +7,7 @@ import json
 import math
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -279,10 +280,10 @@ def run(
     if mutations == 0:
         if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
             raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
-        print("external permuter ran; no improving candidates emitted")
-    print(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s")
+        print("external permuter ran; no improving candidates emitted", file=sys.stderr)
+    print(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s", file=sys.stderr)
     if best.trial.identical_everywhere:
-        print(f"IDENTICAL {best.trial.function}: {best.path}")
+        print(f"IDENTICAL {best.trial.function}: {best.path}", file=sys.stderr)
     else:
-        print(f"best {best.score} words; next_command: {best.trial.next_command}")
+        print(f"best {best.score} words; next_command: {best.trial.next_command}", file=sys.stderr)
     return SearchResult(best.path, best.trial, best.score, best.fuzzy, evaluated, steps)

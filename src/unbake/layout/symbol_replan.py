@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import re
+import sys
 import tempfile
 from collections import defaultdict
 from dataclasses import replace
@@ -224,11 +225,15 @@ def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bo
         f"{len(report['placements'])} placement names change; "
         f"data objects {report['data_symbols']['unified']}, "
         f"data renames {report['data_symbols']['rename_count']}, "
-        f"contradictions {report['data_symbols']['contradictions_by_reason']}"
+        f"contradictions {report['data_symbols']['contradictions_by_reason']}",
+        file=sys.stderr,
     )
     if confirm is None:
-        print(f"OK(setup): review build/setup/symbol-proposal.json; setup --replan-symbols --confirm {token}")
-        print(f"next: unbake setup --redo-symbol-matching --confirm {token}")
+        print(
+            f"OK(setup): review build/setup/symbol-proposal.json; setup --replan-symbols --confirm {token}",
+            file=sys.stderr,
+        )
+        print(f"next: unbake setup --redo-symbol-matching --confirm {token}", file=sys.stderr)
         return ["symbol proposal ready; executable boundaries retained"]
     if confirm != token:
         raise Held("setup", "setup.symbol_proposal_stale: symbol proposal or project inputs changed")

@@ -183,11 +183,13 @@ def run(
         print(
             f"OK(setup): ROM {item.path.name}: VERSION {label} title={item.header.title!r} "
             f"code={item.header.category + item.header.game_code + item.header.region} "
-            f"revision={item.header.revision} CIC={item.header.cic} sha1={item.sha1}"
+            f"revision={item.header.revision} CIC={item.header.cic} sha1={item.sha1}",
+            file=sys.stderr,
         )
         print(
             f"OK(setup): same-game {label}: "
-            + " ".join(f"{names[other.path]}={matrix[item, other]:.6f}" for other in cartridges)
+            + " ".join(f"{names[other.path]}={matrix[item, other]:.6f}" for other in cartridges),
+            file=sys.stderr,
         )
     selected = naming_version(versions, names_from)
     manifest = project.build / "setup/roms.json"

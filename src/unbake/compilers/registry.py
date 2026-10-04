@@ -6,6 +6,7 @@ import fcntl
 import os
 import platform
 import re
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -198,7 +199,7 @@ def _hashes(directory: Path, spec: CompilerSpec) -> dict[str, str]:
 
 def _replaced(path: Path, old: str | None, new: str) -> None:
     if old is not None and old != new:
-        print(f"REPLACED(setup): {path}: sha256 {old} -> {new}")
+        print(f"REPLACED(setup): {path}: sha256 {old} -> {new}", file=sys.stderr)
 
 
 def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: bool = False) -> Path:

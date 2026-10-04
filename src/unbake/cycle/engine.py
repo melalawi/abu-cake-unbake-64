@@ -185,7 +185,8 @@ def run(
             "→ "
             + next_words(
                 "cycle", "--functions", ",".join(row.function for row in picked), "--stop", stop or "all-landed"
-            )
+            ),
+            file=sys.stderr,
         )
     emitter = Emitter(events)
     rows = {c.function: Row(c.function, c.bytes, c.versions, c.carryover, best_percent=c.best_percent) for c in picked}

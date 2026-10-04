@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
 
 # Lock files need stable inodes and hold no project data.
@@ -103,7 +104,7 @@ def main() -> int:
         error for path in sorted(root.rglob("*.py")) for error in violations(path.relative_to(root), path.read_text())
     ]
     for error in errors:
-        print(error)
+        print(error, file=sys.stderr)
     return int(bool(errors))
 
 

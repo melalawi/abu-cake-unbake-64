@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 from unbake import atomic as atomic_files
@@ -142,7 +143,8 @@ def _draft(
                 f"{item.function} (distance={item.distance:.6f}, edits={item.edit_distance})" for item in examples
             )
             or "none"
-        )
+        ),
+        file=sys.stderr,
     )
     assembly = work / (function + ".s")
     body = whole_body(canonical_entry(project, v, function, address, assembly_text, generation=extracted), function)
@@ -269,7 +271,7 @@ def _draft(
     if "abi" in commands.headers:
         includes += gbi.install_audio(project)
     for item in commands.raw:
-        print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}")
+        print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}", file=sys.stderr)
     content = (
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
         f"{includes.rstrip()}\n\n{signatures}\n\n{output.rstrip()}\n"
