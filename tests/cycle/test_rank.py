@@ -49,8 +49,9 @@ class RankTests(unittest.TestCase):
         self.assertEqual(result[-1], "hopeless")
 
     def test_bucket_is_floor_log2(self) -> None:
-        # 127 and 64 share a bucket (6); 128 starts the next one, which has no history of its own.
-        history = attempts(64, [True] * 3, 1.0) + attempts(127, [True] * 3, 1.0)
+        # 127 and 64 share a bucket (6); 128 starts the next one, which has no history of its own and
+        # so scores with the pooled rate, which the failing bucket drags below bucket 6.
+        history = attempts(64, [True] * 3, 1.0) + attempts(127, [True] * 3, 1.0) + attempts(1024, [False] * 6, 1.0)
         pool = [cand("a", 127), cand("b", 128)]
         self.assertEqual(names(rank(pool, history, **WINDOW))[0], "a")
 
