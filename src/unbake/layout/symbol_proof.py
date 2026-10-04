@@ -29,6 +29,7 @@ def available(project: Project, replacements: dict[str, str]) -> bool:
         # An identifier in authored C needs compilation, even in inactive code.
         if set(re.findall(r"\b[A-Za-z_]\w*\b", source.read_text())) & replacements.keys():
             return False
+    newest_header = max((header.stat().st_mtime_ns for header in headers), default=0)
     for version in project.versions:
         generation = project.build_link(version)
         graph = generation / ".split.mk"
@@ -58,9 +59,10 @@ def available(project: Project, replacements: dict[str, str]) -> bool:
             receipt = generation / name.removeprefix("$(BUILD)/")
             receipt = receipt.with_suffix(".built")
             source = project.src / (name.removeprefix("$(BUILD)/obj/src/").removesuffix(".o") + ".c")
-            if not receipt.is_file() or any(
-                p.stat().st_mtime_ns > receipt.stat().st_mtime_ns for p in [source, *headers]
-            ):
+            if not receipt.is_file():
+                return False
+            receipt_time = receipt.stat().st_mtime_ns
+            if source.stat().st_mtime_ns > receipt_time or (headers and newest_header > receipt_time):
                 return False
     return True
 
