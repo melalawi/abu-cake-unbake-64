@@ -11,6 +11,7 @@ from typing import Any
 from unbake.decomp.trial_compile import run_tool
 from unbake.project import compiler_profiles, toolchain
 from unbake.project.config import Held, PendingProject, SetupPolicy
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 CANONICAL = (
@@ -74,7 +75,7 @@ def reproduce(
             with tempfile.TemporaryDirectory(prefix="compile-", dir=directory) as temporary:
                 work = Path(temporary)
                 path = work / "probe.c"
-                path.write_text(source)
+                atomic_files.text(path, source)
                 probe: dict[str, Any] = {
                     "name": label,
                     "source": source,

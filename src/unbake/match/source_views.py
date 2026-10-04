@@ -15,6 +15,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
 from unbake.match.common import held
 from unbake.project.config import Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 def parsers(
@@ -84,7 +85,7 @@ def typed_context(
             if source_context:
                 # Source context includes promoted components excluded from header-only evidence.
                 source = Path(temporary) / "rewrite-context.c"
-                source.write_text("")
+                atomic_files.text(source, "")
                 return typed_declarations.headers(
                     local, policy, version, extra=source, contents=authored_contents(project, headers, local)
                 )
@@ -143,7 +144,7 @@ def header_includes(project: Project, headers: Headers, directory: Path) -> tupl
             if path.is_relative_to(root) and before.get(path) != content:
                 destination = staged / path.relative_to(root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(content)
+                atomic_files.text(destination, content)
         roots.append(staged)
     if shared is not None and shared[0] == project.root:
         for path in before.keys() - texts.keys():
@@ -161,7 +162,7 @@ def _preprocessed_lines(
     lines = text.splitlines(keepends=True)
     with tempfile.TemporaryDirectory(prefix="match-view-") as temporary:
         source = Path(temporary) / "source.c"
-        source.write_text(text)
+        atomic_files.text(source, text)
         include = header_includes(project, headers, Path(temporary)) if headers is not None else ()
         command = [
             str(policy.cpp),

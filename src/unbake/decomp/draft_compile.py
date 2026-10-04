@@ -6,6 +6,7 @@ from unbake.decomp.explain import _absolute_includes
 from unbake.decomp.trial_compile import run_tool
 from unbake.project import makefile
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.sn64_cc import partition_flags
 
 
@@ -20,7 +21,7 @@ def prove(project: Project, policy: Policy, function: str, version: str, source:
         cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
         expanded = run_tool([cpp, *recipe.cppflags, *cppflags, str(source)], project.root, "m2c")
         preprocessed = source.with_suffix(".i")
-        preprocessed.write_text(expanded)
+        atomic_files.text(preprocessed, expanded)
         run_tool(
             [str(compiler.cc), "-quiet", *codeflags, str(preprocessed), "-o", str(source.with_suffix(".s"))],
             project.root,

@@ -13,6 +13,7 @@ from unbake.decomp import exclusions, m2c, type_context, work
 from unbake.decomp.trial_compile import scratch_directory
 from unbake.decomp.trial_target import inputs, owning_versions
 from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
+from unbake.project_tools import atomic as atomic_files
 
 
 def register(phases: Subparsers) -> None:
@@ -75,11 +76,12 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             archive = scratch / (function + ".redraft." + uuid4().hex)
             shutil.move(str(destination), archive)
         destination.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(generated, source)
-        shutil.copytree(generated.parent / "overlay", destination / "overlay")
-        shutil.copyfile(generated.parent / "overlay.json", destination / "overlay.json")
-        (destination / "manifest.json").write_bytes(
-            work.encoded(work.identity(project, source, versions, pinned=pinned, policy=policy))
+        atomic_files.copyfile(generated, source)
+        atomic_files.copytree(generated.parent / "overlay", destination / "overlay")
+        atomic_files.copyfile(generated.parent / "overlay.json", destination / "overlay.json")
+        atomic_files.write(
+            destination / "manifest.json",
+            work.encoded(work.identity(project, source, versions, pinned=pinned, policy=policy)),
         )
     suggest(command(project.root, "try") + " " + shlex.quote(str(source)) + " --scratch " + shlex.quote(str(scratch)))
     return receipt("draft", [f"draft_path: {source}", f"versions: {', '.join(versions)}; draft version: {naming}"])

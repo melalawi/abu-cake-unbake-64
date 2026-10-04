@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PYTHONPATH=src
+python3 -m unbake.project.write_hygiene
 status=0
 rg -n -i --glob '!hygiene' --glob '!**/__pycache__/**' \
     --glob '!*.pyc' --glob '!*.egg-info/**' \

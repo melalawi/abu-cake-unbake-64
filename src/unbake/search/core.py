@@ -18,6 +18,7 @@ from unbake.decomp.candidate_ranking import measured_candidate_rank
 from unbake.decomp.trial_compile import read_text, scratch_directory
 from unbake.project import makefile
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,7 @@ def run(
             directory = out / digest
             directory.mkdir(exist_ok=True)
             path = directory / source.name
-            path.write_text(content, encoding="utf-8")
+            atomic_files.text(path, content, encoding="utf-8")
             scratch = directory / "trial"
             try:
                 result = (
@@ -230,7 +231,7 @@ def run(
             "cached": cached,
             "refusal": error,
         }
-        with steps.open("a", encoding="utf-8") as stream:
+        with atomic_files.stream(steps, "a", encoding="utf-8") as stream:
             stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
         return candidate
 

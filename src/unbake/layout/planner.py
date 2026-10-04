@@ -22,6 +22,7 @@ from unbake.project.census import Census
 from unbake.project.config import Held, PendingProject, SetupPolicy, SymbolPolicy
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
+from unbake.project_tools import atomic as atomic_files
 
 
 def digest(value: Any) -> str:
@@ -62,8 +63,8 @@ def symbol_items(versions: dict[str, VersionLayout]) -> dict[str, CrossVersionIt
 
 def measure(image: bytes, yaml: str, executable: Path, work: Path, version: str) -> split.ExtractedText:
     """Use the pinned disassembler in isolation; no project inputs are published."""
-    (work / "input.z64").write_bytes(image)
-    (work / "symbols.txt").write_text("")
+    atomic_files.write(work / "input.z64", image)
+    atomic_files.text(work / "symbols.txt", "")
     options = {
         "base_path": str(work),
         "target_path": str(work / "input.z64"),
@@ -80,9 +81,10 @@ def measure(image: bytes, yaml: str, executable: Path, work: Path, version: str)
         "extensions_path": str(work / "extensions"),
         "create_asm_dependencies": False,
     }
-    (work / "input.yaml").write_text(yaml)
-    (work / "outputs.yaml").write_text(
-        "options:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in options.items())
+    atomic_files.text(work / "input.yaml", yaml)
+    atomic_files.text(
+        work / "outputs.yaml",
+        "options:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in options.items()),
     )
     result = subprocess.run(
         [str(executable), "split", str(work / "input.yaml"), str(work / "outputs.yaml")],
@@ -642,7 +644,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             work.mkdir()
             image = cartridge.image()
             input_path = work / "source.z64"
-            input_path.write_bytes(image)
+            atomic_files.write(input_path, image)
             template = split_create.create(
                 input_path,
                 "layout",
@@ -669,11 +671,12 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
             else:
                 measured = measure(image, template, Path(executable), work, version)
                 cache.parent.mkdir(parents=True, exist_ok=True)
-                cache.write_text(
+                atomic_files.text(
+                    cache,
                     json.dumps(
                         {"key": key, "functions": [asdict(f) for f in measured.functions], "data": measured.data},
                         sort_keys=True,
-                    )
+                    ),
                 )
             invalid = {
                 (offset, offset + 4)
@@ -801,7 +804,7 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
     )
     path = project.build / "setup/layout.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    atomic_files.text(path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return manifest
 
 

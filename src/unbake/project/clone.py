@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from unbake.project import build, compiler_files, config, hygiene, makefile, setup, toolchain
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 def project_relative(project: Project, path: Path) -> Path:
@@ -114,15 +115,15 @@ def copy_reflink(source: Path, destination: Path, *, immutable: bool = False) ->
             pass
     if _reflink_available:
         try:
-            with source.open("rb") as original, destination.open("wb") as target:
+            with source.open("rb") as original, atomic_files.stream(destination, "wb") as target:
                 fcntl.ioctl(target.fileno(), 0x40049409, original.fileno())
         except OSError as error:
             if error.errno in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTTY, errno.EXDEV}:
                 _reflink_available = False
-            shutil.copyfile(source, destination)
+            atomic_files.copyfile(source, destination)
         shutil.copystat(source, destination)
     else:
-        shutil.copy2(source, destination)
+        atomic_files.copy2(source, destination)
 
 
 def git(root: Path, *arguments: str) -> bytes:
@@ -158,7 +159,7 @@ def refresh_checksums(project: Project) -> None:
         if path.parent != project.tools and actual != expected.lower():
             raise Held("clone", f"{path}: compiler checksum expected {expected}, found {actual}")
         rows.append(f"{actual}  {name}\n")
-    manifest.write_text("".join(rows))
+    atomic_files.text(manifest, "".join(rows))
 
 
 def copy_evidence(project: Project, cloned: Project) -> None:
@@ -180,7 +181,7 @@ def copy_evidence(project: Project, cloned: Project) -> None:
             with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".identity-", delete=False) as stream:
                 temporary = Path(stream.name)
             try:
-                with target.open("rb") as original, temporary.open("wb") as output:
+                with target.open("rb") as original, atomic_files.stream(temporary, "wb") as output:
                     pending = b""
                     while block := original.read(1024 * 1024):
                         pending = (pending + block).replace(old, new)
@@ -189,7 +190,7 @@ def copy_evidence(project: Project, cloned: Project) -> None:
                         pending = pending[boundary:]
                     output.write(pending.replace(old, new))
                 shutil.copystat(target, temporary)
-                temporary.replace(target)
+                atomic_files.publish(temporary, target)
             finally:
                 temporary.unlink(missing_ok=True)
 
@@ -220,9 +221,9 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
             stage = Path(temporary) / "project"
             cloned = _create(project, policy, stage, versions, generations)
             policy_path = cloned.tools / "clone-policy.toml"
-            policy_path.write_text(isolated_policy(policy, destination))
+            atomic_files.text(policy_path, isolated_policy(policy, destination))
             final_policy = destination / policy_path.relative_to(stage)
-            (stage / ".unbake/env").write_text(f"export UNBAKE_POLICY={shlex.quote(str(final_policy))}\n")
+            atomic_files.text(stage / ".unbake/env", f"export UNBAKE_POLICY={shlex.quote(str(final_policy))}\n")
             # rename cannot expose a partial checkout. Refuse an intervening creator.
             if destination.exists() or destination.is_symlink():
                 raise Held("clone", f"{destination}: destination already exists")
@@ -314,7 +315,7 @@ def _create(
     )
     if count != 1:
         raise Held("clone", "workspace.id: required one explicit workspace identity")
-    config_path.write_text(text)
+    atomic_files.text(config_path, text)
     cloned = config.load(destination)
     copy_evidence(project, cloned)
     for path in (cloned.src, cloned.tools, cloned.asm, *cloned.include):
@@ -322,7 +323,7 @@ def _create(
     policy_path = cloned.tools / "clone-policy.toml"
     if policy_path.is_symlink():
         policy_path.unlink()
-    policy_path.write_text(isolated_policy(policy, destination))
+    atomic_files.text(policy_path, isolated_policy(policy, destination))
     local_policy = project_relative(cloned, policy_path).as_posix()
     # The existing Makefile includes these ignored, clone-local build graphs.
     # Keep policy selection out of every tracked game file.
@@ -332,7 +333,7 @@ def _create(
         with tempfile.NamedTemporaryFile(dir=graph.parent, prefix=".graph-", delete=False) as output:
             temporary = Path(output.name)
         try:
-            with temporary.open("wb") as output, graph.open("rb") as original:
+            with atomic_files.stream(temporary, "wb") as output, graph.open("rb") as original:
                 output.write(
                     (
                         f"export UNBAKE_POLICY := $(abspath {local_policy})\n"
@@ -341,7 +342,7 @@ def _create(
                 )
                 shutil.copyfileobj(original, output)
             shutil.copystat(graph, temporary)
-            temporary.replace(graph)
+            atomic_files.publish(temporary, graph)
         finally:
             temporary.unlink(missing_ok=True)
         os.utime(graph, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
@@ -349,8 +350,8 @@ def _create(
     local = destination / ".unbake"
     local.mkdir(exist_ok=True)
     # Operators can source this environment for setup, clean builds and CLI use.
-    (local / "env").write_text(f"export UNBAKE_POLICY={shlex.quote(str(policy_path))}\n")
-    (destination / ".gitignore").write_text(hygiene.ignore_text(cloned))
+    atomic_files.text(local / "env", f"export UNBAKE_POLICY={shlex.quote(str(policy_path))}\n")
+    atomic_files.text(destination / ".gitignore", hygiene.ignore_text(cloned))
     if prepare(cloned, config.load_policy(policy_path)):
         # A replaced compiler invalidates warm code even when its path/flags
         # stay identical. Cache service updates alone do not affect object bytes.
@@ -378,14 +379,12 @@ def prepare(project: Project, policy: Policy) -> bool:
     if any(not (project.root / name).is_file() for name in helpers):
         setup.publish_files(project, helpers)
     else:
-        # Older warm projects rewrote literal/pool objects in place. Upgrade
-        # those writers before a clone can modify a shared published object.
-        # Byte-equivalent rewrites do not invalidate the warm build receipts.
-        for name in ("literal_layout.py", "pool_slices.py"):
-            path = project.tools / name
+        # Upgrade all publication helpers before sharing build objects. Their
+        # timestamps are not object recipe inputs; unchanged bytes stay warm.
+        for name, content in makefile.helper_sources(project).items():
+            path = project.root / name
             original_stat = path.stat()
-            content = helpers[project_relative(project, path).as_posix()].encode()
-            compiler_files.atomic_bytes(path, content, mode=original_stat.st_mode & 0o777)
+            compiler_files.atomic_bytes(path, content.encode(), mode=original_stat.st_mode & 0o777)
             os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
     return changed
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from unbake.layout import entries, split
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object, Symbol
 
 
@@ -48,7 +49,7 @@ def target(
     output = directory / "target.o"
     if not output.exists():
         script = directory / "text.ld"
-        script.write_text("SECTIONS { .text : SUBALIGN(4) { *(.text) } }\n")
+        atomic_files.text(script, "SECTIONS { .text : SUBALIGN(4) { *(.text) } }\n")
         run_tool(
             [str(policy.mips_ld), "-r", "-T", str(script), "-o", str(output), *map(str, objects)], directory, "try"
         )
@@ -87,7 +88,7 @@ def view(path: Path, function: str, size: int, output: Path) -> Path:
                 struct.pack_into(">I", obj.data, at + 8, size)
             elif symbol["section"] == obj.section(".text"):
                 obj.data[at + 12] &= 0xF0
-    output.write_bytes(obj.data)
+    atomic_files.write(output, obj.data)
     return output
 
 

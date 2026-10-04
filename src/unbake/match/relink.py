@@ -12,6 +12,7 @@ from pathlib import Path
 from unbake.match import reporting
 from unbake.project import build, makefile
 from unbake.project.config import Held, Policy, Project, SetupPolicy
+from unbake.project_tools import atomic as atomic_files
 
 
 def source_key(project: Project, policy: Policy, source: Path, version: str) -> str:
@@ -162,8 +163,8 @@ def prove(
     except Held as error:
         output.append(error.reason + "\n")
     finally:
-        log.write_text("".join(output))
-        (generation / "build.exit").write_text("0\n" if ok else "1\n")
+        atomic_files.text(log, "".join(output))
+        atomic_files.text(generation / "build.exit", "0\n" if ok else "1\n")
     return build.BuildResult(version, ok, sha1_line, log, generation)
 
 
@@ -196,7 +197,7 @@ def place_changed(project: Project, version: str, generation: Path) -> bool:
     if not retained["sources"] and current == raw:
         # No link input changed. Keep its exact placement, including transformations
         # older layout drivers used. The complete ROM is still linked and checked.
-        (generation / f"{project.name}.link.ld").write_text(placed)
+        atomic_files.text(generation / f"{project.name}.link.ld", placed)
         return True
     overlays = list(_RESIDENT.finditer(placed))
     core = _RESIDENT.sub("", placed)
@@ -236,8 +237,8 @@ def place_changed(project: Project, version: str, generation: Path) -> bool:
     except (OSError, ValueError, KeyError):
         return False
     script = insert_fragment(script, "\n".join(sections))
-    (generation / f"{project.name}.link.ld").write_text(script)
-    (generation / f"{project.name}.link.flags").write_bytes(b"--no-check-sections" if sections else b"")
+    atomic_files.text(generation / f"{project.name}.link.ld", script)
+    atomic_files.write(generation / f"{project.name}.link.flags", b"--no-check-sections" if sections else b"")
     reporting.record("placement", version=version, sources=sorted(changed & objects), retained=True)
     return True
 
@@ -350,10 +351,10 @@ def retarget_rows(project: Project, generation: Path, before: str, after: str) -
             lines.append(f"$(BUILD)/obj/src/{name}.built: {project.src.relative_to(project.root)}/{name}.c")
     for kind, (index, words) in inventories.items():
         lines[index] = kind + "_OBJECTS := " + " ".join(words)
-    script.write_text(text)
-    graph.write_text("\n".join(lines) + "\n")
-    ranges.write_text(json.dumps(unit_ranges(after), sort_keys=True))
-    dump.write_text("".join(rows))
+    atomic_files.text(script, text)
+    atomic_files.text(graph, "\n".join(lines) + "\n")
+    atomic_files.text(ranges, json.dumps(unit_ranges(after), sort_keys=True))
+    atomic_files.text(dump, "".join(rows))
     return True
 
 

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-import shutil
 import struct
 from pathlib import Path
 from typing import Any
 
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
@@ -133,7 +133,7 @@ def resolve_literal_placement(
         for row in slices:
             mapped = [m for m in mappings if m["start"] <= row["start"] < row["end"] <= m["end"]]
             row["table_entry_bias"] = mapped[0]["table_entry_bias"] if len(mapped) == 1 else 0
-        shutil.copyfile(candidate, copied)
+        atomic_files.copyfile(candidate, copied)
         try:
             section_names = transfer_private(
                 Object(copied),
@@ -145,7 +145,7 @@ def resolve_literal_placement(
             # A compiler section can also contain proved shared storage outside
             # the private slices. Compare its full resident identity below;
             # discard any partial transfer before attempting that proof.
-            shutil.copyfile(candidate, copied)
+            atomic_files.copyfile(candidate, copied)
         else:
             return copied, {
                 "[.text]": text_base,
@@ -156,7 +156,7 @@ def resolve_literal_placement(
             }
     for section in pools:
         if not resolved:
-            shutil.copyfile(candidate, copied)
+            atomic_files.copyfile(candidate, copied)
         try:
             base = arrange(
                 Object(copied),

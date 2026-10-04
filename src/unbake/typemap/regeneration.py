@@ -15,13 +15,14 @@ from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
 from unbake.project.cache import Cache, key, remembered
 from unbake.project.config import Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import header_names, split, storage
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
     def load() -> bytes:
         def make(output: Path) -> None:
-            output.write_bytes(storage.encoded(compute()))
+            atomic_files.write(output, storage.encoded(compute()))
 
         return cache.produce(kind, content_key, make).read_bytes()
 
@@ -151,7 +152,7 @@ class Session:
         content_key = key(self.environment, path.relative_to(self.project.include[0]).as_posix(), text)
 
         def make(output: Path) -> None:
-            output.write_bytes(split.guarded(path.relative_to(self.project.include[0]), text))
+            atomic_files.write(output, split.guarded(path.relative_to(self.project.include[0]), text))
 
         return remembered(
             "typemap-guarded",

@@ -13,6 +13,7 @@ from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate, Declaration, Member
 from unbake.project.cache import Cache, key
+from unbake.project_tools import atomic as atomic_files
 
 _RECORDS = {cls.__name__: cls for cls in (Field, Layout, Aggregate, Declaration, Member)}
 _FIELDS = {name: tuple(field.name for field in fields(cls)) for name, cls in _RECORDS.items()}
@@ -113,7 +114,7 @@ def context(
             "cache": [(aggregates[index], layout) for index, layout in parser.cache.items() if index in aggregates],
             "layouts": layouts,
         }
-        with output.open("w") as stream:
+        with atomic_files.stream(output, "w") as stream:
             json.dump({"order": [names[path] for path in ordered], "parser": _encode(snapshot)}, stream)
 
     artifact = Cache(cache_root).produce("header-context", identity, produce)

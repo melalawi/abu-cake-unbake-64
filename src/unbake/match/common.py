@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from pathlib import Path
 from typing import NoReturn
-from uuid import uuid4
 
 from unbake.project.config import Held, Project
+from unbake.project_tools import atomic as atomic_files
 
 _FUNCTION = re.compile("[A-Za-z_][A-Za-z_0-9]*\\Z")
 
@@ -41,10 +40,4 @@ def relative(project: Project, path: str | Path) -> Path:
 
 
 def atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}")
-    try:
-        temporary.write_bytes(content)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_files.write(path, content)

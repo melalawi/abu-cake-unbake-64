@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -17,6 +16,7 @@ from unbake.layout import port, split
 from unbake.match import relink
 from unbake.project import build, compiler_files, setup
 from unbake.project.config import Held, Project, SetupPolicy
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
@@ -137,16 +137,16 @@ def prove(
             for name in inventory:
                 original, copied = source / name, destination / name
                 if name.startswith("obj/src/"):
-                    shutil.copy2(original, copied)
+                    atomic_files.copy2(original, copied)
                     for suffix in (".d", ".built"):
                         dependency = original.with_suffix(suffix)
                         if dependency.is_file():
-                            shutil.copy2(dependency, copied.with_suffix(suffix))
+                            atomic_files.copy2(dependency, copied.with_suffix(suffix))
                 else:
                     os.link(original, copied)
             for path in source.iterdir():
                 if path.is_file() and path.suffix in {".mk", ".ld", ".json", ".txt", ".csv", ".flags"}:
-                    shutil.copy2(path, destination / path.name)
+                    atomic_files.copy2(path, destination / path.name)
             staged.build_link(version).symlink_to(destination.name)
             pattern = re.compile(
                 rb"(?<![A-Za-z0-9_])(?:"
@@ -178,7 +178,7 @@ def prove(
                 if changed != content or relative != new_relative:
                     target = staged.asm / version / new_relative
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(changed)
+                    atomic_files.text(target, changed)
                     assembly.append(target)
             # Move only explicit paths containing a changed item. Assembly cache
             # paths can include a private-provider directory as well as a stem.
@@ -228,12 +228,12 @@ def prove(
                 for path in c_objects.rglob("*.built"):
                     cached_content = path.read_bytes()
                     path.unlink()
-                    path.write_bytes(cached_content)
+                    atomic_files.write(path, cached_content)
             for name in (".split.mk", ".split"):
                 path = destination / name
                 receipt_content = path.read_bytes() if path.is_file() else b""
                 path.unlink(missing_ok=True)
-                path.write_bytes(receipt_content)
+                atomic_files.write(path, receipt_content)
             return (
                 f"{version}: name-only proof; SHA1 OK; {rebound} object symbol tables rebound; no compilation",
                 assembly,

@@ -158,14 +158,17 @@ class MaterializedIncludesTests(unittest.TestCase):
             main, added = original / "types.h", original / "new.h"
             project = SimpleNamespace(root=root, include=(original,))
             headers = Headers({main: "typedef int Word;"}, root=root)
-            write = Path.write_text
+            write = source_views.atomic_files.text
             writes = []
 
             def writing(path, text, *args, **kwargs):
                 writes.append((path, text))
                 return write(path, text, *args, **kwargs)
 
-            with source_views.shared_includes(project, headers), patch.object(Path, "write_text", new=writing):
+            with (
+                source_views.shared_includes(project, headers),
+                patch.object(source_views.atomic_files, "text", new=writing),
+            ):
                 previous = None
                 for edits, expected_writes in (
                     ({}, 1),

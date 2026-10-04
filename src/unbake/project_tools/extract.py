@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.cache import Cache
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.atomic import receipt as refresh_receipt
 from unbake.project_tools.atomic import write
 from unbake.project_tools.compile import cache_root
@@ -39,7 +39,7 @@ def prepare_build(build: Path) -> None:
             if path.is_symlink():
                 source = path.resolve()
                 path.unlink()
-                shutil.copytree(source, path, symlinks=True)
+                atomic_files.copytree(source, path, symlinks=True)
         return
     if build.exists() and not build.is_dir():
         raise ValueError(f"{build}: build must be a directory")
@@ -478,7 +478,7 @@ def disassemble(
         with tarfile.open(cached) as archive:
             archive.extractall(staging, filter="tar")
     else:
-        config.write_text(assembly)
+        atomic_files.text(config, assembly)
         result = subprocess.run(
             [args.splat, "split", str(config), str(overlay)],
             stdout=subprocess.PIPE,
@@ -488,7 +488,7 @@ def disassemble(
             sys.stderr.write(result.stdout.decode(errors="replace"))
             raise subprocess.CalledProcessError(result.returncode, result.args)
         bundle = staging / ".splat-outputs.tar"
-        with tarfile.open(bundle, "w") as archive:
+        with atomic_files.staging(bundle) as pending, tarfile.open(pending, "w") as archive:
             for name in _SPLAT_OUTPUTS:
                 if (staging / name).exists():
                     archive.add(staging / name, arcname=name)
@@ -502,7 +502,7 @@ def disassemble(
     for name in names:
         spelled = re.sub(rf"(?<![\w/.])asm/{re.escape(name)}\.s\.o\b", f"src/{name}.c.o", spelled)
         spelled = re.sub(rf"/asm/{re.escape(name)}\.s\.o\b", f"/src/{name}.c.o", spelled)
-    script.write_text(spelled)
+    atomic_files.text(script, spelled)
     dump = staging / ".splat" / "splat_symbols.csv"
     owners = {Path(name).name for name in names}
     lines = dump.read_text().splitlines(keepends=True)
@@ -510,7 +510,7 @@ def disassemble(
         fields = line.rstrip("\n").split(",")
         if len(fields) > 2 and fields[-1] == "asm" and fields[-2] in owners:
             lines[index] = ",".join([*fields[:-1], "c"]) + "\n"
-    dump.write_text("".join(lines))
+    atomic_files.text(dump, "".join(lines))
 
 
 def extract(args: argparse.Namespace) -> None:
@@ -581,7 +581,9 @@ def extract(args: argparse.Namespace) -> None:
         overlay = staging / "outputs.yaml"
         config = staging / "input.yaml"
         options["base_path"] = str(staging)
-        overlay.write_text("options:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in options.items()))
+        atomic_files.text(
+            overlay, "options:\n" + "".join(f"  {key}: {json.dumps(value)}\n" for key, value in options.items())
+        )
         disassemble(args, text, staging, config, overlay, store, root)
         # Floating directives align relative to an object, while native rows
         # may start between alignment boundaries. Retain exact ROM bytes in
@@ -591,7 +593,7 @@ def extract(args: argparse.Namespace) -> None:
         for row in pool_rows(text, storage=True):
             source = staging / "asm" / "data" / (row["path"] + row["section"] + ".s")
             if source.is_file():
-                source.write_text(raw_storage(row, image))
+                atomic_files.text(source, raw_storage(row, image))
         script = defer_bss((staging / "layout.ld").read_text())
         rewritten, graph = inventory(script, staging, args.asm, args.src, compiler)
         rewritten = render_alignment(rewritten, alignments)
@@ -620,8 +622,8 @@ def extract(args: argparse.Namespace) -> None:
             if not path.is_file():
                 raise ValueError(f"splat output {filename} is missing")
             if filename == "undefined_syms_auto.txt" and compiler != "sn64":
-                path.write_text(path.read_text() + external_labels(staging / "asm"))
-            path.write_text(automatic_symbols(path.read_text(), committed))
+                atomic_files.text(path, path.read_text() + external_labels(staging / "asm"))
+            atomic_files.text(path, automatic_symbols(path.read_text(), committed))
             tables.append(path)
             publish(args.build / filename, path.read_bytes())
             link_scripts.append("$(BUILD)/" + filename)

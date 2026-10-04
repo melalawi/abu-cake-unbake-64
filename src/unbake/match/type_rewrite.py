@@ -15,6 +15,7 @@ from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
 from unbake.match.rewrite_view import View
 from unbake.project.cache import Cache, key
+from unbake.project_tools import atomic as atomic_files
 
 
 def _gnu_blank(view: str, blank: Any) -> str:
@@ -57,7 +58,7 @@ def _context(prefix: str, cache_root: Path | None = None) -> tuple[list[Any], di
         nonlocal computed
         computed = _parse_context(prefix)
         declarations, scope = computed
-        with output.open("w") as stream:
+        with atomic_files.stream(output, "w") as stream:
             json.dump({"declarations": _encode(declarations), "scope": scope}, stream)
 
     artifact = Cache(cache_root).produce("rewrite-context", identity, produce)

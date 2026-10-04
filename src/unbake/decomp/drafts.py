@@ -6,7 +6,6 @@ import fcntl
 import hashlib
 import json
 import re
-import tempfile
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +15,7 @@ from unbake.decomp.candidate_ranking import candidate_rank
 from unbake.decomp.score import percent, weakest
 from unbake.layout import split
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.decomp.trial import Trial
@@ -395,12 +395,4 @@ def match_edits(project: Project, function: str, source_text: str, versions: Ite
 
 
 def _write(path: Path, content: bytes) -> None:
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(content)
-        temporary.replace(path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    atomic_files.write(path, content)

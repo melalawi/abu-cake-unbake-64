@@ -9,6 +9,7 @@ from pathlib import Path
 
 from unbake.layout import split, split_apply
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
@@ -131,7 +132,7 @@ def candidates(project: Project, source_version: str, versions: list[str]) -> li
 
 
 def measure(path: Path, rows: list[Candidate]) -> None:
-    with path.open("w", newline="") as stream:
+    with atomic_files.stream(path, "w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(
             ("function", "source_version", "version", "source_size", "size", "identity", "differing_words", "cause")

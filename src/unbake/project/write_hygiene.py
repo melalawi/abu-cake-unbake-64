@@ -1,0 +1,136 @@
+"""Reject direct file writes: unknown destinations may belong to a warm build."""
+
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+
+# These streams contain no generated project data and need stable lock inodes.
+_LOCKS = {
+    "project_tools/compile_identity.py": {'(path.parent / ".identity.lock").open("a")'},
+    "project/toolchain.py": {'(cache / f".{spec.id}.lock").open("a")'},
+    "project/workspace.py": {'(Path(name) / ".inuse").open("a+b")'},
+    "project/build.py": {'(generation / ".inuse").open("a+b")', 'path.open("a+b")'},
+    "match/publication.py": {
+        '(path / ".inuse").open("a+b")',
+        '(generation / ".inuse").open("a+b")',
+    },
+}
+# External policy state, serialized by flock on the ledger itself; never cloned.
+_STATE = {
+    "decomp/assign.py": {'self.path.open("a+" if write else "r", encoding="utf-8")'},
+    "decomp/drafts.py": {'(self.root / "trials.jsonl").open("a+", encoding="utf-8")'},
+}
+
+
+def violations(path: Path, content: str) -> list[str]:
+    """Conservatively guard all Python destinations, including indirect paths."""
+    name = path.as_posix()
+    allowed = _LOCKS.get(name, set()) | _STATE.get(name, set())
+    if name == "project_tools/atomic.py":
+        return []  # The single implementation owns fresh-file writes and copying.
+    tree = ast.parse(content)
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases.update({item.asname or item.name: item.name for item in node.names})
+        elif isinstance(node, ast.ImportFrom):
+            aliases.update({item.asname or item.name: f"{node.module}.{item.name}" for item in node.names})
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    result = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        attr = func.attr if isinstance(func, ast.Attribute) else ""
+        called = ast.unparse(func)
+        first, *rest = called.split(".")
+        called = ".".join([aliases.get(first, first), *rest])
+        unsafe = attr in {"write_text", "write_bytes"} or called in {
+            "shutil.copy",
+            "shutil.copy2",
+            "shutil.copyfile",
+            "shutil.copytree",
+        }
+        if attr == "open" or called in {"open", "io.open", "tarfile.open"}:
+            index = 1 if called in {"open", "io.open", "tarfile.open"} else 0
+            modes = [node.args[index]] if len(node.args) > index else []
+            modes += [item.value for item in node.keywords if item.arg == "mode"]
+            for mode in modes:
+                if (
+                    not isinstance(mode, ast.Constant)
+                    or not isinstance(mode.value, str)
+                    or any(c in mode.value for c in "wa+")
+                ):
+                    unsafe = True
+                # Exclusive creation cannot truncate an existing shared inode.
+        if called in {"os.open", "os.fdopen"}:
+            # Existing descriptor streams are allowed only for the two fresh
+            # mkstemp-backed, streaming JSON writers.
+            unsafe = not (
+                name == "typemap/storage.py" and called == "os.fdopen" and ast.unparse(node.args[0]) == "descriptor"
+            )
+        if attr == "touch" and name != "typemap/solver.py":
+            unsafe = ".inuse" not in ast.unparse(func)
+        if unsafe:
+            code = ast.get_source_segment(content, node) or ""
+            if code in allowed:
+                ancestor: ast.AST | None = parents.get(node)
+                while ancestor is not None and not isinstance(ancestor, ast.FunctionDef):
+                    ancestor = parents.get(ancestor)
+                if code != 'path.open("a+b")' or (isinstance(ancestor, ast.FunctionDef) and ancestor.name == "_lock"):
+                    continue
+            ancestor = node
+            while ancestor is not None:
+                if isinstance(ancestor, ast.With):
+                    for item in ancestor.items:
+                        context = item.context_expr
+                        if (
+                            isinstance(context, ast.Call)
+                            and isinstance(context.func, ast.Attribute)
+                            and ast.unparse(context.func) == "atomic_files.staging"
+                            and isinstance(item.optional_vars, ast.Name)
+                            and node.args
+                            and isinstance(node.args[0], ast.Name)
+                            and node.args[0].id == item.optional_vars.id
+                            and called == "tarfile.open"
+                        ):
+                            unsafe = False
+                ancestor = parents.get(ancestor)
+        if unsafe:
+            result.append(f"{name}:{node.lineno}: use atomic publication: {code.splitlines()[0]}")
+    return result
+
+
+def makefile_violations(content: str) -> list[str]:
+    """Keep recipe outputs behind compile.py or the atomic command wrapper."""
+    result = []
+    for number, line in enumerate(content.splitlines(), 1):
+        if not line.startswith("\t"):
+            continue
+        command = re.sub(r"[12]?>\s*/dev/null\b", "", line)
+        direct = bool(re.search(r"(?<![\w.-])(cp|install|tee|touch)\s", command)) or ">" in command
+        compiler = bool(
+            re.search(r"\$\((CC|AS|LD|OBJCOPY)\)", command)
+            or re.search(r"(?:^\s*@?|[;&|]\s*|--\s+)(?:\S*/)?(?:\w+-)*(gcc|as|ld|objcopy)\s", command)
+        )
+        wrapped = "atomic.py" in command and "--output" in command and " -- " in command
+        if direct or (compiler and not wrapped):
+            result.append(f"project_tools/Makefile:{number}: use atomic publication: {line.strip()}")
+    return result
+
+
+def main() -> int:
+    root = Path(__file__).parents[1]
+    errors = [
+        error for path in sorted(root.rglob("*.py")) for error in violations(path.relative_to(root), path.read_text())
+    ]
+    errors.extend(makefile_violations((root / "project_tools/Makefile").read_text()))
+    for error in errors:
+        print(error)
+    return int(bool(errors))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -18,6 +18,7 @@ from typing import Any
 
 from unbake.layout.boundary_signatures import MINIMUM_BODY_SIZE, load
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 RELOCATION_MASKS = {"hi16": 0xFFFF, "lo16": 0xFFFF, "targ26": 0x03FFFFFF}
 
@@ -74,7 +75,7 @@ def build(input_path: Path, output: Path, *, source_url: str, commit: str, sha25
         if temporary.exists() or temporary.is_symlink():
             raise ValueError(f"{temporary.name}: staging path already exists")
         try:
-            temporary.write_text(text)
+            atomic_files.text(temporary, text)
             load(temporary)
             temporary.replace(output)
         finally:

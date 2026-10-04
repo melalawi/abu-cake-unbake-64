@@ -30,6 +30,7 @@ from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
 from unbake.project.config import Held, Policy, Project
 from unbake.project.headers import include_headers
+from unbake.project_tools import atomic as atomic_files
 
 
 def _headers(project: Project) -> list[tuple[Path, str]]:
@@ -134,13 +135,13 @@ def _draft(
     context = work / "context.c"
     examples = similar.retrieve(project, function, v)
     examples_context = similar.context(examples)
-    (work / "similar-context.txt").write_text(examples_context, encoding="utf-8")
+    atomic_files.text(work / "similar-context.txt", examples_context, encoding="utf-8")
     # Shared headers own the types. Similar units' private declarations can
     # collide with canonical tags or leak typedefs unavailable to the draft's
     # include graph; retain those units in the similarity comments instead.
-    context.write_text(_context(headers, {path for path, _ in headers}) + type_context, encoding="utf-8")
-    context.write_text(
-        preprocess_context(context, project, policy, v, function) + "\n" + examples_context, encoding="utf-8"
+    atomic_files.text(context, _context(headers, {path for path, _ in headers}) + type_context, encoding="utf-8")
+    atomic_files.text(
+        context, preprocess_context(context, project, policy, v, function) + "\n" + examples_context, encoding="utf-8"
     )
     print(
         "similar context used: "
@@ -206,9 +207,9 @@ def _draft(
         project, policy, v, body, context.read_text(), function=function, database=database
     )
     if signatures:
-        with context.open("a") as stream:
+        with atomic_files.stream(context, "a") as stream:
             stream.write("\n" + signatures + "\n")
-    assembly.write_text(register_pairs(body, compiler.cflags, function), encoding="utf-8")
+    atomic_files.text(assembly, register_pairs(body, compiler.cflags, function), encoding="utf-8")
     output = run_tool(
         [
             *command(executable_path, assembly.read_text()),
@@ -248,18 +249,18 @@ def _draft(
         {path: read_text(path, "m2c") for path, name in headers},
         output,
     )
-    context.write_text(_context(headers, selected), encoding="utf-8")
-    context.write_text(preprocess_context(context, project, policy, v, function), encoding="utf-8")
+    atomic_files.text(context, _context(headers, selected), encoding="utf-8")
+    atomic_files.text(context, preprocess_context(context, project, policy, v, function), encoding="utf-8")
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:
         headers.append((shared.resolve(), shared.relative_to(project.include[0]).as_posix()))
     if shared is not None:
         selected.add(shared.resolve())
     # The draft and trial compile the same includes as a normal source unit.
     # Expanded declarations are only for m2c and layout/macro analysis.
-    context.write_text(_context(headers, selected), encoding="utf-8")
+    atomic_files.text(context, _context(headers, selected), encoding="utf-8")
     includes = context.read_text()
     declarations = preprocess_context(context, project, policy, v, function)
-    context.write_text(declarations, encoding="utf-8")
+    atomic_files.text(context, declarations, encoding="utf-8")
     output = lower(output, declarations + "\n" + signatures)
     output = address_arithmetic(output, declarations, function)
     commands = gbi.prepare(project, output, gbi.microcode(project))
@@ -284,7 +285,7 @@ def _draft(
     )
     candidate = work / "compile-proof" / (function + ".c")
     candidate.parent.mkdir()
-    candidate.write_text(content, encoding="utf-8")
+    atomic_files.text(candidate, content, encoding="utf-8")
     try:
         prove(project, policy, function, v, candidate)
     except Held as error:
@@ -294,7 +295,7 @@ def _draft(
             "Repair the shared header types identified above and redraft.",
             next_action=shlex.join(["unbake", "draft", function, "--scratch", str(directory)]),
         ) from error
-    source.write_text(content, encoding="utf-8")
+    atomic_files.text(source, content, encoding="utf-8")
     draft_work.save_overlay(original_project, work)
     if announce:
         print(f"draft_path: {source}")

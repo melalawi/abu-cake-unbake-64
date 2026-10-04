@@ -20,6 +20,7 @@ from unbake.project import setup, workspace
 from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import Rom, load
+from unbake.project_tools import atomic as atomic_files
 
 
 def retained_assertions(
@@ -216,7 +217,9 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None, *, retain_na
     token = planner.digest([inputs, report])
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "symbol-proposal.json").write_text(json.dumps(report, separators=(",", ":"), sort_keys=True) + "\n")
+    atomic_files.text(
+        directory / "symbol-proposal.json", json.dumps(report, separators=(",", ":"), sort_keys=True) + "\n"
+    )
     print(
         f"OK(setup): symbol items {report['old_items']} -> {report['new_items']}; "
         f"{len(report['placements'])} placement names change; "
@@ -285,17 +288,17 @@ def publish(
         setup._copy_inputs(project, tree, inputs)
         for v in project.versions:
             target = tree / project.version(v).split.relative_to(project.root)
-            target.write_text(rewrite_layout(target.read_text(), replacements))
+            atomic_files.text(target, rewrite_layout(target.read_text(), replacements))
             target = tree / project.version(v).symbols.relative_to(project.root)
-            target.write_text(data_symbols_text(target.read_text(), v, replacements, binding_data))
+            atomic_files.text(target, data_symbols_text(target.read_text(), v, replacements, binding_data))
         header_names = {**replacements, **shared_data_renames(binding_data)}
         for header in (tree / path.relative_to(project.root) for path in project.include):
             for path in header.rglob("*.h"):
-                path.write_text(rewrite(path.read_text(), header_names))
+                atomic_files.text(path, rewrite(path.read_text(), header_names))
         removed = []
         if not fast:
             for source in (tree / project.src.relative_to(project.root)).rglob("*.c"):
-                source.write_text(rewrite(source.read_text(), header_names))
+                atomic_files.text(source, rewrite(source.read_text(), header_names))
                 if source.stem in replacements:
                     target = source.with_name(replacements[source.stem] + ".c")
                     if target.exists() and target.read_bytes() != source.read_bytes():
@@ -312,11 +315,11 @@ def publish(
             for provider in version["providers"]:
                 provider["name"] = path_name(provider["name"], replacements)
                 provider["owners"] = [replacements.get(owner, owner) for owner in provider["owners"]]
-        (tree / "config.toml").write_text(toml.dumps(data))
-        (tree / "build/setup/layout.json").write_text(
-            json.dumps(report["layout"], separators=(",", ":"), sort_keys=True) + "\n"
+        atomic_files.text(tree / "config.toml", toml.dumps(data))
+        atomic_files.text(
+            tree / "build/setup/layout.json", json.dumps(report["layout"], separators=(",", ":"), sort_keys=True) + "\n"
         )
-        with (tree / "build/setup/symbol-correspondence.json").open("w") as stream:
+        with atomic_files.stream(tree / "build/setup/symbol-correspondence.json", "w") as stream:
             json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
             stream.write("\n")
         if fast:

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import header_names, regeneration, storage
 
 _decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
@@ -446,7 +446,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 os.close(descriptor)
                 backup_path = Path(name)
                 backups[path] = backup_path
-                shutil.copyfile(path, backup_path)
+                atomic_files.copyfile(path, backup_path)
             else:
                 backups[path] = None
         for path, content in outputs.items():
@@ -461,7 +461,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             if backup is None:
                 path.unlink(missing_ok=True)
             else:
-                os.replace(backup, path)
+                atomic_files.publish(backup, path)
         raise
     finally:
         if staged is not None:
@@ -652,7 +652,7 @@ def validate_headers(
                     if str(path).startswith(prefix):
                         staged = staged_root / str(path)[len(prefix) :]
                         staged.parent.mkdir(parents=True, exist_ok=True)
-                        staged.write_bytes(contents[path])
+                        atomic_files.write(staged, contents[path])
             staged_project = replace(project, include=tuple(roots))
             source = scratch / "context.c"
             generated = selected.intersection(outputs)
@@ -662,16 +662,17 @@ def validate_headers(
                 entry_points = sorted(generated)
             covered = {dep for path in entry_points for dep in closures[path]}
             entry_points.extend(sorted(selected - covered))
-            source.write_text(
+            atomic_files.text(
+                source,
                 "".join(
                     f'#include "{str(path)[len(str(root)) + 1 :]}"\n'
                     for path in entry_points
                     for root in project.include
                     if str(path).startswith(str(root) + os.sep)
-                )
+                ),
             )
             assembly = scratch / "validate.s"
-            assembly.write_text(".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
+            atomic_files.text(assembly, ".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
             try:
                 if policy is None:
                     expanded = "\n".join(declarations.clean(contents[path].decode()) for path in sorted(selected))
@@ -682,7 +683,7 @@ def validate_headers(
                 if context_key not in validated:
                     if policy is not None and getattr(policy, "m2c", None):
                         context = scratch / "expanded.c"
-                        context.write_text(context_text)
+                        atomic_files.text(context, context_text)
                         run_tool(
                             [
                                 str(policy.m2c),
@@ -706,6 +707,6 @@ def validate_headers(
                 raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
 
     def complete(path: Path) -> None:
-        path.write_bytes(b"validated\n")
+        atomic_files.write(path, b"validated\n")
 
     cache.produce("typemap-validation", bundle_key, complete)

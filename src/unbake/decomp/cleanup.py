@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from unbake.layout import split, split_apply
 from unbake.match import declarations
 from unbake.match.common import atomic
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 def prepare(project: Project, policy: Policy, source: Path) -> Path:
@@ -25,8 +25,8 @@ def prepare(project: Project, policy: Policy, source: Path) -> Path:
         directory = Path(temporary)
         if (source.parent / "overlay.json").exists():
             work.overlay_data(project, source)
-            shutil.copytree(source.parent / "overlay", directory / "overlay")
-            shutil.copyfile(source.parent / "overlay.json", directory / "overlay.json")
+            atomic_files.copytree(source.parent / "overlay", directory / "overlay")
+            atomic_files.copyfile(source.parent / "overlay.json", directory / "overlay.json")
             staged = work.overlay_project(project, directory)
         else:
             staged = work.overlay(project, directory)
@@ -46,7 +46,7 @@ def prepare(project: Project, policy: Policy, source: Path) -> Path:
         work.save_overlay(project, directory)
         if source.read_bytes() != original:
             raise Held("cleanup", "cleanup.source_sha256: editable source changed during preparation")
-        shutil.copytree(directory / "overlay", source.parent / "overlay", dirs_exist_ok=True)
+        atomic_files.copytree(directory / "overlay", source.parent / "overlay", dirs_exist_ok=True)
         atomic(source.parent / "overlay.json", (directory / "overlay.json").read_bytes())
         atomic(source, prepared.encode())
     return source

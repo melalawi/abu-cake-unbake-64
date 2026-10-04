@@ -9,6 +9,7 @@ from unbake.decomp.explain import gcc_input
 from unbake.decomp.trial_compare import Compare, align_words, words
 from unbake.decomp.trial_compile import run_tool
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
@@ -126,7 +127,7 @@ def annotate_divergence(
             return
         expanded, flags = gcc_input(project, policy, copied, version, work, preserve_lines=True)
         input_path, assembly, debug = work / "debug.i", work / "debug.s", work / "debug.o"
-        input_path.write_text(expanded)
+        atomic_files.text(input_path, expanded)
         run_tool([str(compiler.cc), *flags, "-g", str(input_path), "-o", str(assembly)], work, "try")
         run_tool([str(policy.mips_as), "-EB", "-mips3", "--gdwarf-2", "-o", str(debug), str(assembly)], work, "try")
         actual, diagnostic = Object(unit), Object(debug)
@@ -161,7 +162,7 @@ def annotate_divergence(
             comparison.lines[first] += "; source unavailable: debug instruction cannot be aligned"
             return
         listing = run_tool([str(policy.mips_objdump), "-dl", str(debug)], work, "try")
-        (work / "debug.asm").write_text(listing)
+        atomic_files.text(work / "debug.asm", listing)
         address = diagnostic_entry["value"] + mapped * 4
         location = debug_locations(listing).get(address)
         if location is None:

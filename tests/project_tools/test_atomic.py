@@ -60,12 +60,92 @@ class AtomicTests(unittest.TestCase):
     def test_write_and_rename_failures_preserve_destination_and_cleanup(self):
         path = self.root / "object.o"
         original = self.shared(path)
-        for operation in ("write_bytes", "replace"):
+        for operation in ("fsync", "replace"):
             with self.subTest(operation=operation):
-                with patch.object(Path, operation, side_effect=OSError("injected")), self.assertRaises(OSError):
+                with patch.object(atomic.os, operation, side_effect=OSError("injected")), self.assertRaises(OSError):
                     atomic.write(path, b"new")
                 self.unchanged(original)
                 self.assertFalse(list(self.root.glob(".publish-*")))
+
+    def test_text_append_copy_and_tree_replace_shared_files(self):
+        source = self.root / "input"
+        source.write_bytes(b"copied")
+        tree = self.root / "input-tree"
+        tree.mkdir()
+        (tree / "record").write_bytes(b"tree")
+        for operation in ("text", "append", "copyfile", "copy2", "copy", "copytree"):
+            with self.subTest(operation=operation):
+                path = self.root / operation / "record"
+                original = self.shared(path)
+                path.chmod(0o640)
+                if operation == "text":
+                    atomic.text(path, "new text", encoding="utf-8")
+                    expected = b"new text"
+                elif operation == "append":
+                    with atomic.stream(path, "a", encoding="utf-8") as output:
+                        output.write(" appended")
+                    expected = b"old bytes appended"
+                elif operation == "copytree":
+                    atomic.copytree(tree, path.parent, dirs_exist_ok=True)
+                    expected = b"tree"
+                else:
+                    getattr(atomic, operation)(source, path)
+                    expected = b"copied"
+                self.unchanged(original)
+                self.assertEqual(path.read_bytes(), expected)
+                self.assertNotEqual(path.stat().st_ino, original[0].stat().st_ino)
+                if operation in {"text", "append"}:
+                    self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+
+    def test_tree_cannot_reintroduce_a_direct_copy_callback(self):
+        with self.assertRaisesRegex(ValueError, "atomic publication"):
+            atomic.copytree(self.root / "source", self.root / "destination", copy_function=atomic.shutil.copy2)
+
+    def test_fsync_precedes_replace_in_the_same_directory(self):
+        path = self.root / "database.json"
+        original = self.shared(path)
+        events = []
+        replace = os.replace
+
+        def sync(descriptor):
+            self.assertNotEqual(os.fstat(descriptor).st_ino, original[0].stat().st_ino)
+            events.append("sync")
+
+        def publish(source, destination):
+            self.assertEqual(Path(source).parent, Path(destination).parent)
+            self.assertEqual(events[-1], "sync")
+            events.append("replace")
+            replace(source, destination)
+
+        with (
+            patch.object(atomic.os, "fsync", side_effect=sync),
+            patch.object(atomic.os, "replace", side_effect=publish),
+        ):
+            atomic.write(path, b"new", mode=0o600)
+        self.unchanged(original)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(events[-1], "replace")
+
+    def test_failed_stream_preserves_destination_and_append_keeps_all_records(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        path = self.root / "events.jsonl"
+        original = self.shared(path, b"")
+        with self.assertRaisesRegex(ValueError, "injected"), atomic.stream(path) as output:
+            output.write("partial")
+            raise ValueError("injected")
+        self.unchanged(original)
+        self.assertEqual(path.read_bytes(), b"")
+
+        def append(index):
+            with atomic.stream(path, "a") as output:
+                output.write(str(index) + "\n")
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(append, range(20)))
+        self.assertEqual(sorted(map(int, path.read_text().splitlines())), list(range(20)))
+        self.unchanged(original)
+        self.assertFalse(list(self.root.glob(".publish-*")))
 
     def test_commands_publish_elf_map_assets_and_rom_only_after_success(self):
         for names in (("game.elf", "game.map"), ("asset.o",), ("game.z64",)):

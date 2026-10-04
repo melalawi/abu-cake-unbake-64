@@ -15,6 +15,7 @@ from pathlib import Path
 
 from unbake.layout import split_analysis
 from unbake.project.config import Held, Policy, SetupPolicy
+from unbake.project_tools import atomic as atomic_files
 
 
 def without_comments(text: str) -> str:
@@ -68,7 +69,7 @@ def create(
         # Give its scratch input a safe title and restore the original facts.
         scratch = bytearray(data)
         scratch[0x20:0x34] = b"UNBAKE".ljust(20, b" ")
-        (work / "input.z64").write_bytes(scratch)
+        atomic_files.write(work / "input.z64", scratch)
         result = subprocess.run([executable, "create_config", "input.z64"], cwd=work, capture_output=True, text=True)
         if result.returncode:
             raise Held(

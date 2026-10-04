@@ -178,6 +178,29 @@ class CloneTests(unittest.TestCase):
         self.assertFalse((copied / "proof-old").exists())
         self.assertIn(self.project.workspace_id.encode(), layout.read_bytes())
 
+    def test_prepare_upgrades_every_embedded_writer_and_preserves_shared_old_helpers(self) -> None:
+        from unbake.project import makefile, setup
+
+        setup.publish_files(self.project, makefile.helpers(self.project))
+        expected = makefile.helper_sources(self.project)
+        records = []
+        for name in expected:
+            path = self.project.root / name
+            sibling = path.with_suffix(".old")
+            path.write_text("old helper")
+            os.link(path, sibling)
+            os.utime(path, ns=(100, 100))
+            records.append((path, sibling, path.stat().st_ino))
+        with patch.object(clone.toolchain, "ensure"), patch.object(clone.toolchain, "specification") as specification:
+            specification.return_value.pins = {}
+            self.assertFalse(clone.prepare(self.project, self.policy))
+        for path, sibling, inode in records:
+            self.assertEqual(path.read_text(), expected[str(path.relative_to(self.project.root))])
+            self.assertEqual(path.stat().st_mtime_ns, 100)
+            self.assertEqual(sibling.read_text(), "old helper")
+            self.assertEqual(sibling.stat().st_ino, inode)
+            self.assertNotEqual(path.stat().st_ino, inode)
+
     def test_warm_compiler_pins_do_not_reinstall_into_clone_cache(self) -> None:
         from unbake.project import makefile, setup
 

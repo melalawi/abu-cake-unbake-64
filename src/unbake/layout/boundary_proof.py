@@ -18,6 +18,7 @@ from unbake.layout import boundary, boundary_signatures, split
 from unbake.layout.boundary import Boundary
 from unbake.layout.split_audit import audit
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.project.config import Project
@@ -124,4 +125,4 @@ def write(project: Project, destination: Path, *, signatures: Path | None) -> No
     }
     if destination.is_symlink():
         raise Held("boundary", f"{destination.name}: refusing symlink output")
-    destination.write_text(json.dumps(document, indent=2) + "\n")
+    atomic_files.text(destination, json.dumps(document, indent=2) + "\n")

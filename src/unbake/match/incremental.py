@@ -17,6 +17,7 @@ from unbake.match import forked, reporting, staging
 from unbake.match.common import held
 from unbake.project import build, makefile
 from unbake.project.config import Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools import extract, layout
 from unbake.project_tools.codegen import dependency_paths
 from unbake.project_tools.elf import Object
@@ -46,19 +47,19 @@ def advance(project: Project, version: str, generation: Path, before: str, after
         return _miss("symbol addresses changed")
     for name, address in sorted(additions.items()):
         bindings += f"PROVIDE({name} = 0x{address:08X});\n"
-    definitions.write_text(bindings)
+    atomic_files.text(definitions, bindings)
     # Retained generations may contain proved bindings absent from the address
     # inventory. Attribution and assembly must see the same names as the linker.
     inventory = {line.split()[0]: int(line.split()[1], 0) for line in addresses.read_text().splitlines()}
     missing = {name: int(value, 0) for name, value in known.items() if name not in inventory}
     missing.update(additions)
     if missing:
-        with addresses.open("a") as output:
+        with atomic_files.stream(addresses, "a") as output:
             output.writelines(f"{name} 0x{address:08X}\n" for name, address in sorted(missing.items()))
     if additions:
         for filename in ("undefined_funcs_auto.txt", "undefined_syms_auto.txt"):
             automatic = generation / filename
-            automatic.write_text(extract.automatic_symbols(automatic.read_text(), additions))
+            atomic_files.text(automatic, extract.automatic_symbols(automatic.read_text(), additions))
     return True
 
 
@@ -189,7 +190,7 @@ def _prepare_version(
         staging.independent_objects(generation)
     if retained is not None:
         retained["sources"] = [source.stem for source in changed]
-        (generation / "retained-layout.json").write_text(json.dumps(retained))
+        atomic_files.text(generation / "retained-layout.json", json.dumps(retained))
     return changed
 
 

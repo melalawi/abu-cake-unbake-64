@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 
 def pack(value: object) -> bytes:
@@ -79,14 +80,13 @@ class Writer:
         self.connection.execute("INSERT INTO functions VALUES (?,?,?)", (name, version, pack(body)))
 
     def finish(self) -> Path:
-        import os
 
         from unbake.typemap import storage
 
         self.connection.commit()
         self.connection.close()
         path = self.temporary.parent / ("facts-" + storage.file_digest(self.temporary) + ".sqlite")
-        os.replace(self.temporary, path)
+        atomic_files.publish(self.temporary, path)
         return path
 
     def close(self) -> None:

@@ -25,6 +25,7 @@ from unbake.decomp.gbi_source import (
     word_builder,
 )
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 RULES = frozenset({"raw-gfx", "local-gbi-macro"})
 
@@ -428,7 +429,7 @@ def catalogue(project: Project, policy: Policy, unit: Path, version: str, source
     with tempfile.TemporaryDirectory(prefix="gbi-sdk-") as temporary:
         work = Path(temporary)
         probe = work / "sdk.c"
-        probe.write_text("\n".join([*directives, *(f'#include "{path}"' for path in sorted(headers))]) + "\n")
+        atomic_files.text(probe, "\n".join([*directives, *(f'#include "{path}"' for path in sorted(headers))]) + "\n")
         command = [
             makefile.host_executable(policy, recipe.cpp or "", "cpp"),
             "-dM",
@@ -487,7 +488,7 @@ def proven(
         for path, text in headers.items():
             destination = root / "overlay" / path.relative_to(project.root)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(text)
+            atomic_files.text(destination, text)
         versions = layout_split.holding_versions(project, unit.stem)
         recovered = [lower(source, catalogue(staged, policy, unit, version, source)) for version in versions]
         if not recovered or any(text != recovered[0] for text in recovered):
@@ -507,7 +508,7 @@ def proven(
             if evidence is not None and re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", evidence.read_text(), re.M):
                 destination = staged.include[0] / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(evidence.read_bytes())
+                atomic_files.write(destination, evidence.read_bytes())
         try:
             gbi_proof.preserve(staged, policy, unit, before, after)
         except Held as error:

@@ -23,6 +23,7 @@ from unbake.decomp.trial_target import inputs as trial_inputs
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import entries as entry_layout
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
@@ -139,7 +140,7 @@ def retain_draft(
         result.next_command = (
             result.next_command.replace(str(prepared), str(source)) + " --scratch " + shlex.quote(str(directory))
         )
-        (work / "manifest.json").write_bytes(draft_work.encoded(after))
+        atomic_files.write(work / "manifest.json", draft_work.encoded(after))
         store_trial(project, policy, source, result)
     from unbake.cli.common import suggest
 
@@ -184,7 +185,7 @@ def try_draft(
         trial.flag_results = results
     work = Path(tempfile.mkdtemp(prefix=f"{function}.", dir=directory))
     copied = work / f"{function}.c"
-    copied.write_bytes(("#define NON_MATCHING 1\n#line 1 " + json.dumps(str(source)) + "\n").encode() + content)
+    atomic_files.write(copied, ("#define NON_MATCHING 1\n#line 1 " + json.dumps(str(source)) + "\n").encode() + content)
 
     def compile_variant(name: str, index: int) -> Held | None:
         result = results[index]
@@ -297,7 +298,7 @@ def try_draft(
             if set(selected) == set(owning_versions(original_project, function, None))
             else [*prefix(original_project), "try", str(source)]
         )
-    (work / "report.txt").write_text(render(trial) + "\n", encoding="utf-8")
+    atomic_files.text(work / "report.txt", render(trial) + "\n", encoding="utf-8")
     print(render(trial))
     return trial
 

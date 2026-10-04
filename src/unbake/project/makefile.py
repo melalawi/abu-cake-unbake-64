@@ -231,10 +231,14 @@ def helper_sources(project: Project) -> dict[str, str]:
         tools + "/" + name: (TEMPLATES / name)
         .read_text()
         .replace("from unbake.project_tools.", "from ")
+        .replace("from unbake.project_tools import atomic as atomic_files", "import atomic as atomic_files")
         .replace("from unbake.project.cache import", "from cache import")
         for name in names
     }
     cache_source = Path(__file__).with_name("cache.py").read_text()
+    cache_source = cache_source.replace(
+        "from unbake.project_tools import atomic as atomic_files", "import atomic as atomic_files"
+    )
     cache_source = cache_source.replace(
         "from unbake.project.config import Held",
         """class Held(Exception):

@@ -13,6 +13,7 @@ import toml  # type: ignore[import-untyped]
 from unbake.project import build, census, compiler_files, compiler_proposal, config, setup, setup_config
 from unbake.project.config import Held, PendingProject, SetupPolicy
 from unbake.project.flow import LayoutManifest
+from unbake.project_tools import atomic as atomic_files
 
 
 def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> list[str]:
@@ -51,7 +52,7 @@ def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> li
     with tempfile.TemporaryDirectory(prefix="compiler-refresh-", dir=project.build / "setup") as temporary:
         tree = Path(temporary) / "tree"
         setup._copy_inputs(project, tree, fingerprint)
-        (tree / "config.toml").write_text(toml.dumps(data))
+        atomic_files.text(tree / "config.toml", toml.dumps(data))
         staged = config.load(tree)
         setup.run(staged, policy)
         outputs = {

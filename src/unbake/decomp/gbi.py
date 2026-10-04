@@ -28,6 +28,7 @@ from unbake.decomp.gbi_source import (
     word_builder,
 )
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 
@@ -765,16 +766,18 @@ def install(project: Project) -> str:
     if destination.exists() and destination.read_text() != content:
         if sha256(destination.read_bytes()).hexdigest() != PREVIOUS_HEADER_SHA256:
             raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
-        destination.write_text(content)
+        atomic_files.text(destination, content)
     for root in project.include:
         sdk = root / "n64sdk.h"
         if sdk.is_file() and not re.search(r"^\s*#\s*(?:ifndef|pragma\s+once)\b", sdk.read_text(), re.M):
             if sdk.is_symlink():
                 raise Held("gbi", f"{sdk}: SDK type header must be regular")
-            sdk.write_text("#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n" + sdk.read_text() + "\n#endif\n")
+            atomic_files.text(
+                sdk, "#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n" + sdk.read_text() + "\n#endif\n"
+            )
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists():
-        destination.write_text(content)
+        atomic_files.text(destination, content)
     return '#include "gbi.h"\n'
 
 
@@ -792,7 +795,7 @@ def install_audio(project: Project) -> str:
             raise Held("gbi", f"{destination}: existing header differs from the open reconstruction")
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
-            destination.write_text(content)
+            atomic_files.text(destination, content)
     return '#include "abi.h"\n'
 
 
@@ -902,7 +905,7 @@ def rewrite(project: Project, policy: Policy, files: list[Path], *, all_files: b
                         except (Held, ValueError):
                             pass
                         else:
-                            path.write_text(alternate)
+                            atomic_files.text(path, alternate)
                             changed.append(str(path.relative_to(project.root)))
                             counts.update(conservative.macros)
                             continue
@@ -915,7 +918,7 @@ def rewrite(project: Project, policy: Policy, files: list[Path], *, all_files: b
                         }
                     )
                     continue
-                path.write_text(output)
+                atomic_files.text(path, output)
                 changed.append(str(path.relative_to(project.root)))
                 counts.update(result.macros)
     return {

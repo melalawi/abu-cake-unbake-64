@@ -26,6 +26,7 @@ from unbake.project import (
     workspace,
 )
 from unbake.project.config import Held, PendingProject, Policy, Project, SetupPolicy
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.host import resolve_tool
 
 _AUDIO_CALLBACKS = "audio_callbacks.h"
@@ -272,14 +273,14 @@ def _copy_inputs(project: PendingProject | Project, tree: Path, fingerprint: dic
             if path.is_file() and path.name not in _TRANSIENT_EVIDENCE:
                 destination = tree / _EVIDENCE / path.name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, destination)
+                atomic_files.copy2(path, destination)
     for relative in fingerprint:
         # Committed evidence moves to build output; publication deletes it.
         destination = tree / (
             _EVIDENCE + "/" + relative[len(_RETIRED_EVIDENCE) :] if _retired_evidence(relative) else relative
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(project.root / relative, destination)
+        atomic_files.copy2(project.root / relative, destination)
 
 
 def _seed_generations(project: Project, staged: Project) -> None:
@@ -293,12 +294,12 @@ def _seed_generations(project: Project, staged: Project) -> None:
             with build.pin(current):
                 destination = staged.build / f"{version}.0"
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(current, destination, ignore=shutil.ignore_patterns(".inuse", "*.log"))
+                atomic_files.copytree(current, destination, ignore=shutil.ignore_patterns(".inuse", "*.log"))
                 _relocate_generation(destination, project.root, staged.root)
                 staged.build_link(version).symlink_to(destination.name)
         if project.asm.is_dir():
             # Assembly is editable source: staged writers may update it in place.
-            shutil.copytree(project.asm, staged.asm, copy_function=shutil.copy2)
+            atomic_files.copytree(project.asm, staged.asm, copy_function=atomic_files.copy2)
 
 
 def _relocate_generation(generation: Path, source: Path, destination: Path) -> None:
@@ -307,7 +308,7 @@ def _relocate_generation(generation: Path, source: Path, destination: Path) -> N
             content = path.read_bytes()
             changed = content.replace(str(source).encode(), str(destination).encode())
             if content != changed:
-                path.write_bytes(changed)
+                atomic_files.write(path, changed)
 
 
 def _write(tree: Path, relative: str, content: str) -> None:
@@ -316,7 +317,7 @@ def _write(tree: Path, relative: str, content: str) -> None:
         raise Held("setup", f"setup.publication: invalid output path {relative}")
     destination = tree / path
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(content)
+    atomic_files.text(destination, content)
 
 
 def _layout_inputs(project: PendingProject, census: Census, layout: LayoutManifest, tree: Path) -> None:
@@ -513,7 +514,7 @@ def _publish(
                     raise Held("setup", f"setup.publication: output symlink {target}")
                 if target.exists():
                     backup = Path(rollback) / str(len(before))
-                    shutil.copy2(target, backup)
+                    atomic_files.copy2(target, backup)
                     before[target] = (backup, target.stat().st_mode & 0o777, target.stat().st_mtime_ns)
                 else:
                     before[target] = None
@@ -612,7 +613,7 @@ def _prove_publish(
     run(staged, policy, supply=supply)
     _sdk_headers(staged)
     if previous is not None:
-        contributing.write_bytes(previous)
+        atomic_files.write(contributing, previous)
     workers = min(policy.setup_version_jobs, policy.cores, len(staged.versions))
 
     def extract_version(version: str) -> None:
@@ -692,7 +693,7 @@ def prepare_setup(
         )
         compiler_document = tree / "build/setup/compiler.json"
         compiler_document.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(accepted_path, compiler_document)
+        atomic_files.copy2(accepted_path, compiler_document)
         _write(
             tree,
             "build/setup/confirmation.json",
@@ -753,7 +754,7 @@ def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None
     with workspace.temporary(project, prefix="proof-", directory=directory) as temporary:
         tree = Path(temporary) / "tree"
         _copy_inputs(project, tree, fingerprint)
-        (tree / "config.toml").write_text(configured)
+        atomic_files.text(tree / "config.toml", configured)
         staged = config.load(tree)
         _seed_generations(project, staged)
         if supply is not None:
@@ -762,7 +763,7 @@ def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None
         if manifest.is_file():
             destination = staged.build / "setup/roms.json"
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(manifest, destination)
+            atomic_files.copy2(manifest, destination)
             measured = census.run(config.load_pending(tree), policy, names_from=project.names_from)
             layout_path = tree / "build/setup/layout.json"
             if layout_path.is_file():

@@ -11,6 +11,7 @@ from typing import Any, NoReturn
 
 from unbake.layout import split
 from unbake.project.config import Held, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -211,7 +212,7 @@ def ensure(project: Project) -> None:
         config = tomllib.load(source)
     cap = positive(config["project"].get("layout_cap"), "project.layout_cap")
     value = default(cap, catalog(project), project.versions)
-    (project.root / "layout.toml").write_bytes(encoded(value))
+    atomic_files.write(project.root / "layout.toml", encoded(value))
 
 
 def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> None:

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.project.config import Held, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ def run(
         raise Held("setup", f"{command[0]}: {error}") from error
     if log is not None:
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(result.stdout)
+        atomic_files.text(log, result.stdout)
     if result.returncode:
         raise Held("setup", f"{' '.join(command)}: exit {result.returncode}: {result.stdout[-6000:]}")
     return result.stdout.strip()

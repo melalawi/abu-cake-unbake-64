@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 def digest(content: bytes) -> str:
@@ -47,13 +48,7 @@ def write(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise Held("solve", f"types.database: generated path is a symlink: {path}")
-    descriptor, temporary = tempfile.mkstemp(prefix=".typemap-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    atomic_files.write(path, content)
 
 
 def read(path: Path, key: str) -> dict[str, Any]:
@@ -188,7 +183,7 @@ class FactLog:
         self.stream.close()
         digest_ = file_digest(self.temporary)
         path = self.temporary.parent / ("constraints-" + digest_ + ".jsonl")
-        os.replace(self.temporary, path)
+        atomic_files.publish(self.temporary, path)
         return {"kind": "shard", "path": str(path.relative_to(root)), "sha256": digest_, "count": self.count}
 
     def close(self) -> None:
@@ -256,7 +251,7 @@ def database_json(path: Path, value: object) -> tuple[Path | None, str]:
 
 
 def install(path: Path, staged: Path) -> None:
-    os.replace(staged, path)
+    atomic_files.publish(staged, path)
     record = _json_stages.pop(staged, None)
     _file_digests.pop(staged, None)
     if record is not None:

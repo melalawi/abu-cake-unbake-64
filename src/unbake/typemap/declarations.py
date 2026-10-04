@@ -19,6 +19,7 @@ from unbake.decomp.header_declarations import declarations as header_declaration
 from unbake.layout.structs_parser import Parser
 from unbake.project.config import Held, Policy, Project
 from unbake.project.headers import include_headers
+from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import storage
 
 _BOUNDARY = "extern int __unbake_feedback_boundary;"
@@ -281,7 +282,7 @@ class _PublishedHeaders:
                 self.prepared[version] = None
             else:
                 path = self.scratch / (version + ".macros.h")
-                path.write_text(macros)
+                atomic_files.text(path, macros)
                 # Forced includes were already consumed while preparing the prefix.
                 pending = iter(command)
                 replay = []
@@ -339,7 +340,7 @@ def _source_units(
 ) -> Iterator[tuple[tuple[str, Path, str, dict[str, Any]], str | tuple[str, str] | Held]]:
     """Bound cpp concurrency and preserve receipt order for deterministic merging."""
     dummy = headers_batch.scratch / ".empty.c"
-    dummy.write_text("")
+    atomic_files.text(dummy, "")
     for version in dict.fromkeys(task[2] for task in tasks):
         headers_batch.source(version, dummy)
 
@@ -877,7 +878,7 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
                         )
                 if not duplicates:
                     supplemental.append(statement)
-        extra.write_text("\n".join(supplemental))
+        atomic_files.text(extra, "\n".join(supplemental))
         for version in project.versions:
             provenance = {
                 "kind": "declared",

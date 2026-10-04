@@ -6,6 +6,7 @@ from pathlib import Path
 from unbake.layout import split
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
@@ -38,7 +39,7 @@ def preserve(project: Project, policy: Policy, unit: Path, before: str, after: s
         original, candidate = root / "before" / unit.name, root / "after" / unit.name
         for path, text in ((original, before), (candidate, after)):
             path.parent.mkdir()
-            path.write_text(text)
+            atomic_files.text(path, text)
         for version in versions:
             for mode in (0, 1):
                 if code(project, policy, version, original, mode) != code(project, policy, version, candidate, mode):

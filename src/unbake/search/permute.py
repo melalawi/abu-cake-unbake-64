@@ -8,7 +8,6 @@ import math
 import os
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -23,6 +22,7 @@ from typing import Any, cast
 from unbake.decomp.trial import Trial
 from unbake.project import makefile, toolchain
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.search.core import Context, Mutation
 
 
@@ -110,7 +110,10 @@ class _RunResult:
 
 def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budget: float, log: Path) -> _RunResult:
     try:
-        with log.open("wb") as output, log.with_suffix(log.suffix + ".stderr").open("wb") as errors:
+        with (
+            atomic_files.stream(log, "wb") as output,
+            atomic_files.stream(log.with_suffix(log.suffix + ".stderr"), "wb") as errors,
+        ):
             if budget <= 0:
                 return _RunResult(False, None)
             process = subprocess.Popen(
@@ -205,16 +208,16 @@ class Permuter:
             recipe = work / "recipe"
             recipe.mkdir()
             for name, content in makefile.helpers(project).items():
-                (recipe / Path(name).name).write_text(content, encoding="utf-8")
-            shutil.copyfile(project.tools / "compiler.sha256", recipe / "compiler.sha256")
-            (work / "base.c").write_text(source, encoding="utf-8")
+                atomic_files.text(recipe / Path(name).name, content, encoding="utf-8")
+            atomic_files.copyfile(project.tools / "compiler.sha256", recipe / "compiler.sha256")
+            atomic_files.text(work / "base.c", source, encoding="utf-8")
             environment = dict(
                 os.environ, TMPDIR=str(work), TMP=str(work), TEMP=str(work), PYTHONDONTWRITEBYTECODE="1", LC_ALL="C"
             )
-            shutil.copyfile(target, work / "target.o")
-            (work / "settings.toml").write_text(f'func_name = "{function}"\ncompiler_type = "{family}"\n')
+            atomic_files.copyfile(target, work / "target.o")
+            atomic_files.text(work / "settings.toml", f'func_name = "{function}"\ncompiler_type = "{family}"\n')
             script = work / "compile.sh"
-            script.write_text(compile_script(project, policy, source_path, version, work))
+            atomic_files.text(script, compile_script(project, policy, source_path, version, work))
             script.chmod(0o755)
             command = [
                 sys.executable,

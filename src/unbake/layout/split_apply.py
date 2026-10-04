@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import difflib
 import os
-import shutil
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from unbake.layout import split
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.project.build import BuildResult
@@ -53,21 +53,7 @@ def diff(edits: Iterable[split.Edit]) -> str:
 
 
 def write(path: Path, text: str) -> None:
-    path = Path(path)
-    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(text.encode("utf-8"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.chmod(mode)
-        temporary.replace(path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
+    atomic_files.text(Path(path), text, encoding="utf-8")
 
 
 def _validated(project: Project, edits: Iterable[split.Edit]) -> tuple[list[split.Edit], list[str]]:
@@ -151,7 +137,7 @@ def apply(project: Project, policy: Policy, edits: Iterable[split.Edit]) -> list
                 except FileExistsError:
                     number += 1
             generations[v] = generation
-            shutil.copytree(current, generation, dirs_exist_ok=True, symlinks=True)
+            atomic_files.copytree(current, generation, dirs_exist_ok=True, symlinks=True)
         for edit in edits:
             existed = Path(edit.path).exists()
             write(edit.path, edit.after)

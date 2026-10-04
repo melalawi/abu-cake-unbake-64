@@ -38,6 +38,31 @@ class IdentityStampTests(unittest.TestCase):
         driver.write_text(driver.read_text().replace("from unbake.project_tools.kind", "from kind"))
         self.assertNotEqual(identity.driver_content(driver), before)
 
+    def test_atomic_publication_preserves_object_identity_but_payload_edits_do_not(self):
+        driver = self.root / "codegen.py"
+        direct = "destination.write_bytes(content)\nargs.depfile.write_text(text)\n"
+        driver.write_text(direct)
+        before = identity.driver_content(driver)
+        library = (
+            "from unbake.project_tools import atomic as atomic_files\n"
+            "atomic_files.write(destination, content)\natomic_files.text(args.depfile, text)\n"
+        )
+        for code in (
+            library,
+            library.replace("from unbake.project_tools import atomic as atomic_files", "import atomic as atomic_files"),
+        ):
+            driver.write_text(code)
+            self.assertEqual(identity.driver_content(driver), before)
+            driver.write_text(code.replace("content)", "changed_content)"))
+            self.assertNotEqual(identity.driver_content(driver), before)
+
+    def test_other_imported_generator_logic_still_changes_identity(self):
+        driver = self.root / "driver.py"
+        driver.write_text("from unbake.project_tools import first\nvalue = first.run()\n")
+        before = identity.driver_content(driver)
+        driver.write_text("from unbake.project_tools import second as first\nvalue = first.run()\n")
+        self.assertNotEqual(identity.driver_content(driver), before)
+
     def test_stamp_publication_table_and_hardlinks(self):
         stamp = self.root / "stamp"
         identity.publish_stamp(stamp, "same")

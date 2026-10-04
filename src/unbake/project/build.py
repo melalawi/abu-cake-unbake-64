@@ -18,6 +18,7 @@ from pathlib import Path
 
 from unbake.project import makefile
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -163,7 +164,7 @@ def build(
                     f'mv -f -- "$$pending/status" {status_word} || exit 1; exit $$result',
                 ]
             )
-        driver.write_text("\n".join(lines) + "\n")
+        atomic_files.text(driver, "\n".join(lines) + "\n")
         try:
             subprocess.run(["make", "-f", str(driver), f"-j{policy.cores}", "-k"], capture_output=True, text=True)
         except OSError as error:
@@ -255,10 +256,10 @@ def compile_versions(
                 try:
                     faults = compile_objects(project, policy, sources, version, out, cancel_file=cancel_file)
                 except BaseException:
-                    cancel_file.touch()
+                    atomic_files.receipt(cancel_file)
                     raise
                 if faults:
-                    cancel_file.touch()
+                    atomic_files.receipt(cancel_file)
                 return faults
 
             with ThreadPoolExecutor(max_workers=min(policy.cores, len(planned))) as pool:
@@ -300,8 +301,8 @@ def compile_objects(
     with tempfile.TemporaryDirectory(prefix=".compile-", dir=out) as temporary:
         work = Path(temporary)
         for name, content in makefile.helpers(project).items():
-            (work / Path(name).name).write_text(content)
-        shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
+            atomic_files.text(work / Path(name).name, content)
+        atomic_files.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
         root = project.src.relative_to(project.root)
         completed = subprocess.run(
             [
@@ -368,8 +369,8 @@ def compile_object(
     with tempfile.TemporaryDirectory(prefix=".compile-", dir=out.parent) as temporary:
         work = Path(temporary)
         for name, content in makefile.helpers(project).items():
-            (work / Path(name).name).write_text(content)
-        shutil.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
+            atomic_files.text(work / Path(name).name, content)
+        atomic_files.copyfile(project.tools / "compiler.sha256", work / "compiler.sha256")
         _run(
             [
                 sys.executable,

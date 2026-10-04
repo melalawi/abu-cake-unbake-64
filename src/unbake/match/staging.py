@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import subprocess
 from collections.abc import Callable, Iterable
 from contextlib import ExitStack
@@ -20,6 +19,7 @@ from unbake.match.common import (
 )
 from unbake.project import build, makefile
 from unbake.project.config import Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.compile_identity import driver_names, driver_stamp_name
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
@@ -113,8 +113,8 @@ def copy_tree(
             or (not assembly and parent / name == project.asm.relative_to(project.root))
         ]
 
-    shutil.copytree(
-        source, destination, ignore=ignore, symlinks=True, copy_function=os.link if linked else shutil.copy2
+    atomic_files.copytree(
+        source, destination, ignore=ignore, symlinks=True, copy_function=os.link if linked else atomic_files.copy2
     )
     from unbake.layout import index
 
@@ -122,7 +122,7 @@ def copy_tree(
     if lookup.is_file():
         target = destination / lookup.relative_to(project.root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(lookup, target)
+        atomic_files.copy2(lookup, target)
 
 
 def fingerprint(project: Project, root: Path) -> dict[str, str]:
@@ -208,7 +208,7 @@ def _retain_object(source: Path, target: Path) -> None:
         old, new = source.with_suffix(suffix), target.with_suffix(suffix)
         if old.is_file():
             if suffix == ".built":
-                shutil.copy2(old, new)
+                atomic_files.copy2(old, new)
             else:
                 os.link(old, new, follow_symlinks=True)
 
@@ -219,7 +219,7 @@ def retain(current: Path, generation: Path, *, borrowed: bool = False) -> None:
         if path.name in {".inuse", "report", "obj", "retained-layout.json"} or path.suffix in {".elf", ".map", ".z64"}:
             continue
         if path.is_file():
-            shutil.copy2(path, generation / path.name)
+            atomic_files.copy2(path, generation / path.name)
     if borrowed:
         (generation / "obj").symlink_to(current / "obj", target_is_directory=True)
         return
@@ -414,7 +414,7 @@ def copy_assembly(project: Project, staged: Project) -> None:
     """Hydrate assembly only when a changed boundary requires extraction."""
     if not staged.asm.exists():
         if project.asm.is_dir():
-            shutil.copytree(project.asm, staged.asm, symlinks=True)
+            atomic_files.copytree(project.asm, staged.asm, symlinks=True)
         else:
             staged.asm.mkdir(parents=True)
 
@@ -455,8 +455,8 @@ def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
                 continue
             receipt = (generation / obj).with_suffix(".built")
             if receipt.is_file() and not receipt.is_symlink():
-                receipt.touch()
+                atomic_files.receipt(receipt)
         for name in (".split.mk", ".split"):
             path = generation / name
             if path.is_file():
-                path.touch()
+                atomic_files.receipt(path)

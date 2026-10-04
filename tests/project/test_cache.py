@@ -112,7 +112,7 @@ class CacheTests(unittest.TestCase):
     def test_failed_put_keeps_previous_artifact_and_cleans_temporary(self) -> None:
         existing = self.cache.put("cc", self.identity, self.source)
         with (
-            patch("unbake.project.cache.shutil.copyfile", side_effect=OSError("copy refused")),
+            patch("unbake.project.cache.atomic_files.copyfile", side_effect=OSError("copy refused")),
             self.assertRaises(Held),
         ):
             self.cache.put("cc", self.identity, self.source)

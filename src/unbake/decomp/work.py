@@ -16,6 +16,7 @@ from unbake.layout import split
 from unbake.project import build, makefile
 from unbake.project.config import Held, Policy, Project, load_policy
 from unbake.project.flow import WorkManifest
+from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
 
 
@@ -107,8 +108,8 @@ def overlay(project: Project, directory: Path) -> Project:
     for root in project.include:
         if any(path.is_symlink() for path in root.rglob("*")):
             raise Held("draft", f"paths.include: header symlink in {root}")
-        shutil.copytree(root, destination / root.relative_to(project.root), dirs_exist_ok=True)
-    (directory / "overlay.json").write_bytes(encoded({"base": headers(project), "edits": {}}))
+        atomic_files.copytree(root, destination / root.relative_to(project.root), dirs_exist_ok=True)
+    atomic_files.write(directory / "overlay.json", encoded({"base": headers(project), "edits": {}}))
     return overlay_project(project, directory)
 
 
@@ -147,7 +148,7 @@ def save_overlay(project: Project, directory: Path) -> None:
                 if digest(path.read_bytes()) != metadata["base"].get(relative):
                     edits[relative] = digest(path.read_bytes())
     metadata["edits"] = edits
-    (directory / "overlay.json").write_bytes(encoded(metadata))
+    atomic_files.write(directory / "overlay.json", encoded(metadata))
 
 
 def overlay_data(project: Project, source: Path) -> dict[str, Any]:
@@ -197,10 +198,10 @@ def overlay_source(project: Project, source: Path, directory: Path, root: Path) 
     if not root.is_dir() or any(path.is_symlink() for path in root.rglob("*")):
         raise Held("try", "trial.overlay_root: required include directory without symlinks")
     staged = overlay(project, directory)
-    shutil.copytree(root, staged.include[0], dirs_exist_ok=True)
+    atomic_files.copytree(root, staged.include[0], dirs_exist_ok=True)
     save_overlay(project, directory)
     destination = directory / source.name
-    shutil.copyfile(source, destination)
+    atomic_files.copyfile(source, destination)
     return destination
 
 
@@ -212,18 +213,18 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
 
     tree = directory / "tree"
     tree.mkdir(parents=True)
-    shutil.copyfile(project.root / "config.toml", tree / "config.toml")
+    atomic_files.copyfile(project.root / "config.toml", tree / "config.toml")
     if (project.root / "layout.toml").is_file():
-        shutil.copyfile(project.root / "layout.toml", tree / "layout.toml")
+        atomic_files.copyfile(project.root / "layout.toml", tree / "layout.toml")
     from unbake.layout import index
 
     lookup = index.path(project)
     if lookup.is_file():
         target = tree / lookup.relative_to(project.root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(lookup, target)
+        atomic_files.copyfile(lookup, target)
     for root in (*project.include, project.root / "versions"):
-        shutil.copytree(root, tree / root.relative_to(project.root))
+        atomic_files.copytree(root, tree / root.relative_to(project.root))
     for root in (project.tools, project.roms):
         (tree / root.relative_to(project.root)).symlink_to(root, target_is_directory=True)
     staged = staging.project_at(project, tree)
@@ -244,10 +245,10 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
         if original_headers.get(path) == text:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
+        atomic_files.text(path, text)
     result = staged.src / source.name
-    result.write_text(folded.source)
-    (result.parent / "trial-view.json").write_bytes(encoded({"root": str(tree)}))
+    atomic_files.text(result, folded.source)
+    atomic_files.write(result.parent / "trial-view.json", encoded({"root": str(tree)}))
     return result
 
 

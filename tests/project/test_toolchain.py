@@ -192,7 +192,7 @@ class ToolchainTests(unittest.TestCase):
 
         def replace(source: Any, destination: Any) -> None:
             target = Path(destination)
-            if target.name in pins:
+            if target.name in pins and target.exists():
                 self.assertEqual(target.read_bytes(), old[target.name])
                 self.assertEqual(compiler_files.sha(Path(source)), pins[target.name])
                 self.assertTrue(Path(source).stat().st_mode & 0o111)

@@ -11,6 +11,7 @@ from typing import cast
 from unbake.decomp.trial_compare import Compare
 from unbake.families.gcc.schedule import Schedule
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -203,7 +204,7 @@ def allocation(project: Project, policy: Policy, source: Path, version: str) -> 
         if spec.family == "gcc":
             expanded, codeflags = gcc_input(project, policy, source, version, work, preserve_lines=False)
             input_path = work / "source.i"
-            input_path.write_text(expanded)
+            atomic_files.text(input_path, expanded)
             trial_compile.run_tool(
                 [
                     str(selected.cc),
@@ -315,7 +316,7 @@ def order(project: Project, policy: Policy, source: Path, version: str) -> Sched
         work = Path(temporary)
         expanded, flags = gcc_input(project, policy, source, version, work, preserve_lines=False)
         input_path = work / "source.i"
-        input_path.write_text(expanded, encoding="utf-8")
+        atomic_files.text(input_path, expanded, encoding="utf-8")
         trial_compile.run_tool(
             [str(compiler.cc), *flags, *family.dump_flags(), str(input_path), "-o", str(work / "source.s")],
             work,

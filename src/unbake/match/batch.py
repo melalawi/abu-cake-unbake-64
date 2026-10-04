@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -41,6 +40,7 @@ from unbake.match.common import atomic, held
 from unbake.match.publication import swap
 from unbake.project import build, compiler_choice, config, makefile, setup, workspace
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.report import progress
 from unbake.typemap import storage
 
@@ -152,7 +152,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
                 staging.copy_tree(project, project.root, tree, skip=("docs",), assembly=False, linked=True)
                 local_policy = project.tools / "clone-policy.toml"
                 if local_policy.is_file():
-                    shutil.copy2(local_policy, tree / local_policy.relative_to(project.root))
+                    atomic_files.copy2(local_policy, tree / local_policy.relative_to(project.root))
                 staged = staging.project_at(project, tree)
                 if not all(candidate.compiled for candidate in candidates):
                     staging.write_staged(staged, staging.helper_edits(staged))
@@ -1014,7 +1014,7 @@ def _commit(
                 swapped.append(version)
             progress.write(project, policy, reports=reports)
             ledger.parent.mkdir(parents=True, exist_ok=True)
-            with ledger.open("a", encoding="utf-8") as output:
+            with atomic_files.stream(ledger, "a", encoding="utf-8") as output:
                 for candidate in candidates:
                     if not candidate.matched:
                         continue

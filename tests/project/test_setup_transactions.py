@@ -565,7 +565,7 @@ class SetupTransactionTests(unittest.TestCase):
         staged = config.load(tree)
         with patch.object(setup.shutil, "copytree") as copytree:
             setup._seed_generations(self.project, staged)
-        copytree.assert_called_once_with(self.project.asm, staged.asm, copy_function=shutil.copy2)
+        copytree.assert_called_once_with(self.project.asm, staged.asm, copy_function=setup.atomic_files.copy2)
 
     def test_duplicate_gfx_definition_refuses_without_overwriting_human_header(self) -> None:
         header = self.project.include[0] / "human.h"

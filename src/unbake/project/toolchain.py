@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from unbake.project import compiler_files
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.project.config import Policy, Project, SetupPolicy
@@ -255,7 +256,7 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: b
                     )
                 target = stage / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(contents[pin])
+                atomic_files.write(target, contents[pin])
                 target.chmod(0o755)
             verify(stage, spec)
             if destination.exists():
@@ -263,7 +264,7 @@ def _install(spec: CompilerSpec, cache: Path, source: Path | None, *, refresh: b
                     target = destination / name
                     if previous.get(name) != pin or target.is_symlink():
                         target.parent.mkdir(parents=True, exist_ok=True)
-                        os.replace(stage / name, target)
+                        atomic_files.publish(stage / name, target)
                         _replaced(target, previous.get(name), pin)
             else:
                 os.replace(stage, destination)

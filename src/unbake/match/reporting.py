@@ -13,6 +13,7 @@ from time import monotonic
 from uuid import uuid4
 
 from unbake.project.config import Project
+from unbake.project_tools import atomic as atomic_files
 
 _sink: ContextVar[Callable[[str], object] | None] = ContextVar("publication_sink", default=None)
 _report: ContextVar[Path | None] = ContextVar("publication_report", default=None)
@@ -65,7 +66,7 @@ def session(project: Project) -> Iterator[None]:
 def record(event: str, **evidence: object) -> None:
     path = _report.get()
     if path is not None:
-        with path.open("a") as output:
+        with atomic_files.stream(path, "a") as output:
             output.write(
                 json.dumps({"event": event, "at": datetime.now(UTC).isoformat(), **evidence}, sort_keys=True) + "\n"
             )

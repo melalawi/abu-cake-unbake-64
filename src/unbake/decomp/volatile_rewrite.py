@@ -15,6 +15,7 @@ from pathlib import Path
 from unbake.decomp import checks
 from unbake.layout.header_context import Headers
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 BOUNDARY = "/* unbake declaration evidence boundary */\n"
 
@@ -88,7 +89,7 @@ def proven(
             for path, text in headers.texts.items():
                 destination = root / "overlay" / path.relative_to(project.root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(text)
+                atomic_files.text(destination, text)
             try:
                 gbi_proof.preserve(staged, policy, unit, source, after)
             except Held as error:

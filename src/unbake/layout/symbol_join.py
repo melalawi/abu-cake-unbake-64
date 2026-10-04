@@ -19,6 +19,7 @@ from unbake.project import config, setup
 from unbake.project.config import Held, Project, SetupPolicy
 from unbake.project.flow import LayoutManifest
 from unbake.project.rom import load
+from unbake.project_tools import atomic as atomic_files
 
 
 def read(path: Path) -> list[dict[str, Any]]:
@@ -378,7 +379,7 @@ def run(project: Project, policy: SetupPolicy, path: Path, *, apply: bool) -> li
             report["publication"] = "preview" if not apply else "pending"
             report["exit_status"] = None if apply else int(bool(report["refusals"]))
             artifact = directory / "proposal.json"
-            with artifact.open("w") as stream:
+            with atomic_files.stream(artifact, "w") as stream:
                 json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
                 stream.write("\n")
             lines = [f"join receipt {artifact}"]
@@ -390,7 +391,7 @@ def run(project: Project, policy: SetupPolicy, path: Path, *, apply: bool) -> li
                 )
                 report["exit_status"] = int(bool(report["refusals"]))
                 report["proof"] = lines[1:]
-                with artifact.open("w") as stream:
+                with atomic_files.stream(artifact, "w") as stream:
                     json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
                     stream.write("\n")
             lines += [

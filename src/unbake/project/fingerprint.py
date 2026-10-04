@@ -20,6 +20,7 @@ from unbake.project.compiler_proposal import (
 from unbake.project.config import Held, Policy, Project
 from unbake.project.rom import Rom, shingles
 from unbake.project.toolchain import CompilerSpec
+from unbake.project_tools import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -306,10 +307,11 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
         work = Path(temporary)
         include = work / "include"
         include.mkdir()
-        (include / "probe.h").write_text(
+        atomic_files.text(
+            include / "probe.h",
             "typedef s32 M2C_UNK;\ntypedef s8 M2C_UNK8;\ntypedef s16 M2C_UNK16;\n"
             "typedef s32 M2C_UNK32;\ntypedef s64 M2C_UNK64;\n"
-            "#define M2C_FIELD(value, pointer_type, offset) (*(pointer_type)((s8 *)(value) + (offset)))\n"
+            "#define M2C_FIELD(value, pointer_type, offset) (*(pointer_type)((s8 *)(value) + (offset)))\n",
         )
         project = replace(project, include=(*project.include, include))
         for function in probes:

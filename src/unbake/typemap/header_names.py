@@ -9,6 +9,7 @@ from typing import Any
 
 from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
 from unbake.project.config import Held, Policy, Project
+from unbake.project_tools import atomic as atomic_files
 
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
@@ -403,13 +404,14 @@ def source_names(
                     row = parser.parse()
                 except Held as error:
                     raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
-                output.write_text(
+                atomic_files.text(
+                    output,
                     json.dumps(
                         {
                             "names": sorted(parser.names),
                             "tags": sorted(row.tags),
                         }
-                    )
+                    ),
                 )
 
             row = json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes())

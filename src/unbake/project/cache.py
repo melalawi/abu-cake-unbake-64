@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 import tempfile
 from collections import OrderedDict
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 T = TypeVar("T")
 _parsed: dict[tuple[str, tuple[Path, ...], Hashable], tuple[tuple[bytes, ...], Any]] = {}
@@ -113,19 +113,13 @@ class Cache:
 
     def put(self, kind: str, key: str, src: Path) -> Path:
         path = self.path(kind, key)
-        temporary = None
         try:
             if not src.is_file():
                 raise Held("cache", f"src {src}: expected file")
-            temporary = self._temporary(path)
-            shutil.copyfile(src, temporary)
-            os.replace(temporary, path)
+            atomic_files.copyfile(src, path)
             return path
         except OSError as error:
             raise Held("cache", f"{path} from src {src}: {error}") from error
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
 
     def produce(self, kind: str, key: str, make: Callable[[Path], None]) -> Path:
         cached = self.get(kind, key)
@@ -139,7 +133,7 @@ class Cache:
             make(temporary)
             if not temporary.is_file():
                 raise Held("cache", f"make output {temporary}: expected file")
-            os.replace(temporary, path)
+            atomic_files.publish(temporary, path)
             return path
         except OSError as error:
             raise Held("cache", f"{path}: {error}") from error

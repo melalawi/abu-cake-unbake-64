@@ -6,6 +6,7 @@ from pathlib import Path
 from unbake.cli import common
 from unbake.layout.split import Edit
 from unbake.project.config import Policy, Project
+from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import redrafts, solve, storage
 
 
@@ -83,7 +84,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     conflicts = [f"{row['key']}: {row.get('alternatives', row.get('reason', []))}" for row in value["conflicts"]]
     conflict_path = project.build / "types/conflicts.txt"
     conflict_path.parent.mkdir(parents=True, exist_ok=True)
-    conflict_path.write_text("".join(line + "\n" for line in conflicts), encoding="utf-8")
+    atomic_files.text(conflict_path, "".join(line + "\n" for line in conflicts), encoding="utf-8")
     lines.append(f"conflict list: {conflict_path}; showing {min(5, len(conflicts))} of {len(conflicts)}")
     lines.extend(conflicts[:5])
     lines.append(f"redraft={len(redrafts(project))}; unknown details are retained in the database")

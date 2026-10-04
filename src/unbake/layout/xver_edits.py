@@ -8,6 +8,7 @@ from typing import Any, cast
 from unbake.decomp.needs import Need, PlacementNeed
 from unbake.layout import split, split_edits
 from unbake.project.config import Held
+from unbake.project_tools import atomic as atomic_files
 
 
 def _rename(project: Any, need: PlacementNeed) -> list[split.Edit]:
@@ -50,7 +51,6 @@ def _rename(project: Any, need: PlacementNeed) -> list[split.Edit]:
 
 def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
     """Compose placement needs into edits without writing project files."""
-    import shutil
     from tempfile import TemporaryDirectory
     from types import SimpleNamespace
 
@@ -73,7 +73,7 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
             for field in ("split", "symbols"):
                 path = getattr(original, field)
                 destination = directory / Path(path).name
-                shutil.copyfile(path, destination)
+                atomic_files.copyfile(path, destination)
                 originals[destination] = (Path(path), split.read(path), version)
             versions[version] = SimpleNamespace(
                 split=directory / Path(original.split).name, symbols=directory / Path(original.symbols).name
@@ -93,7 +93,7 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
             else:
                 raise Held("placement", f"{need.function} action {need.action}: unsupported")
             for edit in edits:
-                edit.path.write_text(edit.after)
+                atomic_files.text(edit.path, edit.after)
         return [
             split.Edit(original, before, split.read(path), (version,))
             for path, (original, before, version) in originals.items()

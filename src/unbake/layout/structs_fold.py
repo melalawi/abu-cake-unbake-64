@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import tempfile
 from collections.abc import Iterable, Iterator
 from dataclasses import replace
@@ -20,6 +19,7 @@ from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS, Aggregate
 from unbake.project.config import Held, Project, load_policy
+from unbake.project_tools import atomic as atomic_files
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -795,7 +795,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
         with tempfile.TemporaryDirectory(prefix="structs-proof-", dir=temporary_root) as temporary:
             overlay = Path(temporary)
             for root in project.include:
-                shutil.copytree(root, overlay / root.relative_to(project.root), dirs_exist_ok=True)
+                atomic_files.copytree(root, overlay / root.relative_to(project.root), dirs_exist_ok=True)
             # Only selected consumers and their complete literal include
             # closures are needed. Copying every unrelated C unit twice does
             # not contribute to the physical compiler proof.
@@ -815,11 +815,11 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
             for dependency in needed:
                 destination = overlay / dependency.relative_to(project.root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(dependency, destination)
+                atomic_files.copyfile(dependency, destination)
             for edit in edits:
                 destination = overlay / edit.path.relative_to(project.root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(edit.after)
+                atomic_files.text(destination, edit.after)
             verified = set()
             for index, (source, version, flags) in enumerate(includers):
                 compiler = project.compiler_for(source)
@@ -839,7 +839,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
                             cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
                             expanded = run_tool([cpp, *recipe.cppflags, *cppflags, str(staged)], overlay, "structs")
                             preprocessed = output.with_suffix(".i")
-                            preprocessed.write_text(expanded)
+                            atomic_files.text(preprocessed, expanded)
                             run_tool(
                                 [str(compiler.cc), "-quiet", *codeflags, str(preprocessed), "-o", str(output)],
                                 overlay,
