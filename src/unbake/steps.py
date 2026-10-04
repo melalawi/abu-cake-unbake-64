@@ -144,10 +144,13 @@ def _extract_key(project: Project, host: Host) -> str:
 
 
 def _extract(project: Project, host: Host) -> None:
+    """One splat process per version, [setup].version_jobs of them at once."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from unbake import extract
 
-    for version in project.versions:
-        extract.segments(project, host, version)
+    with ThreadPoolExecutor(max_workers=host.setup_version_jobs) as executor:
+        list(executor.map(lambda version: extract.segments(project, host, version), project.versions))
 
 
 def _progress_key(project: Project, host: Host) -> str:
