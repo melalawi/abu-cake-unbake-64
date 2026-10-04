@@ -1,4 +1,4 @@
-"""Small real header fixtures and synthetic integrity vectors."""
+"""Small header fixtures and synthetic integrity vectors."""
 
 import struct
 import tempfile
@@ -12,7 +12,7 @@ from unittest.mock import patch
 from unbake.project import header, rom
 from unbake.project.config import Held
 
-GOLDEN = (("us", "6aa4dde7e3e2f4e7", "4e42584500", "BATTLETANX", 0x80071000),)
+GOLDEN = (("us", "6aa4dde7e3e2f4e7", "4e42584500", "EXAMPLEONE", 0x80071000),)
 # Independent reference results for repeating max/sign-bit/one/rotate-31 words.
 VECTORS = (
     ("6101", "00000001", 0xF8E8CDDC, 0x947A4D8D),
@@ -41,10 +41,10 @@ BOOTCODES = {zlib.crc32(image(vector)[0x40:0x1000]): vector[0] for vector in VEC
 
 
 class HeaderTests(unittest.TestCase):
-    def test_battletanx_header(self) -> None:
+    def test_reference_header(self) -> None:
         for name, crc, identity, title, entry in GOLDEN:
             with self.subTest(name=name, title=title):
-                title_hex = "424154544c4554414e5820202020202020202020"
+                title_hex = "4558414d504c454f4e4520202020202020202020"
                 data = bytes.fromhex(
                     "803712400000000f"
                     + f"{entry:08x}"

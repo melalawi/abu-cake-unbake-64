@@ -53,7 +53,7 @@ class RenderTests(unittest.TestCase):
 
     def test_incomplete_live_layout_is_refused_without_rebuilding_from_history(self) -> None:
         root = Path(__file__).parent
-        for stem in ("battletanx", "ragewars"):
+        for stem in ("exampleone", "exampletwo"):
             with self.subTest(project=stem):
                 reports = json.loads((root / f"{stem}-measures.json").read_text())
                 reduced = "\n\n".join(
@@ -86,12 +86,12 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(report.render(rendered, reports), rendered)
 
     def test_reference_layout_goldens_and_idempotence(self) -> None:
-        for stem in ("battletanx", "ragewars"):
+        for stem in ("exampleone", "exampletwo"):
             with self.subTest(project=stem):
                 root = Path(__file__).parent
                 reference = (root / f"{stem}-reference.golden").read_text()
                 golden = (root / f"{stem}-progress.golden").read_text()
-                if stem == "ragewars":
+                if stem == "exampletwo":
                     golden = golden.replace("| eu-x (", "| eu-mul (").replace("eu-x    [", "eu-mul  [")
                 reports = json.loads((root / f"{stem}-measures.json").read_text())
                 template = "intro\n## Progress\n\n" + reference + "\n## End\nfooter\n"

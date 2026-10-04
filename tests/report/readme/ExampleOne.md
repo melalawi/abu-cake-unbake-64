@@ -1,6 +1,6 @@
-# BattleTanx decompilation
+# ExampleOne decompilation
 
-A matching decompilation of *BattleTanx* for the Nintendo 64.
+A matching decompilation of *ExampleOne* for the Nintendo 64.
 
 > **This repository contains no game content.** You must supply a legally acquired cartridge dump. Builds are verified against its SHA256.
 

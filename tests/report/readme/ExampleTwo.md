@@ -1,6 +1,6 @@
-# Turok: Rage Wars decompilation
+# Example Two decompilation
 
-A matching decompilation of *Turok: Rage Wars* for the Nintendo 64.
+A matching decompilation of *Example Two* for the Nintendo 64.
 
 > **This repository contains no game content.** You must supply a legally acquired cartridge dump. Builds are verified against its SHA256.
 

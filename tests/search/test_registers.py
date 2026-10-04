@@ -100,7 +100,7 @@ class RegistersTests(unittest.TestCase):
         self.assertEqual(result.pseudos[1].rejections, ((19, "live over 2-48"),))
 
     def test_global_priority_matches_gcc_and_names_the_flip(self) -> None:
-        # RageWars func_8044D408: k (17 refs over 144 insns) is allocated just before the slot
+        # ExampleTwo func_8044D408: k (17 refs over 144 insns) is allocated just before the slot
         # pointer (11 refs over 70 insns), so the pointer loses s7. Real log2 would rank them the
         # other way round; GCC uses floor_log2.
         self.assertEqual((global_priority(17, 144), global_priority(11, 70)), (4722, 4714))

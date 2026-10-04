@@ -65,7 +65,7 @@ class SetupTests(unittest.TestCase):
         )
         mask_identity = re.compile(rb"SHA256 `[0-9a-f]+`")
         readme = self.root / "README.md"
-        for game in ("BattleTanx", "RageWars"):
+        for game in ("ExampleOne", "ExampleTwo"):
             head = (references / "readme" / f"{game}.md").read_bytes()
             reports = json.loads((references / f"{game.lower()}-measures.json").read_bytes())
             reports = {name.replace("eu-mul", "eu-x"): doc for name, doc in reports.items()}

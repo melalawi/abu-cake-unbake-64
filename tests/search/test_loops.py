@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from unbake.search import order
 
-# RageWars func_8041F2A0 matched only once its config walk became config[i]; the walk form
+# ExampleTwo func_8041F2A0 matched only once its config walk became config[i]; the walk form
 # placed the strength-reduced pointer in another schedule slot.
 SOURCE = """typedef struct { char pad[3]; unsigned char active; } C;
 C D[4];
@@ -61,7 +61,7 @@ class LoopFormTests(unittest.TestCase):
 
 class TernaryArmTests(unittest.TestCase):
     def test_arm_order_inverts_the_condition(self) -> None:
-        # RageWars func_8043FFAC: x > 0xFF ? 0xFF : x stores each arm into the outgoing argument
+        # ExampleTwo func_8043FFAC: x > 0xFF ? 0xFF : x stores each arm into the outgoing argument
         # slot where x < 0x100 ? x : 0xFF computes a register first; each inversion gains words.
         source = "int g(int, int);\nint f(int x, int y) { return g(x < 256 ? x : 255, y); }\n"
         found = [
