@@ -661,7 +661,7 @@ def extract(args: argparse.Namespace) -> None:
 
 
 def prune_stale(asm: Path, text: str, written: set[Path]) -> int:
-    """Remove assembly this extraction did not emit for matched C members or pool rows."""
+    """Remove matched C assembly and pool files this extraction no longer emits."""
     matched = {
         Path(scalar(name)).with_suffix(".s")
         for name in re.findall(r"^\s*-\s*\[\s*[\w]+\s*,\s*c\s*,\s*([^,\]]+)", text, re.M)
@@ -669,9 +669,10 @@ def prune_stale(asm: Path, text: str, written: set[Path]) -> int:
     count = 0
     for path in sorted(asm.rglob("*.s")):
         relative = path.relative_to(asm)
-        if path.resolve() in written or not (relative in matched or relative.parts[0] == "data"):
+        if relative not in matched and (relative.parts[0] != "data" or path.resolve() in written):
             continue
         path.unlink()
+        _WRITTEN.pop(str(path), None)
         count += 1
     return count
 

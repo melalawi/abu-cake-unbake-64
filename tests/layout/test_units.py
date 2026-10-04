@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from unbake.layout import units
 from unbake.project_tools import extract
@@ -35,7 +36,11 @@ class UnitTests(unittest.TestCase):
                 (root / entry).parent.mkdir(parents=True, exist_ok=True)
                 (root / entry).write_text("")
             text = rows('c, "f"', 'asm, "g"', 'rodata, "rodata/f/1"')
-            removed = extract.prune_stale(root, text, {(root / "data/rodata/f/1.rodata.s").resolve()})
+            emitted = {root / "f.s", root / "g.s", root / "data/rodata/f/1.rodata.s"}
+            with patch.dict(extract._WRITTEN, {str(p): "digest" for p in emitted}, clear=True):
+                removed = extract.prune_stale(root, text, {p.resolve() for p in emitted})
+                self.assertNotIn(str(root / "f.s"), extract._WRITTEN)
+                self.assertIn(str(root / "g.s"), extract._WRITTEN)
             self.assertEqual(removed, 2)
             left = sorted(p.relative_to(root).as_posix() for p in root.rglob("*.s"))
             self.assertEqual(left, ["assets/x.s", "data/rodata/f/1.rodata.s", "g.s", "kept.s"])
