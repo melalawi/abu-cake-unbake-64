@@ -46,6 +46,8 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
         shutil.rmtree(scratch)
     if replace and (directory / "include").exists():
         shutil.rmtree(directory / "include")
+    # The draft's own header directory comes first on its include path (config.draft_view).
+    (directory / "include").mkdir(parents=True, exist_ok=True)
     content = m2c.draft(
         draft_view(project, function), host, function, version, scratch, extracted, type_context=context
     )
