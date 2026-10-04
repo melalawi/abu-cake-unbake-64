@@ -7,8 +7,10 @@ Same-object evidence joins adjacent functions; object padding cuts them; the lay
 - padding: zero words after a function's return that end on a 16-byte boundary are the end of an object.
 - version: a function that only some versions hold stays with its neighbour while the module is under the cap.
 A boundary is a cut only when every version holding both sides agrees; a join from any version holds.
-Joins never cross a cut, and no single evidence item reaches further than the cap, but a run joined by rodata or
-callee evidence stays whole at any length. The cap only packs what evidence leaves unjoined. Only `default` groups
+Joins never cross a cut, and no single evidence item reaches further than the cap. A direct join keeps its run whole,
+but overlapping joins never chain a run past the cap: such a chain is cut at its weakest boundary (fewest shared
+references in any one version) until each piece is within the cap or lies inside one direct join. The cap then
+packs what evidence leaves unjoined. Only `default` groups
 are inferred; inferred, proven and hypothesis groups stay as they are, so the result is stable and a later proof
 can confirm or split it.
 """
@@ -112,6 +114,26 @@ def version_evidence(
     return evidence
 
 
+def _cut_chains(
+    joined: list[set[str]], cut: list[str | None], weight: list[int], direct: set[tuple[int, int]], cap: int
+) -> None:
+    """Cut every run chained by overlapping joins past the cap at its weakest boundary, nearest the middle on ties,
+    until each piece is within the cap or lies inside one direct join (member indices LOW..HIGH)."""
+    pending: list[tuple[int, int]] = []
+    start = 0
+    for position in range(len(joined) + 1):
+        if position == len(joined) or cut[position] or not joined[position] - _WEAK:
+            pending.append((start, position))
+            start = position + 1
+    while pending:
+        low, high = pending.pop()
+        if high - low + 1 <= cap or any(a <= low and high <= b for a, b in direct):
+            continue
+        weakest = min(range(low, high), key=lambda p: (weight[p], abs(2 * p + 1 - low - high), p))
+        cut[weakest] = "chain"
+        pending += [(low, weakest), (weakest + 1, high)]
+
+
 def plan(
     members: Sequence[Member],
     versions: tuple[str, ...],
@@ -140,15 +162,27 @@ def plan(
             for v in holding
         ):
             cut[position] = "padding"
+    weight = [0] * max(count - 1, 0)
+    direct: set[tuple[int, int]] = set()
     for version in versions:
+        cover = [0] * max(count - 1, 0)
         for first, last, signal in evidence[version].joins:
             if first not in index or last not in index:
                 continue
             low, high = sorted((index[first], index[last]))
             if any(cut[low:high]):
                 continue
+            direct.add((low, high))
             for position in range(low, high):
                 joined[position].add(signal)
+                cover[position] += 1
+        weight = [max(pair) for pair in zip(weight, cover, strict=True)]
+    _cut_chains(joined, cut, weight, direct, cap)
+    # ahead[i]: members from i to the end of its strongly joined run, so a weak join counts the run it brings in.
+    ahead = [1] * count
+    for position in range(count - 2, -1, -1):
+        if not cut[position] and joined[position] - _WEAK:
+            ahead[position] = ahead[position + 1] + 1
     modules: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
     current: list[str] = []
     signals: set[str] = set()
@@ -178,12 +212,38 @@ def plan(
             place(None)
         elif cut[position]:
             place(cut[position])
-        elif joined[position] - _WEAK or (joined[position] and len(current) + len(atom) < cap):
+        elif joined[position] - _WEAK or (joined[position] and len(current) + len(atom) + ahead[position + 1] <= cap):
             atom_signals.update(joined[position])
         else:
             place(None)
     close(None)
     return modules
+
+
+def merged_order(
+    members: Sequence[Member], versions: tuple[str, ...], orders: dict[str, dict[str, int]]
+) -> list[Member]:
+    """Members in one segment-major order every version agrees with: members all versions hold in address order, then
+    each version's other members right after their predecessor in that version (segment start when there is none).
+    Raw addresses differ between versions, so sorting version-only members by them scatters them among strangers."""
+    placed: dict[str, list[Member]] = defaultdict(list)
+    for member in sorted(members, key=lambda m: (m.segment, m.address, m.name)):
+        if set(member.versions) == set(versions):
+            placed[member.segment].append(member)
+    for version in versions:
+        held = sorted((m for m in members if version in m.versions), key=lambda m: orders[version][m.name])
+        for segment in sorted({m.segment for m in held}):
+            line = placed[segment]
+            position = {m.name: index for index, m in enumerate(line)}
+            insert = 0
+            for member in (m for m in held if m.segment == segment):
+                if member.name in position:
+                    insert = position[member.name] + 1
+                    continue
+                line.insert(insert, member)
+                insert += 1
+                position = {m.name: index for index, m in enumerate(line)}
+    return [member for segment in sorted(placed) for member in placed[segment]]
 
 
 def facts(
@@ -242,7 +302,7 @@ def infer(project: Project, value: Map, members: dict[str, Member]) -> Map:
             )
         stretch.clear()
 
-    for member in sorted(members.values(), key=lambda m: (m.segment, m.address, m.name)):
+    for member in merged_order(list(members.values()), project.versions, orders):
         if stretch and stretch[-1].segment != member.segment:
             flush()
         group = kept.get(member.name)

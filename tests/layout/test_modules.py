@@ -3,7 +3,7 @@
 import unittest
 
 from unbake.layout.map import Member
-from unbake.layout.modules import Evidence, Function, padding, plan, version_evidence
+from unbake.layout.modules import Evidence, Function, merged_order, padding, plan, version_evidence
 
 RETURN, NOP = 0x03E00008, 0
 
@@ -151,13 +151,36 @@ class PlanTests(unittest.TestCase):
                 [("a", ["cap"]), ("bcd", ["cap", "rodata"]), ("e", [])],
             ),
             (
-                "a joined run longer than the cap stays whole",
+                "one direct join longer than the cap stays whole",
                 "abcde",
                 "",
                 {"us": Evidence(joins=[("a", "e", "callee")]), "eu": Evidence()},
                 2,
                 set(),
                 [("abcde", ["callee"])],
+            ),
+            (
+                "a chain of joins past the cap is cut at its weakest join",
+                "abcdef",
+                "",
+                {
+                    "us": Evidence(
+                        joins=[("a", "b", "rodata"), ("b", "d", "rodata"), ("b", "d", "callee"), ("d", "f", "rodata")]
+                    ),
+                    "eu": Evidence(joins=[("d", "f", "rodata")]),
+                },
+                4,
+                set(),
+                [("abcd", ["callee", "chain", "rodata"]), ("ef", ["rodata"])],
+            ),
+            (
+                "a chain within the cap stays whole",
+                "abcd",
+                "",
+                {"us": Evidence(joins=[("a", "b", "rodata"), ("b", "d", "callee")]), "eu": Evidence()},
+                4,
+                set(),
+                [("abcd", ["callee", "rodata"])],
             ),
             ("an agreed padding cut splits", "abcd", "", cut_bc, 8, set(), [("ab", ["padding"]), ("cd", [])]),
             (
@@ -196,6 +219,15 @@ class PlanTests(unittest.TestCase):
                 set(),
                 [("ab", ["cap", "version"]), ("cd", ["cap"]), ("e", [])],
             ),
+            (
+                "a version join never brings a joined run past the cap",
+                "abcde",
+                "c",
+                {"us": Evidence(joins=[("c", "e", "callee")]), "eu": Evidence()},
+                4,
+                set(),
+                [("ab", ["cap"]), ("cde", ["callee"])],
+            ),
             ("a recorded split starts a module", "abcd", "", none, 8, {"c"}, [("ab", ["split"]), ("cd", [])]),
         )
         for name, names, partial, evidence, cap, cuts, expected in cases:
@@ -208,3 +240,22 @@ class PlanTests(unittest.TestCase):
         order = {"us": {"a": 0, "b": 1}, "eu": {"a": 0, "x": 1, "b": 2}}
         found = plan(members("ab"), ("us", "eu"), evidence, order, 8)
         self.assertEqual([group for group, _ in found], [("a", "b")])
+
+
+class MergedOrderTests(unittest.TestCase):
+    def test_version_only_members_follow_their_predecessor_in_their_version(self) -> None:
+        both = ("us", "eu")
+        found = merged_order(
+            [
+                Member("a", "main", 0x00, both),
+                Member("b", "main", 0x10, ("us",)),
+                Member("c", "main", 0x20, both),
+                Member("x", "main", 0x5000, ("eu",)),
+                Member("y", "main", 0x0, ("eu",)),
+                Member("d", "main", 0x30, both),
+                Member("e", "other", 0x0, both),
+            ],
+            both,
+            {"us": dict(zip("abcde", range(5), strict=True)), "eu": dict(zip("yacxde", range(6), strict=True))},
+        )
+        self.assertEqual("".join(member.name for member in found), "yabcxde")
