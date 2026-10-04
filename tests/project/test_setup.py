@@ -14,7 +14,8 @@ from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_config import write_policy
 from unbake.cli.main import make_parser
 from unbake.cli.setup import run as setup_command
-from unbake.project import config, setup
+from unbake import config
+from unbake.project import setup
 from unbake.report import progress, readme_layout
 
 

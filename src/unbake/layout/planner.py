@@ -19,7 +19,7 @@ from typing import Any
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
 from unbake.project.census import Census
-from unbake.project.config import Held, PendingProject, SetupPolicy, SymbolPolicy
+from unbake.config import Held, PendingProject, Host, SymbolPolicy
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
 from unbake.project_tools import atomic as atomic_files
@@ -586,7 +586,7 @@ def render_yaml(template: str, providers: list[ProviderRecord], size: int) -> st
     return "".join(lines)
 
 
-def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) -> LayoutManifest:
+def plan_layout(project: PendingProject, census: Census, policy: Host) -> LayoutManifest:
     executable = shutil.which(str(policy.splat))
     if executable is None:
         raise Held("setup", "policy.splat: missing executable")

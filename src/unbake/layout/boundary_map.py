@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.layout import split, split_apply
-from unbake.project.config import Held
+from unbake.config import Held
 
 if TYPE_CHECKING:
     from unbake.project.build import BuildResult
-    from unbake.project.config import Policy, Project
+    from unbake.config import Host, Project
 
 
 @dataclass(frozen=True)
@@ -215,7 +215,7 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
     return edits
 
 
-def apply(project: Project, policy: Policy, changes: Sequence[Change]) -> list[BuildResult]:
+def apply(project: Project, policy: Host, changes: Sequence[Change]) -> list[BuildResult]:
     """Apply all versions or roll back; name refused changes on any ROM failure."""
     edits = plan(project, changes)
     try:

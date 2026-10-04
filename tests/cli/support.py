@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 from tests.project.test_bootstrap import policy
 from unbake.cli import guidance
 from unbake.cli import main as cli
-from unbake.project import config
+from unbake import config
 
 
 class MainCase(unittest.TestCase):

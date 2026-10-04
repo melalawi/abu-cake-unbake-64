@@ -17,7 +17,7 @@ from unbake.cli.common import suggest
 from unbake.layout import planner, port, split, symbol_identity, symbol_proof
 from unbake.layout.symbol_identity import similarity_distribution
 from unbake.project import setup, workspace
-from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
+from unbake.config import Held, Project, Host, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import Rom, load
 from unbake.project_tools import atomic as atomic_files
@@ -63,7 +63,7 @@ def retained_data_symbols(existing: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def plan(project: Project, policy: SetupPolicy, *, retain_names: bool = False) -> tuple[dict[str, str], dict[str, Any]]:
+def plan(project: Project, policy: Host, *, retain_names: bool = False) -> tuple[dict[str, str], dict[str, Any]]:
     """Only instruction/position/graph evidence establishes identity."""
     ff = {v: port.functions(project, v) for v in project.versions}
     images = {v: load(project.version(v).baserom, retain_data=False) for v in project.versions}
@@ -210,7 +210,7 @@ def rewrite_layout(text: str, replacements: dict[str, str]) -> str:
     return "".join(lines)
 
 
-def run(project: Project, policy: SetupPolicy, confirm: str | None, *, retain_names: bool = False) -> list[str]:
+def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bool = False) -> list[str]:
     replacements, report = plan(project, policy, retain_names=retain_names)
     inputs = setup._inputs(project)
     token = planner.digest([inputs, report])
@@ -260,7 +260,7 @@ def publication_data(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def publish(
-    project: Project, policy: SetupPolicy, replacements: dict[str, str], report: dict[str, Any], inputs: dict[str, str]
+    project: Project, policy: Host, replacements: dict[str, str], report: dict[str, Any], inputs: dict[str, str]
 ) -> list[str]:
     """Prove one simultaneous symbol transaction and publish its layout evidence."""
     binding_data = publication_data(report)
@@ -322,7 +322,7 @@ def publish(
             json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
             stream.write("\n")
         if fast:
-            from unbake.project import config
+            from unbake import config
 
             staged = config.load(tree)
             setup.run(staged, policy)

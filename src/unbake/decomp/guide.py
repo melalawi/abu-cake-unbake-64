@@ -14,7 +14,7 @@ from unbake.decomp.commands import prefix
 from unbake.decomp.indexed import table_guidance
 from unbake.decomp.needs import LayoutNeed, Need, SymbolNeed
 from unbake.decomp.symbols import Binding, DataRow, references, required, symbol_line
-from unbake.project.config import Held, Project, load_policy
+from unbake.config import Held, Project, load_policy
 
 _C_TYPES = {
     "f32": "f32",

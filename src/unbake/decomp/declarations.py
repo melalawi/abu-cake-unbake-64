@@ -5,10 +5,10 @@ from pathlib import Path
 from unbake.layout import shared, split_apply
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
-def promote(project: Project, policy: Policy, source: Path, version: str) -> Path:
+def promote(project: Project, policy: Host, source: Path, version: str) -> Path:
     records = layouts(source, project=project, policy=policy, version=version)
     headers = sorted({path for root in project.include for path in root.rglob("*.h")})
     known = {

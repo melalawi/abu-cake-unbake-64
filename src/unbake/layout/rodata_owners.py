@@ -12,7 +12,7 @@ from pathlib import Path
 from unbake.decomp.rom import project_reader
 from unbake.layout import split
 from unbake.layout.rodata_references import Reference, collect, words
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project.makefile import recipe
 from unbake.project_tools.elf import Object
 from unbake.project_tools.literal_layout import storage

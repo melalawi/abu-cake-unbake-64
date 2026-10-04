@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from unbake.decomp import guide
 from unbake.decomp.trial_source import control_context, debug_locations
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 class TrialUxTests(unittest.TestCase):

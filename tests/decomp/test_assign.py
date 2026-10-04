@@ -13,7 +13,7 @@ from typing import Any
 from tests.layout.test_split import ProjectFixture
 from unbake.decomp import assign, drafts
 from unbake.layout import split
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class AssignmentTests(unittest.TestCase):

@@ -34,7 +34,7 @@ class GbiCacheTests(unittest.TestCase):
 
         from tests.decomp.support import assemble
         from tests.decomp.support import fixture as decomp_fixture
-        from unbake.project.config import Held, Policy
+        from unbake.config import Held, Policy
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

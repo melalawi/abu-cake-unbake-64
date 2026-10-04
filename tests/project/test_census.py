@@ -11,8 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.test_rom import BOOTCODES, CODE, cartridge
-from unbake.project import census, config, header, init, setup_config
-from unbake.project.config import CensusPolicy, Held
+from unbake import config
+from unbake.project import census, header, init, setup_config
+from unbake.config import CensusPolicy, Held
 
 
 class CensusTests(unittest.TestCase):

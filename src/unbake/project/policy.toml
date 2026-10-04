@@ -1,6 +1,0 @@
-cores = 12
-stall_trials = 5
-search_beam = 4
-assignment_idle_hours = 3
-same_game_similarity = 0.10
-probe_count = 20

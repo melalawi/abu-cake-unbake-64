@@ -15,7 +15,7 @@ from unittest.mock import patch
 from tests.decomp.support import assemble
 from tests.layout.test_split import ProjectFixture
 from unbake.cli import rodata
-from unbake.project.config import Policy, Project
+from unbake.config import Policy, Project
 from unbake.project_tools.elf import Object
 from unbake.project_tools.layout import resident
 from unbake.project_tools.literal_layout import arrange

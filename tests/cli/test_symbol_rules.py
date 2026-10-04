@@ -15,7 +15,7 @@ import toml
 
 from tests.process_fakes import cli_process
 from tests.project.test_rom import cartridge
-from unbake.project import config
+from unbake import config
 
 
 def leaf(seed, changed=False):

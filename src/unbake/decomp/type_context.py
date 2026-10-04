@@ -6,7 +6,7 @@ import importlib
 from typing import Any
 
 from unbake.decomp.work import digest
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 def provider() -> Any:

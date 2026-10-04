@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.decomp import score
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class ScoreTest(unittest.TestCase):

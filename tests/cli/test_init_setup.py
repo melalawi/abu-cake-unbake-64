@@ -6,8 +6,8 @@ from unittest.mock import Mock, patch
 from tests.cli.support import MainCase
 from unbake.cli.guidance import command
 from unbake.cli.setup import pairs
-from unbake.project import config
-from unbake.project.config import Held
+from unbake import config
+from unbake.config import Held
 
 
 class InitSetupTests(MainCase):
@@ -78,7 +78,7 @@ class InitSetupTests(MainCase):
     def test_name_refusal_restart_reuses_the_explicit_census_choice(self) -> None:
         from tests.project.test_rom import BOOTCODES, CODE, cartridge
         from unbake.project import census, flow, header, init
-        from unbake.project.config import Unfinished
+        from unbake.config import Unfinished
 
         target = self.directory / "unrelated name"
         init.run(target, layout_cap=2)

@@ -7,7 +7,7 @@ import struct
 from pathlib import Path
 
 from unbake.layout import entries, split
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object, Symbol
 
@@ -18,7 +18,7 @@ def functions(obj: Object) -> list[Symbol]:
 
 def target(
     project: Project,
-    policy: Policy,
+    policy: Host,
     source: Path,
     version: str,
     generation: Path,
@@ -62,7 +62,7 @@ def target(
     return output
 
 
-def inventory(project: Project, policy: Policy, source: Path, version: str) -> dict[str, object]:
+def inventory(project: Project, policy: Host, source: Path, version: str) -> dict[str, object]:
     group = entries.owners(project, policy, source, version)
     return {
         "start": group[0].start,
@@ -93,7 +93,7 @@ def view(path: Path, function: str, size: int, output: Path) -> Path:
 
 
 def comparison_views(
-    project: Project, policy: Policy, source: Path, version: str, target: Path, candidate: Path, directory: Path
+    project: Project, policy: Host, source: Path, version: str, target: Path, candidate: Path, directory: Path
 ) -> tuple[Path, Path, list[str]]:
     """Require mapped names/offsets, and compare bytes beyond the first symbol too."""
     group = entries.owners(project, policy, source, version)

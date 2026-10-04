@@ -14,7 +14,7 @@ from pathlib import Path
 
 from unbake.decomp import checks
 from unbake.layout.header_context import Headers
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 BOUNDARY = "/* unbake declaration evidence boundary */\n"
@@ -69,7 +69,7 @@ def candidate(source: str) -> tuple[str, tuple[str, ...]]:
 
 def proven(
     project: Project,
-    policy: Policy,
+    policy: Host,
     unit: Path,
     source: str,
     headers: Headers,

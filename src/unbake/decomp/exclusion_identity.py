@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from unbake.layout.split import Function
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 def canonical(project: Project, names: list[str], rows: list[Function]) -> list[str]:

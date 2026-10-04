@@ -10,7 +10,7 @@ from typing import Any
 
 from unbake.decomp.trial_compile import run_tool
 from unbake.project import compiler_profiles, toolchain
-from unbake.project.config import Held, PendingProject, SetupPolicy
+from unbake.config import Held, PendingProject, Host
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
@@ -56,7 +56,7 @@ def exemplars(path: Path) -> list[compiler_profiles.Exemplar]:
 
 
 def reproduce(
-    project: PendingProject, policy: SetupPolicy, ids: list[str], units: list[dict[str, Any]], image: bytes
+    project: PendingProject, policy: Host, ids: list[str], units: list[dict[str, Any]], image: bytes
 ) -> dict[str, Any]:
     tables = toolchain._read(toolchain.REGISTRY_PATH)["fingerprints"]
     directory = project.build / "setup/probes"
@@ -100,8 +100,8 @@ def reproduce(
                         run_tool(
                             [
                                 str(policy.mips_as),
-                                *policy.asflags,
-                                *policy.sn64_asflags,
+                                *project.asflags,
+                                *project.sn64_asflags,
                                 str(work / "probe.s"),
                                 "-o",
                                 str(work / "probe.o"),

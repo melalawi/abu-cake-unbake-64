@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.match import publication
-from unbake.project import config, workspace
+from unbake import config
+from unbake.project import workspace
 
 
 class WorkspaceTests(unittest.TestCase):

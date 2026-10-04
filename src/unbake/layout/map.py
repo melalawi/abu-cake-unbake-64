@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project_tools import atomic as atomic_files
 
 

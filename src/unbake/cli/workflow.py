@@ -9,10 +9,10 @@ from unbake.decomp import draft_presence, drafts, exclusions, fuzzy_bar, plan, t
 from unbake.decomp.assign import Ledger
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import split
-from unbake.project.config import Held, Policy, Project, load_policy
+from unbake.config import Held, Host, Project, load_policy
 
 
-def select(project: Project, policy: Policy, *, exclude: Path | None = None, new: bool = False) -> tuple[str, str]:
+def select(project: Project, policy: Host, *, exclude: Path | None = None, new: bool = False) -> tuple[str, str]:
     excluded = exclusions.load(project, exclude)
 
     def draft_command(subject: str) -> str:

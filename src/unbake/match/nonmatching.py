@@ -7,10 +7,10 @@ from typing import Any
 
 from unbake.decomp import checks, drafts, fuzzy_bar, work
 from unbake.layout import split
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
-def admit(project: Project, policy: Policy, source: Path) -> dict[str, Any]:
+def admit(project: Project, policy: Host, source: Path) -> dict[str, Any]:
     """Check latest current inputs and all containing versions without trusting a score."""
     source = source.resolve()
     rows = drafts.Store(policy, project).rows(source.stem)

@@ -10,7 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 from unbake.project import header, rom
-from unbake.project.config import Held
+from unbake.config import Held
 
 GOLDEN = (("us", "6aa4dde7e3e2f4e7", "4e42584500", "EXAMPLEONE", 0x80071000),)
 # Independent reference results for repeating max/sign-bit/one/rotate-31 words.

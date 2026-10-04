@@ -10,7 +10,7 @@ from pathlib import Path
 from unbake.decomp.drafts import is_partial
 from unbake.decomp.trial_compare import fields
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 @dataclass(frozen=True)

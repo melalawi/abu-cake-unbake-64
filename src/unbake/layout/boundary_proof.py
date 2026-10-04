@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING
 from unbake.layout import boundary, boundary_signatures, split
 from unbake.layout.boundary import Boundary
 from unbake.layout.split_audit import audit
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
-    from unbake.project.config import Project
+    from unbake.config import Project
 
 
 def report(project: Project, *, signatures: Path | None) -> dict[str, list[Boundary]]:

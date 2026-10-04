@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from unbake.decomp.candidate_ranking import candidate_rank
 from unbake.decomp.score import percent, weakest
 from unbake.layout import split
-from unbake.project.config import Held, Policy, Project, relative_text
+from unbake.config import Held, Host, Project, relative_text
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
@@ -71,7 +71,7 @@ def _count(value: object, name: str) -> int:
 
 
 class Store:
-    def __init__(self, policy: Policy, project: Project) -> None:
+    def __init__(self, policy: Host, project: Project) -> None:
         state_root = getattr(policy, "state_root", None)
         if not state_root:
             raise Held("drafts", "policy.state_root is missing")
@@ -188,7 +188,7 @@ class Store:
 
     def history(self) -> list[TrialRecord]:
         """Read every validated trial record in append order."""
-        from unbake.project.cache import parsed
+        from unbake.cache import parsed
 
         return list(parsed("trials", self.root / "trials.jsonl", self._history))
 

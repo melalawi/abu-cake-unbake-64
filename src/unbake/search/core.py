@@ -17,7 +17,7 @@ from unbake.decomp import explain, trial
 from unbake.decomp.candidate_ranking import measured_candidate_rank
 from unbake.decomp.trial_compile import read_text, scratch_directory
 from unbake.project import makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -35,7 +35,7 @@ class Generator(Protocol):
 @dataclass(frozen=True)
 class Context:
     project: Project
-    policy: Policy
+    policy: Host
     out: Path
     source: Path
     allocation: explain.Allocation
@@ -66,14 +66,14 @@ class _Candidate:
         return measured_candidate_rank(self.trial.compares, self.fuzzy)
 
 
-def _positive(policy: Policy, name: str) -> int:
+def _positive(policy: Host, name: str) -> int:
     value = getattr(policy, name, None)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise Held("search", f"policy.{name}: positive integer required")
     return value
 
 
-def _retain(project: Project, policy: Policy, source: Path, result: trial.Trial) -> float:
+def _retain(project: Project, policy: Host, source: Path, result: trial.Trial) -> float:
     from unbake.decomp.trial import store_trial
 
     store_trial(project, policy, source, result)
@@ -89,7 +89,7 @@ def _retain(project: Project, policy: Policy, source: Path, result: trial.Trial)
     return min(scores.values())
 
 
-def preprocess(project: Project, policy: Policy, source: Path, version: str, deadline: float) -> str:
+def preprocess(project: Project, policy: Host, source: Path, version: str, deadline: float) -> str:
     """Use the selected unit's build preprocessor, includes and VERSION flags."""
     compiler = project.compiler_for(source)
     flags = list(makefile.flags(project, version, source))
@@ -134,7 +134,7 @@ def _focus_lines(allocation: explain.Allocation, original: str, expanded: str) -
 
 
 def run(
-    project: Project, policy: Policy, source: Path, generators: Iterable[Generator], out: Path, budget_seconds: float
+    project: Project, policy: Host, source: Path, generators: Iterable[Generator], out: Path, budget_seconds: float
 ) -> SearchResult:
     from unbake.search.permute import Permuter
 

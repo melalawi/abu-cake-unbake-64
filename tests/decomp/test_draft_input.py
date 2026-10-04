@@ -14,7 +14,7 @@ from tests.decomp.support import fixture
 from unbake.decomp import guide, m2c
 from unbake.decomp.draft_context import preprocess_context
 from unbake.decomp.draft_input import whole_body
-from unbake.project.config import Policy
+from unbake.config import Policy
 
 
 class DraftInputTests(unittest.TestCase):
@@ -77,7 +77,7 @@ class DraftInputTests(unittest.TestCase):
         import struct
 
         from unbake.decomp.draft_input import private_constants
-        from unbake.project.config import Held
+        from unbake.config import Held
 
         rom = self.project.version("us").baserom
         start = len(rom.read_bytes())

@@ -5,7 +5,7 @@ import subprocess
 from dataclasses import fields
 from pathlib import Path
 
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def compiler_directories(project: Project) -> tuple[Path, ...]:
@@ -104,7 +104,7 @@ def indexed_contents(root: Path, blobs: list[bytes]) -> dict[bytes, bytes]:
     return contents
 
 
-def tracked_findings(project: Project, policy: Policy) -> list[str]:
+def tracked_findings(project: Project, policy: Host) -> list[str]:
     """Inspect indexed names and regular working files without following links."""
     if not (project.root / ".git").exists():
         return []

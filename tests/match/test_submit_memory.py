@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 
 from unbake.layout.header_context import Headers
 from unbake.match import batch_fold, declarations, forked
-from unbake.project import cache
-from unbake.project.config import Held
+from unbake import cache
+from unbake.config import Held
 
 
 class PendingTests(unittest.TestCase):

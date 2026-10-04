@@ -6,7 +6,7 @@ from pathlib import Path
 from unbake.decomp.header_declarations import declaration_source
 from unbake.layout.header_context import Headers, context, guarded_source, header_guard
 from unbake.layout.split import Edit
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class HeaderContextTests(unittest.TestCase):

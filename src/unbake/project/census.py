@@ -14,7 +14,7 @@ from typing import Any
 from unbake.layout import split_analysis
 from unbake.layout.split import Function
 from unbake.project import compiler_files, rom
-from unbake.project.config import CensusPolicy, Held, PendingProject
+from unbake.config import Host, Held, PendingProject
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ def naming_version(versions: tuple[str, ...], selected: str | None) -> str:
 
 def run(
     project: PendingProject,
-    policy: CensusPolicy,
+    policy: Host,
     *,
     names_from: str | None,
     renames: dict[str, str] | None = None,

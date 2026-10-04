@@ -9,8 +9,8 @@ from unbake.decomp.draft_context import ordered_headers
 from unbake.decomp.header_declarations import declaration_source, declarations
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
-from unbake.project.cache import remembered
-from unbake.project.config import Held, Project
+from unbake.cache import memo
+from unbake.config import Held, Project
 from unbake.typemap.header_names import alias_types
 from unbake.typemap.split import required_providers
 
@@ -76,7 +76,7 @@ class Providers:
 def resolve(project: Project, headers: Headers, text: str, function: str = "", *, edits: tuple[Edit, ...] = ()) -> str:
     """Replace missing shared imports using live homes; preserve all non-include bytes."""
     contents = {**headers.texts, **{edit.path: edit.after for edit in edits}}
-    index = remembered("imports.providers", tuple(sorted(contents.items())), lambda: Providers(contents), keep=2)
+    index = memo("imports.providers", tuple(sorted(contents.items())), lambda: Providers(contents), keep=2)
 
     def find(name: str) -> Path | None:
         return next((root / name for root in project.include if root / name in contents), None)

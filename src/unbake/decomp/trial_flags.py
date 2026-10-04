@@ -10,7 +10,7 @@ from pathlib import Path
 from unbake.decomp.candidate_ranking import measured_candidate_rank
 from unbake.decomp.trial_compare import Compare
 from unbake.project import toolchain
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 @dataclass

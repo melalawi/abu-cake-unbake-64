@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 _INSTRUCTION = r"\((insn|jump_insn|call_insn)(?:/[a-z]+)*(?::[A-Z][A-Z0-9]*)?\s+(\d+)\b"
 

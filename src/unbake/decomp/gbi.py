@@ -27,7 +27,7 @@ from unbake.decomp.gbi_source import (
     standard_shiftl,
     word_builder,
 )
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
@@ -839,7 +839,7 @@ def canonical_types(project: Project, source: str) -> str:
     return canonical(project, source)
 
 
-def rewrite(project: Project, policy: Policy, files: list[Path], *, all_files: bool = False) -> dict[str, object]:
+def rewrite(project: Project, policy: Host, files: list[Path], *, all_files: bool = False) -> dict[str, object]:
     from unbake.decomp.gbi_proof import preserve
 
     if bool(files) == all_files:

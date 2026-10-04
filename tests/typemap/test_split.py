@@ -10,7 +10,7 @@ from tests.decomp.support import fixture
 from tests.typemap.split_support import expanded
 from unbake.layout.headers import Layout
 from unbake.layout.map import Map
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap import database, declarations, header_names
 from unbake.typemap.split import statements
 

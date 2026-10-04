@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from unbake.project import build
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 def swap(link: Path, target: Path) -> None:

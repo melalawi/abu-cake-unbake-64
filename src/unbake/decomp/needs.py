@@ -7,7 +7,7 @@ from dataclasses import dataclass, fields
 from typing import Any, TypeAlias
 
 from unbake.layout.split import Edit
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class GuardFinding:
 
 
 Need: TypeAlias = SymbolNeed | LabelNeed | LayoutNeed | PlacementNeed | GuardFinding
-Resolver: TypeAlias = Callable[[list[Need], Project, Policy], list[Edit]]
+Resolver: TypeAlias = Callable[[list[Need], Project, Host], list[Edit]]
 _KINDS = {kind.__name__: kind for kind in (SymbolNeed, LabelNeed, LayoutNeed, PlacementNeed, GuardFinding)}
 RESOLVERS: dict[type[Need], tuple[int, Resolver]] = {}
 
@@ -112,7 +112,7 @@ def decode(row: Any) -> Need:
 
 
 def resolve(
-    pending: list[Need], project: Project, policy: Policy, apply: Callable[[Project, Policy, list[Edit]], object]
+    pending: list[Need], project: Project, policy: Host, apply: Callable[[Project, Host, list[Edit]], object]
 ) -> list[str]:
     """Refuse unregistered kinds before writing, then apply each ordered batch."""
     for need in pending:

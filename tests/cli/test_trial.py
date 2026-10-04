@@ -41,7 +41,7 @@ class TrialTests(MainCase):
         self.assertFalse(scratch.resolve().is_relative_to(self.project.root))
 
     def test_volatile_storage_is_delegated_to_the_proven_fold(self) -> None:
-        from unbake.project.config import Held
+        from unbake.config import Held
 
         self.source.write_text(' #include "../legacy/scalars.h"\nvoid alpha(void) { volatile int local; local = 1; }\n')
         operation = Mock(side_effect=Held("volatile", "volatile-storage: volatile int local; rewrite changes codegen"))
@@ -112,7 +112,7 @@ class TrialTests(MainCase):
 
     def test_raw_graphics_copy_is_delegated_to_proven_sdk_recovery(self) -> None:
         self.source.write_text("void alpha(void) { p->words.w0 = 0xE7000000; }\n")
-        from unbake.project.config import Held
+        from unbake.config import Held
 
         operation = Mock(side_effect=Held("gbi", "SDK macro recovery: first unmatched write raw-gfx:1"))
         code, out, error = self.run_main(

@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
-from unbake.project.cache import Cache, key, parsed
-from unbake.project.config import Held
+from unbake.cache import Cache, key, parsed
+from unbake.config import Held
 
 
 class CacheTests(unittest.TestCase):
     def test_shared_parse_reuses_copies_but_observes_every_edit(self) -> None:
         other = self.directory / "copy.o"
         other.write_bytes(self.source.read_bytes())
-        with patch("unbake.project.cache._parsed", {}), patch("unbake.project.cache._remembered", {}):
+        with patch("unbake.cache._parsed", {}), patch("unbake.cache._remembered", {}):
             make = Mock(side_effect=["first", "edited", "other version"])
             self.assertEqual(parsed("fixture", self.source, make, extra="us", share=True), "first")
             self.assertEqual(parsed("fixture", other, make, extra="us", share=True), "first")
@@ -92,7 +92,7 @@ class CacheTests(unittest.TestCase):
             self.cache.get("cc", self.identity)
 
     def test_put_publishes_complete_copy_via_atomic_replace(self) -> None:
-        from unbake.project import cache
+        from unbake import cache
 
         original_replace = cache.os.replace
         replacements = []
@@ -112,7 +112,7 @@ class CacheTests(unittest.TestCase):
     def test_failed_put_keeps_previous_artifact_and_cleans_temporary(self) -> None:
         existing = self.cache.put("cc", self.identity, self.source)
         with (
-            patch("unbake.project.cache.atomic_files.copyfile", side_effect=OSError("copy refused")),
+            patch("unbake.cache.atomic_files.copyfile", side_effect=OSError("copy refused")),
             self.assertRaises(Held),
         ):
             self.cache.put("cc", self.identity, self.source)

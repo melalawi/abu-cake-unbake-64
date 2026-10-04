@@ -16,7 +16,7 @@ from unbake.decomp.draft_context import ordered_headers
 from unbake.decomp.header_declarations import attribute_source, declaration_source
 from unbake.decomp.header_declarations import declarations as header_declarations
 from unbake.layout.structs_parser import Parser
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
 from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import storage
@@ -106,7 +106,7 @@ def clean(source: str, *, line_markers: bool = False) -> str:
 
 def headers(
     project: Project,
-    policy: Policy | None,
+    policy: Host | None,
     version: str,
     extra: Path | None = None,
     *,
@@ -120,19 +120,19 @@ def headers(
             if not storage.generated(project, path)
         }
     if extra is None:
-        from unbake.project.cache import remembered
+        from unbake.cache import memo
 
         selection = (
             project.root,
             version,
             line_markers,
-            None if policy is None else (str(policy.cpp), tuple(policy.cppflags)),
+            None if policy is None else (str(policy.cpp), project.cppflags),
             project.compilers[project.default_compiler].cflags,
             project.include,
             project.version(version).macros,
             tuple(sorted(contents.items())),
         )
-        return remembered(
+        return memo(
             "typemap.headers",
             selection,
             lambda: _headers(project, policy, version, contents, None, line_markers=line_markers),
@@ -151,7 +151,7 @@ def _generated_context(project: Project) -> list[Path]:
 
 def _headers(
     project: Project,
-    policy: Policy | None,
+    policy: Host | None,
     version: str,
     contents: dict[Path, str],
     extra: Path | None,
@@ -191,7 +191,7 @@ def _headers(
     return text if raw else clean(text, line_markers=extra is not None or line_markers)
 
 
-def _cpp_command(project: Project, policy: Policy, version: str, *, extra: bool, line_markers: bool) -> list[str]:
+def _cpp_command(project: Project, policy: Host, version: str, *, extra: bool, line_markers: bool) -> list[str]:
     flags: list[str] = []
     pending = iter(project.compilers[project.default_compiler].cflags)
     for flag in pending:
@@ -205,7 +205,7 @@ def _cpp_command(project: Project, policy: Policy, version: str, *, extra: bool,
     return [
         str(policy.cpp),
         *(f"-I{root}" for root in project.include),
-        *(flag for flag in policy.cppflags if not line_markers or flag != "-P"),
+        *(flag for flag in project.cppflags if not line_markers or flag != "-P"),
         *flags,
         *(("-P",) if not extra and not line_markers else ()),
         "-x",
@@ -226,7 +226,7 @@ def _preprocess(project: Project, command: list[str], source: str) -> str:
     return str(result.stdout)
 
 
-def source_unit(project: Project, policy: Policy | None, version: str, source: Path) -> str:
+def source_unit(project: Project, policy: Host | None, version: str, source: Path) -> str:
     """One source preprocessed with only its own includes, split by the source boundary."""
     return _headers(
         project, policy, version, {}, source, line_markers=False, ordered=[], raw=True, include_generated=False
@@ -709,7 +709,7 @@ def published_sources(project: Project) -> list[tuple[str, Path, str]]:
     )
 
 
-def collect(project: Project, policy: Policy | None, keys: list[str]) -> list[dict[str, Any]]:
+def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict[str, Any]]:
     """Declared header seeds per version, declaration evidence, then every published source's facts."""
     from unbake.typemap import facts
 
@@ -719,7 +719,7 @@ def collect(project: Project, policy: Policy | None, keys: list[str]) -> list[di
 
 
 def _collect(
-    project: Project, policy: Policy | None, scratch: Path, store: Any, keys: list[str]
+    project: Project, policy: Host | None, scratch: Path, store: Any, keys: list[str]
 ) -> list[dict[str, Any]]:
     from unbake.typemap import facts
 

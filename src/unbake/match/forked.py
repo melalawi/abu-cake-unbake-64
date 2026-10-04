@@ -143,7 +143,7 @@ def _bounded(pool: Executor, work: Callable[[T], R], items: Sequence[T], workers
 def release(*, shared: bool = False) -> None:
     """Drop disposable parse state at a candidate boundary; disk artifacts survive."""
     from unbake.match import type_rewrite
-    from unbake.project import cache
+    from unbake import cache
 
     if shared:
         for key in list(cache._parsed):

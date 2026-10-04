@@ -9,7 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import WORK, fixture, helper, write_rendered
-from unbake.project import config, makefile
+from unbake import config
+from unbake.project import makefile
 
 
 class MakefileTests(unittest.TestCase):

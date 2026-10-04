@@ -10,7 +10,7 @@ from itertools import pairwise
 from typing import Any, cast
 
 from unbake.decomp.trial import Trial
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.search.core import Context, Mutation
 from unbake.search.loops import variants as loop_variants
 from unbake.search.loops import walk

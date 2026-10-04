@@ -19,7 +19,7 @@ from unbake.match.common import (
     sha,
 )
 from unbake.project import build, makefile
-from unbake.project.config import Project
+from unbake.config import Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.compile_identity import driver_names, driver_stamp_name
 

@@ -10,10 +10,10 @@ from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 if TYPE_CHECKING:
-    from unbake.project.config import Project
+    from unbake.config import Project
 
 
 class AsmProject(Protocol):
@@ -179,7 +179,7 @@ def plain(value: str) -> str:
 
 
 def layout(path: Path) -> tuple[str, list[str], list[Segment]]:
-    from unbake.project.cache import parsed
+    from unbake.cache import parsed
 
     text, lines, segments = parsed("split.layout", path, lambda: parse_layout(path, read(path)))
     return text, list(lines), segments
@@ -282,7 +282,7 @@ def parse_layout(path: Path, text: str) -> tuple[str, list[str], list[Segment]]:
 
 
 def symbols(path: Path) -> tuple[str, dict[str, tuple[int, int, re.Match[str]]]]:
-    from unbake.project.cache import parsed
+    from unbake.cache import parsed
 
     text, result = parsed("split.symbols", path, lambda: _symbols(path))
     return text, dict(result)
@@ -340,7 +340,7 @@ def bss_end(project: Project, version: str, segment: str) -> int:
 
 def functions(project: Project, v: str) -> list[Function]:
     """List named function rows with explicit ROM and VRAM boundaries."""
-    from unbake.project.cache import parsed
+    from unbake.cache import parsed
 
     version = project.version(v)
     rows = parsed(
@@ -368,7 +368,7 @@ def functions(project: Project, v: str) -> list[Function]:
 
 def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
     """Function rows keyed by every row stem and symbol alias, shared read-only."""
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
     rows = functions(project, v)
 
@@ -379,7 +379,7 @@ def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
                 index.setdefault(alias, []).append(row)
         return index
 
-    return remembered("split.aliases", tuple(rows), build, keep=16)
+    return memo("split.aliases", tuple(rows), build, keep=16)
 
 
 def holding_versions(

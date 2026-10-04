@@ -12,7 +12,7 @@ from unbake.layout import index as layout_index
 from unbake.layout import map as ownership
 from unbake.layout.header_context import Headers
 from unbake.match import declarations
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap import declaration_evidence as evidence
 
 

@@ -7,8 +7,9 @@ from collections import defaultdict
 from collections.abc import Iterator
 from typing import Any
 
-from unbake.project import cache as content_cache
-from unbake.project.config import Held, Policy, Project
+from unbake import inputs
+from unbake import cache as content_cache
+from unbake.config import Held, Host, Project
 from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
 from unbake.typemap.mapping import refresh_map
 
@@ -971,7 +972,7 @@ def infer(
     }
 
 
-def _types_key(project: Project, policy: Policy | None, facts: dict[str, Any], fact_keys: list[str]) -> str:
+def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fact_keys: list[str]) -> str:
     """Every input of merge, infer and header publication."""
     from unbake import steps
     from unbake.layout import index
@@ -981,15 +982,15 @@ def _types_key(project: Project, policy: Policy | None, facts: dict[str, Any], f
     files += sorted(path for path in (project.root / "versions").rglob("*") if path.is_file())
     parts: list[str] = [steps.tool_fingerprint(), facts["shard_sha256"], json.dumps(facts.get("abi_supplement"))]
     if policy is not None:
-        parts.append(json.dumps([str(policy.cpp), *policy.cppflags]))
+        parts.append(json.dumps([str(policy.cpp), *project.cppflags]))
     parts.extend(fact_keys)
     for path in files:
         parts.append(storage.relative(project, path))
-        parts.append(storage.file_digest(path) if path.is_file() else "missing")
+        parts.append(inputs.digest(path) if path.is_file() else "missing")
     return content_cache.key(*parts)
 
 
-def solve(project: Project, policy: Policy | None = None) -> dict[str, Any] | None:
+def solve(project: Project, policy: Host | None = None) -> dict[str, Any] | None:
     """Merge cached facts and infer types; None when no input changed since the last solve."""
     from unbake import steps
     from unbake.typemap import facts as source_facts
@@ -1002,7 +1003,7 @@ def solve(project: Project, policy: Policy | None = None) -> dict[str, Any] | No
         if summary.is_file():
             previous = storage.read(summary, "types.summary")
             storage.validate_identity(project, previous, "types.summary")
-            if previous.get("database_sha256") != storage.file_digest(database):
+            if previous.get("database_sha256") != inputs.digest(database):
                 raise Held("solve", "types.summary: database changed independently of its semantic index")
         elif database.stat().st_size <= 64 * 1024 * 1024:
             previous = storage.read(database, "types.database")
@@ -1039,7 +1040,7 @@ def solve(project: Project, policy: Policy | None = None) -> dict[str, Any] | No
     revision = int(previous.get("revision", 0)) + 1
     result = {
         **storage.identity(project),
-        "map_sha256": storage.file_digest(project.build / "map/facts.json"),
+        "map_sha256": inputs.digest(project.build / "map/facts.json"),
         "map_shard": facts["shard"],
         "map_shard_sha256": facts["shard_sha256"],
         "abi_supplement": facts.get("abi_supplement"),

@@ -8,7 +8,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass(frozen=True)

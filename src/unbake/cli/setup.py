@@ -6,7 +6,7 @@ from pathlib import Path
 
 from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
-from unbake.project.config import Held, PendingProject
+from unbake.config import Held, PendingProject
 
 
 def register(phases: Subparsers) -> None:
@@ -47,7 +47,8 @@ def pairs(values: list[str], flag: str) -> dict[str, str]:
 
 
 def run(args: argparse.Namespace, project: PendingProject) -> bool:
-    from unbake.project import census, config, flow, setup, setup_config, toolchain
+    from unbake import config
+    from unbake.project import census, flow, setup, setup_config, toolchain
 
     if getattr(args, "retain_symbol_names", False) and not args.replan_symbols:
         raise Held("setup", "setup.symbol_layout: --retain-symbol-names requires --replan-symbols")

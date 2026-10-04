@@ -12,7 +12,7 @@ from pathlib import Path
 from time import monotonic
 from uuid import uuid4
 
-from unbake.project.config import Project
+from unbake.config import Project
 from unbake.project_tools import atomic as atomic_files
 
 _sink: ContextVar[Callable[[str], object] | None] = ContextVar("publication_sink", default=None)

@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from unbake.decomp.needs import Need, PlacementNeed
 from unbake.layout import split, split_edits
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 

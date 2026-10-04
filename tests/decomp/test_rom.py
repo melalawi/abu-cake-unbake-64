@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from unbake.decomp import rom
-from unbake.project.config import Held, Version
+from unbake.config import Held, Version
 
 
 def resident_copy() -> list[dict[str, int]]:

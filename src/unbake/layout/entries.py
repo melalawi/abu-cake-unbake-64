@@ -11,11 +11,11 @@ from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
 
 from unbake.layout import split
 from unbake.project import makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.typemap.declarations import clean
 
 
-def definitions(project: Project, policy: Policy, source: Path, version: str, text: str) -> set[str]:
+def definitions(project: Project, policy: Host, source: Path, version: str, text: str) -> set[str]:
     """Read active global C definitions, excluding declarations and static helpers."""
     flags = makefile.flags(project, version, project.src / source.name)
     options: list[str] = []
@@ -26,7 +26,7 @@ def definitions(project: Project, policy: Policy, source: Path, version: str, te
         elif flag.startswith(("-I", "-D", "-U")):
             options.append(flag)
     result = subprocess.run(
-        [str(policy.cpp), *policy.cppflags, *options, "-DNON_MATCHING=1", "-x", "c", "-"],
+        [str(policy.cpp), *project.cppflags, *options, "-DNON_MATCHING=1", "-x", "c", "-"],
         cwd=project.root,
         input=text,
         capture_output=True,
@@ -44,7 +44,7 @@ def definitions(project: Project, policy: Policy, source: Path, version: str, te
 
 
 def owners(
-    project: Project, policy: Policy, source: Path, version: str, *, text: str | None = None
+    project: Project, policy: Host, source: Path, version: str, *, text: str | None = None
 ) -> list[split.Function]:
     """One C item may own several adjacent text rows; all remain byte pinned."""
     index = split.owners_by_alias(project, version)

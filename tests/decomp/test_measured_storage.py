@@ -16,7 +16,7 @@ from unbake.decomp.draft_asm import address_aliases
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import default_scratch, scratch_directory
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap.declarations import clean
 
 

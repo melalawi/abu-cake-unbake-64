@@ -5,12 +5,12 @@ from pathlib import Path
 
 from unbake.layout import split
 from unbake.project import build
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
 
-def code(project: Project, policy: Policy, version: str, source: Path, mode: int) -> object:
+def code(project: Project, policy: Host, version: str, source: Path, mode: int) -> object:
     """Compare allocated sections and relocation identities from cached objects."""
     output = source.with_suffix(".o")
     build.compile_object(project, policy, source, version, output, non_matching=bool(mode))
@@ -26,7 +26,7 @@ def code(project: Project, policy: Policy, version: str, source: Path, mode: int
     )
 
 
-def preserve(project: Project, policy: Policy, unit: Path, before: str, after: str) -> None:
+def preserve(project: Project, policy: Host, unit: Path, before: str, after: str) -> None:
     versions = [
         version
         for version in project.versions

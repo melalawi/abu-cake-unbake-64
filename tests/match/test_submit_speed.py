@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from unbake.layout.header_context import Headers
 from unbake.match import batch, batch_fold, forked, incremental, relink, reporting, source_views, staging
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools.rodata import insert_fragment
 
 

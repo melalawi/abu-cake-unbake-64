@@ -8,7 +8,7 @@ from typing import Any
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project_tools import atomic as atomic_files
 
 

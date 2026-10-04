@@ -17,7 +17,7 @@ from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class DraftBoundaryTests(unittest.TestCase):

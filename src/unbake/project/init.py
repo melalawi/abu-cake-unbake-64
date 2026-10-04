@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from unbake.project import hygiene
-from unbake.project.config import SCHEMA_VERSION, Held
+from unbake.config import SCHEMA_VERSION, Held
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -46,9 +46,7 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
         atomic_files.text(
             target / "config.toml",
             f"schema = {SCHEMA_VERSION}\n\n[project]\n"
-            f'id = {quote(str(uuid4()))}\nstate = "awaiting-roms"\nlayout_cap = {layout_cap}\n\n'
-            '[paths]\nroms = "roms"\nbuild = "build"\nwork = "build/work"\n'
-            'drafts = "build/drafts"\nsrc = "src"\ninclude = ["include"]\nasm = "asm"\ntools = "tools"\n',
+            f'id = {quote(str(uuid4()))}\nstate = "awaiting-roms"\nlayout_cap = {layout_cap}\n',
         )
         from unbake.layout.map import Map, encoded
 

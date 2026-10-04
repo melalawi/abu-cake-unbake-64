@@ -15,7 +15,7 @@ from pathlib import Path
 from unbake.layout import port, split
 from unbake.match import relink
 from unbake.project import build, compiler_files, setup
-from unbake.project.config import Held, Project, SetupPolicy
+from unbake.config import Held, Project, Host
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
@@ -107,7 +107,7 @@ def rebind(path: Path, replacements: dict[str, str]) -> bool:
 
 
 def prove(
-    project: Project, staged: Project, policy: SetupPolicy, replacements: dict[str, str]
+    project: Project, staged: Project, policy: Host, replacements: dict[str, str]
 ) -> tuple[list[str], list[Path], dict[str, str | None]]:
     """Pin generations briefly, then transform and link outside the project lock."""
     assembly = []

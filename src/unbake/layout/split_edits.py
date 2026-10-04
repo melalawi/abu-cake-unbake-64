@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.layout import split
-from unbake.project.config import Held
+from unbake.config import Held
 
 if TYPE_CHECKING:
-    from unbake.project.config import Policy, Project
+    from unbake.config import Host, Project
 
 
 def align(project: Project, v: str, function: str, value: object) -> list[split.Edit]:
@@ -112,7 +112,7 @@ def cut(project: Project, v: str, function: str, start: object, end: object) -> 
 
 
 def code(
-    project: Project, v: str, function: str, start: object, end: object, *, policy: Policy | None = None
+    project: Project, v: str, function: str, start: object, end: object, *, policy: Host | None = None
 ) -> list[split.Edit]:
     from unbake.layout.code_interval import prove
 

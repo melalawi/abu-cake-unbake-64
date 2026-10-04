@@ -10,7 +10,7 @@ from unittest.mock import patch
 from unbake.layout import boundary, boundary_signatures
 from unbake.layout.boundary_signatures import Signature
 from unbake.layout.split_create import complete_executable, loaded_rows
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class BoundaryTests(unittest.TestCase):
@@ -77,7 +77,7 @@ class BoundaryTests(unittest.TestCase):
         from typing import cast
 
         from unbake.layout import boundary_proof, split
-        from unbake.project.config import Project
+        from unbake.config import Project
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -133,7 +133,7 @@ class BoundaryTests(unittest.TestCase):
         from typing import cast
 
         from unbake.layout.split_audit import audit
-        from unbake.project.config import Project
+        from unbake.config import Project
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

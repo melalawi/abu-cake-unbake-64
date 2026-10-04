@@ -13,9 +13,10 @@ from unittest.mock import patch
 
 from unbake.decomp import m2c
 from unbake.layout import split
-from unbake.project import build, config, fingerprint, header, rom, toolchain
+from unbake import config
+from unbake.project import build, fingerprint, header, rom, toolchain
 from unbake.project.census import naming_version
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.report import progress as report
 from unbake.report import units as report_units
 

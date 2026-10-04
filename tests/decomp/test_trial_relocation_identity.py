@@ -106,7 +106,7 @@ class TrialRelocationIdentityTests(unittest.TestCase):
                         relocations=[(section, 0, 2, "text")],
                     )
                     with (
-                        patch("unbake.project.config.load"),
+                        patch("unbake.config.load"),
                         patch("unbake.decomp.rom.project_reader", return_value=reader),
                     ):
                         result = jump_table_differences(

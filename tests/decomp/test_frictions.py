@@ -15,7 +15,7 @@ from unbake.decomp import checks, declarations, drafts, guide, m2c, needs, trial
 from unbake.layout import shared
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class FrictionTests(unittest.TestCase):

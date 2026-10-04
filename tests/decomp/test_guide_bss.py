@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 from tests.cli.support import MainCase
 from unbake.decomp import guide
 from unbake.decomp.rom import project_reader
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class GuideBssTests(MainCase):

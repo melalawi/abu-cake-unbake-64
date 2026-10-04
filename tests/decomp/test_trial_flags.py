@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.decomp.trial_flags import compiler_variants, variant_project
 from unbake.project import toolchain
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class CompilerFlagTests(unittest.TestCase):

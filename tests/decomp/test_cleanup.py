@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from tests.match.support import MatchFixture
 from unbake.decomp import cleanup, gbi, work
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class CleanupTests(MatchFixture):

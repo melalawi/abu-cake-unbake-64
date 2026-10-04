@@ -17,7 +17,8 @@ from tests.decomp.support import assemble, assembly
 from tests.process_fakes import cli_process
 from tests.support import test_policy
 from unbake.layout import map, split
-from unbake.project import config, makefile, toolchain
+from unbake import config
+from unbake.project import makefile, toolchain
 
 
 class MultiEntryCliTests(unittest.TestCase):

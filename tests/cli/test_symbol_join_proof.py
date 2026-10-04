@@ -158,7 +158,7 @@ class SymbolJoinProofTests(unittest.TestCase):
             self.assertEqual(report["replacements"], {})
             self.assertEqual(joined["symbol_assertions"], report["layout"]["symbol_assertions"])
             from unbake.layout import map as ownership
-            from unbake.project import config
+            from unbake import config
 
             ready = config.load(project)
             replacements = {}

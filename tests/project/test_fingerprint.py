@@ -12,7 +12,7 @@ from unittest.mock import patch
 from tests.project.test_rom import BOOTCODES, cartridge
 from unbake.layout import split
 from unbake.project import fingerprint, header, rom
-from unbake.project.config import Compiler, Held, Project, Version
+from unbake.config import Compiler, Held, Project, Version
 
 
 def move(funct: int, source: Path = 4, destination: int = 2) -> int:

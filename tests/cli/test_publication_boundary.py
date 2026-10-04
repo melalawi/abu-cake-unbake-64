@@ -15,7 +15,8 @@ from unittest.mock import patch
 import toml
 
 from tests.support import test_policy
-from unbake.project import config, setup
+from unbake import config
+from unbake.project import setup
 from unbake.report import progress
 
 
@@ -283,7 +284,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
     def test_republication_feedback_failure_restores_type_cache_and_file(self):
         from unittest.mock import patch
 
-        from unbake.project.config import Held
+        from unbake.config import Held
         from unbake.typemap import storage
 
         source = self.sources[0]

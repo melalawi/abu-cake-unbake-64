@@ -10,7 +10,7 @@ from typing import cast
 from unbake.decomp.header_declarations import declaration_source
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Declaration, Member, Operation
-from unbake.project.config import Held
+from unbake.config import Held
 
 _TOKEN = re.compile(
     r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|0[xX][\da-fA-F]+[uUlL]*|\d+[uUlL]*|[A-Za-z_]\w*|<<|>>|\S',

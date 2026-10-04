@@ -10,7 +10,7 @@ from typing import cast
 
 from unbake.decomp.trial_compare import Compare
 from unbake.families.gcc.schedule import Schedule
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -177,7 +177,7 @@ def _flips(difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list
     return rows
 
 
-def allocation(project: Project, policy: Policy, source: Path, version: str) -> Allocation:
+def allocation(project: Project, policy: Host, source: Path, version: str) -> Allocation:
     """Compile private diagnostic streams and explain the normal compiler trial."""
     from unbake.decomp import trial, trial_compile
     from unbake.families import family_for
@@ -255,7 +255,7 @@ def _absolute_includes(project: Project, flags: list[str] | tuple[str, ...]) -> 
     return values
 
 
-def _state_root(policy: Policy) -> Path:
+def _state_root(policy: Host) -> Path:
     root = getattr(policy, "state_root", None)
     if root is None:
         raise Held("explain", "policy.state_root: missing value")
@@ -263,7 +263,7 @@ def _state_root(policy: Policy) -> Path:
 
 
 def gcc_input(
-    project: Project, policy: Policy, source: Path, version: str, work: Path, *, preserve_lines: bool
+    project: Project, policy: Host, source: Path, version: str, work: Path, *, preserve_lines: bool
 ) -> tuple[str, list[str]]:
     """Prepare the exact GCC input with optional source line directives."""
     from unbake.decomp import trial_compile
@@ -295,7 +295,7 @@ def gcc_input(
     return expanded, codeflags
 
 
-def order(project: Project, policy: Policy, source: Path, version: str) -> Schedule:
+def order(project: Project, policy: Host, source: Path, version: str) -> Schedule:
     """Read family scheduling evidence for one selected unit and VERSION."""
     from unbake.decomp import trial_compile
     from unbake.families import family_for

@@ -7,7 +7,7 @@ from tests.match.support import MatchFixture
 from unbake.cli.main import make_parser
 from unbake.match import batch, relink
 from unbake.project import build, makefile
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class BaselineTests(MatchFixture):

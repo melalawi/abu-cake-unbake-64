@@ -3,7 +3,7 @@
 from importlib import import_module
 from typing import cast
 
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.search.core import Generator
 
 METHODS: dict[str, Generator] = {}

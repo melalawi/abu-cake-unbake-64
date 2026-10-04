@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from unbake.layout import symbol_replan
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class RetainedAssertionTests(unittest.TestCase):

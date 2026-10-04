@@ -9,7 +9,7 @@ import struct
 from pathlib import Path
 
 from unbake.layout import split
-from unbake.project.config import Project
+from unbake.config import Project
 from unbake.project_tools import extract, layout
 from unbake.project_tools.elf import Object
 

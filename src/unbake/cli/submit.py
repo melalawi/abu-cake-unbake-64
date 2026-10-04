@@ -8,7 +8,7 @@ from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
 from unbake.match import reporting
 from unbake.match.batch import publish
-from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
+from unbake.config import Held, Host, Project, Unfinished, load_policy
 
 
 def register(phases: Subparsers) -> None:
@@ -20,7 +20,7 @@ def register(phases: Subparsers) -> None:
     parser.add_argument("--batch", type=Path, nargs="*", metavar="FILE")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     batch = getattr(args, "batch", None)
     if (args.source is None) == (batch is None):
         raise Held("submit", "submit.source: supply FILE or --batch FILE..., exclusively")

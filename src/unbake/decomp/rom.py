@@ -9,7 +9,7 @@ from pathlib import Path
 
 from unbake.decomp.trial_compile import read_text
 from unbake.layout import split
-from unbake.project.config import Held, Project, Version
+from unbake.config import Held, Project, Version
 
 NAME = r"[A-Za-z_.$][\w.$]*"
 NUMBER = r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)"

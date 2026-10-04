@@ -18,7 +18,7 @@ from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import Compare
 from unbake.layout import split as layout_split
 from unbake.project import build, makefile, setup
-from unbake.project.config import Compiler, Held, Policy, Project, Version
+from unbake.config import Compiler, Held, Policy, Project, Version
 from unbake.report import progress
 
 SCRATCH_ROOT = Path(tempfile.gettempdir()).resolve()
@@ -139,7 +139,7 @@ class MatchFixture(unittest.TestCase):
         recipe = tools / "build.json"
         recipe.write_text(json.dumps(makefile.description(self.project), sort_keys=True, indent=2) + "\n")
         (tools / "compiler.sha256").write_text(hashlib.sha256(recipe.read_bytes()).hexdigest() + "  tools/build.json\n")
-        patch("unbake.project.config.load", side_effect=lambda *_: self.project).start()
+        patch("unbake.config.load", side_effect=lambda *_: self.project).start()
         cpp = tools / "fixture-cpp"
         cpp.write_bytes(b"fixture preprocessor")
         self.policy = Policy(

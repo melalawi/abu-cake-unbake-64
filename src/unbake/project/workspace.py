@@ -10,7 +10,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from unbake.project import build
-from unbake.project.config import PendingProject, Project
+from unbake.config import PendingProject, Project
 
 
 @contextmanager

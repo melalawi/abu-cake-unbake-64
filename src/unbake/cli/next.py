@@ -4,8 +4,8 @@ import argparse
 
 from unbake.cli import guidance
 from unbake.cli.common import receipt, suggest
-from unbake.project import config
-from unbake.project.config import PendingProject
+from unbake import config
+from unbake.config import PendingProject
 
 
 def run(args: argparse.Namespace, project: PendingProject) -> bool:

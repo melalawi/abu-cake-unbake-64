@@ -5,8 +5,8 @@ import json
 import shlex
 from pathlib import Path
 
-from unbake.project import config
-from unbake.project.config import Held
+from unbake import config
+from unbake.config import Held
 
 
 def command(root: Path | None, phase: str) -> str:

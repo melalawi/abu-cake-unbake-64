@@ -4,7 +4,7 @@ import argparse
 import json
 
 from unbake.cli.common import Subparsers
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 
 
 def register(phases: Subparsers) -> None:
@@ -14,7 +14,7 @@ def register(phases: Subparsers) -> None:
     owners.add_argument("--version", metavar="V", help="Use the configured naming version when omitted.")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     from unbake.layout import rodata_owners
 
     version = project.names_from if args.version is None else args.version

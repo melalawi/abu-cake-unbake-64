@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
@@ -144,7 +144,7 @@ class _Declarations(Parser):
 
 
 def alias_types(source: str) -> dict[str, str]:
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
     def parse() -> dict[str, str]:
         parser = _Declarations(source)
@@ -154,7 +154,7 @@ def alias_types(source: str) -> dict[str, str]:
             raise Held("solve", f"types.header_parse: {error.reason}") from error
         return parser.alias_types
 
-    return dict(remembered("headers.aliases", source, parse, keep=32768))
+    return dict(memo("headers.aliases", source, parse, keep=32768))
 
 
 def type_identity(type_: str, aliases: dict[str, str]) -> object:
@@ -344,7 +344,7 @@ class IncludeClosure:
 def source_names(
     project: Project,
     header: Path,
-    policy: Policy | None,
+    policy: Host | None,
     *,
     consumers: dict[Path, set[str]] | None = None,
     texts: dict[Path, str] | None = None,
@@ -358,7 +358,7 @@ def source_names(
     import json
 
     from unbake.match.source_views import _preprocessed_lines, _version_lines
-    from unbake.project.cache import Cache, key
+    from unbake.cache import Cache, key
     from unbake.typemap.declarations import clean
     from unbake.typemap.storage import generated
 

@@ -10,7 +10,7 @@ from tests.match.support import MatchFixture
 from unbake.layout.structs import layouts
 from unbake.layout.structs_parser import Parser
 from unbake.match import rewrite_view, type_rewrite
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 def dump(tokens):

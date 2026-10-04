@@ -3,7 +3,7 @@
 import re
 
 from unbake.layout import split
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def encoded_address(name: str) -> int | None:
@@ -132,7 +132,7 @@ def addresses(project: Project, name: str) -> dict[str, int]:
     return result
 
 
-def correspondence(project: Project, policy: Policy, name: str) -> list[split.Edit]:
+def correspondence(project: Project, policy: Host, name: str) -> list[split.Edit]:
     """Compose each proved placement with the data-symbol command's edit owner."""
     from unbake.decomp.symbols_edits import data_symbol
 

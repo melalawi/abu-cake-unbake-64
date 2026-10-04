@@ -9,7 +9,7 @@ from unbake.families.gcc.allocation import dump_flags as gcc_flags
 from unbake.families.gcc.allocation import flip, global_priority
 from unbake.families.ido.allocation import allocation as ido
 from unbake.families.ido.allocation import dump_flags as ido_flags
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.search.registers import propose
 
 LREG = """Register 80 used 270 times across 2490 insns; dies in 5 places; crosses 79 calls; GR_REGS or none; pointer.

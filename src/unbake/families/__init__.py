@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from unbake.decomp.explain import Allocation
     from unbake.families.mips import Relocation
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class CompilerIdentity(Protocol):

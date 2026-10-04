@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from unbake.decomp.indexed import indexed_references
 from unbake.decomp.symbols import references
 from unbake.families.mips import Relocation, relocation_pairs
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools.elf import Object
 from unbake.project_tools.literal_layout import signed
 

@@ -8,7 +8,7 @@ from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.decomp.header_declarations import attribute_source, declaration_source, declarations
 from unbake.layout.structs_parser import Parser
 from unbake.project import makefile
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class HeaderDeclarationsTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class HeaderDeclarationsTests(unittest.TestCase):
         source = "typedef int CachedWord; extern CachedWord cached_value;"
         expected = declarations(source)
         with (
-            patch("unbake.project.cache._remembered", {}),
+            patch("unbake.cache._remembered", {}),
             patch("unbake.decomp.header_declarations.Parser.parse", return_value=expected) as parse,
         ):
             first = declarations(source)

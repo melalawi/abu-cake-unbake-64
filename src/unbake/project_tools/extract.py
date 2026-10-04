@@ -18,7 +18,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from unbake.project.cache import Cache
+from unbake.cache import Cache
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.atomic import receipt as refresh_receipt
 from unbake.project_tools.atomic import write

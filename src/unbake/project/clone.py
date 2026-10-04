@@ -17,8 +17,9 @@ from contextlib import ExitStack
 from dataclasses import fields
 from pathlib import Path
 
-from unbake.project import build, compiler_files, config, hygiene, makefile, setup, toolchain
-from unbake.project.config import Held, Policy, Project
+from unbake import config
+from unbake.project import build, compiler_files, hygiene, makefile, setup, toolchain
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -132,7 +133,7 @@ def git(root: Path, *arguments: str) -> bytes:
     return result.stdout
 
 
-def isolated_policy(policy: Policy, destination: Path) -> str:
+def isolated_policy(policy: Host, destination: Path) -> str:
     values: dict[str, object] = {field.name: getattr(policy, field.name) for field in fields(policy)}
     values.update(cache_root=destination / ".unbake/cache", state_root=destination / ".unbake/state")
     return "".join(
@@ -179,7 +180,7 @@ def copy_evidence(project: Project, cloned: Project) -> None:
             copy_reflink(path.resolve(strict=True), target, immutable=True)
 
 
-def create(project: Project, policy: Policy, destination: Path, versions: Sequence[str]) -> Project:
+def create(project: Project, policy: Host, destination: Path, versions: Sequence[str]) -> Project:
     """Publish only a ready checkout; pin warm source generations through the copy."""
     destination = destination.expanduser().absolute()
     if any(path.is_symlink() for path in (destination, *destination.parents)):
@@ -217,7 +218,7 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
 
 def _create(
     project: Project,
-    policy: Policy,
+    policy: Host,
     destination: Path,
     versions: Sequence[str],
     generations: dict[str, Path],
@@ -346,7 +347,7 @@ def _create(
     return cloned
 
 
-def prepare(project: Project, policy: Policy) -> bool:
+def prepare(project: Project, policy: Host) -> bool:
     """Acquire pins and current build helpers in the clone, never in its source."""
     changed = False
     for ident in project.compilers:

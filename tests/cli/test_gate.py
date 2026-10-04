@@ -10,8 +10,8 @@ from unbake.cli import main
 from unbake.decomp import drafts, fuzzy_bar, trial
 from unbake.decomp.trial_compare import TYPES, Compare, compare_object
 from unbake.match import nonmatching
-from unbake.project import config
-from unbake.project.config import Held
+from unbake import config
+from unbake.config import Held
 
 
 def comparison(version="us", exact=9, total=10, **differences):

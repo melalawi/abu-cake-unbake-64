@@ -13,7 +13,7 @@ from typing import Any
 
 from unbake.layout import split
 from unbake.layout.rodata_references import collect, words
-from unbake.project.config import SymbolPolicy
+from unbake.config import SymbolPolicy
 from unbake.project.flow import Span
 from unbake.project.rom import Rom
 
@@ -773,7 +773,7 @@ def data_identity(
                 or key[1] not in tables[key[0]]
                 or tables[key[0]][key[1]].address != placement["address"]
             ):
-                from unbake.project.config import Held
+                from unbake.config import Held
 
                 raise Held("setup", f"data.assertion_stale: {assertion['name']}: {key}")
             forced[key] = assertion["name"]

@@ -10,11 +10,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from unbake import inputs
 from unbake.layout import headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
-from unbake.project.cache import Cache, key, remembered
-from unbake.project.config import Policy, Project
+from unbake.cache import Cache, key, memo
+from unbake.config import Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import header_names, split, storage
 
@@ -27,7 +28,7 @@ def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], An
         return cache.produce(kind, content_key, make).read_bytes()
 
     # Retain immutable bytes, so mutations to a decoded result cannot poison reuse.
-    content = remembered("typemap-artifact." + kind, (str(cache.root), content_key), load, keep=32768)
+    content = memo("typemap-artifact." + kind, (str(cache.root), content_key), load, keep=32768)
     return json.loads(content)
 
 
@@ -62,7 +63,7 @@ class Certificates:
         self.known.update(keys)
 
 
-def environment(project: Project, policy: Policy | None) -> str:
+def environment(project: Project, policy: Host | None) -> str:
     """Pin generator code, configuration, version/compiler flags and actual tools."""
     code = Path(__file__).parents[1]
     sources = sorted(code.rglob("*.py"))
@@ -83,7 +84,7 @@ def environment(project: Project, policy: Policy | None) -> str:
 
 
 class Session:
-    def __init__(self, project: Project, policy: Policy | None) -> None:
+    def __init__(self, project: Project, policy: Host | None) -> None:
         self.project, self.policy = project, policy
         self.cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
         self.environment = environment(project, policy)
@@ -154,7 +155,7 @@ class Session:
         def make(output: Path) -> None:
             atomic_files.write(output, split.guarded(path.relative_to(self.project.include[0]), text))
 
-        return remembered(
+        return memo(
             "typemap-guarded",
             (str(self.cache.root), content_key),
             lambda: self.cache.produce("typemap-header", content_key, make).read_bytes(),
@@ -227,7 +228,7 @@ class Session:
                 return None
             for name, digest in lookup["headers"].items():
                 path = self.project.include[0] / name
-                if not path.is_file() or storage.file_digest(path) != digest:
+                if not path.is_file() or inputs.digest(path) != digest:
                     return None
             cached = self.cache.get("typemap-render", previous["content_key"])
             return json.loads(cached.read_bytes()) if cached is not None else None
@@ -304,13 +305,13 @@ def validation_inputs(
             def analyze(data: bytes = data) -> Declarations:
                 return declarations(data.decode())
 
-            row = remembered("typemap.validation-symbols", data, analyze, keep=32768)
+            row = memo("typemap.validation-symbols", data, analyze, keep=32768)
             for name in row.typedefs | row.exports | row.tags:
                 if storage.generated(project, path) or name not in providers:
                     providers.setdefault(name, set()).add(path)
         return closures, providers
 
-    closures, providers = remembered("typemap.validation-graph", graph_key, graph, keep=4)
+    closures, providers = memo("typemap.validation-graph", graph_key, graph, keep=4)
     abi = []
     for text in dict.fromkeys(line for line in abi_context.splitlines() if line.strip()):
         selected = {p for name in re.findall(r"\b[A-Za-z_]\w*\b", text) for p in providers.get(name, set())}

@@ -13,7 +13,7 @@ from unbake.decomp import assign as assignments
 from unbake.decomp import drafts
 from unbake.decomp.score import percent
 from unbake.layout import split
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 @dataclass(frozen=True)
@@ -181,7 +181,7 @@ def _best(
     return score, not quality[0], path
 
 
-def ranked(project: Project, policy: Policy) -> list[Row]:
+def ranked(project: Project, policy: Host) -> list[Row]:
     """Identical retained drafts first, then weakest fuzzy score, then size."""
     _, functions, bodies = inventory(project)
     store = drafts.Store(policy, project)
@@ -239,7 +239,7 @@ def _occupied(ledger: assignments.Ledger) -> set[str]:
 
 
 def assign(
-    project: Project, policy: Policy, holder: str, tier: str, *, count: int
+    project: Project, policy: Host, holder: str, tier: str, *, count: int
 ) -> list[assignments.AssignmentRecord]:
     """Deal in ranking order; each named claim is atomic in the ledger API."""
     holder, tier = _text(holder, "holder"), _text(tier, "tier")
@@ -268,7 +268,7 @@ def assign(
     return records
 
 
-def actionable(project: Project, policy: Policy) -> list[Row]:
+def actionable(project: Project, policy: Host) -> list[Row]:
     """Keep supported naming-version functions whose unheld owners are assembly."""
     occupied = _occupied(assignments.Ledger(project, policy))
     output = []

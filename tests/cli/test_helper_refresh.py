@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.cli import setup as cli
-from unbake.project import config, setup
-from unbake.project.config import Held
+from unbake import config
+from unbake.project import setup
+from unbake.config import Held
 
 
 class HelperRefreshTests(unittest.TestCase):

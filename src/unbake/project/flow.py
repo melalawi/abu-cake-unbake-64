@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 from unbake.project.census import Census
-from unbake.project.config import PendingProject, SetupPolicy
+from unbake.config import PendingProject, Host
 
 
 class Identity(TypedDict):
@@ -98,7 +98,7 @@ class WorkManifest(Identity):
     compiler_evidence: dict[str, Any]
 
 
-def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) -> LayoutManifest:
+def plan_layout(project: PendingProject, census: Census, policy: Host) -> LayoutManifest:
     """Build the pure joint plan; implementation supplied by the layout owner."""
     from unbake.layout.planner import plan_layout as implementation
 
@@ -109,7 +109,7 @@ def propose_compilers(
     project: PendingProject,
     census: Census,
     layout: LayoutManifest,
-    policy: SetupPolicy,
+    policy: Host,
     *,
     choices: dict[str, str] | None = None,
 ) -> CompilerProposal:
@@ -124,7 +124,7 @@ def complete_setup(
     census: Census,
     layout: LayoutManifest,
     proposal: CompilerProposal,
-    policy: SetupPolicy,
+    policy: Host,
     *,
     confirm: str | None = None,
     supply: Path | None = None,

@@ -2,7 +2,7 @@
 
 import re
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 _ALIASES = {
     name: index

@@ -16,7 +16,7 @@ from unbake.layout import split
 from unbake.match import forked, reporting, staging
 from unbake.match.common import held
 from unbake.project import build, makefile
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools import extract, layout
 from unbake.project_tools.codegen import dependency_paths
@@ -214,7 +214,7 @@ def _prepare_version(
 def prepare(
     original: Project,
     staged: Project,
-    policy: Policy,
+    policy: Host,
     generations: dict[str, Path],
     splits: dict[str, str],
     *,

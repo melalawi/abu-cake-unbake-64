@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from unbake.decomp.header_declarations import declarations
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def _clean(text: str) -> str:
@@ -95,7 +95,7 @@ def required_headers(contents: dict[Path, str], output: str) -> set[Path]:
     return selected
 
 
-def preprocess_context(source: Path, project: Project, policy: Policy, version: str, function: str) -> str:
+def preprocess_context(source: Path, project: Project, policy: Host, version: str, function: str) -> str:
     """Use the selected source unit's make recipe for context preprocessing."""
     from unbake.decomp.explain import _absolute_includes
     from unbake.decomp.trial_compile import run_tool

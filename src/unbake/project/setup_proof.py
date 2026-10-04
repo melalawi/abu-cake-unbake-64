@@ -8,7 +8,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project_tools import atomic as atomic_files
 
 

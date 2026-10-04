@@ -10,7 +10,7 @@ from unbake.decomp import guide, needs, symbols, symbols_edits
 from unbake.decomp.needs import LabelNeed, SymbolNeed
 from unbake.families import family_for
 from unbake.families.mips import Relocation
-from unbake.project.config import Compiler, Held, Policy, Project, Version
+from unbake.config import Compiler, Held, Policy, Project, Version
 
 
 def pair(address: int, opcode: int = 0x31) -> tuple[int, int]:

@@ -10,7 +10,7 @@ from unbake.decomp import drafts
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.match import batch, batch_fold, declarations, nonmatching
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class BatchHeaderHoldsTests(unittest.TestCase):

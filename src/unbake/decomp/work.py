@@ -15,7 +15,7 @@ from typing import Any, cast
 
 from unbake.layout import split
 from unbake.project import build, makefile
-from unbake.project.config import Held, Policy, Project, load_policy
+from unbake.config import Held, Host, Project, load_policy
 from unbake.project.flow import WorkManifest
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
@@ -206,7 +206,7 @@ def overlay_source(project: Project, source: Path, directory: Path, root: Path) 
     return destination
 
 
-def trial_view(project: Project, policy: Policy, source: Path, directory: Path) -> Path:
+def trial_view(project: Project, policy: Host, source: Path, directory: Path) -> Path:
     """Use submit's single-source fold in an entirely private compilation tree."""
     from unbake.layout.header_context import Headers
     from unbake.match import batch_fold, staging
@@ -253,7 +253,7 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
     return result
 
 
-def compiler_identity(project: Project, policy: Policy, ident: str) -> str:
+def compiler_identity(project: Project, policy: Host, ident: str) -> str:
     """Hash the compiler's files and drivers, excluding other units' recipes."""
     compiler = project.compilers[ident]
     paths = {compiler.cc}
@@ -289,12 +289,12 @@ def compiler_identity(project: Project, policy: Policy, ident: str) -> str:
     for path in (*paths, compiler.sha256):
         if not path.is_file():
             raise Held("try", f"trial.compiler.{ident}: missing {path}")
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
     # Installed compilers and drivers are replaced, never edited in place:
     # file identity and size select the content digest within one process.
     signature = tuple((path, (stat := path.stat()).st_ino, stat.st_size, stat.st_mtime_ns) for path in sorted(paths))
-    return remembered(
+    return memo(
         "compiler.identity",
         (project.root, json.dumps(settings, sort_keys=True), signature),
         lambda: _identity(project, paths, settings),
@@ -322,7 +322,7 @@ def _identity(project: Project, paths: set[Path], settings: dict[str, Any]) -> s
 
 
 def current_trial(
-    project: Project, policy: Policy, source: Path, versions: list[str], recorded: dict[str, Any]
+    project: Project, policy: Host, source: Path, versions: list[str], recorded: dict[str, Any]
 ) -> WorkManifest:
     """Validate source-scoped inputs and reconstruct its measured compiler view."""
     from unbake.project import compiler_choice
@@ -362,7 +362,7 @@ def identity(
     versions: list[str],
     *,
     pinned: dict[str, tuple[Path, Path]] | None = None,
-    policy: Policy | None = None,
+    policy: Host | None = None,
 ) -> WorkManifest:
     """Capture this source's build inputs and every immutable holding target."""
     overlay_inputs = overlay_data(project, source)
@@ -386,7 +386,7 @@ def identity(
         }
         providers = project.build / "setup" / (version + ".json")
         if providers.is_file():
-            from unbake.project.cache import parsed
+            from unbake.cache import parsed
 
             provided = parsed("setup.providers", providers, partial(_providers, providers))
             layouts[version]["providers"] = [r for r in provided if source.stem in r.get("owners", [])]

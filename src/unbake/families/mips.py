@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass(frozen=True)

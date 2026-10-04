@@ -8,7 +8,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class HeaderSafetyTests(unittest.TestCase):

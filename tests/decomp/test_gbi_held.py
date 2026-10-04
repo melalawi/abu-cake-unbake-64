@@ -17,7 +17,7 @@ from unbake.decomp import checks, gbi
 from unbake.decomp.gbi_expr import split
 from unbake.decomp.gbi_source import expand, invocations, macros
 from unbake.project import setup
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 class HeldPacketsTest(unittest.TestCase):

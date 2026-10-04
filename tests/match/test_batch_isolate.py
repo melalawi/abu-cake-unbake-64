@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from unbake.match.batch import Candidate, _bisect
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class BisectTests(unittest.TestCase):

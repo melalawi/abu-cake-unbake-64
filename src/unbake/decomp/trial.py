@@ -22,7 +22,7 @@ from unbake.decomp.trial_source import annotate_divergence
 from unbake.decomp.trial_target import inputs as trial_inputs
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import entries as entry_layout
-from unbake.project.config import Held, Policy, Project, relative_text
+from unbake.config import Held, Host, Project, relative_text
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
@@ -59,7 +59,7 @@ def render(trial: Trial) -> str:
     return "\n".join(lines)
 
 
-def store_trial(project: Project, policy: Policy, source: Path, result: Trial) -> None:
+def store_trial(project: Project, policy: Host, source: Path, result: Trial) -> None:
     """Retain evidence measured against pinned, immutable build generations."""
     from unbake.decomp import drafts
 
@@ -80,7 +80,7 @@ def _source_content(source: Path) -> tuple[bytes, str]:
 
 def retain_draft(
     project: Project,
-    policy: Policy,
+    policy: Host,
     source: Path,
     scratch: Path,
     versions: list[str] | None,
@@ -150,7 +150,7 @@ def retain_draft(
 
 def try_draft(
     project: Project,
-    policy: Policy,
+    policy: Host,
     source: Path,
     scratch: Path,
     versions: list[str] | None = None,

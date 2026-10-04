@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from unbake.layout import header_cache, header_context
 from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class HeaderCacheTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class HeaderCacheTests(unittest.TestCase):
         restored = Headers.__new__(Headers)
         restored.root = copied
         restored._cache_root = self.cache
-        with patch("unbake.project.cache._remembered", {}):
+        with patch("unbake.cache._remembered", {}):
             restored._load(inputs)
         _, records = restored.parse("struct Later {Node nodes[COUNT]; Callback callback;};")
         fresh = Parser("struct Later {Node nodes[COUNT]; Callback callback;};")

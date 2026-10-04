@@ -8,7 +8,7 @@ from itertools import combinations, pairwise
 from unbake.layout.planner import correspondence
 from unbake.layout.split import Function
 from unbake.layout.symbol_identity import alignment
-from unbake.project.config import SymbolPolicy
+from unbake.config import SymbolPolicy
 
 
 class SymbolRulesTests(unittest.TestCase):

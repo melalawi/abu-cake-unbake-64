@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 def path(project: Project) -> Path:

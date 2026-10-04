@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.layout import apply, headers, index, map, redeclarations
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class MapTests(unittest.TestCase):
@@ -375,7 +375,7 @@ class ApplyTests(unittest.TestCase):
         outputs = {output: data, index.path(self.project): index.encoded(lookup)}
         with (
             patch("unbake.project.build.build", return_value={"us": SimpleNamespace(ok=True)}),
-            patch("unbake.project.config.read_policy"),
+            patch("unbake.config.read_policy"),
             patch("unbake.typemap.database.load", return_value={}),
             patch("unbake.typemap.database._render", side_effect=lambda *a: dict(outputs)),
             patch("unbake.typemap.regeneration.Session") as session,
@@ -388,7 +388,7 @@ class ApplyTests(unittest.TestCase):
             self.assertEqual(apply.run(self.project), 0)
 
     def test_failed_cartridge_gate_restores_rewritten_sources_and_headers(self):
-        from unbake.project.config import Held
+        from unbake.config import Held
 
         source = self.project.src / "first.c"
         source.write_text("int first(void) {return 1;}\n")
@@ -409,7 +409,7 @@ class ApplyTests(unittest.TestCase):
 
                 with (
                     patch("unbake.project.build.build", return_value={"us": SimpleNamespace(ok=False)}),
-                    patch("unbake.project.config.read_policy"),
+                    patch("unbake.config.read_policy"),
                 ):
                     freshness.publish(self.project, None, {source: b"changed", header: b"changed"})
 

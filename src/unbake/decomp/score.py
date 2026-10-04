@@ -15,18 +15,18 @@ from pathlib import Path
 from typing import cast
 
 from unbake.layout import data_symbols, split, xver
-from unbake.project.cache import Cache, key, parsed
-from unbake.project.config import Held, Policy, Project, load
+from unbake.cache import Cache, key, parsed
+from unbake.config import Held, Host, Project, load
 
 verified: set[tuple[Path, str]] = set()
 _verification_lock = threading.Lock()
 
 
-def objdiff_cli(policy: Policy, phase: str = "score") -> Path:
+def objdiff_cli(policy: Host, phase: str = "score") -> Path:
     """Verify each configured executable/digest pair once in this process."""
     path = getattr(policy, "objdiff_cli", None)
     if not path:
-        raise Held(phase, "policy.objdiff_cli is missing")
+        raise Held(phase, "policy.objdiff is missing")
     expected = getattr(policy, "objdiff_sha256", None)
     if not isinstance(expected, str) or len(expected) != 64:
         raise Held(phase, "policy.objdiff_sha256 must be a SHA-256 digest")
@@ -42,7 +42,7 @@ def objdiff_cli(policy: Policy, phase: str = "score") -> Path:
                 with path.open("rb") as stream:
                     actual = hashlib.file_digest(stream, "sha256").hexdigest()
             except OSError as error:
-                raise Held(phase, f"policy.objdiff_cli {path}: {error}") from error
+                raise Held(phase, f"policy.objdiff {path}: {error}") from error
             if actual != expected.lower():
                 raise Held(phase, f"policy.objdiff_sha256 for {path}: expected {expected}, found {actual}")
             verified.add(identity)
@@ -81,7 +81,7 @@ def _symbol_score(document: object, function: str) -> float:
     return percent(symbols[0].get("match_percent", 0.0), f"{function}.match_percent")
 
 
-def fuzzy(project: Project, policy: Policy, v: str, function: str, target_obj: Path, base_obj: Path) -> float:
+def fuzzy(project: Project, policy: Host, v: str, function: str, target_obj: Path, base_obj: Path) -> float:
     project.version(v)
     if not isinstance(function, str) or not function:
         raise Held("score", "function is missing")
@@ -117,7 +117,7 @@ def fuzzy(project: Project, policy: Policy, v: str, function: str, target_obj: P
                     check=False,
                 )
             except OSError as error:
-                raise Held("score", f"policy.objdiff_cli {tool}: {error}") from error
+                raise Held("score", f"policy.objdiff {tool}: {error}") from error
             if result.returncode:
                 raise Held("score", f"objdiff diff {function} VERSION {v}: {result.stderr.strip()}")
             _read_score(output, function)
@@ -193,7 +193,7 @@ def relocation_addresses(
 
 
 def diff(
-    policy: Policy,
+    policy: Host,
     version: str,
     function: str,
     target: Path,

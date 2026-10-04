@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout import freshness, index, map, redeclarations
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.typemap import storage
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"][^\n]*(?:\n|$)', re.M)
@@ -120,7 +120,7 @@ def source(
     return redeclarations.strip(text, bodies)
 
 
-def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False) -> int:
+def run(project: Project, policy: Host | None = None, *, dry_run: bool = False) -> int:
     from unbake.typemap import database
 
     map.load(project)
@@ -137,7 +137,7 @@ def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False
 
 def _run(
     project: Project,
-    policy: Policy | None,
+    policy: Host | None,
     value: dict[str, Any],
     *,
     previous: set[str] | None = None,

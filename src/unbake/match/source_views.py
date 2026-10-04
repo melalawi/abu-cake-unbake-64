@@ -14,12 +14,12 @@ from typing import Any
 from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
 from unbake.match.common import held
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
 def parsers(
-    project: Project, policy: Policy, text: str, versions: tuple[str, ...], headers: Headers | None = None
+    project: Project, policy: Host, text: str, versions: tuple[str, ...], headers: Headers | None = None
 ) -> list[Parser]:
     """Ask cpp to select branches without expanding tokens or changing edit spans."""
     context = headers if headers is not None else Headers.read(project)
@@ -54,7 +54,7 @@ def parsers(
 
 def typed_context(
     project: Project,
-    policy: Policy,
+    policy: Host,
     headers: Headers,
     version: str,
     *,
@@ -62,7 +62,7 @@ def typed_context(
     context_project: Project | None = None,
 ) -> str:
     """Reuse preprocessing for an effective header set and selected version."""
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
     from unbake.typemap import declarations as typed_declarations
 
     selection = (
@@ -70,7 +70,7 @@ def typed_context(
         project.include,
         tuple(headers.texts.items()),
         policy.cpp,
-        policy.cppflags,
+        project.cppflags,
         project.compilers[project.default_compiler].cflags,
         project.version(version).macros,
         source_context,
@@ -95,7 +95,7 @@ def typed_context(
 
     cached: dict[tuple[Any, ...], str] = headers.__dict__.setdefault("_typed_contexts", {})
     if selection not in cached:
-        cached[selection] = remembered("match.typed-context", selection, compute, keep=8)
+        cached[selection] = memo("match.typed-context", selection, compute, keep=8)
         if len(cached) > 8:
             cached.pop(next(iter(cached)))
     return cached[selection]
@@ -157,7 +157,7 @@ def header_includes(project: Project, headers: Headers, directory: Path) -> tupl
 
 
 def _preprocessed_lines(
-    project: Project, policy: Policy, text: str, version: str, headers: Headers | None = None
+    project: Project, policy: Host, text: str, version: str, headers: Headers | None = None
 ) -> set[int]:
     lines = text.splitlines(keepends=True)
     with tempfile.TemporaryDirectory(prefix="match-view-") as temporary:
@@ -167,7 +167,7 @@ def _preprocessed_lines(
         command = [
             str(policy.cpp),
             *(f"-I{root}" for root in (*include, *project.include)),
-            *(flag for flag in policy.cppflags if flag != "-P"),
+            *(flag for flag in project.cppflags if flag != "-P"),
             "-fdirectives-only",
             *(f"-D{macro}" for macro in project.version(version).macros),
             str(source),
@@ -191,7 +191,7 @@ def _preprocessed_lines(
 _DIRECTIVE = re.compile(r"^\s*#\s*(\w+)\s*(.*?)\s*$")
 
 
-def _version_lines(project: Project, policy: Policy, text: str, version: str) -> set[int] | None:
+def _version_lines(project: Project, policy: Host, text: str, version: str) -> set[int] | None:
     """Select conditional branches whose tests name only VERSION and command-line macros.
 
     Returns None whenever a header could influence a test; cpp then decides.
@@ -202,7 +202,7 @@ def _version_lines(project: Project, policy: Policy, text: str, version: str) ->
         return None
     macros: dict[str, int | None] = {macro: 1 for macro in project.version(version).macros}
     known = {macro for name in project.versions for macro in project.version(name).macros} | {"NON_MATCHING"}
-    for flag in policy.cppflags:
+    for flag in project.cppflags:
         if flag.startswith("-D"):
             name, _, value = flag[2:].partition("=")
             known.add(name)

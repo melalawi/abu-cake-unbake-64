@@ -10,10 +10,10 @@ import tempfile
 from pathlib import Path
 
 from unbake.project import build
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
-def default_scratch(project: Project, policy: Policy) -> Path:
+def default_scratch(project: Project, policy: Host) -> Path:
     """Keep clone-local state from selecting a scratch inside its project."""
     candidate = policy.state_root / "draft-work"
     if not candidate.resolve().is_relative_to(project.root.resolve()):
@@ -64,7 +64,7 @@ def run_tool(argv: list[str], work: Path, phase: str) -> str:
     return result.stdout
 
 
-def compile_draft(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
+def compile_draft(project: Project, policy: Host, source: Path, version: str, out: Path) -> Path:
     result = Path(build.compile_object(project, policy, source, version, out))
     if result.resolve() != out.resolve() or not out.is_file():
         raise Held("try", f"build.compile_object must write {out}; returned {result}")

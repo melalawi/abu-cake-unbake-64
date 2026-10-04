@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:

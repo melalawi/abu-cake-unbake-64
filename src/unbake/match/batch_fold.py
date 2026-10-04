@@ -26,7 +26,7 @@ from unbake.layout.structs_identity import Index, identity
 from unbake.layout.structs_types import Aggregate
 from unbake.match import declarations, forked, reporting, source_views, type_rewrite
 from unbake.match.common import held
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 _WORD = re.compile(r"[A-Za-z_]\w*")
 _MISSING = object()
@@ -92,7 +92,7 @@ class Changes:
 
 
 def fold(
-    staged: Project, policy: Policy, headers: Headers, candidates: list[Any], receipts: list[str]
+    staged: Project, policy: Host, headers: Headers, candidates: list[Any], receipts: list[str]
 ) -> Iterator[tuple[Any, declarations.Folded]]:
     """Fold candidates in order into headers; returns each accepted source with its fold."""
     if policy.cores < 2:
@@ -136,7 +136,7 @@ def fold(
 
 
 def _serial(
-    staged: Project, policy: Policy, headers: Headers, candidates: list[Any], receipts: list[str]
+    staged: Project, policy: Host, headers: Headers, candidates: list[Any], receipts: list[str]
 ) -> Iterator[tuple[Any, declarations.Folded]]:
     """A single worker needs no speculation, warmup, or replay."""
     with source_views.shared_includes(staged, headers):
@@ -155,7 +155,7 @@ def _serial(
     reporting.record("fold", reused=0, folded_in_order=len(candidates), window=1)
 
 
-def _warm_contexts(staged: Project, policy: Policy, headers: Headers, members: list[Any]) -> None:
+def _warm_contexts(staged: Project, policy: Host, headers: Headers, members: list[Any]) -> None:
     """Warm only possible aggregate rewrites; leave source parsing to workers."""
     versions = set()
     for candidate in members:
@@ -186,7 +186,7 @@ def _adopt(headers: Headers, trial: Trial, changes: Changes) -> declarations.Fol
 
 
 def _fold_one(
-    staged: Project, policy: Policy, headers: Headers, candidate: Any, changes: Changes
+    staged: Project, policy: Host, headers: Headers, candidate: Any, changes: Changes
 ) -> declarations.Folded:
     """Fold one source against the current headers and adopt its edits."""
     overlay = candidate.source.parent / "overlay"
@@ -207,7 +207,7 @@ def _fold_one(
     return folded
 
 
-def _folded(staged: Project, policy: Policy, headers: Headers, candidate: Any) -> declarations.Folded:
+def _folded(staged: Project, policy: Host, headers: Headers, candidate: Any) -> declarations.Folded:
     folded = declarations.fold_source(
         staged,
         policy,
@@ -224,7 +224,7 @@ def _folded(staged: Project, policy: Policy, headers: Headers, candidate: Any) -
     return folded
 
 
-def _speculate(shared: tuple[Project, Policy, Headers], candidate: Any) -> Trial:
+def _speculate(shared: tuple[Project, Host, Headers], candidate: Any) -> Trial:
     """Fold one source in a worker against the window's starting headers."""
     staged, policy, headers = shared
     try:

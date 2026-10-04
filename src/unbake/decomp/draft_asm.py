@@ -2,7 +2,7 @@
 
 import re
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 _TRANSFER = re.compile(r"(?:b|bal|beq|bne|beqz|bnez|bgez|bgtz|blez|bltz|bc[012][ft])(?:l|al|all)?$|j(?:al|r|alr)?$")
 

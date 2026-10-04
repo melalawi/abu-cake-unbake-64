@@ -14,10 +14,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from unbake import config
 from unbake.project import (
     build,
     compiler_files,
-    config,
     hygiene,
     makefile,
     setup_config,
@@ -25,7 +25,7 @@ from unbake.project import (
     toolchain,
     workspace,
 )
-from unbake.project.config import Held, PendingProject, Policy, Project, SetupPolicy
+from unbake.config import Held, PendingProject, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.host import resolve_tool
 
@@ -84,7 +84,7 @@ def restore_roms(project: Project, source: Path) -> None:
         compiler_files.atomic_copy(target, contents[version.baserom_sha1], mode=0o600)
 
 
-def run(project: Project, policy: Policy | SetupPolicy, *, supply: Path | None = None) -> list[str]:
+def run(project: Project, policy: Host | Host, *, supply: Path | None = None) -> list[str]:
     config_path = project.root / "config.toml"
     config_text = setup_config.strip_workspace(config_path.read_text())
     build = makefile.recipe(project)
@@ -333,16 +333,11 @@ def _layout_inputs(project: PendingProject, census: Census, layout: LayoutManife
     _write(tree, "build/setup/layout.json", json.dumps(layout, indent=2, sort_keys=True) + "\n")
 
 
-def _build_options(layout: LayoutManifest, policy: SetupPolicy) -> dict[str, Any]:
+def _build_options(project: PendingProject, layout: LayoutManifest) -> dict[str, Any]:
     return {
-        "ld": "policy:mips_ld",
-        "objcopy": "policy:mips_objcopy",
-        "splat": "policy:splat",
-        "as": "policy:mips_as",
-        "cpp": "policy:cpp",
-        "asflags": list(policy.asflags),
-        "cppflags": list(policy.cppflags),
-        "sn64_asflags": list(policy.sn64_asflags),
+        "asflags": list(project.asflags),
+        "cppflags": list(project.cppflags),
+        "sn64_asflags": list(project.sn64_asflags),
         "resident_mappings": {
             version: record["evidence"].get("resident_mappings", []) for version, record in layout["versions"].items()
         },
@@ -603,7 +598,7 @@ def _generations(project: PendingProject | Project, versions: tuple[str, ...]) -
 def _prove_publish(
     project: PendingProject | Project,
     tree: Path,
-    policy: SetupPolicy,
+    policy: Host,
     fingerprint: dict[str, str],
     *,
     fresh: bool,
@@ -656,7 +651,7 @@ def prepare_setup(
     census: Census,
     layout: LayoutManifest,
     proposal: CompilerProposal,
-    policy: SetupPolicy,
+    policy: Host,
     *,
     confirm: str | None = None,
     supply: Path | None = None,
@@ -693,7 +688,7 @@ def prepare_setup(
                 default_compiler=proposal["default_compiler"],
                 assignments=proposal["assignments"],
                 cflags={ident: tuple(flags) for ident, flags in proposal["cflags"].items()},
-                build=_build_options(layout, policy),
+                build=_build_options(project, layout),
             ),
         )
         compiler_document = tree / "build/setup/compiler.json"
@@ -736,7 +731,7 @@ def complete_setup(
     census: Census,
     layout: LayoutManifest,
     proposal: CompilerProposal,
-    policy: SetupPolicy,
+    policy: Host,
     *,
     confirm: str | None = None,
     supply: Path | None = None,
@@ -747,7 +742,7 @@ def complete_setup(
         return prove()
 
 
-def refresh(pending: PendingProject, policy: SetupPolicy, *, supply: Path | None = None) -> list[str]:
+def refresh(pending: PendingProject, policy: Host, *, supply: Path | None = None) -> list[str]:
     """Prove existing authored inputs, refresh generated files and keep config.toml configuration only."""
     from unbake.project import census
 

@@ -11,7 +11,7 @@ from typing import cast
 from tests.decomp.support import SCRATCH_ROOT, fixture
 from unbake.decomp import m2c
 from unbake.decomp.draft_context import preprocess_context
-from unbake.project.config import Held, Policy
+from unbake.config import Held, Policy
 
 
 class M2cTests(unittest.TestCase):

@@ -19,7 +19,7 @@ from unbake.decomp.trial import render, try_draft
 from unbake.decomp.trial_compare import TYPES, compare_object
 from unbake.decomp.trial_target import target_object
 from unbake.project import build, makefile
-from unbake.project.config import Held, Policy
+from unbake.config import Held, Policy
 
 
 class ObjectTrialTests(unittest.TestCase):
@@ -117,7 +117,7 @@ class ObjectTrialTests(unittest.TestCase):
             compiled: list[tuple[str, tuple[str, ...]]] = []
 
             def compile_source(project: object, policy: object, source: Path, version: str, out: Path) -> Path:
-                from unbake.project.config import Project
+                from unbake.config import Project
 
                 effective = makefile.flags(cast(Project, project), version, source)
                 self.assertIn("-G0", effective)

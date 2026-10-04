@@ -18,8 +18,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from unbake.project.cache import Cache, key
-from unbake.project.config import Held, Policy, Project
+from unbake import inputs
+from unbake.cache import Cache, key
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import declarations, storage
 
@@ -56,7 +57,7 @@ def closure(project: Project, roots: list[Path]) -> list[Path]:
     pending = list(roots)
     while pending:
         path = pending.pop()
-        for quote, name in _includes(path, storage._stamp(path)):
+        for quote, name in _includes(path, inputs.signature(path)):
             places = ([path.parent] if quote == '"' else []) + list(project.include)
             found = next((place / name for place in places if (place / name).is_file()), None)
             if found is not None and found not in seen:
@@ -70,14 +71,14 @@ def _forced(project: Project, command: list[str]) -> list[Path]:
     return [path for path in forced if path.is_file()]
 
 
-def _command(project: Project, policy: Policy | None, version: str) -> list[str]:
+def _command(project: Project, policy: Host | None, version: str) -> list[str]:
     if policy is None:
         return ["in-memory", version, *project.version(version).macros]
     command = declarations._cpp_command(project, policy, version, extra=True, line_markers=False)
     return [part.replace(str(project.root), ".") for part in command]
 
 
-def source_key(project: Project, policy: Policy | None, task: Task) -> str:
+def source_key(project: Project, policy: Host | None, task: Task) -> str:
     function, source, version = task
     command = _command(project, policy, version)
     roots = [source, *_forced(project, command)]
@@ -85,7 +86,7 @@ def source_key(project: Project, policy: Policy | None, task: Task) -> str:
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
     for path in closure(project, roots):
-        parts.extend((storage.relative(project, path), storage.file_digest(path)))
+        parts.extend((storage.relative(project, path), inputs.digest(path)))
     return key(*parts)
 
 
@@ -183,11 +184,11 @@ class Store:
         return rows[0]
 
 
-def store(policy: Policy | None) -> Store:
+def store(policy: Host | None) -> Store:
     return Store(None if policy is None else Cache(policy.cache_root))
 
 
-def extract(project: Project, policy: Policy | None, task: Task) -> list[dict[str, Any]]:
+def extract(project: Project, policy: Host | None, task: Task) -> list[dict[str, Any]]:
     """Two seeds: the contracts the source consumes, and the definition it owns."""
     function, source, version = task
     text = declarations.source_unit(project, policy, version, source)
@@ -196,7 +197,7 @@ def extract(project: Project, policy: Policy | None, task: Task) -> list[dict[st
         "function": function,
         "version": version,
         "source": storage.relative(project, source),
-        "sha256": storage.file_digest(source),
+        "sha256": inputs.digest(source),
     }
     contract = declarations.published(text, provenance, source, contracts=True, compact=True)
     consumed = declarations.consumed_contracts(contract, source.read_text())
@@ -207,35 +208,31 @@ def extract(project: Project, policy: Policy | None, task: Task) -> list[dict[st
     return [consumed, definition]
 
 
-def _chunk(shared: tuple[Project, Policy], tasks: list[tuple[str, Task]]) -> None:
+def _chunk(job: tuple[Project, Host, list[tuple[str, Task]]]) -> None:
     """Worker body: extract misses straight into the shared cache."""
-    project, policy = shared
-    output = store(policy)
+    project, host, tasks = job
+    output = store(host)
     for content_key, task in tasks:
-        output.put(content_key, extract(project, policy, task))
+        output.put(content_key, extract(project, host, task))
 
 
-def compute(project: Project, policy: Policy | None, output: Store, misses: list[tuple[str, Task]]) -> None:
+def compute(project: Project, host: Host | None, output: Store, misses: list[tuple[str, Task]]) -> None:
     """Fill the store for missing tasks; worker processes share the cache on disk."""
-    if output.cache is None:
+    if output.cache is None or host is None:
         for content_key, task in misses:
-            output.put(content_key, extract(project, policy, task))
+            output.put(content_key, extract(project, host, task))
         return
-    if not misses:
-        return
-    from unbake.match import forked
+    from unbake import pool
 
-    assert policy is not None
-    chunks = [misses[start : start + _CHUNK] for start in range(0, len(misses), _CHUNK)]
-    for _ in forked.ordered(_chunk, (project, policy), chunks, policy.cores):
-        pass
+    chunks = [(project, host, misses[start : start + _CHUNK]) for start in range(0, len(misses), _CHUNK)]
+    pool.run(host, _chunk, chunks)
 
 
-def published_keys(project: Project, policy: Policy | None) -> list[str]:
+def published_keys(project: Project, policy: Host | None) -> list[str]:
     return [source_key(project, policy, task) for task in declarations.published_sources(project)]
 
 
-def published(project: Project, policy: Policy | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
+def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
     """Seeds of every published source in inventory order; keys come from published_keys."""
     tasks = declarations.published_sources(project)
     if len(tasks) != len(keys):
@@ -251,7 +248,7 @@ def published(project: Project, policy: Policy | None, output: Store, keys: list
     return seeds
 
 
-def refresh(project: Project, policy: Policy, tasks: list[Task]) -> dict[str, str]:
+def refresh(project: Project, policy: Host, tasks: list[Task]) -> dict[str, str]:
     """Extract facts for these sources now and return the refusal reason of each failing function."""
     output = store(policy)
     refused: dict[str, str] = {}

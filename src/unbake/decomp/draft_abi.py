@@ -8,12 +8,12 @@ from unbake.decomp.draft_context import preprocess_context
 from unbake.layout import split
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def declarations(
     project: Project,
-    policy: Policy,
+    policy: Host,
     version: str,
     assembly: str,
     context: str,
@@ -145,7 +145,7 @@ def mapped_body(project: Project, function: str, version: str) -> dict[str, Any]
 def stack_arguments(source: str, context: str, function: str, body: dict[str, Any]) -> str:
     """Recover a lost stack operand only when every mapped call proves one value."""
     from unbake.decomp.draft_macros import calls
-    from unbake.project.config import Held
+    from unbake.config import Held
     from unbake.typemap import declarations
 
     if "Unable to find stack arg" not in source:

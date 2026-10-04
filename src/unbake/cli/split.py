@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from unbake.cli.common import Subparsers, integer, receipt
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 
 
 def register(phases: Subparsers) -> None:
@@ -55,12 +55,12 @@ def register(phases: Subparsers) -> None:
     port.add_argument("--apply", action="store_true", help="Stage rows after target-version object proofs.")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     from unbake.layout import split_apply, split_edits, split_partition
 
     if args.verb == "join":
         from unbake.layout import symbol_join
-        from unbake.project.config import load_policy
+        from unbake.config import load_policy
 
         return receipt(
             "split", symbol_join.run(project, load_policy(args.policy, stage="setup"), args.map, apply=args.apply)
@@ -78,7 +78,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         return receipt("split", [f"{result.version}: {result.sha1_line}" for result in results] or ["no edits"])
     if args.verb == "port":
         from unbake.layout import port
-        from unbake.project.config import Held
+        from unbake.config import Held
 
         rows = port.candidates(project, args.from_version, args.version)
         if args.measure is not None:
@@ -97,7 +97,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     if args.verb == "data-symbol":
         from unbake.decomp.symbols_edits import data_symbol
         from unbake.layout.data_symbols import correspondence
-        from unbake.project.config import Held
+        from unbake.config import Held
 
         if args.correspond:
             if args.version is not None or args.address is not None or args.rename_from is not None:

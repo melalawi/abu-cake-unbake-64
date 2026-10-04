@@ -15,7 +15,7 @@ from unbake.decomp import trial, trial_target
 from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.match import publication
 from unbake.project import build
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 
 
 class TrialLockingTests(unittest.TestCase):

@@ -11,7 +11,8 @@ import toml
 
 from tests.cli import test_publication_boundary as fixture
 from unbake.match import batch, incremental
-from unbake.project import config, makefile
+from unbake import config
+from unbake.project import makefile
 
 
 class BatchPublicationCliTests(unittest.TestCase):

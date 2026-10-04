@@ -9,7 +9,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from unbake.project.config import Held, Policy, Project
+from unbake import inputs
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import header_names, regeneration, storage
 
@@ -108,7 +109,7 @@ def _semantic(value: Any) -> Any:
 
 
 def _render(
-    project: Project, value: dict[str, Any], policy: Policy | None, session: regeneration.Session
+    project: Project, value: dict[str, Any], policy: Host | None, session: regeneration.Session
 ) -> dict[Path, bytes | Path]:
     from unbake.decomp.header_declarations import declaration_source
     from unbake.decomp.header_declarations import declarations as header_declarations
@@ -413,8 +414,8 @@ def symbol_segments(project: Project) -> dict[str, str]:
     return result
 
 
-def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
-    from unbake.project.cache import remembered, serialized
+def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Host | None = None) -> None:
+    from unbake.cache import memo, serialized
 
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
@@ -472,7 +473,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 for name, row in after.items()
             }
 
-        summary[kind] = remembered(
+        summary[kind] = memo(
             "typemap.summary." + kind,
             storage.digest(serialized("typemap.database." + kind, after)),
             summarize,
@@ -521,7 +522,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         for path, content in outputs.items()
         if not path.is_file()
         or (
-            storage.file_digest(path) != storage.file_digest(content)
+            inputs.digest(path) != inputs.digest(content)
             if isinstance(content, Path)
             else path.read_bytes() != content
         )
@@ -573,7 +574,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
 def validate_headers(
     project: Project,
     outputs: dict[Path, bytes | Path],
-    policy: Policy | None,
+    policy: Host | None,
     *,
     abi_context: str = "",
     validated: set[str] | None = None,
@@ -584,11 +585,11 @@ def validate_headers(
 
     from unbake.decomp.draft_context import preprocess_context
     from unbake.decomp.trial_compile import run_tool
-    from unbake.project.cache import Cache, key, remembered
+    from unbake.cache import Cache, key, memo
     from unbake.typemap import declarations
 
     def remembered_digest(data: bytes) -> str:
-        return remembered("typemap-validation-digest", data, lambda: storage.digest(data), keep=32768)
+        return memo("typemap-validation-digest", data, lambda: storage.digest(data), keep=32768)
 
     cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
     environment = session.environment if session is not None else regeneration.environment(project, policy)
@@ -622,7 +623,7 @@ def validate_headers(
 
     def signature(name: str, inputs: set[Path]) -> str:
         pinned = sorted((str(dep), digests[dep]) for dep in inputs)
-        return remembered(
+        return memo(
             "typemap-validation-signature",
             (environment, name, tuple(pinned)),
             lambda: key(environment, name, *(part for pair in pinned for part in pair)),
@@ -704,7 +705,7 @@ def validate_headers(
                             "solve",
                         )
                     else:
-                        if isinstance(policy, Policy):
+                        if isinstance(policy, Host):
                             raise Held("solve", "policy.m2c: required shared context parser")
                         declarations.extract(context_text, {"kind": "declared"})
                     validated.add(context_key)

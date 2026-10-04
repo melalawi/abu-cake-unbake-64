@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.project import makefile
-from unbake.project.cache import key
+from unbake.cache import key
 from unbake.project_tools import codegen, compile
 from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
 

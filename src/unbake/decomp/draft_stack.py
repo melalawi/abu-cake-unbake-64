@@ -3,7 +3,7 @@
 import re
 
 from unbake.layout.structs import Layout
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 def overlay(output: str, template: Layout, prefix_size: int, function: str, assembly: str) -> str | None:

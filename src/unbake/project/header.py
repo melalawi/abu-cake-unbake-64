@@ -6,7 +6,7 @@ import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 DESTINATIONS = dict(
     zip(

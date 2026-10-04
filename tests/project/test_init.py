@@ -7,8 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from unbake.project import config, init
-from unbake.project.config import Held
+from unbake import config
+from unbake.project import init
+from unbake.config import Held
 
 
 class InitTests(unittest.TestCase):

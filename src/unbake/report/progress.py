@@ -16,7 +16,7 @@ from typing import Any, cast
 
 from unbake.decomp.score import objdiff_cli
 from unbake.project import build, makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.report import files, readme_layout
 from unbake.report import units as report_units
 
@@ -311,7 +311,7 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     return before + block + after
 
 
-def measure(project: Project, policy: Policy, version: str, *, generation: Path | None = None) -> dict[str, Any]:
+def measure(project: Project, policy: Host, version: str, *, generation: Path | None = None) -> dict[str, Any]:
     """Generate native totals from the current split and build without publishing them."""
     if generation is None:
         with ExitStack() as holds:
@@ -378,7 +378,7 @@ def measure(project: Project, policy: Policy, version: str, *, generation: Path 
         raise Held("report", f"VERSION {version} report file/tool: {error}") from error
 
 
-def findings(project: Project, policy: Policy) -> list[str]:
+def findings(project: Project, policy: Host) -> list[str]:
     """Name every VERSION whose saved native totals disagree with current inputs."""
     lines = []
     for version in project.versions:
@@ -428,7 +428,7 @@ def readme_descriptions(project: Project) -> dict[str, str]:
     }
 
 
-def write(project: Project, policy: Policy, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
+def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
     if not project.versions:
         raise Held("report", "project.versions is missing")
     descriptions = readme_descriptions(project)

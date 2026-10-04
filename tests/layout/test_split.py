@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from unbake.layout import split, split_analysis, split_apply, split_create, split_edits, split_partition
 from unbake.project import build
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 from unbake.project.fingerprint import Counts, Region
 
 
@@ -123,8 +123,8 @@ class SplitTests(unittest.TestCase):
         version.symbols.write_bytes(original.symbols.read_bytes())
         project = SimpleNamespace(version=lambda _: version)
         with (
-            patch("unbake.project.cache._remembered", {}),
-            patch("unbake.project.cache._parsed", {}),
+            patch("unbake.cache._remembered", {}),
+            patch("unbake.cache._parsed", {}),
             patch.object(split, "_functions", wraps=split._functions) as compute,
         ):
             inventory = split.functions(self.project, "us")

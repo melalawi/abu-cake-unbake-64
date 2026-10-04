@@ -18,7 +18,7 @@ from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS, Aggregate
-from unbake.project.config import Held, Project, load_policy
+from unbake.config import Held, Project, load_policy
 from unbake.project_tools import atomic as atomic_files
 
 

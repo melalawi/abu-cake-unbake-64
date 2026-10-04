@@ -17,7 +17,7 @@ from unbake.project.compiler_proposal import (
 from unbake.project.compiler_proposal import (
     receipt as receipt,
 )
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project.rom import Rom, shingles
 from unbake.project.toolchain import CompilerSpec
 from unbake.project_tools import atomic as atomic_files
@@ -275,7 +275,7 @@ def choose(
     )
 
 
-def prove(project_scratch: Project, region: Region, candidates: Sequence[CompilerSpec], policy: Policy) -> Decision:
+def prove(project_scratch: Project, region: Region, candidates: Sequence[CompilerSpec], policy: Host) -> Decision:
     from unbake.decomp import m2c
     from unbake.decomp.trial_compile import executable
     from unbake.project import build, toolchain

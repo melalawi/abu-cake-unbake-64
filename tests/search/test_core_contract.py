@@ -18,7 +18,7 @@ from unbake.decomp import explain, features, needs, score, trial
 from unbake.decomp.drafts import Store
 from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.families import Family, family_for
-from unbake.project.config import Compiler, Held, Policy, Project, Version
+from unbake.config import Compiler, Held, Policy, Project, Version
 from unbake.search import core, methods, permute, register
 
 

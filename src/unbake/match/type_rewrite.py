@@ -14,7 +14,7 @@ from pycparser import c_ast, c_lexer, c_parser  # type: ignore[import-untyped]
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
 from unbake.match.rewrite_view import View
-from unbake.project.cache import Cache, key
+from unbake.cache import Cache, key
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -212,7 +212,7 @@ def edits(
     if expanded is not None:
         view = expanded.text
     view = _gnu_blank(view, blank)
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
     selection = (
         parser.source,
@@ -229,7 +229,7 @@ def edits(
         source_text,
     )
     return dict(
-        remembered(
+        memo(
             "rewrite.plans",
             selection,
             lambda: _plan(
@@ -503,7 +503,7 @@ def _plan(
 
     # Shared declarations only seed namespaces. Their coordinates precede the
     # editable source, so resolutions cannot produce edits in this part.
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
     shared = tree.ext[: len(_context(prefix, cache_root)[0])]
 
@@ -511,7 +511,7 @@ def _plan(
         Rewrite().visit(c_ast.FileAST(shared))
         return dict(aliases), dict(tags), dict(scopes[0])
 
-    initial_aliases, initial_tags, initial_scope = remembered("rewrite.namespaces", prefix, seed, keep=8)
+    initial_aliases, initial_tags, initial_scope = memo("rewrite.namespaces", prefix, seed, keep=8)
     aliases.update(initial_aliases)
     tags.update(initial_tags)
     scopes[0].update(initial_scope)

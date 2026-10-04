@@ -10,10 +10,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from unbake import inputs
 from unbake.decomp import plan
 from unbake.decomp.indexed import indexed_references
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project_tools.extract import discovered_symbols, symbols_from
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis, control
@@ -25,7 +26,7 @@ def map_program(project: Project) -> dict[str, Any]:
 
 def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.monotonic()
-    pinned = storage.inputs(project)
+    pinned = storage.map_inputs(project)
     images = {}
     inventory = []
     symbols: dict[str, dict[int, list[str]]] = {}
@@ -80,7 +81,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
                 raise Held("map", f"map.functions.{row.version}: duplicate runtime address 0x{row.address:X}")
             targets[row.version][row.address] = canonical
     old_functions: Mapping[str, dict[str, Any]] | None = None
-    analyzer = storage.file_digest(Path(__file__).with_name("mips.py"))
+    analyzer = inputs.digest(Path(__file__).with_name("mips.py"))
     old_rows: dict[tuple[str, int, int, int], tuple[str, str]] = {}
     old_symbols: dict[str, dict[int, list[str]]] = {v: {} for v in project.versions}
     old_targets: dict[str, dict[int, str]] = {v: {} for v in project.versions}
@@ -231,7 +232,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
         "format": "sqlite-zlib-v1",
         "abi_analysis_sha256": analyzer,
         "shard": shard_path.name,
-        "shard_sha256": storage.file_digest(shard_path),
+        "shard_sha256": inputs.digest(shard_path),
         "functions": functions,
         "symbols": symbols,
         "globals": globals_,
@@ -252,7 +253,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
                 shard_path.unlink(missing_ok=True)
             shard_path = directory / previous["shard"]
             result.update(shard=shard_path.name, shard_sha256=previous["shard_sha256"])
-    if pinned != storage.inputs(project):
+    if pinned != storage.map_inputs(project):
         raise Held("map", "map.inputs_stale: inputs changed during map")
     storage.write(project.build / "map/facts.json", storage.encoded(result))
     result["functions"] = shards.Functions(shard_path, functions)
@@ -270,7 +271,7 @@ def _read_map(project: Project) -> dict[str, Any]:
     if not isinstance(shard, str) or Path(shard).name != shard:
         raise Held("solve", "map.shards: invalid shard name")
     shard_path = path.parent / shard
-    if not shard_path.is_file() or storage.file_digest(shard_path) != result.get("shard_sha256"):
+    if not shard_path.is_file() or inputs.digest(shard_path) != result.get("shard_sha256"):
         raise Held("solve", "map.shards: missing or changed facts; run unbake map")
     storage.validate_identity(project, result, "map.facts")
     return result
@@ -279,7 +280,7 @@ def _read_map(project: Project) -> dict[str, Any]:
 def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
     """Read verified shards; snapshot consumers must separately pin selected targets."""
     result = _read_map(project)
-    if not allow_stale and result.get("inputs_sha256") != storage.inputs(project):
+    if not allow_stale and result.get("inputs_sha256") != storage.map_inputs(project):
         raise Held("solve", "map.inputs_stale: run unbake solve to refresh affected map facts")
     result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
     return result
@@ -288,7 +289,7 @@ def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
 def refresh_map(project: Project) -> dict[str, Any]:
     """Refresh symbol and boundary dependencies, retaining unaffected instruction facts."""
     result = _read_map(project)
-    pinned = storage.inputs(project)
+    pinned = storage.map_inputs(project)
     old_inputs = result["inputs_sha256"]
     for version in project.versions:
         relative = str(project.version(version).baserom.relative_to(project.root))
@@ -307,7 +308,7 @@ def compiler_inputs(project: Project, config_content: bytes) -> tuple[Path, byte
         return None
     result = storage.read(path, "map.facts")
     storage.validate_identity(project, result, "map.facts")
-    pinned = storage.inputs(project)
+    pinned = storage.map_inputs(project)
     previous_inputs = result.get("inputs_sha256", {})
     changed = {key for key in set(previous_inputs) | set(pinned) if previous_inputs.get(key) != pinned.get(key)}
     if changed - {"config.toml"}:

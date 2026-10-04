@@ -6,8 +6,8 @@ import functools
 import json
 from pathlib import Path
 
-from unbake.project.cache import key
-from unbake.project.config import Held, Project
+from unbake.cache import key
+from unbake.config import Held, Project
 from unbake.project_tools import atomic as atomic_files
 
 

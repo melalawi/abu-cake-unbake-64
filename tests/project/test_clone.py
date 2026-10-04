@@ -16,7 +16,8 @@ from unittest.mock import patch
 
 from tests.support import test_policy
 from unbake.cli.main import main
-from unbake.project import build, clone, config, hygiene, toolchain
+from unbake import config
+from unbake.project import build, clone, hygiene, toolchain
 
 
 class CloneTests(unittest.TestCase):

@@ -8,7 +8,7 @@ from functools import lru_cache
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake.decomp.header_declarations import declaration_source, declarations
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap.declarations import _SeededParser, _type, canonical
 
 

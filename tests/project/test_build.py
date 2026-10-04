@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from tests.project.makefile_fixture import WORK, fixture
 from unbake.match import publication
-from unbake.project import build, config, setup
+from unbake import config
+from unbake.project import build, setup
 
 
 class BuildTests(unittest.TestCase):

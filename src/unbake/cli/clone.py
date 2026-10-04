@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from unbake.cli.common import Subparsers, receipt
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def register(phases: Subparsers) -> None:
@@ -21,7 +21,7 @@ def validate(args: argparse.Namespace) -> None:
         raise Held("clone", "CLI form: unbake [--project SRC] clone DEST [--version VERSION]")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     from unbake.project import clone
 
     result = clone.create(project, policy, args.destination, args.version or project.versions)

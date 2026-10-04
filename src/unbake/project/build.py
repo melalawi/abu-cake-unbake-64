@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.project import makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -123,7 +123,7 @@ def discard_generation(generation: Path) -> None:
 
 
 def build(
-    project: Project, policy: Policy, versions: Sequence[str], *, tree: Path, generation_for: Callable[[str], Path]
+    project: Project, policy: Host, versions: Sequence[str], *, tree: Path, generation_for: Callable[[str], Path]
 ) -> dict[str, BuildResult]:
     if not versions:
         raise Held("build", "versions is required")
@@ -196,7 +196,7 @@ def _run(command: list[str], root: Path) -> bytes:
     return completed.stdout
 
 
-def preprocess_object(project: Project, policy: Policy, source: Path, v: str) -> bytes:
+def preprocess_object(project: Project, policy: Host, source: Path, v: str) -> bytes:
     """Use the object's ordinary recipe to inspect active external references."""
     flags = list(makefile.flags(project, v, source))
     compiler = project.compiler_for(source)
@@ -220,7 +220,7 @@ def preprocess_object(project: Project, policy: Policy, source: Path, v: str) ->
 
 
 def compile_versions(
-    project: Project, policy: Policy, jobs: Mapping[str, tuple[Sequence[Path], Path]], *, stop_on_error: bool = False
+    project: Project, policy: Host, jobs: Mapping[str, tuple[Sequence[Path], Path]], *, stop_on_error: bool = False
 ) -> dict[str, dict[str, str]]:
     """Share object compile slots across versions, retaining small interpreter batches."""
     if policy.cores < 1:
@@ -277,7 +277,7 @@ def compile_versions(
 
 def compile_objects(
     project: Project,
-    policy: Policy,
+    policy: Host,
     sources: Sequence[Path],
     v: str,
     out: Path,
@@ -350,7 +350,7 @@ def compile_objects(
 
 
 def compile_object(
-    project: Project, policy: Policy, source: Path, v: str, out: Path, *, non_matching: bool = False
+    project: Project, policy: Host, source: Path, v: str, out: Path, *, non_matching: bool = False
 ) -> Path:
     project.version(v)
     source, out = Path(source).resolve(), Path(out).resolve()

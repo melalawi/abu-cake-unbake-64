@@ -10,7 +10,7 @@ from unbake.decomp import needs
 from unbake.layout import split_apply, structs
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 class DeclarationTests(unittest.TestCase):

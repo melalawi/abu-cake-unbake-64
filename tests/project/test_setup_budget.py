@@ -7,7 +7,7 @@ from pathlib import Path
 
 from tests.process_fakes import boundary
 from unbake.project import setup_proof
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class SetupBudgetTests(unittest.TestCase):

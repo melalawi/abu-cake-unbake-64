@@ -13,7 +13,7 @@ from unbake.decomp import trial, trial_data, trial_target, work
 from unbake.decomp.needs import SymbolNeed
 from unbake.decomp.trial_compile import scratch_directory
 from unbake.project import makefile
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 
 @dataclass

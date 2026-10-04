@@ -12,7 +12,7 @@ from typing import Any
 from unbake.decomp.draft_context import ordered_headers
 from unbake.decomp.header_declarations import declaration_source, declarations
 from unbake.layout.map import Group, Map
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap.header_names import alias_types
 from unbake.typemap.split import guarded, required_providers
 

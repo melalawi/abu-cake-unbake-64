@@ -10,13 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 from unbake.decomp.candidate_ranking import measured_candidate_rank
 from unbake.project import compiler_choice, toolchain
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 if TYPE_CHECKING:
     from unbake.decomp.trial import Trial
 
 
-def _row(project: Project, policy: Policy, ident: str) -> dict[str, Any]:
+def _row(project: Project, policy: Host, ident: str) -> dict[str, Any]:
     from unbake.decomp.work import compiler_identity
 
     return {
@@ -43,7 +43,7 @@ def _measured(row: dict[str, Any], result: Trial) -> None:
 
 def resolve(
     project: Project,
-    policy: Policy,
+    policy: Host,
     source: Path,
     compiled: Path,
     work: Path,

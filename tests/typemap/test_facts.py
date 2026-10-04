@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
-from unbake.project.cache import Cache
+from unbake.cache import Cache
 from unbake.typemap import declarations, facts
 
 

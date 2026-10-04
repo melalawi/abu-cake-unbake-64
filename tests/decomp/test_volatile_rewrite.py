@@ -10,7 +10,7 @@ from unittest.mock import patch
 from unbake.decomp import checks
 from unbake.decomp import volatile_rewrite as rewrite
 from unbake.layout.header_context import Headers
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class VolatileRewriteTests(unittest.TestCase):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*\Z")
 _SCALARS = set(["void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "_Complex"])
@@ -223,12 +223,12 @@ class Parser:
 
 
 def declarations(source: str) -> Declarations:
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
     # A version fold reads the same installed declarations through several
     # private include trees. Text, rather than their temporary paths, identifies
     # this analysis. Keep caller-owned sets outside the shared cache.
-    parsed = remembered("headers.declarations", source, lambda: Parser(source).parse(), keep=32768)
+    parsed = memo("headers.declarations", source, lambda: Parser(source).parse(), keep=32768)
     return Declarations(
         set(parsed.typedefs),
         set(parsed.uses),

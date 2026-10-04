@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from unbake.decomp.header_declarations import declaration_source
-from unbake.project.config import Held
+from unbake.config import Held
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
 

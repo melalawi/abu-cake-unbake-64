@@ -29,7 +29,7 @@ from unbake.decomp.draft_macros import lower
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
 from unbake.project_tools import atomic as atomic_files
 
@@ -100,7 +100,7 @@ def _context(headers: list[tuple[Path, str]], selected: set[Path]) -> str:
 
 def _draft(
     project: Project,
-    policy: Policy,
+    policy: Host,
     function: str | None,
     v: str | None,
     scratch: Path,
@@ -308,7 +308,7 @@ def _draft(
 
 def draft(
     project: Project,
-    policy: Policy,
+    policy: Host,
     function: str | None,
     v: str | None,
     scratch: Path,

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from unbake.project import toolchain
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass(frozen=True)

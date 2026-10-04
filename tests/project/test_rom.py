@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 from unbake.project import header, rom
-from unbake.project.config import Held
+from unbake.config import Held
 
 BOOTCODES = {zlib.crc32(bytes(0xFC0)): "6102/7101"}
 CODE = bytes.fromhex("27bdffe8afbf0014008010210c000004000000008fbf001403e0000827bd0018")

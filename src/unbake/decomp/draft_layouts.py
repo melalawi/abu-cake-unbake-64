@@ -5,7 +5,7 @@ import re
 from unbake.decomp import opaque_pointers
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS
-from unbake.project.config import Held
+from unbake.config import Held
 
 _TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', re.S)
 

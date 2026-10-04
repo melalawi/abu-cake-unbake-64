@@ -7,17 +7,17 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
-def publish(project: Project, policy: Policy | None, outputs: dict[Path, bytes | Path]) -> int:
+def publish(project: Project, policy: Host | None, outputs: dict[Path, bytes | Path]) -> int:
     from unbake.layout import apply
     from unbake.project import build
 
     count = apply.install(project, outputs)
     if policy is None:
-        from unbake.project.config import read_policy
+        from unbake.config import read_policy
 
         policy = read_policy()
     results = build.build(

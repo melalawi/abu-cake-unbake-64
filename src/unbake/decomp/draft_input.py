@@ -11,7 +11,7 @@ import struct
 from pathlib import Path
 
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project_tools.extract import discovered_symbols
 
 

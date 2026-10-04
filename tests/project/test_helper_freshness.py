@@ -11,7 +11,7 @@ from unittest.mock import patch
 from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.match import relink
 from unbake.project import build, hygiene, makefile, setup
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class HelperFreshnessTests(unittest.TestCase):

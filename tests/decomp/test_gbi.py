@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.decomp import gbi
 from unbake.decomp.gbi_expr import Ambiguous
-from unbake.project.config import Held, Policy
+from unbake.config import Held, Policy
 
 
 class GbiTests(unittest.TestCase):

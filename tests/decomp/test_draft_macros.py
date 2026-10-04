@@ -11,7 +11,7 @@ from tests.decomp.support import fixture
 from unbake.decomp.draft_context import required_headers
 from unbake.decomp.draft_macros import lower
 from unbake.decomp.field_access import share
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap.declarations import clean
 
 

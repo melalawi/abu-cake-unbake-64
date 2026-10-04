@@ -11,7 +11,7 @@ from unittest.mock import patch
 from tests.project.makefile_fixture import fixture
 from tests.support import test_policy
 from unbake.layout import split
-from unbake.project.config import Project, Version
+from unbake.config import Project, Version
 from unbake.report.progress import write
 from unbake.report.units import functions, units
 

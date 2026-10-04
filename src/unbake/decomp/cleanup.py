@@ -9,11 +9,11 @@ from unbake.decomp import checks, gbi, type_context, work
 from unbake.layout import split, split_apply
 from unbake.match import declarations
 from unbake.match.common import atomic
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
-def prepare(project: Project, policy: Policy, source: Path) -> Path:
+def prepare(project: Project, policy: Host, source: Path) -> Path:
     source = source.resolve()
     if source.suffix != ".c" or not source.is_file() or not source.is_relative_to(project.drafts.resolve()):
         raise Held("cleanup", "cleanup.source: required editable .c file under paths.drafts")

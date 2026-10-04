@@ -9,7 +9,8 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.match import incremental
 from unbake.match.relink import retarget_rows
-from unbake.project import build, config, makefile
+from unbake import config
+from unbake.project import build, makefile
 from unbake.project_tools.extract import unit_ranges
 
 

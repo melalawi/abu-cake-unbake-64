@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.decomp import gbi_recover as recover
-from unbake.project.config import Held
+from unbake.config import Held
 
 SDK = """
 #define _SHIFTL(v,s,w) (((unsigned int)(v) & (0xFFFFFFFFU >> (32-(w)))) << (s))

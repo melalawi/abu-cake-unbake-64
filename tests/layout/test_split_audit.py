@@ -8,7 +8,7 @@ from typing import cast
 
 from unbake.layout import split_partition
 from unbake.layout.split_audit import audit
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 class AuditTests(unittest.TestCase):

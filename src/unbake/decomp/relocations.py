@@ -84,7 +84,7 @@ def resolve_literal_placement(
     """
     from unbake.decomp.rom import project_reader
     from unbake.layout import split
-    from unbake.project.config import Held, load
+    from unbake.config import Held, load
     from unbake.project_tools.literal_layout import arrange
 
     root = generation.parent.parent
@@ -227,7 +227,7 @@ def jump_table_differences(
     linked_paths = sorted(generation.glob("*.elf"))
     linked = Object(linked_paths[0]) if len(linked_paths) == 1 else None
     from unbake.decomp.rom import project_reader
-    from unbake.project.config import load
+    from unbake.config import load
 
     reader = (
         project_reader(load(generation.parent.parent), version)

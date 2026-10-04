@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, NoReturn, Protocol
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass

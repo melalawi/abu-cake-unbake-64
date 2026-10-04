@@ -4,10 +4,10 @@ import re
 from pathlib import Path
 
 from unbake.match import data_symbols
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
-def infer(project: Project, policy: Policy, function: str, version: str, candidate: Path) -> dict[str, int]:
+def infer(project: Project, policy: Host, function: str, version: str, candidate: Path) -> dict[str, int]:
     pending = data_symbols.needs(project, function, version, candidate)
     for need in pending:
         shaped = re.fullmatch(r"D_([0-9A-Fa-f]{8})", need.name)

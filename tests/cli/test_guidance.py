@@ -11,8 +11,9 @@ from unittest.mock import patch
 from tests.cli.support import MainCase
 from unbake.cli import common
 from unbake.cli.main import main
-from unbake.project import config, init
-from unbake.project.config import Held
+from unbake import config
+from unbake.project import init
+from unbake.config import Held
 
 
 class GuidanceTests(MainCase):

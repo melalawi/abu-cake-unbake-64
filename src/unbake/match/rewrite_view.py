@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.layout.structs import held
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 
 # Consume quoted tokens before looking for another map, including map-like text
 # in literals. Multi-character punctuators must remain one preprocessing token.
@@ -105,7 +105,7 @@ def _source_output(output: str, boundary_line: int) -> str:
 
 def prepare(
     project: Project,
-    policy: Policy,
+    policy: Host,
     source: str,
     version: str,
     source_path: Path,

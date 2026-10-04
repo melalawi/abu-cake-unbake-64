@@ -10,7 +10,7 @@ from pathlib import Path
 
 from unbake.layout import split
 from unbake.project import build
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def owning_versions(project: Project, function: str, versions: list[str] | None) -> list[str]:
@@ -39,7 +39,7 @@ def inputs(
     versions: list[str],
     *,
     source: Path | None = None,
-    policy: Policy | None = None,
+    policy: Host | None = None,
     scratch: Path | None = None,
     read_only: bool = False,
 ) -> Iterator[dict[str, tuple[Path, Path]]]:

@@ -8,7 +8,7 @@ from pathlib import Path
 from unbake.layout import split_apply
 from unbake.layout.structs import Layout, held
 from unbake.layout.structs_parser import Parser
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 def home(project: Project) -> Path:

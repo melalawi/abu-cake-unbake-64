@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, overload
 
-from unbake.project.cache import key
-from unbake.project.config import Held, Policy, Project, SetupPolicy
+from unbake.cache import key
+from unbake.config import Held, Host, Project
 from unbake.project_tools.compile_identity import driver_content, driver_names, driver_stamp_name
 
 TEMPLATES = Path(__file__).parents[1] / "project_tools"
@@ -34,7 +34,7 @@ class Recipe:
 
 
 def recipe(project: Project) -> Recipe:
-    from unbake.project.config import _read
+    from unbake.config import _read
 
     path = project.root / "config.toml"
     try:
@@ -124,7 +124,7 @@ def host_tool(project: Project, value: str, name: str) -> str:
     return value
 
 
-def host_executable(policy: Policy | SetupPolicy, value: str, field: str) -> str:
+def host_executable(policy: Host | Host, value: str, field: str) -> str:
     """Resolve a recipe host tool; policy:NAME references read the operator policy, as the build does."""
     if not value:
         raise Held("config", f"build.{field}: missing value")
@@ -232,7 +232,7 @@ def helper_sources(project: Project) -> dict[str, str]:
         .read_text()
         .replace("from unbake.project_tools.", "from ")
         .replace("from unbake.project_tools import atomic as atomic_files", "import atomic as atomic_files")
-        .replace("from unbake.project.cache import", "from cache import")
+        .replace("from unbake.cache import", "from cache import")
         for name in names
     }
     cache_source = Path(__file__).with_name("cache.py").read_text()
@@ -240,7 +240,7 @@ def helper_sources(project: Project) -> dict[str, str]:
         "from unbake.project_tools import atomic as atomic_files", "import atomic as atomic_files"
     )
     cache_source = cache_source.replace(
-        "from unbake.project.config import Held",
+        "from unbake.config import Held",
         """class Held(Exception):
     def __init__(self, phase, reason):
         super().__init__(f"HELD({phase}): {reason}")""",

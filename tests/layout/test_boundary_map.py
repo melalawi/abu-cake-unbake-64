@@ -11,7 +11,7 @@ from typing import cast
 
 from tests.layout.test_split import ProjectFixture, fake_build
 from unbake.layout import boundary_map, split
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 
 
 class BoundaryMapTests(unittest.TestCase):

@@ -14,7 +14,7 @@ import toml
 from tests.decomp.support import fixture
 from tests.process_fakes import cli_process
 from unbake.decomp.checks import run as source_rules
-from unbake.project.config import load_policy
+from unbake.config import load_policy
 
 
 class SolvedLayoutCliTests(unittest.TestCase):

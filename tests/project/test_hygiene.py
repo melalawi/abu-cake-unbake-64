@@ -10,7 +10,8 @@ from pathlib import Path
 
 from tests.project.makefile_fixture import fixture
 from unbake.cli import check
-from unbake.project import config, hygiene, setup
+from unbake import config
+from unbake.project import hygiene, setup
 
 
 class HygieneTests(unittest.TestCase):

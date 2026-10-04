@@ -12,7 +12,7 @@ from unittest.mock import patch
 from tests.project.makefile_fixture import executable, fixture, write_rendered
 from unbake.decomp.trial_target import inputs, make_target, target_object
 from unbake.project import build
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class TrialTargetTests(unittest.TestCase):

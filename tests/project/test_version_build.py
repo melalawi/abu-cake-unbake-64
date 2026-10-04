@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture, write_rendered
-from unbake.project import config
+from unbake import config
 
 
 class NamingConfigTests(unittest.TestCase):

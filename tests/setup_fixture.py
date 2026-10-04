@@ -97,7 +97,7 @@ def extraction(project, version, cores, *, log, slots=None):
 
 
 def proof(project, version, data, cores, *, log=None, slots=None, extracted=False):
-    from unbake.project.config import Held
+    from unbake.config import Held
 
     if any("return 17" in source.read_text() for source in project.src.rglob("*.c")):
         raise Held("setup", f"setup.sha1.{version}: ROM mismatch at first differing offset 0x1100")

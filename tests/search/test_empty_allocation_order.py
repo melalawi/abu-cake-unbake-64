@@ -13,7 +13,7 @@ from unbake.decomp import explain, trial, trial_compile
 from unbake.decomp.trial_compare import Compare
 from unbake.families.gcc.allocation import allocation as gcc_allocation
 from unbake.project import toolchain
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 from unbake.search import order
 from unbake.search.core import Context
 

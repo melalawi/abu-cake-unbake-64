@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools.elf import Object
 from unbake.project_tools.rodata import Pool, pools
 

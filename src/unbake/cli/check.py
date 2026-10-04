@@ -4,7 +4,7 @@ import argparse
 
 from unbake.cli.common import Subparsers, receipt
 from unbake.project import hygiene
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 from unbake.report import progress
 
 
@@ -13,7 +13,7 @@ def register(phases: Subparsers) -> None:
     parser.add_argument("--hygiene", action="store_true", help="Check only tracked repository hygiene.")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     from unbake.decomp import checks
 
     lines = hygiene.tracked_findings(project, policy)

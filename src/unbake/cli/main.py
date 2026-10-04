@@ -25,8 +25,8 @@ from unbake.cli import (
     next as next_command,
 )
 from unbake.cli.common import Parser
-from unbake.project import config
-from unbake.project.config import Held, Policy, Project
+from unbake import config
+from unbake.config import Held, Host, Project
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -63,7 +63,7 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def dispatch(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     from unbake.cli import draft, solve, submit, trial
     from unbake.cli import map as map_command
 

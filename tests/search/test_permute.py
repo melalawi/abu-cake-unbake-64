@@ -19,7 +19,7 @@ from unbake.decomp.explain import Allocation
 from unbake.decomp.trial import Trial
 from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.project import makefile, toolchain
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 from unbake.search import core, permute
 from unbake.search.core import Context
 

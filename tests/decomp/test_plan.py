@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from unbake.decomp import assign, drafts, plan
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 
 KINDS = ("register", "order", "immediate", "relocation", "inserted", "missing", "changed")
 BODY = bytes.fromhex("27bdffe0 afbf001c 00801021 8fbf001c 03e00008 27bd0020")

@@ -11,7 +11,7 @@ import toml  # type: ignore[import-untyped]
 
 from unbake.project import compiler_files, rom
 from unbake.project.census import Census
-from unbake.project.config import Held, PendingProject
+from unbake.config import Held, PendingProject
 
 
 def version_macros(versions: tuple[str, ...]) -> dict[str, str]:
@@ -25,7 +25,6 @@ def version_macros(versions: tuple[str, ...]) -> dict[str, str]:
 def facts(project: PendingProject, census: Census, *, name: str | None, title: str | None) -> dict[str, Any]:
     with (project.root / "config.toml").open("rb") as source:
         data = tomllib.load(source)
-    data.pop("workspace", None)
     if name is None:
         name = data["project"].get("name", project.root.name)
     try:
@@ -97,11 +96,6 @@ def render_ready(
     return str(toml.dumps(data))
 
 
-def strip_workspace(text: str) -> str:
-    """Remove retired checkout state while preserving unrelated config formatting."""
-    return re.sub(r"(?ms)^\[workspace\][^\n]*\n.*?(?=^\[|\Z)", "", text)
-
-
 def canonical(text: str) -> str:
     """Rewrite a ready config.toml as configuration only.
 
@@ -112,7 +106,7 @@ def canonical(text: str) -> str:
     """
     from collections import Counter
 
-    from unbake.project.config import CONFIG_SECTIONS
+    from unbake.config import CONFIG_SECTIONS
 
     data = {key: value for key, value in tomllib.loads(text).items() if key in CONFIG_SECTIONS}
     compilers = data.get("compilers", {})

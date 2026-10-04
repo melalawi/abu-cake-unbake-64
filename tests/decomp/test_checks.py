@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.decomp import checks
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class ChecksTest(unittest.TestCase):

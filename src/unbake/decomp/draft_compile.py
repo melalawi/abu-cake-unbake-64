@@ -5,12 +5,12 @@ from pathlib import Path
 from unbake.decomp.explain import _absolute_includes
 from unbake.decomp.trial_compile import run_tool
 from unbake.project import makefile
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.sn64_cc import partition_flags
 
 
-def prove(project: Project, policy: Policy, function: str, version: str, source: Path) -> None:
+def prove(project: Project, policy: Host, function: str, version: str, source: Path) -> None:
     """Generate code without publishing a trial or touching the object cache."""
     unit = project.src / (function + ".c")
     compiler = project.compiler_for(unit)

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TextIO, TypedDict, cast
 
 from unbake.decomp.drafts import TrialRecord
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 class AssignmentRecord(TypedDict):
@@ -44,7 +44,7 @@ def _at(value: object, label: str) -> datetime:
 
 
 class Ledger:
-    def __init__(self, project: Project, policy: Policy) -> None:
+    def __init__(self, project: Project, policy: Host) -> None:
         self.project = project
         self.policy = policy
         state_root = getattr(policy, "state_root", None)

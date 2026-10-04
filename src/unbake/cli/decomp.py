@@ -11,7 +11,7 @@ from pathlib import Path
 
 from unbake.cli.common import Subparsers, count, receipt, suggest
 from unbake.decomp.commands import prefix
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def register(phases: Subparsers) -> None:
@@ -61,7 +61,7 @@ def register(phases: Subparsers) -> None:
     publish.add_argument("--all", required=True, action="store_true")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> None:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> None:
     if args.verb in ("assign", "release"):
         from unbake.decomp.assign import Ledger
 

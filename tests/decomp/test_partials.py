@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from unbake.decomp import drafts
 from unbake.project import makefile
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 def extract_helper() -> ModuleType:

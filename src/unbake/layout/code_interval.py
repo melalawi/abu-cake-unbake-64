@@ -11,11 +11,11 @@ from typing import Any
 
 from unbake.layout import boundary, split
 from unbake.layout.rodata_references import collect
-from unbake.project.config import Held, Policy, Project, load_policy
+from unbake.config import Held, Host, Project, load_policy
 from unbake.project.makefile import recipe
 
 
-def prove(project: Project, version: str, start: int, end: int, policy: Policy | None = None) -> dict[str, Any]:
+def prove(project: Project, version: str, start: int, end: int, policy: Host | None = None) -> dict[str, Any]:
     configured = project.version(version)
     image = configured.baserom.read_bytes()
     if hashlib.sha1(image).hexdigest() != configured.baserom_sha1:

@@ -9,34 +9,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from unbake.project.config import Held, Project
+from unbake import inputs
+from unbake.config import Held, Project
 from unbake.project_tools import atomic as atomic_files
 
 
 def digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
-
-
-def _stamp(path: Path) -> tuple[int, int, int, int, int]:
-    stat = path.stat()
-    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
-
-
-_file_digests: dict[Path, tuple[tuple[int, int, int, int, int], str]] = {}
-
-
-def file_digest(path: Path) -> str:
-    stamp = _stamp(path)
-    cached = _file_digests.get(path)
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
-    hash_ = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            hash_.update(block)
-    result = hash_.hexdigest()
-    _file_digests[path] = stamp, result
-    return result
 
 
 def encoded(value: object) -> bytes:
@@ -73,7 +52,7 @@ def validate_identity(project: Project, value: dict[str, Any], key: str) -> None
         raise Held("solve", f"{key}: project/ROM identity changed")
 
 
-def inputs(project: Project) -> dict[str, str]:
+def map_inputs(project: Project) -> dict[str, str]:
     paths = {project.root / "config.toml"}
     symbol_inputs: dict[str, str] = {}
     for version in project.versions:
@@ -95,7 +74,7 @@ def inputs(project: Project) -> dict[str, str]:
     # Extracted assembly is a disposable rendering: make prunes obsolete C-unit
     # assembly and rewrites other extraction outputs without changing the ROM.
     paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
-    result = {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
+    result = {str(path.relative_to(project.root)): inputs.digest(path) for path in sorted(paths)}
     result.update(symbol_inputs)
     return result
 
@@ -107,7 +86,7 @@ def symbol_digest(path: Path) -> str:
     """Pin exactly the extraction symbol facts consumed by map_program."""
     from unbake.project_tools.extract import discovered_symbols, symbols_from
 
-    content = file_digest(path)
+    content = inputs.digest(path)
     cached = _symbol_digests.get(path)
     if cached is not None and cached[0] == content:
         return cached[1]
@@ -157,7 +136,7 @@ class FactLog:
 
     def finish(self, root: Path) -> dict[str, Any]:
         self.stream.close()
-        digest_ = file_digest(self.temporary)
+        digest_ = inputs.digest(self.temporary)
         path = self.temporary.parent / ("constraints-" + digest_ + ".jsonl")
         atomic_files.publish(self.temporary, path)
         return {"kind": "shard", "path": str(path.relative_to(root)), "sha256": digest_, "count": self.count}
@@ -168,10 +147,10 @@ class FactLog:
 
 
 def _json_chunks(value: object) -> tuple[bytes, ...]:
-    from unbake.project.cache import serialized
+    from unbake.cache import serialized
 
     if not isinstance(value, dict):
-        return serialized("typemap.database", value), b"\n"
+        return serialized(value), b"\n"
     chunks = [b"{"]
     for index, field in enumerate(sorted(value)):
         if index:
@@ -199,12 +178,12 @@ def _stage_json(path: Path, chunks: tuple[bytes, ...]) -> tuple[Path, str]:
                 hash_.update(chunk)
         digest_ = hash_.hexdigest()
         _json_stages[temporary] = chunks, digest_
-        _file_digests[temporary] = _stamp(temporary), digest_
+        inputs._digests[temporary] = inputs.signature(temporary), digest_
         return temporary, digest_
     except BaseException:
         temporary.unlink(missing_ok=True)
         _json_stages.pop(temporary, None)
-        _file_digests.pop(temporary, None)
+        inputs._digests.pop(temporary, None)
         raise
 
 
@@ -219,7 +198,7 @@ def database_json(path: Path, value: object) -> tuple[Path | None, str]:
     installed = _json_installed.get(path)
     if installed is not None and installed[0] == chunks and not path.is_symlink():
         try:
-            if installed[1] == _stamp(path):
+            if installed[1] == inputs.signature(path):
                 return None, installed[2]
         except OSError:
             pass
@@ -229,18 +208,18 @@ def database_json(path: Path, value: object) -> tuple[Path | None, str]:
 def install(path: Path, staged: Path) -> None:
     atomic_files.publish(staged, path)
     record = _json_stages.pop(staged, None)
-    _file_digests.pop(staged, None)
+    inputs._digests.pop(staged, None)
     if record is not None:
         chunks, digest_ = record
-        stamp = _stamp(path)
+        stamp = inputs.signature(path)
         _json_installed[path] = chunks, stamp, digest_
-        _file_digests[path] = stamp, digest_
+        inputs._digests[path] = stamp, digest_
 
 
 def discard_json(staged: Path) -> None:
     staged.unlink(missing_ok=True)
     _json_stages.pop(staged, None)
-    _file_digests.pop(staged, None)
+    inputs._digests.pop(staged, None)
 
 
 _verified: dict[Path, tuple[tuple[int, int, int, int], str]] = {}
@@ -252,7 +231,7 @@ def verify_file(path: Path, expected: str, key: str) -> None:
         stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
         if _verified.get(path) == (stamp, expected):
             return
-        if file_digest(path) != expected:
+        if inputs.digest(path) != expected:
             raise Held("solve", f"{key}: content changed: {path}")
         _verified[path] = stamp, expected
     except OSError as error:

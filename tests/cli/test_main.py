@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from tests.cli.support import MainCase
 from unbake.cli import main as cli
-from unbake.project import config
+from unbake import config
 
 
 class MainTests(MainCase):

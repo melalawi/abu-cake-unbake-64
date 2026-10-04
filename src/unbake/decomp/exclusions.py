@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from unbake.layout import split
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 
 MANIFEST = "unbake-exclusions.json"
 

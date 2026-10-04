@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.project import header
-from unbake.project.config import Held
+from unbake.config import Held
 
 if TYPE_CHECKING:
     from unbake.layout.split import Function

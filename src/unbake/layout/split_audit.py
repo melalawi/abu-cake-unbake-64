@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from unbake.layout import boundary, boundary_signatures, split
 
 if TYPE_CHECKING:
-    from unbake.project.config import Project
+    from unbake.config import Project
 
 
 @dataclass(frozen=True)

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap import declarations, solver, storage
 
 

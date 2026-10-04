@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.layout.boundary_signatures import MINIMUM_BODY_SIZE, load
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 RELOCATION_MASKS = {"hi16": 0xFFFF, "lo16": 0xFFFF, "targ26": 0x03FFFFFF}

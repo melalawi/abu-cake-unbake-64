@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import NoReturn
 
-from unbake.project.config import Held, Project
+from unbake.config import Held, Project
 from unbake.project_tools import atomic as atomic_files
 
 _FUNCTION = re.compile("[A-Za-z_][A-Za-z_0-9]*\\Z")

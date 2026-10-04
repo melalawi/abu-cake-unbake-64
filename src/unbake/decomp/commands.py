@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 def prefix(project: Project) -> list[str]:

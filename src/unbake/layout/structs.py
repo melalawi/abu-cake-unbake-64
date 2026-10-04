@@ -10,7 +10,7 @@ from typing import Any, NoReturn, cast
 
 from unbake.decomp.needs import LayoutNeed, Need, register_resolver
 from unbake.layout.split import Edit
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ def preprocess(source: Path, project: Any, policy: Any, version: str) -> str:
             flags.append(option)
     command = [
         str(policy.cpp),
-        *policy.cppflags,
+        *project.cppflags,
         "-P",
         *flags,
         *(f"-I{path}" for path in project.include),

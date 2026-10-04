@@ -21,7 +21,7 @@ from typing import Any, cast
 
 from unbake.decomp.trial import Trial
 from unbake.project import makefile, toolchain
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.search.core import Context, Mutation
 
@@ -65,7 +65,7 @@ def checkout(archive: Path, digest: str, work: Path) -> Path:
         raise Held("permute", f"policy.permuter_archive: {error}") from error
 
 
-def compile_script(project: Project, policy: Policy, source_path: Path, version: str, work: Path) -> str:
+def compile_script(project: Project, policy: Host, source_path: Path, version: str, work: Path) -> str:
     """Render a scorer using generated compile.py, preserving unit and VERSION flags."""
     project.version(version)
     cache = _outside(project, _required(policy, "cache_root", "policy"), "policy.cache_root")
@@ -164,7 +164,7 @@ class Permuter:
         """Yield external improvements for the common search loop to confirm."""
 
         project = cast(Project, _required(ctx, "project", "context"))
-        policy = cast(Policy, _required(ctx, "policy", "context"))
+        policy = cast(Host, _required(ctx, "policy", "context"))
         out = _outside(project, _required(ctx, "out", "context"), "context.out")
         source_path = Path(_required(ctx, "source", "context"))
         version = _required(self, "version", "permuter")

@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import cast
 
-from unbake.project.cache import Cache, key
+from unbake.cache import Cache, key
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.atomic import receipt, staging, write
 from unbake.project_tools.codegen import (

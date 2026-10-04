@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.test_rom import BOOTCODES, cartridge
-from unbake.project import compiler_profiles, compiler_proposal, config, fingerprint, header, init, rom, toolchain
+from unbake import config
+from unbake.project import compiler_profiles, compiler_proposal, fingerprint, header, init, rom, toolchain
 from unbake.project.census import Census
 from unbake.project.flow import LayoutManifest
 

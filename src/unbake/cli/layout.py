@@ -4,7 +4,7 @@ import argparse
 
 from unbake.cli.common import Subparsers, receipt
 from unbake.layout import apply
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 
 
 def register(phases: Subparsers) -> None:
@@ -14,6 +14,6 @@ def register(phases: Subparsers) -> None:
     command.add_argument("--dry-run", action="store_true")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     count = apply.run(project, policy, dry_run=args.dry_run)
     return receipt("layout", [f"{'would write' if args.dry_run else 'wrote'} {count} files"])

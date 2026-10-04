@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from unbake.decomp.drafts import Store
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 
 
 class DraftsTest(unittest.TestCase):

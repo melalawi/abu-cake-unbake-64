@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from tests.layout.test_rodata import Object, words
 from unbake.match import data_symbols
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class DataEntryOwnershipTests(unittest.TestCase):

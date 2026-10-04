@@ -9,7 +9,7 @@ from typing import cast
 from tests.decomp.support import fixture
 from unbake.decomp.draft_abi import declarations
 from unbake.decomp.draft_fp import register_pairs
-from unbake.project.config import Policy
+from unbake.config import Policy
 
 
 class DraftSignatureTests(unittest.TestCase):

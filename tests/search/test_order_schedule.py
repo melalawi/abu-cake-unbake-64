@@ -17,7 +17,7 @@ from unbake.decomp.trial_compare import TYPES, Compare
 from unbake.families.gcc.schedule import schedule
 from unbake.families.ido.schedule import schedule as ido_schedule
 from unbake.project import toolchain
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 from unbake.search import core, order
 from unbake.search.core import Context, Mutation
 

@@ -10,7 +10,7 @@ from unbake.decomp.commands import prefix
 from unbake.decomp.trial_compile import default_scratch
 from unbake.decomp.trial_target import owning_versions
 from unbake.match.batch import FOLDED_RULES
-from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
+from unbake.config import Held, Host, Project, Unfinished, load_policy
 
 
 def register(phases: Subparsers) -> None:
@@ -21,7 +21,7 @@ def register(phases: Subparsers) -> None:
     parser.add_argument("--flags", action="store_true", help="Measure explicit compiler flag alternatives.")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     if args.source.suffix == ".h":
         raise Unfinished("try", "trial.struct")
     local = project.tools / "clone-policy.toml"

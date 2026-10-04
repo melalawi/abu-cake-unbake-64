@@ -24,7 +24,7 @@ from unbake.decomp.gbi_source import (
     tokens,
     word_builder,
 )
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 RULES = frozenset({"raw-gfx", "local-gbi-macro"})
@@ -388,7 +388,7 @@ def lower(source: str, catalogue: list[Pattern]) -> str:
     return source
 
 
-def catalogue(project: Project, policy: Policy, unit: Path, version: str, source: str) -> list[Pattern]:
+def catalogue(project: Project, policy: Host, unit: Path, version: str, source: str) -> list[Pattern]:
     """Read active SDK definitions under the unit's configured preprocessor flags."""
     from unbake.decomp.trial_compile import run_tool
     from unbake.project import makefile
@@ -439,15 +439,15 @@ def catalogue(project: Project, policy: Policy, unit: Path, version: str, source
             *options,
             str(probe),
         ]
-        from unbake.project.cache import remembered
+        from unbake.cache import memo
 
         definitions = run_tool(command, work, "gbi")
-        return remembered("gbi.sdk.patterns", definitions, lambda: patterns(definitions))
+        return memo("gbi.sdk.patterns", definitions, lambda: patterns(definitions))
 
 
 def proven(
     project: Project,
-    policy: Policy,
+    policy: Host,
     unit: Path,
     source: str,
     headers: dict[Path, str],
@@ -519,7 +519,7 @@ def proven(
         return after
 
 
-def preflight(project: Project, policy: Policy, unit: Path, source: str) -> None:
+def preflight(project: Project, policy: Host, unit: Path, source: str) -> None:
     """Name an unrepresentable write before expensive declaration preparation."""
     if not any(f.rule in RULES for f in checks.run(source)):
         return

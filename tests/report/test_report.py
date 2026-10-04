@@ -20,7 +20,7 @@ from tests.project.makefile_fixture import fixture
 from tests.support import test_policy
 from unbake.cli import check
 from unbake.decomp import score
-from unbake.project.config import Held, Policy, Project, Version
+from unbake.config import Held, Policy, Project, Version
 from unbake.report import progress as report
 from unbake.report import readme_layout
 from unbake.report import units as report_units

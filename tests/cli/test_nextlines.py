@@ -8,7 +8,7 @@ from unittest.mock import patch
 from tests.cli.support import MainCase
 from unbake.cli import draft, guidance
 from unbake.decomp import m2c, work
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class NextLinesTests(MainCase):
@@ -35,7 +35,7 @@ class NextLinesTests(MainCase):
                 self.assertNotIn(key, action)
                 self.assertNotIn("Supply", action)
                 self.assertTrue(action.endswith("Then run unbake setup."))
-        with patch("unbake.project.config.load_pending", side_effect=Held("config", "project.state: broken")):
+        with patch("unbake.config.load_pending", side_effect=Held("config", "project.state: broken")):
             self.assertNotIn("project.state", guidance.resolve(self.root))
         for error in (Held("next", "next.project: blocked"), ValueError("database.internal: broken")):
             with patch("unbake.cli.workflow.select", side_effect=error):
@@ -45,7 +45,7 @@ class NextLinesTests(MainCase):
                 self.assertNotIn("database.internal", action)
         with patch("unbake.cli.workflow.select", side_effect=Held("next", "key", next_action="unbake solve")):
             self.assertEqual(guidance.resolve(self.root), "unbake solve")
-        with patch("unbake.project.config.load_pending", side_effect=Held("config", "key", next_action="unbake setup")):
+        with patch("unbake.config.load_pending", side_effect=Held("config", "key", next_action="unbake setup")):
             self.assertEqual(guidance.resolve(self.root), "unbake setup")
 
     def test_solve_caps_sample_and_rewrites_complete_list_even_when_empty(self):

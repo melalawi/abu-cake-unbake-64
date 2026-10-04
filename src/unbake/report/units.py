@@ -11,7 +11,7 @@ from typing import Any
 
 from unbake.layout import split
 from unbake.project.build import compile_object
-from unbake.project.config import Held, Policy, Project, Version
+from unbake.config import Held, Host, Project, Version
 from unbake.project_tools.elf import Object, Symbol
 from unbake.project_tools.extract import partial_rows
 from unbake.report import files
@@ -112,7 +112,7 @@ def full_text_object(path: Path, size: int) -> bool:
     return end == size
 
 
-def units(project: Project, policy: Policy, version: str, generation: Path, workspace: Path) -> list[dict[str, Any]]:
+def units(project: Project, policy: Host, version: str, generation: Path, workspace: Path) -> list[dict[str, Any]]:
     from unbake.report.progress import target_object
 
     cartridge = project.version(version)

@@ -13,7 +13,7 @@ from typing import cast
 from unittest.mock import patch
 
 from unbake.project import toolchain
-from unbake.project.config import Compiler, Policy, Project
+from unbake.config import Compiler, Policy, Project
 
 
 class Sn64DownloadTests(unittest.TestCase):

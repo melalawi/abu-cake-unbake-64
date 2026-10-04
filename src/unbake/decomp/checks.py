@@ -10,7 +10,7 @@ from pathlib import Path
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass(frozen=True)

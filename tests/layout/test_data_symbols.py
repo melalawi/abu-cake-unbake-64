@@ -9,7 +9,7 @@ from typing import cast
 from tests.layout.test_split import ProjectFixture
 from unbake.decomp.symbols_edits import data_symbol
 from unbake.layout import data_symbols
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Policy, Project
 
 
 class DataProjectFixture(ProjectFixture):

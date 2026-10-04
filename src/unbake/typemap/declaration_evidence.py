@@ -16,8 +16,8 @@ from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
 from unbake.match import imports
-from unbake.project.cache import remembered
-from unbake.project.config import Held, Policy, Project, relative_text
+from unbake.cache import memo
+from unbake.config import Held, Host, Project, relative_text
 from unbake.typemap import split
 
 _MARKER = re.compile(r"/\* unbake declaration evidence: (evidence_[a-f0-9]+) \*/")
@@ -110,7 +110,7 @@ def units(contents: dict[Path, str]) -> tuple[Unit, ...]:
 def catalogue(project: Project) -> tuple[Unit, ...]:
     paths = files(project)
     contents = {path: path.read_text() for path in paths}
-    return remembered("declaration.evidence", tuple(sorted(contents.items())), lambda: units(contents), keep=2)
+    return memo("declaration.evidence", tuple(sorted(contents.items())), lambda: units(contents), keep=2)
 
 
 def select(project: Project, headers: Headers, text: str, function: str) -> tuple[Unit, ...]:
@@ -118,7 +118,7 @@ def select(project: Project, headers: Headers, text: str, function: str) -> tupl
     rows = catalogue(project)
     if not rows:
         return ()
-    live = remembered(
+    live = memo(
         "imports.providers", tuple(sorted(headers.texts.items())), lambda: imports.Providers(headers.texts), keep=2
     )
     source = imports._INCLUDE.sub("", imports._without_comments(text))
@@ -375,7 +375,7 @@ def feedback_components(project: Project) -> dict[Path, str]:
     return result
 
 
-def plan_many(project: Project, policy: Policy, sources: tuple[Path, ...]) -> tuple[list[Edit], list[dict[str, str]]]:
+def plan_many(project: Project, policy: Host, sources: tuple[Path, ...]) -> tuple[list[Edit], list[dict[str, str]]]:
     """Admit authored declarations independently of a function's instruction proof.
 
     This is declared evidence, not a matched-function receipt. Planning uses the

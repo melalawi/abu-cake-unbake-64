@@ -5,7 +5,7 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
-from unbake.project import config
+from unbake import config
 
 
 def tool(name: str) -> str:

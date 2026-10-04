@@ -259,7 +259,7 @@ def copied_mappings(data: bytes, text: Sequence[tuple[int, int, int]]) -> list[d
         if merged and row["start"] <= merged[-1]["end"]:
             previous = merged[-1]
             if row["address"] - row["start"] != previous["address"] - previous["start"]:
-                from unbake.project.config import Held
+                from unbake.config import Held
 
                 raise Held("setup", "layout.loaded_mapping: conflicting copied spans")
             previous["end"] = max(previous["end"], row["end"])

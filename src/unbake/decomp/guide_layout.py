@@ -6,11 +6,11 @@ from pathlib import Path
 
 from unbake.decomp.symbols import Reference
 from unbake.layout.structs import layouts, preprocess
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 def resolve(
-    project: Project, policy: Policy, source: Path, version: str, values: dict[str, int], refs: Sequence[Reference]
+    project: Project, policy: Host, source: Path, version: str, values: dict[str, int], refs: Sequence[Reference]
 ) -> tuple[set[int], list[str]]:
     """Return settled addresses and field guidance for typed global objects."""
     if not refs or not source.is_file():

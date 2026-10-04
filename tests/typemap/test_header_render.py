@@ -11,7 +11,7 @@ from tests.typemap.split_support import expanded
 from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
 from unbake.match import declarations as publication
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap import database, declaration_evidence, declarations, facts, solver
 from unbake.typemap.solver import Constraints, _merge_records
 

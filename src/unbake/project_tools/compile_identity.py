@@ -53,7 +53,7 @@ class _Logic(ast.NodeTransformer):
                 if not node.names:
                     return None
             node.module = node.module.removeprefix("unbake.project_tools.")
-            if node.module == "unbake.project.cache":
+            if node.module == "unbake.cache":
                 node.module = "cache"
         return node
 
@@ -227,7 +227,7 @@ def repair_assembly_depfiles(recipe: Path, build: Path, version: str) -> None:
 
 def sync_drivers(recipe: Path) -> None:
     """Use the cache's projection for installed driver logic, ignoring comments."""
-    from unbake.project.cache import key
+    from unbake.cache import key
 
     for kind in ("cc", "as"):
         for sn64 in (False, True):

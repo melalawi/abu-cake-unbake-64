@@ -7,7 +7,7 @@ from pathlib import Path
 from tests.layout.test_xver import Project
 from unbake.decomp.needs import PlacementNeed
 from unbake.layout import xver
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class TrialCutRowTests(unittest.TestCase):

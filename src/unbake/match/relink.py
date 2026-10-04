@@ -11,11 +11,11 @@ from pathlib import Path
 
 from unbake.match import reporting
 from unbake.project import build, makefile
-from unbake.project.config import Held, Policy, Project, SetupPolicy
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
 
-def source_key(project: Project, policy: Policy, source: Path, version: str) -> str:
+def source_key(project: Project, policy: Host, source: Path, version: str) -> str:
     content = build.preprocess_object(project, policy, source, version)
     # Preprocessor line directives describe locations, rather than generated code.
     content = re.sub(rb"^\s*#\s*(?:line\s+)?\d+[^\n]*\n", b"", content, flags=re.M)
@@ -27,7 +27,7 @@ def source_key(project: Project, policy: Policy, source: Path, version: str) -> 
 
 
 def inputs(
-    project: Project, policy: Policy, versions: list[str], generations: dict[str, Path] | None = None
+    project: Project, policy: Host, versions: list[str], generations: dict[str, Path] | None = None
 ) -> dict[str, dict[str, str]]:
     from unbake.project_tools.extract import unit_ranges
 
@@ -44,7 +44,7 @@ def inputs(
 
 def prove(
     project: Project,
-    policy: Policy | SetupPolicy,
+    policy: Host | Host,
     version: str,
     generation: Path,
     retained: dict[str, str] | None,
@@ -79,7 +79,7 @@ def prove(
     try:
         retained_inputs = {}
         if not extracted:
-            if not isinstance(policy, Policy):
+            if not isinstance(policy, Host):
                 raise Held("match", "submit.relink: source verification requires the work policy")
             run(["make", "extract", f"VERSION={version}", f"BUILD={generation}"])
             if retained is not None:

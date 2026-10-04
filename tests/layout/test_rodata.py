@@ -5,7 +5,7 @@ from typing import Any
 
 from unbake.families.gcc import Gcc
 from unbake.families.ido import Ido
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools.rodata import fragment, placement, relocated
 
 

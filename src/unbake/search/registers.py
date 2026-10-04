@@ -9,7 +9,7 @@ from typing import cast
 
 from unbake.decomp.explain import Allocation, leverage
 from unbake.decomp.trial import Trial
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.search.core import Context, Mutation
 
 

@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 
 from unbake.decomp.explain import Allocation
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 def dump_flags() -> tuple[str, ...]:

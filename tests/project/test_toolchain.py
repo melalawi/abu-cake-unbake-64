@@ -15,7 +15,7 @@ from typing import Any
 from unittest.mock import patch
 
 from unbake.project import compiler_files, toolchain
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 def digest(content: bytes) -> str:

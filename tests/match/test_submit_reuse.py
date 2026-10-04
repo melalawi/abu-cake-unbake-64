@@ -14,8 +14,8 @@ from unbake.layout.header_context import Headers
 from unbake.layout.structs import layouts
 from unbake.layout.structs_parser import Parser
 from unbake.match import batch_fold, declarations, forked, rewrite_view, source_views, type_rewrite
-from unbake.project import cache
-from unbake.project.config import Held
+from unbake import cache
+from unbake.config import Held
 from unbake.project.headers import include_headers
 from unbake.typemap import declarations as typed_declarations
 from unbake.typemap import header_names

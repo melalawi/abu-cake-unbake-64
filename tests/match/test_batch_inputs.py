@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from unbake.decomp.needs import SymbolNeed
 from unbake.match import batch, data_symbols, publication
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class InputTests(unittest.TestCase):

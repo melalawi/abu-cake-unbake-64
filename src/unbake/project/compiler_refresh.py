@@ -10,13 +10,14 @@ from typing import cast
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.project import build, census, compiler_files, compiler_proposal, config, setup, setup_config
-from unbake.project.config import Held, PendingProject, SetupPolicy
+from unbake import config
+from unbake.project import build, census, compiler_files, compiler_proposal, setup, setup_config
+from unbake.config import Held, PendingProject, Host
 from unbake.project.flow import LayoutManifest
 from unbake.project_tools import atomic as atomic_files
 
 
-def run(pending: PendingProject, policy: SetupPolicy, confirm: str | None) -> list[str]:
+def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]:
     project = config.load(pending.root)
     layout_path = project.build / "setup/layout.json"
     try:

@@ -10,7 +10,7 @@ from unbake.layout import split
 from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
 from unbake.project import build
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools.elf import Object
 
 
@@ -41,7 +41,7 @@ def unresolved(content: str, known: set[str]) -> set[str]:
     return {name for name in external if uses[name] > 0}
 
 
-def prepare(project: Project, policy: Policy, function: str, version: str, out: Path) -> list[SymbolNeed]:
+def prepare(project: Project, policy: Host, function: str, version: str, out: Path) -> list[SymbolNeed]:
     """Compile only unresolved references through the build's content-keyed cache."""
     source = project.src / f"{function}.c"
     content = build.preprocess_object(project, policy, source, version)
@@ -190,7 +190,7 @@ def preferred_address(project: Project, version: str, name: str) -> int | None:
     return identities.pop() if len(identities) == 1 else None
 
 
-def resolve(needs: list[SymbolNeed], project: Project, policy: Policy) -> list[Edit]:
+def resolve(needs: list[SymbolNeed], project: Project, policy: Host) -> list[Edit]:
     """Keep displaced linker aliases without defining a second Splat symbol."""
     selected: dict[tuple[str, int], str] = {}
     for need in needs:

@@ -8,7 +8,7 @@ from pathlib import Path
 from unbake.decomp.explain import gcc_input
 from unbake.decomp.trial_compare import Compare, align_words, words
 from unbake.decomp.trial_compile import run_tool
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
@@ -103,7 +103,7 @@ def debug_locations(listing: str) -> dict[int, tuple[str, int]]:
 
 def annotate_divergence(
     project: Project,
-    policy: Policy,
+    policy: Host,
     copied: Path,
     source: Path,
     version: str,

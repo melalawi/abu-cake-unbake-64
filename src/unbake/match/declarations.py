@@ -19,11 +19,11 @@ from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
 from unbake.match import imports, pool_literals, reporting, rewrite_view, source_views, type_rewrite
 from unbake.match.common import held
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
 
 
-def preflight(project: Project, policy: Policy, pending: list[needs.Need]) -> list[Edit]:
+def preflight(project: Project, policy: Host, pending: list[needs.Need]) -> list[Edit]:
     """Validate shared layout needs without writes, copies, generations, or builds.
 
     Call after deriving trial needs and before retaining or submitting a trial.
@@ -198,7 +198,7 @@ def _local_typedefs(
 
 def fold_source(
     project: Project,
-    policy: Policy,
+    policy: Host,
     headers: Headers,
     function: str,
     text: str,
@@ -296,7 +296,7 @@ def fold_source(
 
 
 def folded_edits(
-    project: Project, policy: Policy, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
+    project: Project, policy: Host, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
 ) -> list[Edit]:
     """Plan aggregate promotion and source removal as one publication unit."""
     folded = fold_source(project, policy, Headers.read(project), function, text, versions, prove_headers=prove_headers)
@@ -319,7 +319,7 @@ def _remove_rows(text: str, removed: Iterable[str]) -> str:
 
 def _layout_names(
     project: Project,
-    policy: Policy,
+    policy: Host,
     function: str,
     text: str,
     parsers: list[Parser],

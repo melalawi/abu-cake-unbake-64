@@ -11,7 +11,7 @@ from tests.decomp.support import fixture
 from unbake.decomp import plan
 from unbake.layout import index as layout_index
 from unbake.layout import split
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.typemap import clear_redraft, context, load, map_program, redrafts, solve, storage
 
 

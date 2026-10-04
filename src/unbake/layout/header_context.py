@@ -15,27 +15,20 @@ from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_identity import Index
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project.headers import include_headers
 
 
-def context(
-    contents: dict[Path, str], *, root: Path | None = None, cache_root: Path | None = None
-) -> tuple[dict[Path, str], Parser, list[Layout]]:
+def context(contents: dict[Path, str], *, root: Path | None = None) -> tuple[dict[Path, str], Parser, list[Layout]]:
     """Reuse draft's declaration parser; retain raw spans for header edits.
 
     One parse per distinct header set in a process; the parser is shared and read-only.
     """
-    from unbake.project.cache import remembered
+    from unbake.cache import memo
 
-    def parse() -> tuple[dict[Path, str], Parser, list[Layout]]:
-        if cache_root is None:
-            return _context(contents, root=root)
-        from unbake.layout import header_cache
-
-        return header_cache.context(contents, root, cache_root, lambda: _context(contents, root=root))
-
-    ordered, parser, records = remembered("headers.context", (root, cache_root, tuple(sorted(contents.items()))), parse)
+    ordered, parser, records = memo(
+        "headers.context", (root, tuple(sorted(contents.items()))), lambda: _context(contents, root=root)
+    )
     return dict(ordered), parser, records
 
 
@@ -243,7 +236,7 @@ class Headers:
         self._load(texts)
 
     def _load(self, texts: dict[Path, str]) -> None:
-        ordered, parser, records = context(texts, root=self.root, cache_root=self._cache_root)
+        ordered, parser, records = context(texts, root=self.root)
         self.texts = ordered
         self.source = parser.source
         self.types = dict(parser.types)

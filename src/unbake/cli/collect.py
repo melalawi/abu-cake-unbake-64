@@ -3,14 +3,14 @@
 import argparse
 
 from unbake.cli.common import Subparsers, receipt
-from unbake.project.config import Policy, Project
+from unbake.config import Host, Project
 
 
 def register(phases: Subparsers) -> None:
     phases.add_parser("collect", phase="collect", help="Remove abandoned scratch and unpinned old generations.")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     from unbake.match.publication import collect
 
     collect(project)

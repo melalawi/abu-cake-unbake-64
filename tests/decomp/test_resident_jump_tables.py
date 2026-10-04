@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.decomp.draft_input import jump_tables
 from unbake.project import makefile
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 def resident(project: Project, bias: int) -> SimpleNamespace:

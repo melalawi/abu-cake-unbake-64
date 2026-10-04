@@ -4,7 +4,7 @@ from typing import Any
 
 from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
 
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 def address_arithmetic(source: str, context: str, function: str) -> str:

@@ -8,17 +8,18 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from unbake.project.config import Held, Project
+from unbake import inputs
+from unbake.config import Held, Project
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis
 
 
 def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
     """Keep the original map shard; pin a separate ABI evidence supplement."""
-    analyzer = storage.file_digest(Path(__file__).with_name("mips.py"))
+    analyzer = inputs.digest(Path(__file__).with_name("mips.py"))
     if facts.get("abi_analysis_sha256") == analyzer:
         return facts
-    key = storage.digest((facts["shard_sha256"] + analyzer + storage.file_digest(Path(__file__))).encode())
+    key = storage.digest((facts["shard_sha256"] + analyzer + inputs.digest(Path(__file__))).encode())
     index = project.build / "map" / ("abi-index-" + key + ".json")
     functions = facts["functions"]
     metadata = {
@@ -102,13 +103,13 @@ def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
                     **storage.identity(project),
                     "map_shard_sha256": facts["shard_sha256"],
                     "path": path.name,
-                    "sha256": storage.file_digest(path),
+                    "sha256": inputs.digest(path),
                 }
             ),
         )
     return {
         **facts,
-        "abi_supplement": {"path": path.name, "sha256": storage.file_digest(path)},
+        "abi_supplement": {"path": path.name, "sha256": inputs.digest(path)},
         "functions": Functions(functions, shards.Functions(path, metadata)),
     }
 

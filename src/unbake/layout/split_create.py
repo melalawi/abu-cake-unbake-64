@@ -14,7 +14,7 @@ from functools import partial
 from pathlib import Path
 
 from unbake.layout import split_analysis
-from unbake.project.config import Held, Policy, SetupPolicy
+from unbake.config import Held, Host
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -46,11 +46,11 @@ def create(
     stem: str,
     version: str,
     *,
-    policy: Policy | SetupPolicy | None = None,
+    policy: Host | Host | None = None,
     code_ranges: Sequence[tuple[int, int, int]] | None = None,
 ) -> str:
     """Keep Splat's measured layout, anchoring every output in a VERSION tree."""
-    from unbake.project.config import load_policy
+    from unbake.config import load_policy
     from unbake.project.rom import stem as valid_stem
 
     valid_stem(stem, "name")

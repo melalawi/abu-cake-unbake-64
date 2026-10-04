@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
 
 from unbake.decomp.draft_context import _typedefs
-from unbake.project.config import Held
+from unbake.config import Held
 
 _TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', re.S)
 

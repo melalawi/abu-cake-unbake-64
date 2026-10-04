@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.layout import split
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.project.build import BuildResult
-    from unbake.project.config import Policy, Project
+    from unbake.config import Host, Project
 
 
 def coalesce(edits: Iterable[split.Edit]) -> list[split.Edit]:
@@ -111,7 +111,7 @@ def _write_staging(project: Project, edits: Iterable[split.Edit]) -> None:
         raise
 
 
-def apply(project: Project, policy: Policy, edits: Iterable[split.Edit]) -> list[BuildResult]:
+def apply(project: Project, policy: Host, edits: Iterable[split.Edit]) -> list[BuildResult]:
     from unbake.project import build
 
     edits, versions = _validated(project, edits)

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from tests.layout.test_split import ProjectFixture
 from unbake.layout import port, split
-from unbake.project.config import Policy, Project
+from unbake.config import Policy, Project
 
 
 class PortTests(unittest.TestCase):

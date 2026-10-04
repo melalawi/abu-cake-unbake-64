@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from unbake.decomp.trial_compile import default_scratch
-from unbake.project.config import Policy, Project, relative_text
+from unbake.config import Host, Project, relative_text
 from unbake.project_tools import atomic
 
 
@@ -34,7 +34,7 @@ def attempts(project: Project) -> dict[str, dict[str, str]]:
     return output
 
 
-def private(project: Project, policy: Policy) -> dict[str, str]:
+def private(project: Project, policy: Host) -> dict[str, str]:
     output = {name: row["reason"] for name, row in attempts(project).items()}
     # Discover default-scratch drafts created before attempt receipts existed.
     for path in sorted((default_scratch(project, policy) / "drafts").glob("*/manifest.json")):

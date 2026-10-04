@@ -8,7 +8,7 @@ from unbake.layout.planner import carve, complete_providers, correspondence
 from unbake.layout.rodata_owners import Span
 from unbake.layout.split import Function
 from unbake.layout.split_analysis import copy_evidence
-from unbake.project.config import SymbolPolicy
+from unbake.config import SymbolPolicy
 
 
 def function(name: str, start: int, end: int) -> Function:

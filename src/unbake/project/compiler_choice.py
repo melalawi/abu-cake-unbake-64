@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from unbake.project import toolchain
-from unbake.project.config import Project
+from unbake.config import Project
 
 
 def alternatives(project: Project, function: str) -> list[str]:

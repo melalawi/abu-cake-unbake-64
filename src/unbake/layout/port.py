@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.layout import split, split_apply
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
@@ -243,7 +243,7 @@ def required_placements(
     return result
 
 
-def port(project: Project, policy: Policy, rows: list[Candidate], scratch: Path, *, apply: bool) -> list[str]:
+def port(project: Project, policy: Host, rows: list[Candidate], scratch: Path, *, apply: bool) -> list[str]:
     from unbake.decomp import trial
 
     accepted = []

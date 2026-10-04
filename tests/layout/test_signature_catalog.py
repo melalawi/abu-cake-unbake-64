@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 from unbake.layout import boundary_signatures, signature_catalog
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 class SignatureCatalogTests(unittest.TestCase):

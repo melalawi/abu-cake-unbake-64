@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.layout import split
-from unbake.project.config import Held
+from unbake.config import Held
 
 if TYPE_CHECKING:
-    from unbake.project.config import Project
+    from unbake.config import Project
     from unbake.project.fingerprint import Region
 
 

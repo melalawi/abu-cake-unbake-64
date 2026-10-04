@@ -5,7 +5,7 @@ from pathlib import Path
 
 from unbake.cli import common
 from unbake.layout.split import Edit
-from unbake.project.config import Policy, Project, relative_text
+from unbake.config import Host, Project, relative_text
 from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import redrafts, solve, storage
 
@@ -21,7 +21,7 @@ def register(phases: common.Subparsers) -> None:
     )
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     map_path = project.build / "map/facts.json"
     before = map_path.stat().st_mtime_ns if map_path.is_file() else None
     needed = tuple(getattr(args, "declarations_needed", None) or ())

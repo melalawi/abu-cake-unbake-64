@@ -12,7 +12,8 @@ from typing import Any
 from unittest.mock import patch
 
 from tests.support import tool, write_policy
-from unbake.project import config, makefile
+from unbake import config
+from unbake.project import makefile
 
 WORK = Path(tempfile.gettempdir()).resolve()
 

@@ -9,8 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
-from unbake.project import cache
-from unbake.project.config import Held
+from unbake import cache
+from unbake.config import Held
 from unbake.typemap import database, header_names, regeneration, storage
 
 

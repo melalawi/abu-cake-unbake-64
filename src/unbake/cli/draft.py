@@ -12,7 +12,7 @@ from unbake.cli.guidance import command
 from unbake.decomp import draft_presence, exclusions, m2c, type_context, work
 from unbake.decomp.trial_compile import default_scratch, scratch_directory
 from unbake.decomp.trial_target import inputs, owning_versions
-from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
+from unbake.config import Held, Host, Project, Unfinished, load_policy
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -26,7 +26,7 @@ def register(phases: Subparsers) -> None:
     parser.add_argument("--struct", metavar="ID", help="Draft an evidenced shared struct (implementation pending).")
 
 
-def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
+def run(args: argparse.Namespace, project: Project, policy: Host) -> bool:
     if args.struct is not None:
         if args.function is not None:
             raise Held("draft", "draft.subject: select FUNCTION or --struct ID", next_action="unbake draft --help")
@@ -43,8 +43,8 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         policy = load_policy(local)
     versions = owning_versions(project, function, None)
     naming = versions[0]
-    remembered = draft_presence.attempts(project).get(function)
-    previous = project.root / remembered["scratch"] if remembered and getattr(args, "redraft", False) else None
+    memo = draft_presence.attempts(project).get(function)
+    previous = project.root / memo["scratch"] if memo and getattr(args, "redraft", False) else None
     scratch = scratch_directory(project, args.scratch or previous or default_scratch(project, policy), "draft")
     _database, context = ("", "") if args.without_type_db else type_context.snapshot(project, function)
     destination = scratch / "drafts" / function

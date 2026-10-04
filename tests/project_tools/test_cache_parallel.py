@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from unbake.project.cache import Cache, key
+from unbake.cache import Cache, key
 
 
 class ParallelCacheTests(unittest.TestCase):

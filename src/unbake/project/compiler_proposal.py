@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from unbake.project import compiler_files, compiler_probes, compiler_profiles, toolchain
-from unbake.project.config import Held, PendingProject, SetupPolicy
+from unbake.config import Held, PendingProject, Host
 
 if TYPE_CHECKING:
     from unbake.project.census import Census
@@ -43,7 +43,7 @@ def proposal_path(project: PendingProject) -> Path:
 def _inputs(
     project: PendingProject,
     layout: LayoutManifest,
-    policy: SetupPolicy,
+    policy: Host,
     choices: dict[str, str],
     *,
     layout_sha256: str | None = None,
@@ -121,7 +121,7 @@ def propose_compilers(
     project: PendingProject,
     census: Census,
     layout: LayoutManifest,
-    policy: SetupPolicy,
+    policy: Host,
     *,
     choices: dict[str, str] | None = None,
 ) -> CompilerProposal:
@@ -400,7 +400,7 @@ def confirm_proposal(
     census: Census,
     layout: LayoutManifest,
     proposal: CompilerProposal,
-    policy: SetupPolicy,
+    policy: Host,
     *,
     confirm: str | None = None,
 ) -> None:
@@ -460,7 +460,7 @@ def confirm_proposal(
         confirm_proposal(project, census, layout, proposal, policy, confirm=token)
 
 
-def confirmation_guard(project: PendingProject, proposal: CompilerProposal, policy: SetupPolicy) -> Callable[[], None]:
+def confirmation_guard(project: PendingProject, proposal: CompilerProposal, policy: Host) -> Callable[[], None]:
     """Retain input pins, not measured bodies, while the staged cartridges build."""
     token = compiler_files.sha(proposal_path(project))
     expected = dict(proposal["inputs_sha256"])

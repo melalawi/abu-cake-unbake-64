@@ -6,7 +6,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from unbake.project import build
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools import compile as compiler
 
 

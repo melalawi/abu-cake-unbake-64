@@ -37,8 +37,9 @@ from unbake.match import (
 )
 from unbake.match.common import atomic, held
 from unbake.match.publication import swap
-from unbake.project import build, compiler_choice, config, makefile, setup, workspace
-from unbake.project.config import Held, Policy, Project
+from unbake import config
+from unbake.project import build, compiler_choice, makefile, setup, workspace
+from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.report import progress
 
@@ -72,7 +73,7 @@ class Candidate:
     compiled: bool = False
 
 
-def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
+def publish(project: Project, policy: Host, sources: list[Path]) -> list[str]:
     """Admit, fold, prove and publish; refusals are named per source."""
     names = [source.stem for source in sources]
     if len(set(names)) != len(names):
@@ -89,7 +90,7 @@ def publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
         return _publish(project, policy, [source.resolve() for source in sources])
 
 
-def _baseline(project: Project, policy: Policy) -> list[str]:
+def _baseline(project: Project, policy: Host) -> list[str]:
     """Prove the unchanged project through the same retained-object link boundary."""
     # Keep the previous recipe as provenance: refreshing implementation helpers
     # must not bless different compiler flags or other changed build inputs.
@@ -123,7 +124,7 @@ def _baseline(project: Project, policy: Policy) -> list[str]:
         return [f"OK(submit): {version}: {result.sha1_line}" for version, result in results.items()]
 
 
-def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]:
+def _publish(project: Project, policy: Host, sources: list[Path]) -> list[str]:
     receipts = reporting.Receipts()
     started = staging.fingerprint(project, project.root)
     with reporting.phase("admission", sources=len(sources)):
@@ -270,7 +271,7 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
 class _Inputs:
     """Trial rows and split owners read once for a whole admission."""
 
-    def __init__(self, project: Project, policy: Policy, sources: list[Path] | None = None) -> None:
+    def __init__(self, project: Project, policy: Host, sources: list[Path] | None = None) -> None:
         # The build lock holds these inputs still; a refusal repeats per source.
         self.owners: dict[str, Any] | None = None
         self.trials: dict[str, list[Any]] | None = None
@@ -285,7 +286,7 @@ class _Inputs:
             pass
 
 
-def _admission(project: Project, policy: Policy, sources: list[Path], receipts: list[str]) -> list[Candidate]:
+def _admission(project: Project, policy: Host, sources: list[Path], receipts: list[str]) -> list[Candidate]:
     """Admit every source on all cores; candidates and refusals keep source order."""
     shared = project, policy, _Inputs(project, policy, sources)
     candidates = []
@@ -301,14 +302,14 @@ def _admission(project: Project, policy: Policy, sources: list[Path], receipts: 
     return candidates
 
 
-def _admitted(shared: tuple[Project, Policy, _Inputs], source: Path) -> Candidate | str | None:
+def _admitted(shared: tuple[Project, Host, _Inputs], source: Path) -> Candidate | str | None:
     try:
         return _admit(*shared, source)
     except Held as error:
         return error.reason
 
 
-def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> Candidate | None:
+def _admit(project: Project, policy: Host, inputs: _Inputs, source: Path) -> Candidate | None:
     function = source.stem
     if source.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", function):
         held(f"submit.source: {source} must be named <function>.c")
@@ -360,7 +361,7 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
 class _Base:
     """Staged inputs before any candidate edit; materialization starts here."""
 
-    def __init__(self, staged: Project, policy: Policy) -> None:
+    def __init__(self, staged: Project, policy: Host) -> None:
         self.policy = policy
         self.layout_map = (staged.root / "layout.toml").read_text()
         self.symbols = {v: staged.version(v).symbols.read_text() for v in staged.versions}
@@ -379,7 +380,7 @@ class _Base:
                     self.exclusion_aliases.setdefault(Path(row.path).name, set()).update((row.name, *row.aliases))
 
 
-def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
+def _fold(staged: Project, policy: Host, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
     """Fold every source against one context; a refused source leaves the context unchanged."""
     if all(candidate.compiled for candidate in candidates):
         for candidate in candidates:
@@ -548,7 +549,7 @@ def _recipe(staged: Project) -> None:
     setup.refresh_helpers(project)
 
 
-def _data_symbols(staged: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
+def _data_symbols(staged: Project, policy: Host, candidates: list[Candidate], receipts: list[str]) -> list[Candidate]:
     """Place unknown data a source declares from its owning ROM relocations, in parallel."""
     if all(candidate.compiled for candidate in candidates):
         return candidates
@@ -707,7 +708,7 @@ def _isolate(
     project: Project,
     staged: Project,
     base: _Base,
-    policy: Policy,
+    policy: Host,
     candidates: list[Candidate],
     generations: dict[str, Path],
     results: dict[str, build.BuildResult],
@@ -761,7 +762,7 @@ def _isolate(
 
 
 def _relink(
-    staged: Project, policy: Policy, generations: dict[str, Path], extracted: dict[str, str]
+    staged: Project, policy: Host, generations: dict[str, Path], extracted: dict[str, str]
 ) -> dict[str, build.BuildResult]:
     """Link the staged layout over objects this transaction already built.
 
@@ -794,7 +795,7 @@ def _relink(
 def _bisect(
     staged: Project,
     base: _Base,
-    policy: Policy,
+    policy: Host,
     candidates: list[Candidate],
     generations: dict[str, Path],
     failures: list[str],
@@ -868,7 +869,7 @@ def _publish_survivors(
     project: Project,
     staged: Project,
     base: _Base,
-    policy: Policy,
+    policy: Host,
     candidates: list[Candidate],
     current: dict[str, Path],
     generations: dict[str, Path],
@@ -910,7 +911,7 @@ def _publish_survivors(
 
 def _commit(
     project: Project,
-    policy: Policy,
+    policy: Host,
     staged: Project,
     candidates: list[Candidate],
     current: dict[str, Path],
@@ -1046,7 +1047,7 @@ def _commit(
 
 
 def _type_preflight(
-    project: Project, policy: Policy, candidates: list[Candidate], receipts: list[str]
+    project: Project, policy: Host, candidates: list[Candidate], receipts: list[str]
 ) -> list[Candidate]:
     if all(candidate.compiled for candidate in candidates):
         return candidates
@@ -1081,7 +1082,7 @@ def _type_preflight(
     return [candidate for candidate in candidates if candidate.function not in refused]
 
 
-def _feedback(project: Project, policy: Policy, candidates: list[Candidate]) -> list[str]:
+def _feedback(project: Project, policy: Host, candidates: list[Candidate]) -> list[str]:
     """Cache the published sources' facts; the next solve merges them without re-extracting."""
     from unbake.typemap import facts
 

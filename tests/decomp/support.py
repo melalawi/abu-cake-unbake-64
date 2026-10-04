@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import cast
 
 from tests.support import tool
-from unbake.project.config import Compiler, Policy, Project, Version, load_policy
+from unbake.config import Compiler, Policy, Project, Version, load_policy
 
 
 class FixturePolicy(SimpleNamespace):
@@ -173,7 +173,7 @@ def fixture(
         drafts=root / "build/drafts",
     )
     configured = load_policy()
-    from unbake.project.config import Policy
+    from unbake.config import Policy
 
     policy = FixturePolicy(**vars(configured))
     policy.mips_ld = Path(LINKER)

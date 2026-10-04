@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from unbake.decomp.needs import SymbolNeed
-from unbake.project.config import Held
+from unbake.config import Held
 
 
 @dataclass(frozen=True)

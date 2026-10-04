@@ -19,7 +19,8 @@ from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_bootstrap import cartridge
 from tests.project.test_config import write_policy
 from unbake.cli.main import main
-from unbake.project import config, fingerprint, init, setup, setup_config, setup_proof
+from unbake import config
+from unbake.project import fingerprint, init, setup, setup_config, setup_proof
 from unbake.project.census import Census
 from unbake.report import readme_layout
 

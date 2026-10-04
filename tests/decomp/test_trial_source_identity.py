@@ -14,7 +14,7 @@ from tests.decomp.support import assemble, assembly, fixture
 from unbake.decomp import drafts
 from unbake.decomp.trial import try_draft
 from unbake.project import build
-from unbake.project.config import Policy
+from unbake.config import Policy
 
 
 class TrialSourceIdentityTests(unittest.TestCase):

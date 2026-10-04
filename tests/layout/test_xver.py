@@ -9,7 +9,7 @@ from typing import Any
 
 from unbake.decomp.needs import PlacementNeed
 from unbake.layout import split, split_edits, xver, xver_edits
-from unbake.project.config import Held
+from unbake.config import Held
 from unbake.project_tools.extract import alignment_rows, render_alignment
 
 BODY = bytes.fromhex("27bdffe0 afbf001c 0c109230 00000000 3c04800c c4848884 8fbf001c 03e00008 27bd0020")

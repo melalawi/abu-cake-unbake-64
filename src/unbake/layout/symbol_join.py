@@ -15,8 +15,9 @@ from typing import Any, cast
 
 from unbake.cli.common import suggest
 from unbake.layout import planner, port, split, symbol_identity, symbol_replan
-from unbake.project import config, setup
-from unbake.project.config import Held, Project, SetupPolicy
+from unbake import config
+from unbake.project import setup
+from unbake.config import Held, Project, Host
 from unbake.project.flow import LayoutManifest
 from unbake.project.rom import load
 from unbake.project_tools import atomic as atomic_files
@@ -360,7 +361,7 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
     return replacements, report
 
 
-def run(project: Project, policy: SetupPolicy, path: Path, *, apply: bool) -> list[str]:
+def run(project: Project, policy: Host, path: Path, *, apply: bool) -> list[str]:
     command = shlex.join(["unbake", "split", "join", "--map", str(path.resolve())])
     suggest(command if apply else command + " --apply", on_refusal=True)
     assertions = read(path)

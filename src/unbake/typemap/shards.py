@@ -10,7 +10,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from unbake.project.config import Held
+from unbake import inputs
+from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -85,7 +86,7 @@ class Writer:
 
         self.connection.commit()
         self.connection.close()
-        path = self.temporary.parent / ("facts-" + storage.file_digest(self.temporary) + ".sqlite")
+        path = self.temporary.parent / ("facts-" + inputs.digest(self.temporary) + ".sqlite")
         atomic_files.publish(self.temporary, path)
         return path
 

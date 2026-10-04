@@ -9,14 +9,14 @@ from unbake.decomp.needs import LabelNeed, Need, SymbolNeed, register_resolver
 from unbake.decomp.rom import NAME
 from unbake.decomp.symbols import required, symbol_line
 from unbake.layout.split import Edit
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 _LINE = re.compile(rf"^\s*({NAME})\s*=\s*(0[xX][\da-fA-F]+|\d+)\s*;\s*(?://(.*))?$")
 
 
-def resolve(needs: list[Need], project: Project, policy: Policy) -> list[Edit]:
+def resolve(needs: list[Need], project: Project, policy: Host) -> list[Edit]:
     """Coalesce symbol and label needs into reviewable edits without writing files."""
-    # Policy is required by the resolver protocol; symbol edits use no process tools.
+    # Host is required by the resolver protocol; symbol edits use no process tools.
     required(policy, "policy")
     names_from = required(getattr(project, "names_from", None), "project.names_from")
     groups: dict[Path, list[SymbolNeed | LabelNeed]] = {}
@@ -108,7 +108,7 @@ register_resolver(LabelNeed, 20, resolve)
 
 
 def data_symbol(
-    project: Project, policy: Policy, version: str, name: str, address: int, rename_from: str | None
+    project: Project, policy: Host, version: str, name: str, address: int, rename_from: str | None
 ) -> list[Edit]:
     """Add or rename one validated address-only data declaration."""
     from unbake.layout import split

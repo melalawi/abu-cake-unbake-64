@@ -13,7 +13,7 @@ from typing import cast
 from tests.decomp import test_m2c, test_plan
 from tests.decomp.support import fixture
 from unbake.decomp import m2c, similar
-from unbake.project.config import Held, Policy
+from unbake.config import Held, Policy
 
 
 def words(*values: int) -> bytes:
