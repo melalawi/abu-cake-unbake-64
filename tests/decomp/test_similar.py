@@ -13,7 +13,7 @@ from typing import cast
 from tests.decomp import test_m2c, test_plan
 from tests.decomp.support import fixture
 from unbake.decomp import m2c, similar
-from unbake.config import Held, Policy
+from unbake.config import Held, Host
 
 
 def words(*values: int) -> bytes:
@@ -89,7 +89,7 @@ class SimilarTests(unittest.TestCase):
         split.write_text(split.read_text().replace("asm, beta", "c, beta"))
         (project.src / "beta.c").write_text('#include "types.h"\nint beta(void) { return 2; }\n')
         with redirect_stdout(io.StringIO()) as output:
-            source = m2c.draft(project, cast(Policy, fixture_test.policy), "alpha", "us", fixture_test.scratch)
+            source = m2c.draft(project, cast(Host, fixture_test.policy), "alpha", "us", fixture_test.scratch)
         invocation = json.loads((source.parent / "invocation.json").read_text())
         self.assertIn("int beta(void)", invocation["context"])
         self.assertIn("glabel beta", invocation["context"])

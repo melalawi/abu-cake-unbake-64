@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project
 from unbake.fold import apply
-from unbake import atomic as atomic_files
 from unbake.work import compare
 
 

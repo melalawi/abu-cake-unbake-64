@@ -22,7 +22,7 @@ class HeaderSafetyTests(unittest.TestCase):
         self.project, _, _ = fixture(self.root, versions=("us", "eu"), case=self)
         import subprocess
 
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
         from unbake.decomp import trial_compile
 
         self.failed_version = None

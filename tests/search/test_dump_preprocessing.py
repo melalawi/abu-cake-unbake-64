@@ -9,14 +9,14 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 from unbake.decomp.explain import function_dump, gcc_input, render
-from unbake.families.gcc.allocation import allocation
+from unbake.compilers.families.gcc.allocation import allocation
 from unbake.search.core import preprocess
 
 
 class DumpPreprocessingTests(unittest.TestCase):
     def setUp(self):
         from tests.preprocessor import output
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
         from unbake.decomp import trial_compile
         from unbake.search import core
 

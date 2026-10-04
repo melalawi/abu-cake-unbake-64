@@ -26,7 +26,7 @@ Edit where functions and data start and end. Every form previews the change; add
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return not args.apply
 
 
@@ -69,7 +69,14 @@ def run(context: Context) -> Result:
         if not args.all_versions and (args.version is None or args.address is None):
             raise Held("boundary", "boundary.name_data: supply --version and --address, or --all-versions")
         outcome = boundary_ops.name_data(
-            project, host, args.subject, args.version, args.address, args.rename_from, args.all_versions, apply=args.apply
+            project,
+            host,
+            args.subject,
+            args.version,
+            args.address,
+            args.rename_from,
+            args.all_versions,
+            apply=args.apply,
         )
     else:
         outcome = boundary_ops.interval(

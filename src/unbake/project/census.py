@@ -11,11 +11,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake.compilers import files as compiler_files
+from unbake.config import Held, Host, PendingProject
 from unbake.layout import split_analysis
 from unbake.layout.split import Function
-from unbake.compilers import files as compiler_files
 from unbake.project import rom
-from unbake.config import Host, Held, PendingProject
 
 
 @dataclass(frozen=True)

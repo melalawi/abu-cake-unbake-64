@@ -23,7 +23,7 @@ order (instruction order differences), similar (already matched functions that l
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return True
 
 
@@ -37,4 +37,6 @@ def run(context: Context) -> Result:
 
     sections = tuple(context.args.section or SECTIONS)
     report = explain.explain(context.project(), context.require_host(), context.args.subject, sections)
-    return Result.ok(NAME, report.document(), report.lines(), report.next_words and context.cmd(*report.next_words))
+    return Result.ok(
+        NAME, report.document(), report.lines(), context.cmd(*report.next_words) if report.next_words else None
+    )

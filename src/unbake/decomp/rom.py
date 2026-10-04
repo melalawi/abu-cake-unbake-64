@@ -7,9 +7,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.process import read_text
-from unbake.layout import split
 from unbake.config import Held, Project, Version
+from unbake.layout import split
+from unbake.process import read_text
 
 NAME = r"[A-Za-z_.$][\w.$]*"
 NUMBER = r"(?:0[xX][0-9A-Fa-f]+|[0-9]+)"

@@ -7,7 +7,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from unbake.layout.split import Function
+from unbake import atomic as atomic_files
 from unbake.compilers.propose import (
     confirm_proposal as confirm_proposal,
 )
@@ -17,10 +17,10 @@ from unbake.compilers.propose import (
 from unbake.compilers.propose import (
     receipt as receipt,
 )
-from unbake.config import Held, Host, Project
-from unbake.project.rom import Rom, shingles
 from unbake.compilers.registry import CompilerSpec
-from unbake import atomic as atomic_files
+from unbake.config import Held, Host, Project
+from unbake.layout.split import Function
+from unbake.project.rom import Rom, shingles
 
 
 @dataclass(frozen=True)
@@ -276,9 +276,9 @@ def choose(
 
 
 def prove(project_scratch: Project, region: Region, candidates: Sequence[CompilerSpec], policy: Host) -> Decision:
-    from unbake.decomp import m2c
+    from unbake import extract, runner
     from unbake.compilers import registry as toolchain
-    from unbake import runner
+    from unbake.decomp import m2c
     from unbake.project.rom import load
 
     if not candidates:
@@ -286,7 +286,7 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
     if type(getattr(policy, "probe_count", None)) is not int or policy.probe_count <= 0:
         raise Held("setup", "policy.probe_count: required positive integer")
     project = project_scratch
-    policy.m2c
+    policy.require(["tools.m2c"])
     compilers = dict(project.compilers)
     for candidate in candidates:
         if candidate.id not in compilers:
@@ -313,13 +313,23 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
             "typedef s32 M2C_UNK32;\ntypedef s64 M2C_UNK64;\n"
             "#define M2C_FIELD(value, pointer_type, offset) (*(pointer_type)((s8 *)(value) + (offset)))\n",
         )
-        project = replace(project, include=(*project.include, include))
+        project = replace(project, work_include=(*project.work_include, include))
         for function in probes:
             try:
                 drafting = replace(
                     project, default_compiler=candidates[0].id, units={**project.units, function.name: candidates[0].id}
                 )
-                source = m2c.draft(drafting, policy, function.name, version, work)
+                source = m2c.draft(
+                    drafting,
+                    policy,
+                    function.name,
+                    version,
+                    work,
+                    extract.directory(project, policy, version),
+                    type_context="",
+                )
+                source_file = work / f"{function.name}.c"
+                atomic_files.text(source_file, source)
             except Held as error:
                 errors[function.name] = f"{error.phase}: {error.reason}"
                 for values in results.values():
@@ -330,7 +340,7 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
                     selected = replace(
                         project, default_compiler=candidate.id, units={**project.units, function.name: candidate.id}
                     )
-                    out = runner.compile_unit(selected, policy, source, version, unit=function.name)
+                    out = runner.compile_unit(selected, policy, source_file, version, unit=function.name)
                     identical = reproduces(out, function.name, data[function.start : function.end])
                 except (Held, OSError, ValueError, struct.error) as error:
                     errors[f"{candidate.id}/{function.name}"] = str(error)

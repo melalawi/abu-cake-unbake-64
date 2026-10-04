@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
+from unbake.config import Host, PendingProject
 from unbake.project.census import Census
-from unbake.config import PendingProject, Host
 
 
 class Identity(TypedDict):

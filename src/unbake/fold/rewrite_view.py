@@ -13,8 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.layout.structs import held
 from unbake.config import Host, Project
+from unbake.layout.structs import held
 
 # Consume quoted tokens before looking for another map, including map-like text
 # in literals. Multi-character punctuators must remain one preprocessing token.

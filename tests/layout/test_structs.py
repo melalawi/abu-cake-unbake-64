@@ -16,7 +16,7 @@ from unbake.layout.structs_fold import fold
 class DeclarationTests(unittest.TestCase):
     def setUp(self):
         from tests.preprocessor import output
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
         from unbake.layout import structs
         from unbake.typemap import declarations
 
@@ -169,7 +169,7 @@ class DeclarationTests(unittest.TestCase):
 class FoldTests(unittest.TestCase):
     def setUp(self):
         from tests.preprocessor import output
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
         from unbake.layout import structs
         from unbake.typemap import declarations
 
@@ -554,7 +554,7 @@ if __name__ == "__main__":
 class DefinitionOrderTests(unittest.TestCase):
     def setUp(self):
         from tests.preprocessor import output
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
         from unbake.layout import structs
         from unbake.typemap import declarations
 

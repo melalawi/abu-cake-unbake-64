@@ -14,7 +14,7 @@ from tests.decomp.support import fixture
 from unbake.decomp import guide, m2c
 from unbake.decomp.draft_context import preprocess_context
 from unbake.decomp.draft_input import whole_body
-from unbake.config import Policy
+from unbake.config import Host
 
 
 class DraftInputTests(unittest.TestCase):
@@ -36,9 +36,9 @@ class DraftInputTests(unittest.TestCase):
             '#!/bin/sh\nprintf "typedef int s32;\\n'
             'int alpha(struct one *a, struct two *b) { return a->v + b->v; }\\n"\n'
         )
-        source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.project.work)
+        source = m2c.draft(self.project, cast(Host, self.policy), "alpha", "us", self.project.work)
         self.assertEqual(
-            preprocess_context(source, self.project, cast(Policy, self.policy), "us", "alpha").count(
+            preprocess_context(source, self.project, cast(Host, self.policy), "us", "alpha").count(
                 "typedef int s32;"
             ),
             1,
@@ -57,7 +57,7 @@ class DraftInputTests(unittest.TestCase):
 
     def test_draft_announces_function_filename_and_written_path(self) -> None:
         with redirect_stdout(io.StringIO()) as output:
-            source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.project.work)
+            source = m2c.draft(self.project, cast(Host, self.policy), "alpha", "us", self.project.work)
         self.assertTrue(source.is_file())
         self.assertEqual(source.name, "alpha.c")
         self.assertIn(f"draft_path: {source}", output.getvalue())

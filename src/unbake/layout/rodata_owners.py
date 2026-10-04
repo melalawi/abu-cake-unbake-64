@@ -8,10 +8,10 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from unbake.config import Held, Project
 from unbake.decomp.rom import project_reader
 from unbake.layout import split
 from unbake.layout.rodata_references import Reference, collect, words
-from unbake.config import Held, Project
 from unbake.objects.elf import Object
 from unbake.objects.literal_layout import storage
 from unbake.objects.rodata import pools, relocated, table_addresses, table_pointer_bias

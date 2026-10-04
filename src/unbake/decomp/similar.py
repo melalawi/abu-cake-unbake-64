@@ -7,10 +7,10 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.fold.drafts import is_partial
-from unbake.work.score import fields
-from unbake.layout import split
 from unbake.config import Held, Project
+from unbake.fold.drafts import is_partial
+from unbake.layout import split
+from unbake.work.score import fields
 
 
 @dataclass(frozen=True)

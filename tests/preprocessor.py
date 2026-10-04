@@ -111,7 +111,7 @@ def output(command, **kwargs):
         cwd=cwd,
     )
     if "-fdebug-cpp" in command:
-        from unbake.match.rewrite_view import _TOKEN
+        from unbake.fold.rewrite_view import _TOKEN
 
         tokens = []
         origin, number = "<stdin>", 1

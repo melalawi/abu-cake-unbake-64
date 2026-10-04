@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+from unbake import atomic as atomic_files
+from unbake.config import Held
 from unbake.decomp.needs import Need, PlacementNeed
 from unbake.layout import split, split_edits
-from unbake.config import Held
-from unbake import atomic as atomic_files
 
 
 def _rename(project: Any, need: PlacementNeed) -> list[split.Edit]:

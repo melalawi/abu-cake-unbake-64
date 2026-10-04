@@ -70,7 +70,9 @@ def plan(project: Project, host: Host) -> dict[Path, bytes]:
             continue
         removed = (declared(path.read_text()) - declared(data.decode())) & used
         if removed:
-            raise Held("headers", f"headers.merge_only: {path}: would remove {', '.join(sorted(removed))} used by published C")
+            raise Held(
+                "headers", f"headers.merge_only: {path}: would remove {', '.join(sorted(removed))} used by published C"
+            )
     return changed
 
 

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import tempfile
-
 import csv
 import hashlib
 import json
 import re
+import tempfile
 from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
@@ -15,13 +14,13 @@ from typing import Any, cast
 
 import toml  # type: ignore[import-untyped]
 
+from unbake import atomic as atomic_files
+from unbake.config import Held, Host, Project, SymbolPolicy
 from unbake.layout import planner, port, split, symbol_identity
 from unbake.layout.symbol_identity import similarity_distribution
 from unbake.project import setup
-from unbake.config import Held, Project, Host, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import Rom, load
-from unbake import atomic as atomic_files
 
 
 def retained_assertions(
@@ -320,7 +319,9 @@ def publish(
             json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
             stream.write("\n")
         del report, data, groups
-        return setup._prove_publish(project, tree, policy, inputs, fresh=True, supply=None, removed_inputs=tuple(removed))
+        return setup._prove_publish(
+            project, tree, policy, inputs, fresh=True, supply=None, removed_inputs=tuple(removed)
+        )
 
 
 def data_symbols_text(text: str, version: str, replacements: dict[str, str], data: dict[str, Any]) -> str:

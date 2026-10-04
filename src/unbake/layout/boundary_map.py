@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.layout import split, split_apply
 from unbake.config import Held
+from unbake.layout import split, split_apply
 
 if TYPE_CHECKING:
     from unbake.build import Outcome

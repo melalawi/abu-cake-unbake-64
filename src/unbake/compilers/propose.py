@@ -16,7 +16,7 @@ from unbake.compilers import files as compiler_files
 from unbake.compilers import probe as compiler_probes
 from unbake.compilers import profiles as compiler_profiles
 from unbake.compilers import registry as toolchain
-from unbake.config import Held, PendingProject, Host
+from unbake.config import Held, Host, PendingProject
 
 if TYPE_CHECKING:
     from unbake.project.census import Census
@@ -129,8 +129,8 @@ def propose_compilers(
     choices: dict[str, str] | None = None,
 ) -> CompilerProposal:
     """Persist measured ranks only; no config, compiler install or publication."""
-    from unbake.decomp.guide import prologue
     from unbake.compilers.fingerprint import evidence
+    from unbake.decomp.guide import prologue
 
     hashes = _verify_identity(project, census, layout)
     specs = toolchain.registry()

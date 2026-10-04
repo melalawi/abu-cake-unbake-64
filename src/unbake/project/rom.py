@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.project import header
 from unbake.config import Held
+from unbake.project import header
 
 if TYPE_CHECKING:
     from unbake.layout.split import Function

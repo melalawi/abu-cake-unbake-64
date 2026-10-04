@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from unbake.layout import split
 from unbake.config import Held, Project
+from unbake.layout import split
 from unbake.objects.elf import Object
 
 

@@ -6,8 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, fields
 from typing import Any, TypeAlias
 
-from unbake.layout.split import Edit
 from unbake.config import Held, Host, Project
+from unbake.layout.split import Edit
 
 
 @dataclass(frozen=True)

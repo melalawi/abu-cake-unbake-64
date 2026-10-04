@@ -19,10 +19,10 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 
 _FINGERPRINT_PARTS = ("extract.py",)
 _C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)c(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)
@@ -109,9 +109,7 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
         if not dump.is_file():
             raise Held("extract", f"extract.splat.{version}: splat wrote no symbol dump")
         shutil.copyfile(dump, staging / "splat_symbols.csv")
-        committed = instruction_symbols(
-            staging / "asm", discovered_symbols(dump, symbols_from([configured.symbols]))
-        )
+        committed = instruction_symbols(staging / "asm", discovered_symbols(dump, symbols_from([configured.symbols])))
         units = unit_addresses(configured.split.read_text())
         for name, address in units.items():
             if name in committed and committed[name] != address:

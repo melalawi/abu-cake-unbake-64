@@ -8,9 +8,9 @@ from typing import cast
 
 from unbake.decomp import guide, needs, symbols, symbols_edits
 from unbake.decomp.needs import LabelNeed, SymbolNeed
-from unbake.families import family_for
-from unbake.families.mips import Relocation
-from unbake.config import Compiler, Held, Policy, Project, Version
+from unbake.compilers.families import family_for
+from unbake.compilers.families.mips import Relocation
+from unbake.config import Compiler, Held, Host, Project, Version
 
 
 def pair(address: int, opcode: int = 0x31) -> tuple[int, int]:
@@ -61,7 +61,7 @@ class SymbolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.family = family_for("ido-7.1")
         root = Path(tempfile.gettempdir()).resolve()
-        self.policy = Policy(
+        self.policy = Host(
             setup_version_jobs=4,
             cores=1,
             stall_trials=1,
@@ -196,7 +196,7 @@ class SymbolTests(unittest.TestCase):
             with self.assertRaisesRegex(Held, "project.names_from"):
                 symbols_edits.resolve([], replace(project, names_from=""), self.policy)
             with self.assertRaisesRegex(Held, "policy"):
-                symbols_edits.resolve([], project, cast(Policy, None))
+                symbols_edits.resolve([], project, cast(Host, None))
             path.unlink()
             with self.assertRaisesRegex(Held, "symbol_addrs"):
                 symbols_edits.resolve([need()], project, self.policy)

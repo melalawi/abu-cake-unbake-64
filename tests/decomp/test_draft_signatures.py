@@ -9,7 +9,7 @@ from typing import cast
 from tests.decomp.support import fixture
 from unbake.decomp.draft_abi import declarations
 from unbake.decomp.draft_fp import register_pairs
-from unbake.config import Policy
+from unbake.config import Host
 
 
 class DraftSignatureTests(unittest.TestCase):
@@ -22,9 +22,9 @@ class DraftSignatureTests(unittest.TestCase):
                 "#if NON_MATCHING\nfloat beta(Private *value, float scale) { return value->x * scale; }\n"
                 "#else\ns32 beta(void) { return 0; }\n#endif\n"
             )
-            result = declarations(project, cast(Policy, policy), "us", "jal beta\nnop\n", "")
+            result = declarations(project, cast(Host, policy), "us", "jal beta\nnop\n", "")
             self.assertEqual(result, "float beta(void *, float);")
-            self.assertEqual(declarations(project, cast(Policy, policy), "us", "jal beta\n", result), "")
+            self.assertEqual(declarations(project, cast(Host, policy), "us", "jal beta\n", result), "")
 
     def test_database_contract_has_one_owner_when_c_definition_exists(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
@@ -41,7 +41,7 @@ class DraftSignatureTests(unittest.TestCase):
                 }
             }
             result = declarations(
-                project, cast(Policy, policy), "us", "jal beta\nnop\n", "", function="alpha", database=database
+                project, cast(Host, policy), "us", "jal beta\nnop\n", "", function="alpha", database=database
             )
             self.assertEqual(result.count("beta("), 1)
             self.assertIn("extern int beta(int);", result)
@@ -58,7 +58,7 @@ class DraftSignatureTests(unittest.TestCase):
             database = {"functions": {"beta": record}}
             result = declarations(
                 project,
-                cast(Policy, policy),
+                cast(Host, policy),
                 "us",
                 "jal beta\n",
                 "int beta();",
@@ -79,7 +79,7 @@ class DraftSignatureTests(unittest.TestCase):
                     incomplete = {**record, "abi": {**record["abi"], **change}}
                     result = declarations(
                         project,
-                        cast(Policy, policy),
+                        cast(Host, policy),
                         "us",
                         "jal beta\n",
                         "",

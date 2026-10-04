@@ -75,7 +75,9 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     return {
         "ok": True,
         "sha256": measured.source_sha256,
-        "per_version": {v: {"percent": round(c.match_percent, 6), "exact": c.exact} for v, c in measured.compares.items()},
+        "per_version": {
+            v: {"percent": round(c.match_percent, 6), "exact": c.exact} for v, c in measured.compares.items()
+        },
         "best_percent": measured.best_percent,
         "exact": measured.exact,
         "diagnostic": next((line for c in measured.compares.values() for line in c.lines[2:3]), ""),
@@ -143,15 +145,17 @@ class Stop:
         return timeout is not None and timeout <= 0
 
 
-def choose(
-    project: Project, host: Host, pick: int | None, functions: tuple[str, ...]
-) -> list[rank.Candidate]:
+def choose(project: Project, host: Host, pick: int | None, functions: tuple[str, ...]) -> list[rank.Candidate]:
     order = ranked(project, host)
     if functions:
         by_name = {row.function: row for row in order}
         missing = [name for name in functions if name not in by_name]
         if missing:
-            raise Held("cycle", f"cycle.functions: {', '.join(missing)}: not candidates (published, unknown or outside the size window)")
+            raise Held(
+                "cycle",
+                f"cycle.functions: {', '.join(missing)}: "
+                "not candidates (published, unknown or outside the size window)",
+            )
         return [by_name[name] for name in functions]
     if pick is not None:
         return order[:pick]
@@ -177,7 +181,12 @@ def run(
     if not picked:
         raise Held("cycle", "cycle.pick: nothing to work on (no candidates in the size window)")
     if not interactive():
-        print("→ " + next_words("cycle", "--functions", ",".join(row.function for row in picked), "--stop", stop or "all-landed"))
+        print(
+            "→ "
+            + next_words(
+                "cycle", "--functions", ",".join(row.function for row in picked), "--stop", stop or "all-landed"
+            )
+        )
     emitter = Emitter(events)
     rows = {c.function: Row(c.function, c.bytes, c.versions, c.carryover, best_percent=c.best_percent) for c in picked}
     inbox: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -196,13 +205,17 @@ def run(
     emitter.listeners.append(save_state)
     for done_step in steps.ensure(project, host, ["extract", "types", "headers", "buildfiles"]):
         if done_step.ran:
-            emitter.emit("step.run", step=done_step.step, trigger=done_step.trigger, seconds=round(done_step.seconds, 3))
+            emitter.emit(
+                "step.run", step=done_step.step, trigger=done_step.trigger, seconds=round(done_step.seconds, 3)
+            )
     emitter.emit(
         "cycle.start",
         project=str(project.root),
         versions=list(project.versions),
         functions=list(rows),
-        workers=pool.admitted(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes),
+        workers=pool.admitted(
+            host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes
+        ),
         cores=host.cores,
         memory_total_bytes=host.memory_total_bytes,
         cache_root=str(host.cache_root),
@@ -232,7 +245,11 @@ def run(
             else:
                 future = workers.submit(_compare_task, (project.root, host, argument))
             inflight[function] = future
-            future.add_done_callback(lambda done, f=function, k=kind, a=argument: inbox.put((k, (f, a, done))))
+
+            def finished(done: Future[Any]) -> None:
+                inbox.put((kind, (function, argument, done)))
+
+            future.add_done_callback(finished)
 
         def start(row: Row, *, redraft: bool = False) -> None:
             if row.held:
@@ -261,7 +278,13 @@ def run(
             except Held as error:
                 again = (row.function, row.sha256) not in retried
                 retried.add((row.function, row.sha256))
-                emitter.emit("fn.land_failed", function=row.function, versions=list(row.versions), diagnostic=error.reason, returned_to_worker=again)
+                emitter.emit(
+                    "fn.land_failed",
+                    function=row.function,
+                    versions=list(row.versions),
+                    diagnostic=error.reason,
+                    returned_to_worker=again,
+                )
                 row.diagnostic = error.reason
                 if again:
                     start(row)
@@ -270,7 +293,14 @@ def run(
                 return
             row.stage, row.commit = "landed", commit
             landed.append(row.function)
-            emitter.emit("fn.landed", function=row.function, bytes=row.bytes, versions=list(row.versions), seconds=round(time.monotonic() - started, 3), retried=(row.function, row.sha256) in retried)
+            emitter.emit(
+                "fn.landed",
+                function=row.function,
+                bytes=row.bytes,
+                versions=list(row.versions),
+                seconds=round(time.monotonic() - started, 3),
+                retried=(row.function, row.sha256) in retried,
+            )
             emitter.emit("fn.committed", function=row.function, commit=commit, message=f"Match {row.function}")
             unpushed.append(commit)
             for merged in steps.ensure(project, host, ["merge-units"]):
@@ -280,7 +310,14 @@ def run(
                 pusher.request()
 
         for row in rows.values():
-            emitter.emit("fn.queued", function=row.function, bytes=row.bytes, versions=list(row.versions), carryover=row.carryover, best_percent=row.best_percent)
+            emitter.emit(
+                "fn.queued",
+                function=row.function,
+                bytes=row.bytes,
+                versions=list(row.versions),
+                carryover=row.carryover,
+                best_percent=row.best_percent,
+            )
             start(row)
         try:
             while not stopper.reached(rows):
@@ -294,14 +331,33 @@ def run(
                     result = _result(done)
                     if not result["ok"]:
                         row.stage, row.diagnostic = "held", result["diagnostic"]
-                        emitter.emit("fn.draft.done", function=function, ok=False, file="", seconds=round(result["seconds"], 3), diagnostic=result["diagnostic"])
-                        emitter.emit("fn.held", function=function, key=result["key"], reason=result["diagnostic"], next=next_words("draft", function))
+                        emitter.emit(
+                            "fn.draft.done",
+                            function=function,
+                            ok=False,
+                            file="",
+                            seconds=round(result["seconds"], 3),
+                            diagnostic=result["diagnostic"],
+                        )
+                        emitter.emit(
+                            "fn.held",
+                            function=function,
+                            key=result["key"],
+                            reason=result["diagnostic"],
+                            next=next_words("draft", function),
+                        )
                         continue
-                    emitter.emit("fn.draft.done", function=function, ok=True, file=result["file"], seconds=round(result["seconds"], 3))
+                    emitter.emit(
+                        "fn.draft.done",
+                        function=function,
+                        ok=True,
+                        file=result["file"],
+                        seconds=round(result["seconds"], 3),
+                    )
                     stopper.touch()
                     start(row)
                 elif kind == "compare":
-                    function, file, done = payload
+                    function, _file, done = payload
                     row = rows[function]
                     result = _result(done)
                     if inflight.get(function) is not done:
@@ -309,13 +365,30 @@ def run(
                     row.tries += 1
                     if not result["ok"]:
                         row.stage, row.diagnostic = "waiting for edit", result["diagnostic"]
-                        emitter.emit("fn.compare.done", function=function, sha256=row.sha256, per_version={}, best_percent=0.0, tries=row.tries, seconds=round(result["seconds"], 3), diagnostic=result["diagnostic"])
+                        emitter.emit(
+                            "fn.compare.done",
+                            function=function,
+                            sha256=row.sha256,
+                            per_version={},
+                            best_percent=0.0,
+                            tries=row.tries,
+                            seconds=round(result["seconds"], 3),
+                            diagnostic=result["diagnostic"],
+                        )
                         continue
                     if result["sha256"] != row.sha256:
                         continue  # the file changed while it was compared; the watcher queued a new compare
                     row.best_percent = result["best_percent"]
                     row.diagnostic = result["diagnostic"]
-                    emitter.emit("fn.compare.done", function=function, sha256=row.sha256, per_version=result["per_version"], best_percent=result["best_percent"], tries=row.tries, seconds=round(result["seconds"], 3))
+                    emitter.emit(
+                        "fn.compare.done",
+                        function=function,
+                        sha256=row.sha256,
+                        per_version=result["per_version"],
+                        best_percent=result["best_percent"],
+                        tries=row.tries,
+                        seconds=round(result["seconds"], 3),
+                    )
                     stopper.touch()
                     if result["exact"]:
                         emitter.emit("fn.exact", function=function, bytes=row.bytes, sha256=row.sha256)
@@ -324,9 +397,10 @@ def run(
                         row.stage = "waiting for edit"
                 elif kind == "edit":
                     path = Path(payload)
-                    row = rows.get(path.stem)
-                    if row is None or row.stage in ("landed", "landing") or row.held or not path.is_file():
+                    edited = rows.get(path.stem)
+                    if edited is None or edited.stage in ("landed", "landing") or edited.held or not path.is_file():
                         continue
+                    row = edited
                     sha = _sha(path)
                     if sha == row.sha256:
                         continue
@@ -340,7 +414,14 @@ def run(
                     emitter.emit("fn.compare.start", function=row.function, sha256=sha)
                     submit("compare", row.function, row.file)
                 elif kind == "pushed":
-                    emitter.emit("fn.pushed", commits=list(unpushed), remote=host.publish_remote, branch=host.publish_branch, ok=bool(payload), **({} if payload else {"error": "git push failed"}))
+                    emitter.emit(
+                        "fn.pushed",
+                        commits=list(unpushed),
+                        remote=host.publish_remote,
+                        branch=host.publish_branch,
+                        ok=bool(payload),
+                        **({} if payload else {"error": "git push failed"}),
+                    )
                     if payload:
                         unpushed.clear()
                 elif kind == "key":
@@ -364,7 +445,14 @@ def run(
             except queue.Empty:
                 break
             if kind == "pushed":
-                emitter.emit("fn.pushed", commits=list(unpushed), remote=host.publish_remote, branch=host.publish_branch, ok=bool(payload), **({} if payload else {"error": "git push failed"}))
+                emitter.emit(
+                    "fn.pushed",
+                    commits=list(unpushed),
+                    remote=host.publish_remote,
+                    branch=host.publish_branch,
+                    ok=bool(payload),
+                    **({} if payload else {"error": "git push failed"}),
+                )
                 if payload:
                     unpushed.clear()
     held = [name for name, row in rows.items() if row.stage in ("held", "failed")]
@@ -382,7 +470,10 @@ def run(
         exit=exit_code,
         next=following,
     )
-    atomic_files.text(state_path(project), json.dumps({"running": False, "rows": [asdict(r) for r in rows.values()]}, sort_keys=True, default=list) + "\n")
+    atomic_files.text(
+        state_path(project),
+        json.dumps({"running": False, "rows": [asdict(r) for r in rows.values()]}, sort_keys=True, default=list) + "\n",
+    )
     data = {"landed": landed, "unpushed": unpushed, "held": held, "carryovers": carry, "exit": exit_code}
     lines = [f"landed {len(landed)}; held {len(held)}; carried over {len(carry)}; unpushed {len(unpushed)}"]
     if exit_code == 130:
@@ -402,7 +493,13 @@ def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
     return done.result()
 
 
-def _key(key: tuple[str, str], rows: dict[str, Row], start: Callable[..., None], emitter: Emitter, next_words: Callable[..., str]) -> None:
+def _key(
+    key: tuple[str, str],
+    rows: dict[str, Row],
+    start: Callable[..., None],
+    emitter: Emitter,
+    next_words: Callable[..., str],
+) -> None:
     """Board keys that change work: r (compare again), d (redraft), h (hold or release)."""
     action, function = key
     row = rows.get(function)
@@ -417,7 +514,13 @@ def _key(key: tuple[str, str], rows: dict[str, Row], start: Callable[..., None],
         row.held = not row.held
         if row.held:
             row.stage = "held"
-            emitter.emit("fn.held", function=function, key="cycle.held_by_user", reason="held from the board", next=next_words("cycle", "--functions", function))
+            emitter.emit(
+                "fn.held",
+                function=function,
+                key="cycle.held_by_user",
+                reason="held from the board",
+                next=next_words("cycle", "--functions", function),
+            )
         else:
             row.stage = "queued"
             start(row)

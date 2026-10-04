@@ -6,11 +6,11 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake import extract
 from unbake.config import Held, Host, Project, draft_view
 from unbake.decomp import exclusions, m2c, type_context
 from unbake.layout import split
-from unbake import atomic as atomic_files
 from unbake.work import attempts
 
 

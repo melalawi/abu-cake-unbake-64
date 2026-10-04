@@ -24,7 +24,8 @@ VERBS = {
     "recompute": ["--all"],
 }
 DELETED = ["try", "submit", "map", "solve", "layout", "report", "collect", "clone", "split", "decomp", "rodata"]
-HUMAN_MARKERS = ("OK(", "HELD(", "Next:", "usage:", "Usage:")
+# Human rendering (stderr only). JSON string fields may hold help or usage text, never rendered receipts.
+HUMAN_MARKERS = ("OK(", "HELD(", "FAILED(", "Next:")
 
 
 class ContractTests(TempCase):
@@ -47,8 +48,11 @@ class ContractTests(TempCase):
         return value
 
     def assert_stdout_is_json_only(self, stdout: str) -> None:
-        for marker in HUMAN_MARKERS:
-            self.assertNotIn(marker, stdout)
+        for line in stdout.splitlines():
+            value = json.loads(line)
+            for receipt in value["receipts"]:
+                self.assertFalse(receipt.startswith(HUMAN_MARKERS), receipt)
+            self.assertNotIn("Next:", json.dumps(value["data"]))
 
     def test_help_of_every_verb(self) -> None:
         for verb in VERBS:
@@ -94,7 +98,7 @@ class ContractTests(TempCase):
         code, stdout, stderr = self.run_main(["--help"])
         result = self.only_object(stdout)
         self.assertEqual((code, result["status"]), (0, "ok"))
-        for verb in VERBS:
+        for verb in set(VERBS) - {"recompute"}:
             self.assertIn(verb, stderr)
-        for verb in ("try", "submit", "clone"):
+        for verb in ("try", "submit", "clone", "recompute"):
             self.assertNotRegex(stderr, rf"\b{verb}\b")

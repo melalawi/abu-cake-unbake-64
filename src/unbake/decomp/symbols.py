@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TypeVar
 
-from unbake.decomp.needs import SymbolNeed
 from unbake.config import Held
+from unbake.decomp.needs import SymbolNeed
 
 
 @dataclass(frozen=True)

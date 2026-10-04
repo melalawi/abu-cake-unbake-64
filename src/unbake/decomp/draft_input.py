@@ -9,9 +9,9 @@ import re
 import struct
 from pathlib import Path
 
-from unbake.layout import split
 from unbake.config import Held, Project
 from unbake.extract import discovered_symbols
+from unbake.layout import split
 
 
 def assembly_source(project: Project, version: str, function: str, extracted: Path) -> tuple[str, int]:

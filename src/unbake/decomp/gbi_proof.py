@@ -3,10 +3,10 @@
 import tempfile
 from pathlib import Path
 
-from unbake.layout import split
+from unbake import atomic as atomic_files
 from unbake import runner
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
+from unbake.layout import split
 from unbake.objects.elf import Object
 
 

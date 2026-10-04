@@ -19,11 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from unbake.work.compare import Compared
+from unbake import atomic as atomic_files
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 from unbake.search.core import Context, Mutation
+from unbake.work.compare import Compared
 
 
 def _required(owner: object, name: str, prefix: str) -> Any:
@@ -85,8 +85,9 @@ def compile_script(project: Project, policy: Host, source_path: Path, version: s
         '[ "$#" -eq 3 ] && [ "$2" = "-o" ] || { echo "source -o output required" >&2; exit 2; }',
         'source=$(realpath -- "$1")',
         'output=$(realpath -m -- "$3")',
-        f'case "$output" in {shlex.quote(str(work))}/*) ;; *) echo "output outside search directory" >&2; exit 2;; esac',
-        f'scratch=$(mktemp -d {shlex.quote(str(work))}/build.XXXXXX)',
+        f'case "$output" in {shlex.quote(str(work))}/*) ;; '
+        '*) echo "output outside search directory" >&2; exit 2;; esac',
+        f"scratch=$(mktemp -d {shlex.quote(str(work))}/build.XXXXXX)",
         f"cd {shlex.quote(str(project.root))}",
         f'{words(steps.preprocess)} > "$scratch/{unit}.i"',
         'cd "$scratch"',

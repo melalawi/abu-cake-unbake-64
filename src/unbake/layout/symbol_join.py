@@ -13,13 +13,13 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, cast
 
-from unbake.layout import planner, port, split, symbol_identity, symbol_replan
+from unbake import atomic as atomic_files
 from unbake import config
+from unbake.config import Held, Host, Project
+from unbake.layout import planner, port, split, symbol_identity, symbol_replan
 from unbake.project import setup
-from unbake.config import Held, Project, Host
 from unbake.project.flow import LayoutManifest
 from unbake.project.rom import load
-from unbake import atomic as atomic_files
 
 
 def read(path: Path) -> list[dict[str, Any]]:

@@ -125,4 +125,6 @@ def run(host: Host, fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
 
 
 def describe(host: Host) -> dict[str, Any]:
-    return {"workers": admitted(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)}
+    return {
+        "workers": admitted(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)
+    }

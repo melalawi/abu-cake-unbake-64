@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from unbake.cdecl import LayoutParser
 from unbake.layout.structs import layouts
 from unbake.layout.structs_identity import identity
-from unbake.match import type_rewrite
+from unbake.fold import type_rewrite
 
 
 class TypeRewriteTests(unittest.TestCase):

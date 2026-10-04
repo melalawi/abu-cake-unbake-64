@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 
+from unbake.config import Held, Project
 from unbake.decomp import gbi_audio
 from unbake.decomp.gbi_source import gfx_typedefs, packet_pointers, tokens, typedefs
-from unbake.config import Held, Project
 
 
 def scalar_signature(declaration: str) -> list[str]:

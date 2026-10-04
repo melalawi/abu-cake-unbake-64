@@ -19,7 +19,7 @@ function. Prints the match percent per version. When every version is exact, the
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return True
 
 
@@ -34,6 +34,8 @@ def run(context: Context) -> Result:
     measured = compare.compare(project, host, context.args.file.resolve())
     data = measured.document()
     following = (
-        context.cmd("publish", context.args.file) if measured.exact else f"stop: edit {context.args.file}, then compare again"
+        context.cmd("publish", context.args.file)
+        if measured.exact
+        else f"stop: edit {context.args.file}, then compare again"
     )
     return Result.ok(NAME, data, measured.lines(), following)

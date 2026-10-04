@@ -9,9 +9,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.config import Held, Project
-from unbake import atomic as atomic_files
 
 
 def digest(content: bytes) -> str:

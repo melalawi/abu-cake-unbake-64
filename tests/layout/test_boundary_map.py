@@ -11,7 +11,7 @@ from typing import cast
 
 from tests.layout.test_split import ProjectFixture, fake_build
 from unbake.layout import boundary_map, split
-from unbake.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 class BoundaryMapTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class BoundaryMapTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.fixture = ProjectFixture(Path(self.directory.name), ("one", "two", "three", "four", "five"))
         self.project = cast(Project, self.fixture)
-        self.policy = cast(Policy, self.fixture.policy)
+        self.policy = cast(Host, self.fixture.policy)
 
     def change(self, version: str, function: str, action: str, neighbour: str = "") -> boundary_map.Change:
         config = self.fixture.version(version)

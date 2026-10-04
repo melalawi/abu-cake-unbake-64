@@ -9,9 +9,9 @@ from pathlib import Path
 from re import Match
 from typing import Any, cast
 
+from unbake.config import Held
 from unbake.decomp.needs import PlacementNeed, register_resolver
 from unbake.layout import split, xver_edits
-from unbake.config import Held
 
 
 @dataclass(frozen=True)

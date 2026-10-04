@@ -11,7 +11,7 @@ from tests.typemap.split_support import expanded
 from unbake.cdecl import LayoutParser
 from unbake.config import Held
 from unbake.layout.header_context import Headers
-from unbake.match import declarations as publication
+from unbake.fold import declarations as publication
 from unbake.typemap import database, declaration_evidence, declarations, facts, solver
 from unbake.typemap.solver import Constraints, _merge_records
 
@@ -363,7 +363,7 @@ class HeaderRenderTests(unittest.TestCase):
             "void f(void) {\n#if defined(VERSION_US)\nif (1) {\n#else\nif (0) {\n#endif\n} }\n"
             "typedef struct Later Later;\n"
         )
-        from unbake.match import source_views
+        from unbake.fold import source_views
 
         # The multiline macro forces the cpp boundary; mock its active-line receipt.
         text = (self.project.src / "published.c").read_text()

@@ -56,7 +56,9 @@ def history(project: Project) -> list[rank.History]:
     for function in attempts.functions(project):
         found = attempts.read(project, function)
         if found:
-            rows.append(rank.History(function, found[-1].bytes, any(row.exact for row in found), attempts.minutes(found)))
+            rows.append(
+                rank.History(function, found[-1].bytes, any(row.exact for row in found), attempts.minutes(found))
+            )
     return rows
 
 

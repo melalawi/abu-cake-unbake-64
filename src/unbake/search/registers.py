@@ -7,10 +7,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import cast
 
-from unbake.decomp.explain import Allocation, leverage
-from unbake.work.compare import Compared
 from unbake.config import Held
+from unbake.decomp.explain import Allocation, leverage
 from unbake.search.core import Context, Mutation
+from unbake.work.compare import Compared
 
 
 @dataclass(frozen=True)

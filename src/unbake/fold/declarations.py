@@ -13,7 +13,7 @@ from pathlib import Path
 from unbake.cdecl import LayoutParser
 from unbake.config import Held, Host, Project
 from unbake.decomp import gbi_recover, needs
-from unbake.fold import drafts, imports, pool_literals, rewrite_view, source_views, type_rewrite
+from unbake.fold import imports, pool_literals, rewrite_view, source_views, type_rewrite
 from unbake.fold import notes as reporting
 from unbake.fold.common import held
 from unbake.layout import entries, shared, split, structs
@@ -294,16 +294,16 @@ def fold_source(
 def folded_edits(
     project: Project, policy: Host, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
 ) -> list[Edit]:
-    """Plan aggregate promotion and source removal as one publication unit."""
+    """The folded source, the header edits and the split rows the fold absorbed (land converts F's own row)."""
     folded = fold_source(project, policy, Headers.read(project), function, text, versions, prove_headers=prove_headers)
-    edits = match_edits(project, function, folded.source, versions)
-    edits = [
-        replace(edit, after=_remove_rows(edit.after, folded.removed_rows[version]))
-        if (version := next((v for v in versions if project.version(v).split == edit.path), None))
-        and version in folded.removed_rows
-        else edit
-        for edit in edits
-    ]
+    path = project.src / f"{function}.c"
+    edits = [Edit(path, path.read_text() if path.exists() else "", folded.source, versions)]
+    for version, removed in folded.removed_rows.items():
+        split_path = project.version(version).split
+        before = split_path.read_text()
+        after = _remove_rows(before, removed)
+        if after != before:
+            edits.append(Edit(split_path, before, after, (version,)))
     return [*folded.headers, *edits]
 
 
@@ -436,33 +436,3 @@ def _layout_names(
     for name, target in sorted(member_renames):
         reporting.learn(f"OK(types): {function}: rename {name} -> {target} (shared member layout)")
     return text, resolved_tags
-
-
-def match_edits(project: Project, function: str, text: str, versions: Iterable[str]) -> list[Edit]:
-    """Publish an assembly-backed source, including committed unguarded drafts."""
-    path = project.src / f"{function}.c"
-    versions = tuple(versions)
-    assembly = []
-    for version in versions:
-        _, _, segments = split.layout(project.version(version).split)
-        rows = [
-            row
-            for segment in segments
-            for row in segment.rows
-            if row.kind in ("asm", "c") and Path(row.path).name == function
-        ]
-        if len(rows) == 1 and rows[0].kind == "c":
-            continue
-        assembly.append(version)
-    if not assembly:
-        return [Edit(path, path.read_text() if path.exists() else "", text, versions)]
-    if not path.exists() or drafts.is_partial(path.read_text()):
-        edits = drafts.match_edits(project, function, text, assembly)
-        edits[0] = replace(edits[0], versions=versions)
-        return edits
-    # Derive the same publication edits without treating an assembly-backed draft
-    # as an already matched source. The selected split rows still require asm.
-    unpublished = replace(project, src=project.src / ".match-unpublished")
-    edits = drafts.match_edits(unpublished, function, text, assembly)
-    edits[0] = replace(edits[0], path=path, before=path.read_text(), versions=versions)
-    return edits

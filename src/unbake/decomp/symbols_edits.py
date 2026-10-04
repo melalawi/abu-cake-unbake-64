@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from unbake.config import Held, Host, Project
 from unbake.decomp.needs import LabelNeed, Need, SymbolNeed, register_resolver
 from unbake.decomp.rom import NAME
 from unbake.decomp.symbols import required, symbol_line
 from unbake.layout.split import Edit
-from unbake.config import Held, Host, Project
 
 _LINE = re.compile(rf"^\s*({NAME})\s*=\s*(0[xX][\da-fA-F]+|\d+)\s*;\s*(?://(.*))?$")
 

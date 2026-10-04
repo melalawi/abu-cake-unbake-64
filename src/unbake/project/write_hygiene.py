@@ -93,7 +93,6 @@ def violations(path: Path, content: str) -> list[str]:
     return result
 
 
-
 def main() -> int:
     root = Path(__file__).parents[1]
     errors = [

@@ -11,9 +11,9 @@ from itertools import combinations, pairwise
 from pathlib import Path
 from typing import Any
 
+from unbake.config import SymbolPolicy
 from unbake.layout import split
 from unbake.layout.rodata_references import collect, words
-from unbake.config import SymbolPolicy
 from unbake.project.flow import Span
 from unbake.project.rom import Rom
 

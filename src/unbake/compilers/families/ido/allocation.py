@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-from unbake.decomp.explain import Allocation
 from unbake.config import Held
+from unbake.decomp.explain import Allocation
 
 
 def dump_flags() -> tuple[str, ...]:

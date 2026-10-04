@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, TextIO
@@ -10,6 +11,8 @@ from typing import Any, TextIO
 from unbake.config import Held
 
 EXIT = {"ok": 0, "held": 1, "failed": 2}
+# A receipt already rendered for people (OK(setup): ..., HELD(check): ...); JSON keeps only the text after it.
+_RENDERED = re.compile(r"^[A-Z]+\([\w-]+\): ")
 
 
 @dataclass(frozen=True)
@@ -28,12 +31,12 @@ class Result:
     @classmethod
     def held(cls, command: str, error: Held, next_: str | None, data: dict[str, Any] | None = None) -> Result:
         body = {"phase": error.phase, "reason": error.reason, **(data or {})}
-        return cls(command, "held", error.key, body, next_, (f"HELD({error.phase}): {error.reason}",))
+        return cls(command, "held", error.key, body, next_)
 
     @classmethod
     def failed(cls, command: str, error: BaseException) -> Result:
         text = f"{type(error).__name__}: {error}"
-        return cls(command, "failed", "error", {"error": text}, None, (f"FAILED({command}): {text}",))
+        return cls(command, "failed", "error", {"error": text}, None)
 
     def document(self) -> dict[str, Any]:
         return {
@@ -43,17 +46,18 @@ class Result:
             "key": self.key,
             "data": self.data,
             "next": self.next,
-            "receipts": list(self.receipts),
+            "receipts": [_RENDERED.sub("", line) for line in self.receipts],
         }
 
 
 def human(result: Result, stream: TextIO) -> None:
-    """Receipts as OK(...)/HELD(...) lines, then the Next line."""
+    """Receipts as OK(...) lines, the HELD/FAILED line, then the Next line."""
     for line in result.receipts:
-        if line.startswith(("OK(", "HELD(", "FAILED(", "WARN(")):
-            print(line, file=stream)
-        else:
-            print(f"OK({result.command}): {line}", file=stream)
+        print(line if _RENDERED.match(line) else f"OK({result.command}): {line}", file=stream)
+    if result.status == "held":
+        print(f"HELD({result.data['phase']}): {result.data['reason']}", file=stream)
+    elif result.status == "failed":
+        print(f"FAILED({result.command}): {result.data['error']}", file=stream)
     if result.next is not None:
         print(f"Next: {result.next}", file=stream)
 

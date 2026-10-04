@@ -22,7 +22,7 @@ class InitTests(unittest.TestCase):
         for name in ("cake-one", "A folder with spaces", "作品"):
             with self.subTest(name=name), patch.dict(os.environ, UNBAKE_POLICY=str(self.root / "absent")):
                 target = self.root / name
-                from tests.process_fakes import boundary, git_init
+                from tests.kit import boundary, git_init
                 from unbake.project import hygiene
 
                 with (
@@ -57,7 +57,7 @@ class InitTests(unittest.TestCase):
         link.symlink_to(existing, target_is_directory=True)
         for target in (existing, link, link / "child"):
             with self.subTest(target=target), self.assertRaisesRegex(Held, "init.target"):
-                from tests.process_fakes import boundary, git_init
+                from tests.kit import boundary, git_init
                 from unbake.project import hygiene
 
                 with (

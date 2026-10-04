@@ -15,7 +15,6 @@ from unbake.decomp.draft_abi import declarations
 from unbake.decomp.draft_asm import address_aliases
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.field_access import share
-from unbake.decomp.trial_compile import default_scratch, scratch_directory
 from unbake.config import Held
 from unbake.typemap.declarations import clean
 
@@ -98,18 +97,6 @@ class MeasuredStorageTests(unittest.TestCase):
     def test_unaligned_field_width_refuses_instead_of_guessing_padding(self):
         with self.assertRaisesRegex(Held, "unaligned field"):
             share(self.project, "alpha", "int alpha(void *p) { return M2C_FIELD(p, int *, 1); }", "")
-
-    def test_default_scratch_is_external_and_explicit_inside_still_refuses(self):
-        policy = SimpleNamespace(state_root=self.project.root / ".unbake/state")
-        directory = default_scratch(self.project, policy)
-        self.assertFalse(directory.resolve().is_relative_to(self.project.root))
-        self.assertEqual(default_scratch(self.project, policy), directory)
-        self.assertEqual(
-            default_scratch(self.project, replace(self.policy, state_root=self.project.work)),
-            self.project.work / "draft-work",
-        )
-        with self.assertRaisesRegex(Held, "outside project.root"):
-            scratch_directory(self.project, self.project.root / "work", "try")
 
     def test_explicit_solved_callee_prototype_precedes_unknown_transport(self):
         database = {"functions": {"beta": {"state": "known", "prototype": "extern int beta(int);"}}}

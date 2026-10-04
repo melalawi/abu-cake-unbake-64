@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from unbake.decomp.rom import RomReader
 
+from unbake.config import Held, Host, Project
 from unbake.decomp.commands import prefix
 from unbake.decomp.indexed import table_guidance
 from unbake.decomp.needs import LayoutNeed, Need, SymbolNeed
 from unbake.decomp.symbols import Binding, DataRow, references, required, symbol_line
-from unbake.config import Held, Host, Project
 
 _C_TYPES = {
     "f32": "f32",

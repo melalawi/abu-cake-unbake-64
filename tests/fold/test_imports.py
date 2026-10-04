@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from tests.match.support import MatchFixture
+from tests.project_fixture import ProjectCase
 from unbake.layout.header_context import Headers
-from unbake.match import declarations, imports
+from unbake.fold import declarations, imports
 
 
 class ImportTests(TestCase):
@@ -149,7 +149,7 @@ class ImportTests(TestCase):
                 self.assertTrue(result.endswith(body))
 
 
-class ImportFoldTests(MatchFixture):
+class ImportFoldTests(ProjectCase):
     def test_try_and_submit_fold_share_import_resolution(self):
         header = self.project.include[0] / "canonical.h"
         header.write_text("typedef struct Record {int value;} Record;\n")
@@ -161,7 +161,7 @@ class ImportFoldTests(MatchFixture):
         with patch.object(imports, "resolve", wraps=imports.resolve) as resolver:
             result = declarations.fold_source(
                 self.project,
-                self.policy,
+                self.host,
                 Headers.read(self.project),
                 "alpha",
                 source,

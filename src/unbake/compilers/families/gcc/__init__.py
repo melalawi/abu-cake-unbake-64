@@ -11,8 +11,8 @@ from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
-    from unbake.decomp.explain import Allocation
     from unbake.compilers.families.mips import Relocation
+    from unbake.decomp.explain import Allocation
 
 
 class Gcc:

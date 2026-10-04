@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project
 from unbake.layout import split
-from unbake import atomic as atomic_files
 from unbake.work import compare
 
 
@@ -80,7 +80,6 @@ def target_object(function: str, code: bytes) -> bytes:
         + struct.pack(">HHIIIIIHHHHHH", 1, 8, 1, 0, 0, section_offset, 536875009, 52, 0, 0, 40, 5, 4)
     )
     return bytes(content)
-
 
 
 def search(project: Project, host: Host, file: Path, method: str, seconds: int) -> Searched:

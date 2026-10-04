@@ -4,9 +4,9 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+from unbake.config import Held, Host, Project
 from unbake.decomp.symbols import Reference
 from unbake.layout.structs import layouts, preprocess
-from unbake.config import Held, Host, Project
 
 
 def resolve(

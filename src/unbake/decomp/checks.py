@@ -7,10 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake.config import Held
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
-from unbake.config import Held
 
 
 @dataclass(frozen=True)

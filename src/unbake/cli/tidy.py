@@ -19,7 +19,7 @@ casts and offsets. The file is rewritten in place; compare it again afterwards.
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return True
 
 

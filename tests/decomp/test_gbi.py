@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.decomp import gbi
 from unbake.decomp.gbi_expr import Ambiguous
-from unbake.config import Held, Policy
+from unbake.config import Held, Host
 
 
 class GbiTests(unittest.TestCase):
@@ -223,7 +223,7 @@ void f(void) {
             original = "typedef struct {unsigned w0,w1;} Gfx; void alpha(Gfx *p) {p->w0=0xE7000000;p->w1=0;}"
             code.write_text(original)
             with patch("unbake.decomp.gbi_proof.preserve", side_effect=Held("gbi", "alpha: rewrite changes codegen")):
-                result = gbi.rewrite(project, cast(Policy, policy), [code])
+                result = gbi.rewrite(project, cast(Host, policy), [code])
             self.assertEqual(code.read_text(), original)
             self.assertEqual(result["files_rewritten"], 0)
             self.assertEqual(result["macros"], {})
@@ -263,7 +263,7 @@ void f(void) {
                 '#include "basetypes.h"\ntypedef struct {u32 w0;u32 w1;} Gfx;\nvoid alpha(Gfx *p) {p->w1=payload;}\n'
             )
             with patch("unbake.decomp.gbi_proof.preserve"):
-                result = gbi.rewrite(project, cast(Policy, policy), [code])
+                result = gbi.rewrite(project, cast(Host, policy), [code])
             text = code.read_text()
             self.assertEqual(result["files_rewritten"], 1)
             self.assertNotIn("typedef struct", text)
@@ -287,7 +287,7 @@ void f(void) {
             code = project.src / "alpha.c"
             code.write_text("typedef Shared_Gfx Gfx; void alpha(Gfx *p) {p->words_w0=0xE7000000;p->words_w1=0;}")
             with patch("unbake.decomp.gbi_proof.preserve"):
-                result = gbi.rewrite(project, cast(Policy, policy), [code])
+                result = gbi.rewrite(project, cast(Host, policy), [code])
             self.assertEqual(result["macros"], {"gDPPipeSync": 1})
             self.assertNotIn("typedef Shared_Gfx", code.read_text())
             self.assertIn("gDPPipeSync(p)", code.read_text())
@@ -301,7 +301,7 @@ void f(void) {
                 "void alpha(void) { Gfx *p; p=dl++; p->w0=0xE7000000; p->w1=0; }\n"
             )
             with patch("unbake.decomp.gbi_proof.preserve", side_effect=[Held("gbi", "alpha: changed codegen"), None]):
-                result = gbi.rewrite(project, cast(Policy, policy), [code])
+                result = gbi.rewrite(project, cast(Host, policy), [code])
             self.assertEqual(result["files_rewritten"], 1)
             self.assertIn("p=dl++;", code.read_text())
             self.assertIn("gDPPipeSync(p)", code.read_text())
@@ -342,16 +342,16 @@ void f(void) {
                 "void alpha(Gfx *p) {p->words.w0=0xE7000000;p->words.w1=0;}\n"
             )
             with patch("unbake.decomp.gbi_proof.preserve") as proof:
-                result = gbi.rewrite(project, cast(Policy, policy), [code])
+                result = gbi.rewrite(project, cast(Host, policy), [code])
                 proof.assert_called_once()
             self.assertEqual(result["files_rewritten"], 1)
             self.assertEqual(result["macros"], {"gDPPipeSync": 1})
             self.assertTrue((project.include[0] / "gbi.h").is_file())
             self.assertIn('#include "gbi.h"', code.read_text())
-            self.assertEqual(gbi.rewrite(project, cast(Policy, policy), [], all_files=True)["files_rewritten"], 0)
+            self.assertEqual(gbi.rewrite(project, cast(Host, policy), [], all_files=True)["files_rewritten"], 0)
             json.dumps(result)
             with self.assertRaises(Held):
-                gbi.rewrite(project, cast(Policy, policy), [])
+                gbi.rewrite(project, cast(Host, policy), [])
 
     def test_draft_postpass(self) -> None:
         import sys
@@ -370,6 +370,6 @@ void f(void) {
             )
             tool.chmod(0o755)
             policy.m2c = tool
-            draft = m2c.draft(project, cast(Policy, policy), "alpha", "us", project.work)
+            draft = m2c.draft(project, cast(Host, policy), "alpha", "us", project.work)
             self.assertIn("gDPPipeSync", draft.read_text())
             self.assertIn('#include "gbi.h"', draft.read_text())

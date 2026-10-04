@@ -7,8 +7,8 @@ from collections import defaultdict
 from collections.abc import Iterator
 from typing import Any
 
-from unbake import inputs
 from unbake import cache as content_cache
+from unbake import inputs
 from unbake.config import Host, Project
 from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
 from unbake.typemap.mapping import refresh_map
@@ -1002,9 +1002,8 @@ def input_key(project: Project, host: Host | None) -> str:
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution."""
     from unbake.typemap import facts as source_facts
-    from unbake.typemap.abi_facts import refine
-
     from unbake.typemap import types_db
+    from unbake.typemap.abi_facts import refine
 
     database = types_db.path(project)
     previous = types_db.summary(database) if database.is_file() else {}

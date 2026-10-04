@@ -110,7 +110,6 @@ class Layout:
         return self.root / "tools"
 
 
-
 @dataclass(frozen=True)
 class Project:
     root: Path
@@ -527,7 +526,11 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
     },
 }
 
-_RESOURCES = ("resources.cores", "resources.workers", *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")))
+_RESOURCES = (
+    "resources.cores",
+    "resources.workers",
+    *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")),
+)
 _CACHE = ("cache.root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_bytes")
 _BINUTILS = ("tools.cpp", "tools.mips_as", "tools.mips_ld", "tools.mips_objcopy", "tools.n64link")
 # buildfiles writes the CI workflow for [publish].branch, so every command that may regenerate it needs it.
@@ -666,7 +669,8 @@ class Host:
             if self.memory_worker_bytes > self.memory_total_bytes - self.memory_parent_bytes:
                 raise Held(
                     "config",
-                    "unbake.toml [resources].memory_worker_bytes: expected at most memory_total_bytes - memory_parent_bytes",
+                    "unbake.toml [resources].memory_worker_bytes: "
+                    "expected at most memory_total_bytes - memory_parent_bytes",
                 )
 
     def raw(self, dotted: str) -> Any:

@@ -380,7 +380,6 @@ def plan_many(project: Project, policy: Host, sources: tuple[Path, ...]) -> tupl
     This is declared evidence, not a matched-function receipt. Planning uses the
     normal collision/layout fold; solve validates the resulting shared context.
     """
-    from dataclasses import replace
 
     from unbake.fold import declarations as source_declarations
 
@@ -405,7 +404,7 @@ def plan_many(project: Project, policy: Host, sources: tuple[Path, ...]) -> tupl
             wanted = declarations(prefix).typedefs - headers.types.keys()
             synthetic = prefix + "/* unbake declaration evidence boundary */\n" + f"void {source.stem}(void) {{}}\n"
             folded = source_declarations.fold_source(
-                replace(project, declaration_evidence=()),
+                project,
                 policy,
                 headers,
                 source.stem,

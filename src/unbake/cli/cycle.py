@@ -30,7 +30,7 @@ Stop conditions: all-landed, idle:SECONDS (no save or land for that long), after
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return bool(args.status or args.list)
 
 
@@ -60,7 +60,12 @@ def run(context: Context) -> Result:
         rows = engine.ranked(context.project(), context.require_host())
         for row in rows:
             engine.emit_row(context.stdout, row)
-        return Result.ok(NAME, {"candidates": len(rows)}, [f"{len(rows)} candidates"], context.cmd("cycle", "--pick", "5", "--stop", "idle:900"))
+        return Result.ok(
+            NAME,
+            {"candidates": len(rows)},
+            [f"{len(rows)} candidates"],
+            context.cmd("cycle", "--pick", "5", "--stop", "idle:900"),
+        )
     interactive = engine.interactive()
     if not interactive and args.pick is None and args.functions is None:
         raise Held("cycle", "cycle.pick: supply --pick N or --functions A,B,C (no terminal to choose on)")

@@ -42,7 +42,7 @@ def generate(command, **kwargs):
 
 
 def install(case):
-    from tests.process_fakes import boundary
+    from tests.kit import boundary
     from unbake.report import progress
 
     mock = boundary(progress, generate)

@@ -92,7 +92,9 @@ def consumer_define(project: Project, unit: str) -> str | None:
 def flags(project: Project, version: str, unit: str, *, non_matching: bool = False) -> list[str]:
     """Include roots, compiler flags, version macros, the consumer guard and the unit's own flags."""
     root = project.root
-    result = [f"-I{include.relative_to(root) if include.is_relative_to(root) else include}" for include in project.include]
+    result = [
+        f"-I{include.relative_to(root) if include.is_relative_to(root) else include}" for include in project.include
+    ]
     for flag in project.compiler_for(unit).cflags:
         if flag not in result:
             result.append(flag)
@@ -151,7 +153,9 @@ def gnu_as_flags(project: Project) -> tuple[str, ...]:
 
 def _split(values: list[str]) -> tuple[list[str], list[str], list[str]]:
     """(includes, codegen, defines) in their original relative order."""
-    includes, codegen, defines = [], [], []
+    includes: list[str] = []
+    codegen: list[str] = []
+    defines: list[str] = []
     pending = iter(values)
     for flag in pending:
         if flag in ("-I", "-D", "-U", "-include", "-isystem", "-iquote", "-imacros"):
@@ -198,9 +202,7 @@ def parts(project: Project, version: str, unit: str, *, non_matching: bool = Fal
     if compiler.kind == "sn64":
         partition_sn64(codegen)
     cc = str(compiler.cc.relative_to(root) if compiler.cc.is_relative_to(root) else compiler.cc)
-    return Parts(
-        compiler.kind, cc, (*project_includes, *c_includes, *u_includes), tuple(codegen), tuple(defines)
-    )
+    return Parts(compiler.kind, cc, (*project_includes, *c_includes, *u_includes), tuple(codegen), tuple(defines))
 
 
 def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
@@ -258,5 +260,7 @@ def preprocess_command(
     if compiler.kind == "sn64":
         cppflags = [flag for flag in project.cppflags if not (line_markers and flag == "-P")]
         return [cpp, *cppflags, *options, "-DNON_MATCHING=1", str(source)]
-    codegen = [flag for flag in flags(project, version, unit) if flag != "-c" and not flag.startswith(("-I", "-D", "-U"))]
+    codegen = [
+        flag for flag in flags(project, version, unit) if flag != "-c" and not flag.startswith(("-I", "-D", "-U"))
+    ]
     return [str(compiler.cc), *codegen, *options, "-DNON_MATCHING=1", "-E", str(source)]

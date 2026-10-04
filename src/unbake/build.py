@@ -31,7 +31,9 @@ class Outcome:
 
     def lines(self) -> list[str]:
         head = "check passed" if self.ok else "check failed"
-        detail = "every version byte-identical" if self.built and self.ok else ("build skipped" if not self.built else "")
+        detail = (
+            "every version byte-identical" if self.built and self.ok else ("build skipped" if not self.built else "")
+        )
         return [f"{head}{': ' + detail if detail else ''} ({self.seconds:.1f}s)", *self.findings, *self.make_tail]
 
 
@@ -79,9 +81,8 @@ def make_command(host: Host, target: str) -> list[str]:
 
 
 def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
-    from unbake.project import hygiene
-
     from unbake import buildfiles
+    from unbake.project import hygiene
 
     started = time.monotonic()
     if files_only:

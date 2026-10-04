@@ -6,8 +6,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 
-from unbake.decomp.explain import Allocation, Pseudo
 from unbake.config import Held
+from unbake.decomp.explain import Allocation, Pseudo
 
 
 def dump_flags() -> tuple[str, ...]:

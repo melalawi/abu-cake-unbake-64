@@ -9,9 +9,9 @@ import subprocess
 import tempfile
 from typing import Any
 
+from unbake.config import Held, Host, Project
 from unbake.layout import boundary, split
 from unbake.layout.rodata_references import collect
-from unbake.config import Held, Host, Project
 
 
 def prove(project: Project, version: str, start: int, end: int, policy: Host) -> dict[str, Any]:

@@ -66,12 +66,10 @@ def make_parser() -> Parser:
     parser.add_argument("--config", type=Path, metavar="FILE", help="Host config file (default: unbake.toml).")
     verbs = parser.add_subparsers(dest="command", required=True, metavar="COMMAND", parser_class=Parser)
     for verb in VERBS:
-        hidden = getattr(verb, "HIDDEN", False)
+        # argparse lists a subcommand in help whenever a help= keyword is given, even None.
+        listed = {} if getattr(verb, "HIDDEN", False) else {"help": verb.HELP}
         sub = verbs.add_parser(
-            verb.NAME,
-            help=None if hidden else verb.HELP,
-            description=verb.DESCRIPTION,
-            formatter_class=parser.formatter_class,
+            verb.NAME, description=verb.DESCRIPTION, formatter_class=parser.formatter_class, **listed
         )
         verb.register(sub)
     return parser
@@ -115,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with redirect_stdout(sys.stderr):
             result = _run(argv, stdout)
-    except Exception as error:  # noqa: BLE001 - every failure still produces the JSON contract
+    except Exception as error:
         result = Result.failed("unbake", error)
     code = emit(result, stdout, sys.stderr)
     return 130 if result.key == "interrupted" else code

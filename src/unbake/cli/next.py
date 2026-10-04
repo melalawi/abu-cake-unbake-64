@@ -18,7 +18,7 @@ Print the single next action for this project, with the reason.
 PROJECT = "pending"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return True
 
 

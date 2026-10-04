@@ -112,7 +112,7 @@ class RecoveryTests(unittest.TestCase):
                 patch("unbake.layout.split.holding_versions", return_value=("us", "eu")),
                 patch.object(recover, "catalogue", return_value=self.patterns),
                 patch("unbake.layout.header_context.Headers.read", return_value=None),
-                patch("unbake.match.imports.resolve", side_effect=lambda project, headers, source, function: source),
+                patch("unbake.fold.imports.resolve", side_effect=lambda project, headers, source, function: source),
                 patch("unbake.decomp.gbi_proof.preserve") as proof,
             ):
                 after = recover.proven(project, None, unit, before, {})
@@ -245,7 +245,7 @@ class RecoveryTests(unittest.TestCase):
                 patch("unbake.layout.split.holding_versions", return_value=("us",)),
                 patch.object(recover, "catalogue", return_value=self.patterns),
                 patch("unbake.layout.header_context.Headers.read", return_value=None),
-                patch("unbake.match.imports.resolve", side_effect=lambda project, headers, source, function: source),
+                patch("unbake.fold.imports.resolve", side_effect=lambda project, headers, source, function: source),
                 patch("unbake.decomp.gbi_proof.preserve", side_effect=prove) as proof,
             ):
                 recover.proven(project, None, root / "alpha.c", before, {live / "commands.h": SDK}, authored=authored)

@@ -2,8 +2,8 @@
 
 import re
 
-from unbake.layout import split
 from unbake.config import Held, Host, Project
+from unbake.layout import split
 
 
 def encoded_address(name: str) -> int | None:
@@ -60,9 +60,9 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
 def addresses(project: Project, name: str) -> dict[str, int]:
     """Carry a data address through aligned references in corresponding code."""
     from unbake.decomp.symbols import references
-    from unbake.work.score import align_words, words
     from unbake.layout import xver
     from unbake.project.rom import normalise
+    from unbake.work.score import align_words, words
 
     name = split.name(name)
     source_version = project.names_from

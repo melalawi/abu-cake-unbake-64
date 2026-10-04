@@ -57,7 +57,9 @@ class Compared:
     def lines(self) -> list[str]:
         output = [line for result in self.compares.values() for line in result.lines]
         output.extend(f"precondition: {line}" for line in self.preconditions)
-        output.append(f"{self.function}: {'EXACT in every version' if self.exact else f'best {self.best_percent:.2f}%'}")
+        output.append(
+            f"{self.function}: {'EXACT in every version' if self.exact else f'best {self.best_percent:.2f}%'}"
+        )
         return output
 
 
@@ -101,8 +103,12 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
             linked, problems = runner.link_function(project, host, obj, version, row)
         except Held as error:
             results[version] = Compare(
-                version, 0, len(target) // 4, dict.fromkeys(TYPES, 0) | {"changed": len(target) // 4},
-                [f"VERSION {version}: {error.reason}"], 0.0,
+                version,
+                0,
+                len(target) // 4,
+                dict.fromkeys(TYPES, 0) | {"changed": len(target) // 4},
+                [f"VERSION {version}: {error.reason}"],
+                0.0,
             )
             continue
         result = compare_words(version, target, linked)

@@ -9,7 +9,7 @@ from typing import cast
 from tests.layout.test_split import ProjectFixture
 from unbake.decomp.symbols_edits import data_symbol
 from unbake.layout import data_symbols
-from unbake.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 
 
 class DataProjectFixture(ProjectFixture):
@@ -21,7 +21,7 @@ class DataRenameTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = DataProjectFixture(Path(temporary).resolve())
             project = cast(Project, fixture)
-            policy = cast(Policy, fixture.policy)
+            policy = cast(Host, fixture.policy)
             for version in project.versions:
                 fixture.layout(version, [(0x10, "asm", "alpha"), (0x30, "asm", "beta"), (0x40, "data", "pool")])
                 layout = project.version(version).split
@@ -84,7 +84,7 @@ class DataRenameTests(unittest.TestCase):
                 fixture.names_from = origin
                 name = f"D_{expected[origin]:08X}"
                 self.assertEqual(data_symbols.addresses(project, name), expected)
-                edits = data_symbols.correspondence(project, cast(Policy, fixture.policy), name)
+                edits = data_symbols.correspondence(project, cast(Host, fixture.policy), name)
                 self.assertEqual(len(edits), 5)
                 self.assertEqual({v: project.version(v).symbols.read_bytes() for v in project.versions}, before)
             target = project.version("de")

@@ -2,8 +2,7 @@
 
 from collections.abc import Mapping
 
-from unbake.work.score import weakest
-from unbake.work.score import Compare
+from unbake.work.score import Compare, weakest
 
 
 def candidate_rank(

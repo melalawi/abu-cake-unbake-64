@@ -6,11 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.match.support import MatchFixture
+from tests.project_fixture import ProjectCase
 from unbake.cdecl import LayoutParser
 from unbake.config import Held
 from unbake.layout.structs import layouts
-from unbake.match import rewrite_view, type_rewrite
+from unbake.fold import rewrite_view, type_rewrite
 
 
 def dump(tokens):
@@ -235,7 +235,7 @@ class RewriteViewTests(unittest.TestCase):
                 type_rewrite._parse("", view)
 
 
-class PrepareTests(MatchFixture):
+class PrepareTests(ProjectCase):
     def test_injected_preprocessor_uses_compiler_and_version_macros_and_private_includes(self):
         source = "int alpha(void) {return 1;}"
         path = Path("/authored/alpha.c")
@@ -245,7 +245,7 @@ class PrepareTests(MatchFixture):
             self.project,
             version_map={**self.project.version_map, "us": replace(self.project.version("us"), macros=("VERSION_US",))},
         )
-        view = rewrite_view.prepare(self.project, self.policy, source, "us", path, preprocess=run)
+        view = rewrite_view.prepare(self.project, self.host, source, "us", path, preprocess=run)
         project, command, unit = run.call_args.args
         self.assertIs(project, self.project)
         for flag in ("-P", "-fdebug-cpp", "-ftrack-macro-expansion=2", "-ftabstop=1", "-DVERSION_US"):

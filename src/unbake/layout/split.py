@@ -343,9 +343,7 @@ def functions(project: Project, v: str) -> list[Function]:
     from unbake.cache import parsed
 
     version = project.version(v)
-    rows = parsed(
-        "split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v, share=True
-    )
+    rows = parsed("split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v)
     asm = getattr(project, "asm", None)
     if asm is None:
         return list(rows)

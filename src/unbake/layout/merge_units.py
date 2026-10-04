@@ -132,10 +132,16 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
     land._git(project, "add", "-A", "--", *(str(p.relative_to(project.root)) for p in paths))
     land._git(
         project,
-        "-c", f"user.name={host.publish_author_name}",
-        "-c", f"user.email={host.publish_author_email}",
-        "commit", "-q", "-m", message,
-        "--author", f"{host.publish_author_name} <{host.publish_author_email}>",
+        "-c",
+        f"user.name={host.publish_author_name}",
+        "-c",
+        f"user.email={host.publish_author_email}",
+        "commit",
+        "-q",
+        "-m",
+        message,
+        "--author",
+        f"{host.publish_author_name} <{host.publish_author_email}>",
     )
 
 
@@ -153,7 +159,10 @@ def run(project: Project, host: Host) -> list[str]:
             _commit(project, host, [path], f"Record unit split in {group.name}")
             lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; recorded as split")
             continue
-        backup = {path: path.read_bytes() for path in [project.root / "layout.toml", *(project.src / f"{m}.c" for m in members)]}
+        backup = {
+            path: path.read_bytes()
+            for path in [project.root / "layout.toml", *(project.src / f"{m}.c" for m in members)]
+        }
         backup.update({project.version(v).split: project.version(v).split.read_bytes() for v in project.versions})
         try:
             atomic_files.text(project.src / f"{members[0]}.c", source)

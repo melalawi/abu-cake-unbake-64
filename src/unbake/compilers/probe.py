@@ -8,12 +8,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from unbake.process import run_tool
+from unbake import atomic as atomic_files
 from unbake.compilers import profiles as compiler_profiles
 from unbake.compilers import registry as toolchain
-from unbake.config import Held, PendingProject, Host
-from unbake import atomic as atomic_files
+from unbake.config import Held, Host, PendingProject
 from unbake.objects.elf import Object
+from unbake.process import run_tool
 
 CANONICAL = (
     "int identity(int x) { return x; }\n"

@@ -174,7 +174,9 @@ def summary(file: Path) -> dict[str, Any]:
 def redrafts(file: Path) -> dict[str, Any]:
     connection = _connect(file)
     try:
-        return {function: json.loads(value) for function, value in connection.execute("SELECT function, value FROM redraft")}
+        return {
+            function: json.loads(value) for function, value in connection.execute("SELECT function, value FROM redraft")
+        }
     finally:
         connection.close()
 
@@ -184,6 +186,8 @@ def set_redrafts(file: Path, marks: dict[str, Any]) -> None:
     try:
         with connection:
             connection.execute("DELETE FROM redraft")
-            connection.executemany("INSERT INTO redraft VALUES (?, ?)", ((k, _encode(v)) for k, v in sorted(marks.items())))
+            connection.executemany(
+                "INSERT INTO redraft VALUES (?, ?)", ((k, _encode(v)) for k, v in sorted(marks.items()))
+            )
     finally:
         connection.close()

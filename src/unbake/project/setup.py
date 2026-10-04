@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-import tempfile
 import json
 import os
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from unbake import atomic as atomic_files
 from unbake import config
 from unbake.compilers import files as compiler_files
 from unbake.compilers import registry as toolchain
+from unbake.config import Held, Host, PendingProject, Project
 from unbake.project import hygiene, setup_config
-from unbake.config import Held, PendingProject, Host, Project
-from unbake import atomic as atomic_files
 
 _AUDIO_CALLBACKS = "audio_callbacks.h"
 TEMPLATES = Path(__file__).parents[1] / "templates"
@@ -86,7 +86,10 @@ def run(project: Project, policy: Host, *, supply: Path | None = None) -> list[s
         rom_content = _read(version.baserom)
         digest = hashlib.sha1(rom_content).hexdigest()
         if digest != version.baserom_sha1:
-            raise Held("setup", f"{version.baserom}: [version.{name}].baserom_sha1 expected {version.baserom_sha1}, got {digest}")
+            raise Held(
+                "setup",
+                f"{version.baserom}: [version.{name}].baserom_sha1 expected {version.baserom_sha1}, got {digest}",
+            )
         text = _read(version.split).decode()
         for number, line in enumerate(text.splitlines(), 1):
             if _comment(line):
@@ -369,8 +372,8 @@ def prepare_setup(
     supply: Path | None = None,
 ) -> Iterator[Callable[[], list[str]]]:
     """Stage confirmed inputs, then release planning state before the proof."""
-    from unbake.compilers import propose as compiler_proposal
     from unbake.compilers import fingerprint as compilers
+    from unbake.compilers import propose as compiler_proposal
 
     for line in compilers.receipt(proposal):
         print(f"OK(setup): {line}")

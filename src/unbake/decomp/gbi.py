@@ -14,6 +14,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TypeAlias
 
+from unbake import atomic as atomic_files
+from unbake.config import Held, Host, Project
 from unbake.decomp import gbi_audio
 from unbake.decomp.gbi_expr import Ambiguous, Word, integer, number, plus_one, pure, scalar, split, unwrap
 from unbake.decomp.gbi_source import (
@@ -27,8 +29,6 @@ from unbake.decomp.gbi_source import (
     standard_shiftl,
     word_builder,
 )
-from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 

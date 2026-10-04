@@ -6,8 +6,8 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.layout import split
 from unbake.config import Held, Project
+from unbake.layout import split
 
 
 @dataclass(frozen=True)

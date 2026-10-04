@@ -16,13 +16,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from unbake import atomic as atomic_files
+from unbake.config import Held, Host, PendingProject, SymbolPolicy
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
 from unbake.project.census import Census
-from unbake.config import Held, PendingProject, Host, SymbolPolicy
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
-from unbake import atomic as atomic_files
 
 
 def digest(value: Any) -> str:
@@ -819,7 +819,7 @@ def render_layout(project: PendingProject, census: Census, layout: LayoutManifes
         text = row["evidence"]["split_yaml"].replace("basename: layout", "basename: " + name)
         options = {
             "target_path": (project.roms / f"baserom.{version}.z64").relative_to(project.root).as_posix(),
-            "asm_path": (project.asm / version).relative_to(project.root).as_posix(),
+            "asm_path": (project.build / "asm" / version).relative_to(project.root).as_posix(),
             "src_path": project.src.relative_to(project.root).as_posix(),
             "build_path": (project.build / version).relative_to(project.root).as_posix(),
             "extensions_path": (project.tools / "splat_ext").relative_to(project.root).as_posix(),

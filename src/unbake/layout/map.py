@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
 
-from unbake.layout import split
-from unbake.config import Held, Project
 from unbake import atomic as atomic_files
+from unbake.config import Held, Project
+from unbake.layout import split
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,9 @@ class Outcome:
     lines: list[str] = field(default_factory=list)
 
 
-def _finish(project: Project, host: Host, edits: list[split.Edit], apply: bool, extra: list[str] | None = None) -> Outcome:
+def _finish(
+    project: Project, host: Host, edits: list[split.Edit], apply: bool, extra: list[str] | None = None
+) -> Outcome:
     text = split_apply.diff(edits)
     versions = sorted({v for edit in edits for v in edit.versions})
     lines = [*(extra or []), *text.splitlines()]
@@ -29,7 +31,9 @@ def _finish(project: Project, host: Host, edits: list[split.Edit], apply: bool, 
     if proved is None:
         return Outcome([], versions, [*lines, "no edits"])
     if not proved.ok:
-        raise Held("boundary", "boundary.proof: make check refused the edit; nothing was written: " + "; ".join(proved.lines()))
+        raise Held(
+            "boundary", "boundary.proof: make check refused the edit; nothing was written: " + "; ".join(proved.lines())
+        )
     return Outcome(text.splitlines(), versions, [*lines, *proved.lines()])
 
 

@@ -8,7 +8,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from tests.project.makefile_fixture import fixture
+from tests.project_fixture import make
 from unbake.cli import check
 from unbake import config
 from unbake.project import hygiene, setup
@@ -19,13 +19,13 @@ class HygieneTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        self.project, _ = fixture(self.root, case=self)
+        self.project, _ = make(self.root)
         self.policy = config.load_policy()
         from unittest.mock import patch
 
         self.addCleanup(patch.stopall)
         from tests.git_fixture import Index
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
 
         self.index = Index(self.root)
         mock = boundary(hygiene, self.index.run)

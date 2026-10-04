@@ -4,9 +4,9 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from unbake.config import Held, Project
 from unbake.decomp.rom import FunctionSpan, project_reader
 from unbake.layout import split
-from unbake.config import Held, Project
 
 
 @dataclass(frozen=True)

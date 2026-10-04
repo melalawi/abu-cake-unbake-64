@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.layout import split, split_analysis, split_apply, split_create, split_edits, split_partition
-from unbake.project.config import Held, Policy, Project
+from unbake.config import Held, Host, Project
 from unbake.project.fingerprint import Counts, Region
 
 
@@ -85,7 +85,7 @@ def fake_build(
     calls = []
 
     def run(
-        project: Project, policy: Policy, versions: Sequence[str], *, tree: Path, generation_for: Callable[[str], Path]
+        project: Project, policy: Host, versions: Sequence[str], *, tree: Path, generation_for: Callable[[str], Path]
     ) -> dict[str, SimpleNamespace]:
         calls.append((versions, tree))
         if error:
@@ -316,7 +316,7 @@ class SplitTests(unittest.TestCase):
         )
 
     def test_create_full_executable_and_title(self) -> None:
-        from tests.process_fakes import boundary
+        from tests.kit import boundary
         from tests.splat_fixture import create
 
         mock = boundary(split_create, create)

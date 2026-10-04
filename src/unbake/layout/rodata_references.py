@@ -4,10 +4,10 @@ import struct
 from collections import defaultdict
 from dataclasses import dataclass
 
-from unbake.decomp.indexed import indexed_references
-from unbake.decomp.symbols import references
 from unbake.compilers.families.mips import Relocation, relocation_pairs
 from unbake.config import Held
+from unbake.decomp.indexed import indexed_references
+from unbake.decomp.symbols import references
 from unbake.objects.elf import Object
 from unbake.objects.literal_layout import signed
 

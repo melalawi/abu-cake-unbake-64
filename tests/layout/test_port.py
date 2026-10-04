@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from tests.layout.test_split import ProjectFixture
 from unbake.layout import port, split
-from unbake.config import Policy, Project
+from unbake.config import Host, Project
 
 
 class PortTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class PortTests(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.fixture = ProjectFixture(self.root)
         self.project = cast(Project, self.fixture)
-        self.policy = cast(Policy, self.fixture.policy)
+        self.policy = cast(Host, self.fixture.policy)
         self.fixture.version("eu").macros = ("VERSION_EU", "VERSION_EUROPE")
         self.fixture.layout("us", [(0x10, "c", "alpha"), (0x20, "data", "pool")])
         self.fixture.layout("eu", [(0x10, "asm", "alpha"), (0x20, "data", "pool")])

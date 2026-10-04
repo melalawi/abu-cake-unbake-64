@@ -27,7 +27,7 @@ Other forms (each alone):
 PROJECT = "pending"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return bool(args.list_compilers)
 
 

@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from tests.match.support import MatchFixture
+from tests.project_fixture import ProjectCase
 from unbake.layout import headers as mapped_headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as ownership
 from unbake.layout.header_context import Headers
-from unbake.match import declarations
+from unbake.fold import declarations
 from unbake.config import Held
 from unbake.typemap import declaration_evidence as evidence
 
@@ -177,7 +177,7 @@ class SplitEvidenceTests(TestCase):
                 self.assertIn(layout.homes[root / ("shared/.evidence_" + kind + ".h")], required)
 
 
-class FoldTests(MatchFixture):
+class FoldTests(ProjectCase):
     def setUp(self):
         super().setUp()
         self.old = self.root.parent / "old/include"
@@ -192,7 +192,7 @@ class FoldTests(MatchFixture):
         body = "int alpha(View *p) {return p->position.x;}\n"
         result = declarations.fold_source(
             self.project,
-            self.policy,
+            self.host,
             Headers.read(self.project),
             "alpha",
             body,
@@ -214,7 +214,7 @@ class FoldTests(MatchFixture):
         )
         body = "typedef struct View {Vec3f position;} View;\nint alpha(View *p) {return p->position.x;}\n"
         result = declarations.fold_source(
-            self.project, self.policy, Headers.read(self.project), "alpha", body, ("us", "eu"), prove_headers=False
+            self.project, self.host, Headers.read(self.project), "alpha", body, ("us", "eu"), prove_headers=False
         )
         generated = "\n".join(edit.after for edit in result.headers)
         self.assertIn("float x;", generated)
@@ -228,7 +228,7 @@ class FoldTests(MatchFixture):
         )
         body = "int alpha(Record *p) {return p->values[0];}\n"
         result = declarations.fold_source(
-            self.project, self.policy, Headers.read(self.project), "alpha", body, ("us", "eu"), prove_headers=False
+            self.project, self.host, Headers.read(self.project), "alpha", body, ("us", "eu"), prove_headers=False
         )
         generated = "\n".join(edit.after for edit in result.headers)
         self.assertIn("#define COUNT 3", generated)
@@ -238,7 +238,7 @@ class FoldTests(MatchFixture):
         (self.old / "shared/session.h").write_text("typedef int Word;\nextern Word beta(Word);\n#define VALUE 7\n")
         body = "int alpha(void) {return beta(VALUE);}\n"
         result = declarations.fold_source(
-            self.project, self.policy, Headers.read(self.project), "alpha", body, ("us", "eu"), prove_headers=False
+            self.project, self.host, Headers.read(self.project), "alpha", body, ("us", "eu"), prove_headers=False
         )
         self.assertTrue(result.source.endswith(body))
         self.assertNotIn("#define VALUE", result.source)
@@ -263,7 +263,7 @@ class FoldTests(MatchFixture):
                 body = "int alpha(Record *p) {return p->value;}\n"
                 result = declarations.fold_source(
                     self.project,
-                    self.policy,
+                    self.host,
                     Headers.read(self.project),
                     "alpha",
                     f"typedef struct Record {{{old_type} value;}} Record;\n" + body,
@@ -286,7 +286,7 @@ class FoldTests(MatchFixture):
         source = self.root.parent / "alpha.c"
         body = "void alpha(Vec3f *p) {goto *((void **)p);}\n"
         source.write_text(body)
-        edits, reports = evidence.plan_many(self.project, self.policy, (source,))
+        edits, reports = evidence.plan_many(self.project, self.host, (source,))
         self.assertEqual(reports[0]["status"], "admitted")
         generated = "\n".join(edit.after for edit in edits)
         self.assertIn("Vec3f", generated)
@@ -302,7 +302,7 @@ class FoldTests(MatchFixture):
             source = self.root.parent / (name + ".c")
             source.write_text(body)
             paths.append(source)
-        edits, reports = evidence.plan_many(self.project, self.policy, tuple(paths))
+        edits, reports = evidence.plan_many(self.project, self.host, tuple(paths))
         self.assertEqual([report["status"] for report in reports], ["held", "admitted"])
         self.assertIn("absent live symbol/address inventory", reports[0]["reason"])
         self.assertTrue(edits)
@@ -383,7 +383,7 @@ class DatabaseFeedbackTests(TestCase):
             self.assertEqual(evidence.feedback_components(project), retained)
 
 
-class SolveAdmissionTests(MatchFixture):
+class SolveAdmissionTests(ProjectCase):
     def test_failed_solve_rolls_back_declaration_admission_edits(self):
         import argparse
 
@@ -398,7 +398,7 @@ class SolveAdmissionTests(MatchFixture):
             patch.object(command, "solve", side_effect=Held("solve", "test refusal")),
             self.assertRaisesRegex(Held, "test refusal"),
         ):
-            command.run(args, self.project, self.policy)
+            command.run(args, self.project, self.host)
         self.assertFalse(path.exists())
 
     def test_successful_solve_publishes_admitted_declarations_at_declared_confidence(self):

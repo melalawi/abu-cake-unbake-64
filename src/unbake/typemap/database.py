@@ -473,7 +473,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
 
         summary[kind] = memo(
             "typemap.summary." + kind,
-            storage.digest(serialized("typemap.database." + kind, after)),
+            storage.digest(serialized(["typemap.database." + kind, after])),
             summarize,
         )
         for name in set(before) | set(after):
@@ -645,7 +645,7 @@ def validate_headers(
                         staged = staged_root / str(path)[len(prefix) :]
                         staged.parent.mkdir(parents=True, exist_ok=True)
                         atomic_files.write(staged, contents[path])
-            staged_project = replace(project, include=tuple(roots))
+            staged_project = replace(project, work_include=tuple(roots))
             source = scratch / "context.c"
             generated = selected.intersection(outputs)
             dependencies = {dep for path in generated for dep in closures[path] if dep != path}

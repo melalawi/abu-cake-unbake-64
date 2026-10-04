@@ -20,7 +20,7 @@ never needs it because every step reruns by itself when its inputs change.
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return False
 
 

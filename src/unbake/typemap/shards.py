@@ -10,9 +10,9 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.config import Held
-from unbake import atomic as atomic_files
 
 
 def pack(value: object) -> bytes:
@@ -81,7 +81,6 @@ class Writer:
         self.connection.execute("INSERT INTO functions VALUES (?,?,?)", (name, version, pack(body)))
 
     def finish(self) -> Path:
-
 
         self.connection.commit()
         self.connection.close()

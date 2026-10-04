@@ -10,13 +10,13 @@ from typing import cast
 
 import toml  # type: ignore[import-untyped]
 
+from unbake import atomic as atomic_files
 from unbake import config
 from unbake.compilers import files as compiler_files
 from unbake.compilers import propose as compiler_proposal
+from unbake.config import Held, Host, PendingProject
 from unbake.project import census, setup, setup_config
-from unbake.config import Held, PendingProject, Host
 from unbake.project.flow import LayoutManifest
-from unbake import atomic as atomic_files
 
 
 def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]:

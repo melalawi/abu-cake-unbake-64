@@ -12,6 +12,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from unbake import atomic as atomic_files
+from unbake.config import Held, Host, Project
 from unbake.decomp import checks
 from unbake.decomp.gbi import LEXICAL, PAIR
 from unbake.decomp.gbi_expr import Ambiguous, Word, integer, pure, scalar, split, unwrap
@@ -24,8 +26,6 @@ from unbake.decomp.gbi_source import (
     tokens,
     word_builder,
 )
-from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 
 RULES = frozenset({"raw-gfx", "local-gbi-macro"})
 
@@ -459,28 +459,10 @@ def proven(
     from dataclasses import replace as replaced
 
     from unbake.decomp import gbi_proof
+    from unbake.fold.imports import _INCLUDE, _without_comments
     from unbake.layout import split as layout_split
 
     before = import_aliases(project, source, headers, sdk_aliases=False)
-    # Provider resolution may have added the installed SDK before a missing
-    # legacy include. Restore the authored SDK choice for the raw comparison.
-    from unbake.fold.imports import _INCLUDE, _without_comments
-
-    requested = set(_INCLUDE.findall(_without_comments(authored if authored is not None else source)))
-    installed = {
-        path.relative_to(root).as_posix()
-        for path, text in headers.items()
-        for root in project.include
-        if path.is_relative_to(root)
-        if re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", text, re.M)
-    }
-    legacy = any(
-        (old / name).is_file() and re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", (old / name).read_text(), re.M)
-        for name in requested - installed
-        for old in ()
-    )
-    if legacy and not requested & installed:
-        before = _INCLUDE.sub(lambda match: "" if match[1] in installed else match[0], before)
     source = import_aliases(project, source, headers)
 
     with tempfile.TemporaryDirectory(prefix="gbi-recovery-") as temporary:
@@ -495,8 +477,8 @@ def proven(
         recovered = [lower(source, catalogue(staged, policy, unit, version, source)) for version in versions]
         if not recovered or any(text != recovered[0] for text in recovered):
             raise Held("gbi", f"{unit.stem}: SDK macro recovery differs between owning VERSIONs")
-        from unbake.layout.header_context import Headers
         from unbake.fold import imports
+        from unbake.layout.header_context import Headers
 
         after = imports.resolve(staged, Headers.read(staged), recovered[0], unit.stem)
         # The raw form sees its actual legacy SDK macros, not the replacement

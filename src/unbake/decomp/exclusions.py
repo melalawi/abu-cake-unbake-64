@@ -4,8 +4,8 @@ import json
 import re
 from pathlib import Path
 
-from unbake.layout import split
 from unbake.config import Held, Project
+from unbake.layout import split
 
 MANIFEST = "unbake-exclusions.json"
 

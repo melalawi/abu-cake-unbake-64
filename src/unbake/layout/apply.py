@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,7 @@ def rewrite(text: str, member: str, ownership: map.Map, lookup: dict[str, Any], 
     return result
 
 
-def imported(text: str, root: Path, outputs: dict[Path, bytes | Path]) -> list[str]:
+def imported(text: str, root: Path, outputs: Mapping[Path, bytes | Path]) -> list[str]:
     """Read the source's actual transitive includes, using staged header bytes."""
     result = []
     pending = [root / m[1] for m in _INCLUDE.finditer(text)]
@@ -90,7 +91,7 @@ def source(
     project: Project,
     text: str,
     member: str,
-    outputs: dict[Path, bytes | Path],
+    outputs: Mapping[Path, bytes | Path],
     *,
     ownership: map.Map | None = None,
     lookup: dict[str, Any] | None = None,

@@ -11,9 +11,9 @@ import math
 import re
 import struct
 
-from unbake.layout import split
-from unbake.fold import notes as reporting
 from unbake.config import Project
+from unbake.fold import notes as reporting
+from unbake.layout import split
 
 _TYPES = {"f32": (">f", "f"), "float": (">f", "f"), "f64": (">d", ""), "double": (">d", "")}
 _EXTERN = re.compile(r"^[ \t]*extern\s+(?:const\s+)?(f32|f64|float|double)\s+(D_([0-9A-Fa-f]{8}))\s*;[ \t]*\n?", re.M)

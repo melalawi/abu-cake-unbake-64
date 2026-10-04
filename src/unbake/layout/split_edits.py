@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.layout import split
 from unbake.config import Held
+from unbake.layout import split
 
 if TYPE_CHECKING:
     from unbake.config import Host, Project
@@ -111,9 +111,7 @@ def cut(project: Project, v: str, function: str, start: object, end: object) -> 
     return _cut(project, v, function, start, end, "asm")
 
 
-def code(
-    project: Project, v: str, function: str, start: object, end: object, *, policy: Host | None = None
-) -> list[split.Edit]:
+def code(project: Project, v: str, function: str, start: object, end: object, *, policy: Host) -> list[split.Edit]:
     from unbake.layout.code_interval import prove
 
     split.name(function)

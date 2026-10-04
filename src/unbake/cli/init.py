@@ -22,7 +22,7 @@ MyGame/config.toml, and run `unbake setup` inside MyGame.
 PROJECT = "none"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return True
 
 

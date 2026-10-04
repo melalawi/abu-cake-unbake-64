@@ -7,9 +7,9 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.layout import split
-from unbake.config import Held
 from unbake import atomic as atomic_files
+from unbake.config import Held
+from unbake.layout import split
 
 if TYPE_CHECKING:
     from unbake.build import Outcome

@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from unbake.decomp import explain
-from unbake.compilers.ranking import measured_candidate_rank
-from unbake.process import read_text
-from unbake.config import Held, Host, Project
-from unbake.work.compare import Compared, measure
 from unbake import atomic as atomic_files
+from unbake.compilers.ranking import measured_candidate_rank
+from unbake.config import Held, Host, Project
+from unbake.decomp import explain
+from unbake.process import read_text
+from unbake.work.compare import Compared, measure
 
 
 @dataclass(frozen=True)
@@ -151,7 +151,11 @@ def run(
             path = directory / source.name
             atomic_files.text(path, content, encoding="utf-8")
             try:
-                result = measure(project, policy, path) if version is None else measure(project, policy, path, versions=(version,))
+                result = (
+                    measure(project, policy, path)
+                    if version is None
+                    else measure(project, policy, path, versions=(version,))
+                )
             except Held as failure:
                 error = failure.reason
                 cache[digest] = None

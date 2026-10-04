@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, TextIO
 
 VERSION = 1
@@ -14,7 +14,11 @@ VERSION = 1
 SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     name: (frozenset(required.split()), frozenset(optional.split()))
     for name, required, optional in (
-        ("cycle.start", "project versions functions workers cores memory_total_bytes cache_root stop remote branch", ""),
+        (
+            "cycle.start",
+            "project versions functions workers cores memory_total_bytes cache_root stop remote branch",
+            "",
+        ),
         ("fn.queued", "function bytes versions carryover best_percent", ""),
         ("fn.draft.start", "function", ""),
         ("fn.draft.done", "function ok file seconds", "diagnostic"),
@@ -63,7 +67,13 @@ class Emitter:
         validate(event, fields)
         with self.lock:
             self.seq += 1
-            record = {"v": VERSION, "seq": self.seq, "t": datetime.now(timezone.utc).isoformat(), "event": event, **fields}
+            record = {
+                "v": VERSION,
+                "seq": self.seq,
+                "t": datetime.now(UTC).isoformat(),
+                "event": event,
+                **fields,
+            }
             self.stream.write(json.dumps(record, sort_keys=True) + "\n")
             self.stream.flush()
         for listener in self.listeners:

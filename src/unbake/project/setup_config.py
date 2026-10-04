@@ -10,9 +10,9 @@ from typing import Any
 import toml  # type: ignore[import-untyped]
 
 from unbake.compilers import files as compiler_files
+from unbake.config import Held, PendingProject
 from unbake.project import rom
 from unbake.project.census import Census
-from unbake.config import Held, PendingProject
 
 
 def version_macros(versions: tuple[str, ...]) -> dict[str, str]:

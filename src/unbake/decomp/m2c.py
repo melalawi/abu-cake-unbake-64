@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from unbake import atomic as atomic_files
+from unbake.config import Held, Host, Project
 from unbake.decomp import draft_abi, gbi, measured_storage, similar
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
@@ -25,9 +27,7 @@ from unbake.decomp.draft_macros import lower
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.process import read_text, run_tool
-from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
-from unbake import atomic as atomic_files
 
 
 def _headers(project: Project) -> list[tuple[Path, str]]:
@@ -145,9 +145,7 @@ def _draft(
         )
     )
     assembly = work / (function + ".s")
-    body = whole_body(
-        canonical_entry(project, v, function, address, assembly_text, generation=extracted), function
-    )
+    body = whole_body(canonical_entry(project, v, function, address, assembly_text, generation=extracted), function)
     registers = [
         "zero",
         "at",

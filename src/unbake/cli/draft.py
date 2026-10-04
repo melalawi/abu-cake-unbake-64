@@ -21,7 +21,7 @@ The draft goes to build/work/FUNC/FUNC.c. Edit it there, then compare it.
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return True
 
 

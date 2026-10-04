@@ -6,9 +6,9 @@ import subprocess
 from pathlib import Path
 from uuid import uuid4
 
-from unbake.project import hygiene
-from unbake.config import SCHEMA_VERSION, Held
 from unbake import atomic as atomic_files
+from unbake.config import SCHEMA_VERSION, Held
+from unbake.project import hygiene
 
 
 def readme_text(target: Path) -> str:

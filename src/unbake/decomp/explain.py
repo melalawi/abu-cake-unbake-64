@@ -8,10 +8,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from unbake.work.score import Compare
+from unbake import atomic as atomic_files
 from unbake.compilers.families.gcc.schedule import Schedule
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
+from unbake.work.score import Compare
 
 
 @dataclass(frozen=True)
@@ -179,11 +179,11 @@ def _flips(difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list
 
 def allocation(project: Project, policy: Host, source: Path, version: str) -> Allocation:
     """Compile private diagnostic streams and explain the normal compiler trial."""
-    from unbake.process import run_tool
-    from unbake.work import compare
-    from unbake.compilers.families import family_for
     from unbake.compilers import drivers
     from unbake.compilers import registry as toolchain
+    from unbake.compilers.families import family_for
+    from unbake.process import run_tool
+    from unbake.work import compare
 
     source = Path(source).resolve()
     if not source.is_file():
@@ -281,9 +281,9 @@ def gcc_input(
 
 def order(project: Project, policy: Host, source: Path, version: str) -> Schedule:
     """Read family scheduling evidence for one selected unit and VERSION."""
+    from unbake.compilers import registry as toolchain
     from unbake.compilers.families import family_for
     from unbake.process import run_tool
-    from unbake.compilers import registry as toolchain
 
     source = Path(source).resolve()
     if not source.is_file():

@@ -110,7 +110,9 @@ def _row_edits(project: Project, function: str, versions: list[str]) -> list[spl
         for segment in segments:
             for candidate in segment.rows:
                 if candidate.start == row.start and candidate.kind in ("asm", "c"):
-                    lines[candidate.line] = split.replace_row(lines[candidate.line], candidate.match, kind="c", path=function)
+                    lines[candidate.line] = split.replace_row(
+                        lines[candidate.line], candidate.match, kind="c", path=function
+                    )
         after = "".join(lines)
         if after != text:
             edits.append(split.Edit(path, text, after, (version,)))
@@ -172,9 +174,16 @@ def land(project: Project, host: Host, file: Path) -> str:
         author = f"{host.publish_author_name} <{host.publish_author_email}>"
         _git(
             project,
-            "-c", f"user.name={host.publish_author_name}",
-            "-c", f"user.email={host.publish_author_email}",
-            "commit", "-q", "-m", f"Match {function}", "--author", author,
+            "-c",
+            f"user.name={host.publish_author_name}",
+            "-c",
+            f"user.email={host.publish_author_email}",
+            "commit",
+            "-q",
+            "-m",
+            f"Match {function}",
+            "--author",
+            author,
         )
     except BaseException:
         for path, previous in written.items():
@@ -197,9 +206,20 @@ def push_commits(project: Project, host: Host) -> bool:
     else:
         helper = value
     result = subprocess.run(
-        ["git", "-c", "credential.helper=", "-c", f"credential.helper={helper}", "push", "-q",
-         host.publish_remote, f"HEAD:{host.publish_branch}"],
-        cwd=project.root, capture_output=True, text=True,
+        [
+            "git",
+            "-c",
+            "credential.helper=",
+            "-c",
+            f"credential.helper={helper}",
+            "push",
+            "-q",
+            host.publish_remote,
+            f"HEAD:{host.publish_branch}",
+        ],
+        cwd=project.root,
+        capture_output=True,
+        text=True,
     )
     return result.returncode == 0
 

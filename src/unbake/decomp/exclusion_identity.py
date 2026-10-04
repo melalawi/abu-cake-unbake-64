@@ -3,8 +3,8 @@
 import json
 from typing import Any
 
-from unbake.layout.split import Function
 from unbake.config import Project
+from unbake.layout.split import Function
 
 
 def canonical(project: Project, names: list[str], rows: list[Function]) -> list[str]:

@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake.cache import key
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 
 
 def _path(project: Project) -> Path:

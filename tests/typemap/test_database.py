@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
-from unbake.decomp import plan
 from unbake.layout import index as layout_index
 from unbake.layout import split
 from unbake.config import Held
@@ -242,7 +241,6 @@ class DatabaseTests(unittest.TestCase):
             self.assertNotIn("alpha", split.owners_by_alias(self.project, version))
         mapped = map_program(self.project)
         self.assertNotIn("alpha", mapped["functions"])
-        self.assertNotIn("alpha", {row.function for row in plan.actionable(self.project, self.policy)})
         for version in self.project.versions:
             path = self.project.asm / version / "nonmatchings/alpha.s"
             path.write_text(

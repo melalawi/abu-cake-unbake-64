@@ -12,11 +12,11 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake import cache, process
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
-from unbake import atomic as atomic_files
 
 
 def tools(host: Host) -> drivers.Tools:
@@ -94,11 +94,18 @@ def place(
     """Run n64link place; with score, unproved constants come back as problems instead of a refusal."""
     kind = project.compiler_for(Path(obj).stem).kind
     argv = [
-        str(host.n64link), "place", str(obj), "-o", str(output),
-        "--rom", str(project.version(version).baserom),
-        "--text", f"0x{row.address:X}:0x{row.start:X}:0x{row.end - row.start:X}",
+        str(host.n64link),
+        "place",
+        str(obj),
+        "-o",
+        str(output),
+        "--rom",
+        str(project.version(version).baserom),
+        "--text",
+        f"0x{row.address:X}:0x{row.start:X}:0x{row.end - row.start:X}",
         *(item for window in windows(project, version) for item in ("--map", window)),
-        "--symbols", str(symbols_file(project, version)),
+        "--symbols",
+        str(symbols_file(project, version)),
     ]
     if kind not in drivers.UNTRIMMED:
         argv.append("--trim")
@@ -108,7 +115,7 @@ def place(
     if result.returncode:
         raise Held("place", f"n64link place exited {result.returncode}: {result.stderr.strip()}")
     prefix = "n64link: place: unproved: "
-    return [line[len(prefix):] for line in result.stderr.splitlines() if line.startswith(prefix)]
+    return [line[len(prefix) :] for line in result.stderr.splitlines() if line.startswith(prefix)]
 
 
 def link(project: Project, host: Host, placed: Path, version: str, row: split.Function, work: Path) -> bytes:
@@ -119,15 +126,28 @@ def link(project: Project, host: Host, placed: Path, version: str, row: split.Fu
     if not script.is_file():
         raise Held("compile", f"build.link_script: {script} is missing; run unbake recompute buildfiles")
     process.run_tool(
-        [str(host.mips_ld), "-EB", "-T", str(script), f"--section-start=.text=0x{row.address:X}", "-o", str(elf), str(placed)],
+        [
+            str(host.mips_ld),
+            "-EB",
+            "-T",
+            str(script),
+            f"--section-start=.text=0x{row.address:X}",
+            "-o",
+            str(elf),
+            str(placed),
+        ],
         project.root,
         "link",
     )
-    process.run_tool([str(host.mips_objcopy), "-O", "binary", "-j", ".text", str(elf), str(binary)], project.root, "link")
+    process.run_tool(
+        [str(host.mips_objcopy), "-O", "binary", "-j", ".text", str(elf), str(binary)], project.root, "link"
+    )
     return binary.read_bytes()
 
 
-def link_function(project: Project, host: Host, obj: Path, version: str, row: split.Function) -> tuple[bytes, list[str]]:
+def link_function(
+    project: Project, host: Host, obj: Path, version: str, row: split.Function
+) -> tuple[bytes, list[str]]:
     """Score mode: the unit's linked words even when some constants are unproved, with those problems."""
     with tempfile.TemporaryDirectory(prefix="link-") as temporary:
         work = Path(temporary)

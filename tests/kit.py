@@ -2,12 +2,15 @@
 
 import copy
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 EXECUTABLES = (
-    "make cpp mips_as mips_ld mips_objcopy mips_objdump mips_readelf n64link splat m2c objdiff"
+    "make cpp mips_as mips_ld mips_objcopy mips_objdump mips_readelf n64link splat m2c"
 ).split()
 
 
@@ -26,7 +29,7 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
     archive = directory / "permuter.tar"
     archive.write_bytes(b"archive")
     tools.update(
-        path=[str(bin_dir)], objdiff_sha256="a" * 64, permuter_archive=str(archive), permuter_sha256="b" * 64
+        path=[str(bin_dir)], permuter_archive=str(archive), permuter_sha256="b" * 64
     )
     return {
         "resources": {
@@ -75,3 +78,14 @@ class TempCase(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name).resolve()
+
+
+def boundary(module, execute):
+    """Patch MODULE's subprocess.run with EXECUTE (unit tests never start processes)."""
+    return patch.object(module, "subprocess", SimpleNamespace(**{**vars(subprocess), "run": execute}))
+
+
+def git_init(command, *, cwd, **kwargs):
+    assert command[1:] == ["init", "-b", "main"], command
+    (Path(cwd) / ".git").mkdir()
+    return subprocess.CompletedProcess(command, 0, "", "")

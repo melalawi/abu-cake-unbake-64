@@ -137,7 +137,7 @@ def output(command, **kwargs):
 
 
 def install(case):
-    from tests.process_fakes import boundary
+    from tests.kit import boundary
     from unbake.decomp import score
 
     mock = boundary(score, output)

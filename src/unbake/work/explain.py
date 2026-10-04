@@ -97,7 +97,12 @@ def _similar(project: Project, host: Host, function: str) -> list[dict[str, Any]
     version = project.names_from if project.names_from in versions else versions[0]
     examples = similar.retrieve(project, function, version, extract.directory(project, host, version))
     return [
-        {"function": item.function, "distance": round(item.distance, 6), "edits": item.edit_distance, "source": item.source}
+        {
+            "function": item.function,
+            "distance": round(item.distance, 6),
+            "edits": item.edit_distance,
+            "source": item.source,
+        }
         for item in examples
     ]
 

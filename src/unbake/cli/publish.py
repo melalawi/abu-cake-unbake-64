@@ -23,7 +23,7 @@ Pushing needs [publish] in unbake.toml (remote, branch, author, credential).
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return False
 
 
@@ -36,7 +36,10 @@ def run(context: Context) -> Result:
     from unbake import land
 
     done = land.publish(
-        context.project(), context.require_host(), [path.resolve() for path in context.args.files], push=not context.args.no_push
+        context.project(),
+        context.require_host(),
+        [path.resolve() for path in context.args.files],
+        push=not context.args.no_push,
     )
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from unbake.cdecl import LayoutParser, attribute_source, declaration_source, declarations
 from unbake.config import Held
 from unbake.decomp.draft_context import ordered_headers, required_headers
-from unbake.project import makefile
+from unbake.project.setup import TEMPLATES
 
 
 class HeaderDeclarationsTests(unittest.TestCase):
@@ -98,12 +98,12 @@ class HeaderDeclarationsTests(unittest.TestCase):
         self.assertEqual(len(source), len(declaration_source(source)))
 
     def test_original_sdk_callbacks_have_only_their_four_typedef_names(self) -> None:
-        source = (makefile.TEMPLATES / "audio_callbacks.h").read_text()
+        source = (TEMPLATES / "audio_callbacks.h").read_text()
         parsed = declarations(source)
         self.assertEqual(parsed.typedefs, {"ALCmdHandler", "ALDMAproc", "ALVoiceHandler", "ALSetParam"})
         self.assertEqual(parsed.uses, {"Acmd"})
         callbacks, commands = Path("audio_callbacks.h"), Path("acmd.h")
-        contents = {callbacks: source, commands: (makefile.TEMPLATES / "acmd.h").read_text()}
+        contents = {callbacks: source, commands: (TEMPLATES / "acmd.h").read_text()}
         self.assertEqual(ordered_headers(contents), [commands, callbacks])
 
     def test_nested_function_pointers_arrays_and_multiple_aliases(self) -> None:

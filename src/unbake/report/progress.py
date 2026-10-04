@@ -288,7 +288,13 @@ def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
     metadata: dict[str, Any] = {"complete": matched}
     if matched:
         metadata["source_path"] = f"src/{row.path}.c"
-    return {"name": row.name, "measures": measures, "sections": [section], "functions": [function], "metadata": metadata}
+    return {
+        "name": row.name,
+        "measures": measures,
+        "sections": [section],
+        "functions": [function],
+        "metadata": metadata,
+    }
 
 
 def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
@@ -401,7 +407,11 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
         if readme.exists():
             original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
         else:
-            original = (Path(__file__).parents[1] / "templates" / "README.ready.md").read_text().replace("@TITLE@", project.title)
+            original = (
+                (Path(__file__).parents[1] / "templates" / "README.ready.md")
+                .read_text()
+                .replace("@TITLE@", project.title)
+            )
         rendered = render(original, reports, descriptions=descriptions)
         written: list[Path] = []
         for version, document in reports.items():

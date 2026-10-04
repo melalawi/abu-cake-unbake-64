@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from unbake import inputs
-from unbake.work import inventory as plan
-from unbake.decomp.indexed import indexed_references
-from unbake.layout import split
 from unbake.config import Held, Project
+from unbake.decomp.indexed import indexed_references
 from unbake.extract import discovered_symbols, symbols_from
+from unbake.layout import split
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis, control
+from unbake.work import inventory as plan
 
 
 def map_program(project: Project) -> dict[str, Any]:

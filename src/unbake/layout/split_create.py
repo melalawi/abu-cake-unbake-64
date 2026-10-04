@@ -13,9 +13,9 @@ from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 
-from unbake.layout import split_analysis
-from unbake.config import Held, Host
 from unbake import atomic as atomic_files
+from unbake.config import Held, Host
+from unbake.layout import split_analysis
 
 
 def without_comments(text: str) -> str:

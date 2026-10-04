@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import Literal
 
 TYPES = ("register", "order", "immediate", "relocation", "inserted", "missing", "changed")
 _REGISTER_FIELDS = ((21, "rs"), (16, "rt"), (11, "rd"))
@@ -116,7 +117,9 @@ def compare_words(version: str, target: bytes, candidate: bytes) -> Compare:
             kind = classify(left[i1 + offset], right[j1 + offset])
             typed[kind] += 1
             if kind == "register":
-                register_changes.extend(_register_changes(i1 + offset, j1 + offset, left[i1 + offset], right[j1 + offset]))
+                register_changes.extend(
+                    _register_changes(i1 + offset, j1 + offset, left[i1 + offset], right[j1 + offset])
+                )
             details.append(
                 f"{kind}: target +0x{(i1 + offset) * 4:04X} {left[i1 + offset]:08X}; "
                 f"candidate +0x{(j1 + offset) * 4:04X} {right[j1 + offset]:08X}"
@@ -146,7 +149,9 @@ def weakest(scores: dict[str, float]) -> float:
     return min(scores.values()) if scores else 0.0
 
 
-def align_words(target: Sequence[int], candidate: Sequence[int], relocations: dict[int, int]) -> list[tuple[str, int, int, int, int]]:
+def align_words(
+    target: Sequence[int], candidate: Sequence[int], relocations: dict[int, int]
+) -> list[tuple[Literal["replace", "delete", "insert", "equal"], int, int, int, int]]:
     """Align instruction sequences with the candidate's relocated operand fields masked on both sides."""
     forms: defaultdict[int, set[int]] = defaultdict(set)
     for offset, mask in relocations.items():

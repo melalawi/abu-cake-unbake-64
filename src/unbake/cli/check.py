@@ -20,7 +20,7 @@ the original byte for byte. Also checks repository hygiene and the C source rule
 PROJECT = "ready"
 
 
-def READ_ONLY(args: argparse.Namespace) -> bool:  # noqa: N802 - verb protocol
+def READ_ONLY(args: argparse.Namespace) -> bool:
     return False
 
 
