@@ -137,7 +137,6 @@ def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False
             project, text, path.stem, outputs, ownership=session.ownership, lookup=lookup, previous=previous
         ).encode()
     count = install(project, outputs, dry_run=dry_run)
-    count += units(project, dry_run=dry_run)
     if not dry_run and "inputs_sha256" in value:
         value["rendered_sha256"] = {
             storage.relative(project, p): storage.digest(data)
