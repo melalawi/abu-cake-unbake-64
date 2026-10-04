@@ -178,6 +178,94 @@ class CloneTests(unittest.TestCase):
         self.assertFalse((copied / "proof-old").exists())
         self.assertIn(self.project.workspace_id.encode(), layout.read_bytes())
 
+    def test_analysis_receipts_remain_fresh_and_shards_share_atomic_storage(self) -> None:
+        from unbake.typemap import database, mapping, shards, storage
+
+        for name in ("setup", "map", "types", "layout"):
+            (self.project.build / name).mkdir()
+        storage.write(self.project.build / "setup/layout.json", storage.encoded(storage.identity(self.project)))
+        storage.write(
+            self.project.build / "types/proven.json",
+            storage.encoded({**storage.identity(self.project), "records": {}}),
+        )
+        (self.project.build / "map/.facts-unpublished.sqlite").write_bytes(b"scratch")
+        (self.project.build / "types/database.json.partial").write_bytes(b"scratch")
+        writer = shards.Writer(self.project.build / "map")
+        shard = writer.finish()
+        facts = self.project.build / "map/facts.json"
+        storage.write(
+            facts,
+            storage.encoded(
+                {
+                    **storage.identity(self.project),
+                    "format": "sqlite-zlib-v1",
+                    "inputs_sha256": storage.inputs(self.project),
+                    "shard": shard.name,
+                    "shard_sha256": storage.file_digest(shard),
+                    "functions": {},
+                }
+            ),
+        )
+        index = self.project.build / "layout/index.json"
+        storage.write(index, storage.encoded({"schema": 1, "symbols": {}, "clusters": {}, "headers": {}}))
+        constraints = storage.FactLog(self.project.build / "types")
+        constraints.append({"kind": "constraint", "function": "alpha"})
+        constraint = constraints.finish(self.project.root)
+        db = self.project.build / "types/database.json"
+        storage.write(
+            db,
+            storage.encoded(
+                {
+                    **storage.identity(self.project),
+                    "inputs_sha256": storage.inputs(self.project, headers=True),
+                    "map_sha256": storage.file_digest(facts),
+                    "map_shard": shard.name,
+                    "map_shard_sha256": storage.file_digest(shard),
+                    "constraints": [constraint],
+                    "functions": {},
+                    "unknown": [],
+                    "conflicts": [],
+                    "receipt_path": str(self.project.root / "src/alpha.c"),
+                }
+            ),
+        )
+        old_digest = storage.file_digest(db)
+        storage.write(
+            self.project.build / "types/summary.json",
+            storage.encoded({**storage.identity(self.project), "database_sha256": old_digest}),
+        )
+        storage.write(
+            self.project.build / "types/redraft.json",
+            storage.encoded({**storage.identity(self.project), "functions": {"alpha": {"type_db_sha256": old_digest}}}),
+        )
+        original = {p: (p.stat().st_ino, storage.file_digest(p)) for p in self.project.build.rglob("*") if p.is_file()}
+        database.load(self.project)
+        with patch.object(clone, "prepare", return_value=False):
+            result = clone.create(self.project, self.policy, self.destination, self.project.versions)
+        self.assertFalse((result.build / "map/.facts-unpublished.sqlite").exists())
+        self.assertFalse((result.build / "types/database.json.partial").exists())
+        value = database.load(result)
+        self.assertEqual(value["receipt_path"], str(result.root / "src/alpha.c"))
+        mapping.load_map(result)
+        new_digest = storage.file_digest(result.build / "types/database.json")
+        self.assertEqual(storage.read(result.build / "types/summary.json", "summary")["database_sha256"], new_digest)
+        self.assertEqual(database.redrafts(result)["alpha"]["type_db_sha256"], new_digest)
+        for source in (shard, self.project.root / constraint["path"], index):
+            target = result.root / source.relative_to(self.project.root)
+            self.assertEqual(source.stat().st_ino, target.stat().st_ino)
+            storage.write(target, b"replacement")
+            self.assertEqual((source.stat().st_ino, storage.file_digest(source)), original[source])
+        for source, before in original.items():
+            self.assertEqual((source.stat().st_ino, storage.file_digest(source)), before)
+        # Rebasing must not turn stale pins into fresh evidence.
+        changed = self.project.version("us").symbols
+        changed.write_text(changed.read_text() + "\n")
+        stale_destination = self.root / "stale"
+        with patch.object(clone, "prepare", return_value=False):
+            stale = clone.create(self.project, self.policy, stale_destination, self.project.versions)
+        with self.assertRaisesRegex(config.Held, "types.inputs_stale"):
+            database.load(stale)
+
     def test_prepare_upgrades_every_embedded_writer_and_preserves_shared_old_helpers(self) -> None:
         from unbake.project import makefile, setup
 

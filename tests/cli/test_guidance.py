@@ -3,6 +3,7 @@
 import io
 import os
 import shlex
+import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -47,6 +48,25 @@ class GuidanceTests(MainCase):
         self.assertEqual(exited.exception.code, 0)
         self.assertIn("--new", output.getvalue())
         self.assertIn("undrafted", output.getvalue())
+
+    def test_clone_guidance_uses_published_destination_and_failure_uses_source(self) -> None:
+        destination = self.directory / "clone with spaces"
+        shutil.copytree(self.root, destination)
+        cloned = config.load(destination)
+        with (
+            patch("unbake.project.clone.create", return_value=cloned),
+            patch("unbake.cli.workflow.select", return_value=("unbake solve", "types needed")),
+            patch.dict(os.environ),
+        ):
+            code, out, error = self.run_main(self.args("clone", str(destination)))
+        self.assertEqual((code, error), (0, ""))
+        action = out.split("Next: ", 1)[1].strip()
+        self.assertEqual(shlex.split(action), ["unbake", "--project", str(destination), "solve"])
+        self.assertNotIn(str(self.root), out)
+        with patch("unbake.project.clone.create", side_effect=Held("clone", "destination: unavailable")):
+            code, out, error = self.run_main(self.args("clone", str(destination)))
+        self.assertEqual((code, error), (1, ""))
+        self.assertIn(str(self.root), out.split("Next: ", 1)[1])
 
     def test_ready_next_does_not_create_an_absent_policy(self) -> None:
         path = self.directory / "absent-operator/policy.toml"

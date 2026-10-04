@@ -162,37 +162,93 @@ def refresh_checksums(project: Project) -> None:
     atomic_files.text(manifest, "".join(rows))
 
 
-def copy_evidence(project: Project, cloned: Project) -> None:
-    """Carry published setup inputs without scratch or in-memory JSON trees."""
-    directory = project.build / "setup"
-    if not directory.is_dir():
-        return
-    for path in directory.iterdir():
-        if not path.is_file() or path.name in setup._TRANSIENT_EVIDENCE or path.name == ".inuse":
+def rebind_evidence(path: Path, replacements: dict[bytes, bytes]) -> tuple[str, str]:
+    """Stream receipt substitutions, retaining shared storage for unchanged bytes."""
+    pattern = re.compile(b"|".join(re.escape(key) for key in sorted(replacements, key=len, reverse=True)))
+    overlap = max(map(len, replacements)) - 1
+    before, after = hashlib.sha256(), hashlib.sha256()
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".identity-", delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        with path.open("rb") as original, atomic_files.stream(temporary, "wb") as output:
+            pending = b""
+            while block := original.read(1024 * 1024):
+                before.update(block)
+                pending += block
+                boundary = max(0, len(pending) - overlap)
+                cursor = 0
+                for match in pattern.finditer(pending):
+                    if match.start() >= boundary:
+                        break
+                    content = pending[cursor : match.start()] + replacements[match[0]]
+                    output.write(content)
+                    after.update(content)
+                    cursor = match.end()
+                boundary = max(boundary, cursor)
+                content = pending[cursor:boundary]
+                output.write(content)
+                after.update(content)
+                pending = pending[boundary:]
+            content = pattern.sub(lambda match: replacements[match[0]], pending)
+            output.write(content)
+            after.update(content)
+        old, new = before.hexdigest(), after.hexdigest()
+        if old != new:
+            shutil.copystat(path, temporary)
+            atomic_files.publish(temporary, path)
+        return old, new
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def copy_evidence(project: Project, cloned: Project, published_root: Path | None = None) -> None:
+    """Carry atomic analysis publications and rebind their receipt dependency chain.
+
+    Substitute only existing pins, rather than recomputing inputs: a stale
+    source remains stale. Shards and unchanged indexes retain their hardlinks.
+    """
+    final_root = published_root or cloned.root
+    replacements = {
+        project.workspace_id.encode(): cloned.workspace_id.encode(),
+        json.dumps(str(project.root))[1:-1].encode(): json.dumps(str(final_root))[1:-1].encode(),
+    }
+    old_config = compiler_files.sha(project.root / "config.toml")
+    replacements[old_config.encode()] = compiler_files.sha(cloned.root / "config.toml").encode()
+    receipts: list[Path] = []
+    for name in ("setup", "map", "types", "layout"):
+        directory = project.build / name
+        if not directory.is_dir():
             continue
-        if path.name.endswith(".partial"):
-            continue
-        target = cloned.build / "setup" / path.name
-        copy_regular(path, target)
-        if path.name == "layout.json":
-            # Workspace UUIDs have equal length. Rebind the identity without
-            # decoding a potentially huge correspondence/layout document.
-            old, new = project.workspace_id.encode(), cloned.workspace_id.encode()
-            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".identity-", delete=False) as stream:
-                temporary = Path(stream.name)
-            try:
-                with target.open("rb") as original, atomic_files.stream(temporary, "wb") as output:
-                    pending = b""
-                    while block := original.read(1024 * 1024):
-                        pending = (pending + block).replace(old, new)
-                        boundary = max(0, len(pending) - len(old) + 1)
-                        output.write(pending[:boundary])
-                        pending = pending[boundary:]
-                    output.write(pending.replace(old, new))
-                shutil.copystat(target, temporary)
-                atomic_files.publish(temporary, target)
-            finally:
-                temporary.unlink(missing_ok=True)
+        for path in directory.iterdir():
+            if path.name.startswith(".") or path.name.endswith(".partial") or not path.is_file():
+                continue
+            if name == "setup" and path.name in setup._TRANSIENT_EVIDENCE:
+                continue
+            target = cloned.build / name / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copy_reflink(path.resolve(strict=True), target, immutable=True)
+            if path.suffix == ".json":
+                receipts.append(target)
+
+    # Setup layout and published feedback are inputs to map/types. Facts are
+    # pinned by the database, whose digest is pinned by summary/redraft marks.
+    def order(path: Path) -> tuple[int, str]:
+        if path.parent.name == "setup":
+            rank = 0
+        elif path.name == "proven.json":
+            rank = 1
+        elif path.parent.name == "map":
+            rank = 2 if path.name != "facts.json" else 3
+        elif path.name == "database.json":
+            rank = 4
+        else:
+            rank = 5
+        return rank, str(path)
+
+    for path in sorted(receipts, key=order):
+        old, new = rebind_evidence(path, replacements)
+        if old != new:
+            replacements[old.encode()] = new.encode()
 
 
 def create(project: Project, policy: Policy, destination: Path, versions: Sequence[str]) -> Project:
@@ -219,7 +275,7 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
             generations[name] = generation
         with tempfile.TemporaryDirectory(prefix=".clone-", dir=destination.parent) as temporary:
             stage = Path(temporary) / "project"
-            cloned = _create(project, policy, stage, versions, generations)
+            cloned = _create(project, policy, stage, versions, generations, published_root=destination)
             policy_path = cloned.tools / "clone-policy.toml"
             atomic_files.text(policy_path, isolated_policy(policy, destination))
             final_policy = destination / policy_path.relative_to(stage)
@@ -232,7 +288,13 @@ def create(project: Project, policy: Policy, destination: Path, versions: Sequen
 
 
 def _create(
-    project: Project, policy: Policy, destination: Path, versions: Sequence[str], generations: dict[str, Path]
+    project: Project,
+    policy: Policy,
+    destination: Path,
+    versions: Sequence[str],
+    generations: dict[str, Path],
+    *,
+    published_root: Path | None = None,
 ) -> Project:
     """Clone Git history, then reflink live build inputs and receipts."""
     destination = destination.expanduser().absolute()
@@ -317,7 +379,7 @@ def _create(
         raise Held("clone", "workspace.id: required one explicit workspace identity")
     atomic_files.text(config_path, text)
     cloned = config.load(destination)
-    copy_evidence(project, cloned)
+    copy_evidence(project, cloned, published_root)
     for path in (cloned.src, cloned.tools, cloned.asm, *cloned.include):
         project_relative(cloned, path)
     policy_path = cloned.tools / "clone-policy.toml"

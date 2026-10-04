@@ -140,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
         project = config.load(root)
         policy = config.load_policy()
         refused = dispatch(args, project, policy)
+        if phase == "clone" and not refused and not invocation.refused:
+            root = args.destination.expanduser().resolve()
+            retry = guidance.command(root, "next")
         return int(refused or invocation.refused)
     except Held as error:
         print(f"HELD({error.phase}): {error.reason}", file=sys.stderr if json_output else sys.stdout)
