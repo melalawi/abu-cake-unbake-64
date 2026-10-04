@@ -146,79 +146,8 @@ class FactLog:
         self.temporary.unlink(missing_ok=True)
 
 
-def _json_chunks(value: object) -> tuple[bytes, ...]:
-    from unbake.cache import serialized
-
-    if not isinstance(value, dict):
-        return serialized(value), b"\n"
-    chunks = [b"{"]
-    for index, field in enumerate(sorted(value)):
-        if index:
-            chunks.append(b",")
-        chunks.extend((json.dumps(field).encode() + b":", serialized("typemap.database." + field, value[field])))
-    chunks.append(b"}\n")
-    return tuple(chunks)
-
-
-_json_stages: dict[Path, tuple[tuple[bytes, ...], str]] = {}
-_json_installed: dict[Path, tuple[tuple[bytes, ...], tuple[int, int, int, int, int], str]] = {}
-
-
-def _stage_json(path: Path, chunks: tuple[bytes, ...]) -> tuple[Path, str]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink():
-        raise Held("solve", f"types.database: generated path is a symlink: {path}")
-    hash_ = hashlib.sha256()
-    descriptor, name = tempfile.mkstemp(prefix=".typemap-json-", dir=path.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            for chunk in chunks:
-                stream.write(chunk)
-                hash_.update(chunk)
-        digest_ = hash_.hexdigest()
-        _json_stages[temporary] = chunks, digest_
-        inputs._digests[temporary] = inputs.signature(temporary), digest_
-        return temporary, digest_
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        _json_stages.pop(temporary, None)
-        inputs._digests.pop(temporary, None)
-        raise
-
-
-def stage_json(path: Path, value: object) -> Path:
-    """Stage canonical JSON without a database-sized concatenation or deep copy."""
-    return _stage_json(path, _json_chunks(value))[0]
-
-
-def database_json(path: Path, value: object) -> tuple[Path | None, str]:
-    """Skip staging only when both the serialized value and installed file match."""
-    chunks = _json_chunks(value)
-    installed = _json_installed.get(path)
-    if installed is not None and installed[0] == chunks and not path.is_symlink():
-        try:
-            if installed[1] == inputs.signature(path):
-                return None, installed[2]
-        except OSError:
-            pass
-    return _stage_json(path, chunks)
-
-
 def install(path: Path, staged: Path) -> None:
     atomic_files.publish(staged, path)
-    record = _json_stages.pop(staged, None)
-    inputs._digests.pop(staged, None)
-    if record is not None:
-        chunks, digest_ = record
-        stamp = inputs.signature(path)
-        _json_installed[path] = chunks, stamp, digest_
-        inputs._digests[path] = stamp, digest_
-
-
-def discard_json(staged: Path) -> None:
-    staged.unlink(missing_ok=True)
-    _json_stages.pop(staged, None)
     inputs._digests.pop(staged, None)
 
 

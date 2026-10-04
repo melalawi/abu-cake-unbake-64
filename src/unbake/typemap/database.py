@@ -12,26 +12,16 @@ from typing import Any
 from unbake import inputs
 from unbake.config import Held, Host, Project
 from unbake import atomic as atomic_files
-from unbake.typemap import header_names, regeneration, storage
-
-_decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
-
+from unbake.typemap import header_names, regeneration, storage, types_db
 
 def load(project: Project, *, required: bool = True, allow_stale: bool = False) -> dict[str, Any] | None:
-    path = project.build / "types/database.json"
-    if not path.is_file() and not required:
-        return None
-    try:
-        stat = path.stat()
-    except OSError as error:
-        raise Held("draft", f"types.database: {path}: {error}") from error
-    stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
-    cached = _decoded.get(path)
-    if cached is not None and cached[0] == stamp:
-        value = cached[1]
-    else:
-        value = storage.read(path, "types.database")
-        _decoded[path] = (stamp, value)
+    """The whole solution from build/types.sqlite (the solver and the headers step need all of it)."""
+    path = types_db.path(project)
+    if not path.is_file():
+        if not required:
+            return None
+        raise Held("draft", f"types.database: {path} is missing; the types step builds it")
+    value = types_db.read(path)
     storage.validate_identity(project, value, "types.database")
     shard = value.get("map_shard")
     if shard is not None:
@@ -46,54 +36,63 @@ def load(project: Project, *, required: bool = True, allow_stale: bool = False) 
         storage.verify_file(project.build / "map" / filename, supplement["sha256"], "map.abi")
     for row in value.get("constraints", []):
         if row.get("kind") == "shard":
-            path = project.root / row["path"]
-            if not path.resolve().is_relative_to((project.build / "types").resolve()):
+            shard_path = project.root / row["path"]
+            if not shard_path.resolve().is_relative_to((project.build / "types").resolve()):
                 raise Held("draft", "types.constraints: shard is outside the generated type directory")
-            storage.verify_file(path, row["sha256"], "types.constraints")
+            storage.verify_file(shard_path, row["sha256"], "types.constraints")
     return value
 
 
-def context(project: Project, *, function: str | None = None, allow_stale: bool = False) -> str:
-    value = load(project, allow_stale=allow_stale)
-    assert value is not None
-    from unbake.layout import index
+def digest(project: Project) -> str:
+    """The content digest of the installed solution (what redraft marks pin)."""
+    path = types_db.path(project)
+    if not path.is_file():
+        raise Held("types", f"types.database: {path} is missing; the types step builds it")
+    return str(types_db.meta(path, "content_sha256"))
 
+
+def context(project: Project, *, function: str | None = None, allow_stale: bool = False) -> str:
+    """Draft context: the function's header, then only the prototypes it depends on (rows read on demand)."""
+    from unbake.layout import index
+    from unbake.typemap.abi_declarations import for_caller
+
+    path = types_db.path(project)
+    if not path.is_file():
+        raise Held("types", f"types.database: {path} is missing; the types step builds it")
     lookup = index.load(project)
     homes = lookup["symbols"]
     selected = [homes[function]] if function in homes else sorted(set(homes.values()))
-    lines = [f'#include "{path}"' for path in selected]
-    lines.extend("/* unknown: " + row.replace("*/", "* /") + " */" for row in value["unknown"])
-    lines.extend("/* conflict: " + row["key"].replace("*/", "* /") + " */" for row in value["conflicts"])
-    for name, record in sorted(value["functions"].items()):
-        from unbake.typemap.abi_declarations import for_caller
-
+    lines = [f'#include "{home}"' for home in selected]
+    lines.extend("/* unknown: " + row.replace("*/", "* /") + " */" for row in types_db.meta(path, "unknown"))
+    lines.extend("/* conflict: " + row["key"].replace("*/", "* /") + " */" for row in types_db.meta(path, "conflicts"))
+    aliases = types_db.meta(path, "shared_aliases")
+    if function is None:
+        names: set[str] = set(types_db.read(path)["functions"])
+    else:
+        neighbours = types_db.entries(path, "dependencies", [function]).get(function, [])
+        names = {function, *neighbours}
+    for name, record in sorted(types_db.entries(path, "functions", names).items()):
         carrier = for_caller(record, function)
         if carrier.get("prototype"):
             reasons = "; ".join(carrier["reasons"]).replace("*/", "* /")
-            prototype = header_names.rewrite(carrier["prototype"], value.get("shared_aliases", {}), set())
+            prototype = header_names.rewrite(carrier["prototype"], aliases, set())
             lines.extend((f"/* {name}: {reasons} */", prototype))
     return "\n".join(lines) + "\n"
 
 
 def redrafts(project: Project) -> dict[str, Any]:
-    path = project.build / "types/redraft.json"
-    if not path.is_file():
-        return {}
-    value = storage.read(path, "types.redraft")
-    storage.validate_identity(project, value, "types.redraft")
-    return dict(value.get("functions", {}))
+    path = types_db.path(project)
+    return types_db.redrafts(path) if path.is_file() else {}
 
 
 def clear_redraft(project: Project, function: str, type_db_sha256: str) -> None:
-    path = project.build / "types/database.json"
-    if not path.is_file() or storage.digest(path.read_bytes()) != type_db_sha256:
+    path = types_db.path(project)
+    if not path.is_file() or digest(project) != type_db_sha256:
         raise Held("draft", "types.redraft: database changed during draft")
     marks = redrafts(project)
     if function in marks and marks[function]["type_db_sha256"] == type_db_sha256:
         del marks[function]
-        storage.write(
-            project.build / "types/redraft.json", storage.encoded({**storage.identity(project), "functions": marks})
-        )
+        types_db.set_redrafts(path, marks)
 
 
 def _semantic(value: Any) -> Any:
@@ -454,11 +453,9 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         for path, content in outputs.items()
         if isinstance(content, bytes)
     }
-    database = project.build / "types/database.json"
-    staged, digest = storage.database_json(database, value)
-    if staged is not None:
-        outputs[database] = staged
-    summary: dict[str, Any] = {**storage.identity(project), "revision": value["revision"], "database_sha256": digest}
+    database = types_db.path(project)
+    digest = types_db.content_digest(value)
+    summary: dict[str, Any] = {}
     changed: set[str] = set()
     for kind in ("functions", "globals", "structs", "arrays"):
         before = previous.get(kind, {})
@@ -509,11 +506,10 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                     "revision": value["revision"],
                     "type_db_sha256": digest,
                 }
-    outputs[project.build / "types/summary.json"] = storage.encoded(summary)
     # Carry pending marks forward so a draft against the newest revision can clear them.
     for mark in marks.values():
         mark.update(revision=value["revision"], type_db_sha256=digest)
-    outputs[project.build / "types/redraft.json"] = storage.encoded({**storage.identity(project), "functions": marks})
+    staged, _ = types_db.stage(database, value, summary, marks)
     from unbake.layout import index
 
     obsolete = index.headers(project) - outputs.keys()
@@ -529,8 +525,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     }
     backups: dict[Path, Path | None] = {}
     try:
-        metadata = {database, project.build / "types/summary.json", project.build / "types/redraft.json"}
-        for path in set(outputs) | obsolete | metadata:
+        for path in set(outputs) | obsolete | {database}:
             if path.is_file():
                 descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
                 os.close(descriptor)
@@ -546,16 +541,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 storage.write(path, content)
         for path in obsolete:
             path.unlink()
-        staged, digest = storage.database_json(database, value)
-        if staged is not None:
-            storage.install(database, staged)
-        summary["database_sha256"] = digest
-        storage.write(project.build / "types/summary.json", storage.encoded(summary))
-        for mark in marks.values():
-            mark.update(revision=value["revision"], type_db_sha256=digest)
-        storage.write(
-            project.build / "types/redraft.json", storage.encoded({**storage.identity(project), "functions": marks})
-        )
+        types_db.install(database, staged)
     except BaseException:
         for path, backup in backups.items():
             if backup is None:
@@ -564,8 +550,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 atomic_files.publish(backup, path)
         raise
     finally:
-        if staged is not None:
-            storage.discard_json(staged)
+        staged.unlink(missing_ok=True)
         for backup in backups.values():
             if backup is not None:
                 backup.unlink(missing_ok=True)

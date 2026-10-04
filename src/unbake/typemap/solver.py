@@ -9,7 +9,7 @@ from typing import Any
 
 from unbake import inputs
 from unbake import cache as content_cache
-from unbake.config import Held, Host, Project
+from unbake.config import Host, Project
 from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
 from unbake.typemap.mapping import refresh_map
 
@@ -1004,20 +1004,10 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     from unbake.typemap import facts as source_facts
     from unbake.typemap.abi_facts import refine
 
-    database = project.build / "types/database.json"
-    summary = project.build / "types/summary.json"
-    previous = {}
-    if database.is_file():
-        if summary.is_file():
-            previous = storage.read(summary, "types.summary")
-            storage.validate_identity(project, previous, "types.summary")
-            if previous.get("database_sha256") != inputs.digest(database):
-                raise Held("solve", "types.summary: database changed independently of its semantic index")
-        elif database.stat().st_size <= 64 * 1024 * 1024:
-            previous = storage.read(database, "types.database")
-            storage.validate_identity(project, previous, "types.database")
-        else:
-            raise Held("solve", "types.summary: missing bounded semantic index for existing database")
+    from unbake.typemap import types_db
+
+    database = types_db.path(project)
+    previous = types_db.summary(database) if database.is_file() else {}
     facts = refine(project, refresh_map(project))
     fact_keys = source_facts.published_keys(project, policy)
     log = storage.FactLog(project.build / "types")

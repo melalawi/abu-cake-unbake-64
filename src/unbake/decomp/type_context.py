@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from unbake.typemap.storage import digest
 from unbake.config import Held, Project
 
 
@@ -17,13 +16,10 @@ def provider() -> Any:
 
 
 def required(project: Project, function: str | None = None) -> tuple[str, str]:
-    api = provider()
-    api.load(project, required=True)
-    context = api.context(project, function=function) if function is not None else api.context(project)
-    path = project.build / "types/database.json"
-    if not path.is_file():
-        raise Held("types", f"types.database: missing {path}")
-    return digest(path.read_bytes()), str(context)
+    from unbake.typemap import database
+
+    context = database.context(project, function=function)
+    return database.digest(project), context
 
 
 def snapshot(project: Project, function: str) -> tuple[str, str]:
@@ -36,6 +32,4 @@ def clear_redraft(project: Project, function: str, database: str) -> None:
 
 
 def redrafts(project: Project) -> dict[str, Any]:
-    if not (project.build / "types/redraft.json").exists():
-        return {}
     return dict(provider().redrafts(project))

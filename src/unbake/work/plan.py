@@ -72,7 +72,7 @@ def ranked(project: Project, host: Host) -> list[rank.Candidate]:
 
 def next_action(project: Project, host: Host, *, undrafted: bool) -> Action:
     """Continue existing work first (unless undrafted), then draft the best-ranked new function."""
-    if not (project.build / "types" / "database.json").is_file():
+    if not (project.build / "types.sqlite").is_file():
         return Action(("check",), "the type solution does not exist yet; check builds it", None)
     order = ranked(project, host)
     if not undrafted:
