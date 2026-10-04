@@ -23,6 +23,8 @@ from unbake.project.headers import include_headers
 from unbake.typemap import storage
 
 _BOUNDARY = "extern int __unbake_feedback_boundary;"
+# One source's facts parse the same unit up to four times (scoped then full, contracts then definition).
+UNIT_MEMO = 2
 _C_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|^[ \t]*#[^\n]*|[A-Za-z_]\w*|\S', re.M)
 
 
@@ -50,6 +52,11 @@ def _outer_guard(text: str) -> str | None:
 
 
 def _declaration_unit(source: str) -> str:
+    """_unit_bodies_blanked, once per text: a source's facts blank the same unit several times."""
+    return memo("decl.unit", source, lambda: _unit_bodies_blanked(source), keep=2 * UNIT_MEMO)
+
+
+def _unit_bodies_blanked(source: str) -> str:
     """Keep function definitions' signatures, never parse their implementation.
 
     Proven GCC code may contain label addresses, computed goto or inline asm.
@@ -343,10 +350,6 @@ def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -
     return result
 
 
-# One source's facts parse the same unit up to four times (scoped then full, contracts then definition).
-UNIT_MEMO = 2
-
-
 def _tree(source: str, scope: dict[str, bool]) -> Any:
     """A parse is pure in its text and seeded typedef scope; consumers copy before they change a node."""
     key = (source, tuple(sorted(scope.items())))
@@ -495,7 +498,8 @@ def extract(
             _contracts or not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
         ):
             type_ = _type(declaration.type)
-            declaration = copy.deepcopy(declaration)
+            # A shallow copy: the parse tree is shared by memo, and only the copy drops its initializer.
+            declaration = copy.copy(declaration)
             declaration.init = None
             result["globals"][declaration.name] = {
                 "type": type_,
