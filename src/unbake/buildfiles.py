@@ -89,6 +89,7 @@ def windows(project: Project, version: str) -> list[tuple[int, int, int]]:
     return result
 
 
+_LINKER_ALIAS = re.compile(r"^//\s*unbake linker alias:\s*([A-Za-z_]\w*)\s*=\s*0x([0-9A-Fa-f]+);", re.M)
 _ADDRESS_NAMED = re.compile(r"\b(?:D|func)_([0-9A-F]{8})\b")
 
 
@@ -104,15 +105,18 @@ def address_named(project: Project) -> dict[str, int]:
 def symbols_ld(project: Project, version: str) -> str:
     """Every known symbol as PROVIDE, so a unit linked alone resolves its external references.
 
-    Data that stays a raw ROM slice has no label in any object. In the naming version a referenced
-    address-named symbol missing from the symbol file is provided at the address its name encodes;
-    a wrong address cannot pass, because make check compares the whole ROM.
+    Data that stays a raw ROM slice has no label in any object. An address-named symbol the sources spell
+    and the version's symbol file lacks is provided at the address its name encodes (version branches name
+    their own addresses); a wrong address cannot pass, because make check compares the whole ROM.
     """
-    _, rows = split.symbols(project.version(version).symbols)
+    path = project.version(version).symbols
+    _, rows = split.symbols(path)
     provided = {name: address for name, (address, _, _) in rows.items()}
-    if version == project.names_from:
-        for name, address in address_named(project).items():
-            provided.setdefault(name, address)
+    # A shared name whose address already has another splat symbol in this version is kept as a comment.
+    for name, address in _LINKER_ALIAS.findall(path.read_text()):
+        provided.setdefault(name, int(address, 16))
+    for name, address in address_named(project).items():
+        provided.setdefault(name, address)
     return "".join(f"PROVIDE({name} = 0x{address:08X});\n" for name, address in sorted(provided.items()))
 
 
