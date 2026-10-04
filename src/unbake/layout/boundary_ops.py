@@ -1,0 +1,96 @@
+"""`unbake boundary`: preview or apply boundary edits; an applied edit is proved by make check (split_apply)."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from unbake.config import Held, Host, Project
+from unbake.layout import split, split_apply
+
+
+@dataclass
+class Outcome:
+    diff: list[str]
+    versions: list[str]
+    lines: list[str] = field(default_factory=list)
+
+
+def _finish(project: Project, host: Host, edits: list[split.Edit], apply: bool, extra: list[str] | None = None) -> Outcome:
+    text = split_apply.diff(edits)
+    versions = sorted({v for edit in edits for v in edit.versions})
+    lines = [*(extra or []), *text.splitlines()]
+    if not apply:
+        return Outcome(text.splitlines(), versions, [*lines, f"preview: {len(edits)} file edits; add --apply to write"])
+    if not edits:
+        return Outcome([], [], [*lines, "no edits"])
+    proved = split_apply.apply(project, host, edits)
+    if proved is None:
+        return Outcome([], versions, [*lines, "no edits"])
+    if not proved.ok:
+        raise Held("boundary", "boundary.proof: make check refused the edit; nothing was written: " + "; ".join(proved.lines()))
+    return Outcome(text.splitlines(), versions, [*lines, *proved.lines()])
+
+
+def interval(
+    project: Project, host: Host, verb: str, subject: str, version: str, start: int, end: int, *, apply: bool
+) -> Outcome:
+    from unbake.layout import split_edits
+
+    extra: list[str] = []
+    if verb == "function":
+        edits = split_edits.cut(project, version, subject, start, end)
+    elif verb == "data":
+        edits = split_edits.data_cut(project, version, subject, start, end)
+    elif verb == "code-in-data":
+        from unbake.layout.code_interval import prove
+
+        edits = split_edits.code(project, version, subject, start, end, policy=host)
+        extra.append("proved code: " + json.dumps(prove(project, version, start, end, host), sort_keys=True))
+    else:
+        raise Held("boundary", f"boundary.verb: {verb}: unknown")
+    return _finish(project, host, edits, apply, extra)
+
+
+def import_file(project: Project, host: Host, path: Path, *, apply: bool) -> Outcome:
+    from unbake.layout import boundary_map
+
+    changes = boundary_map.read(path)
+    edits = boundary_map.plan(project, changes)
+    if not apply:
+        return _finish(project, host, edits, False, [f"{len(changes)} boundary changes"])
+    proved = boundary_map.apply(project, host, changes)
+    text = split_apply.diff(edits)
+    versions = sorted({v for edit in edits for v in edit.versions})
+    return Outcome(text.splitlines(), versions, proved.lines() if proved is not None else ["no edits"])
+
+
+def same_symbol(project: Project, host: Host, path: Path, *, apply: bool) -> Outcome:
+    from unbake.layout import symbol_join
+
+    lines = symbol_join.run(project, host, path, apply=apply)
+    return Outcome([], list(project.versions), list(lines))
+
+
+def name_data(
+    project: Project,
+    host: Host,
+    name: str,
+    version: str | None,
+    address: int | None,
+    rename_from: str | None,
+    all_versions: bool,
+    *,
+    apply: bool,
+) -> Outcome:
+    if all_versions:
+        from unbake.layout.data_symbols import correspondence
+
+        edits = correspondence(project, host, name)
+    else:
+        from unbake.decomp.symbols_edits import data_symbol
+
+        assert version is not None and address is not None
+        edits = data_symbol(project, host, version, name, address, rename_from)
+    return _finish(project, host, edits, apply)

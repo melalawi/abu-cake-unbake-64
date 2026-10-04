@@ -273,6 +273,9 @@ def run(
             emitter.emit("fn.landed", function=row.function, bytes=row.bytes, versions=list(row.versions), seconds=round(time.monotonic() - started, 3), retried=(row.function, row.sha256) in retried)
             emitter.emit("fn.committed", function=row.function, commit=commit, message=f"Match {row.function}")
             unpushed.append(commit)
+            for merged in steps.ensure(project, host, ["merge-units"]):
+                if merged.ran:
+                    emitter.emit("step.run", step=merged.step, trigger=merged.trigger, seconds=round(merged.seconds, 3))
             if pusher is not None:
                 pusher.request()
 

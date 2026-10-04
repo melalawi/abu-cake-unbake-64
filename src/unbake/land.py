@@ -248,6 +248,7 @@ def publish(project: Project, host: Host, files: list[Path], *, push: bool) -> L
             continue
         result.landed.append(file.stem)
         result.commits.append(commit)
+        steps.ensure(config.load(project.root), host, ["merge-units"])
     if push and result.commits:
         result.pushed = push_commits(project, host)
     return result
