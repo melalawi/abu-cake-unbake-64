@@ -25,7 +25,8 @@ class DraftFileTests(ProjectCase):
         self.assertTrue((file.parent / "include").is_dir())
 
     def test_unproven_draft_is_written_and_named(self) -> None:
-        def unproven(project: object, host: object, function: str, version: str, scratch: Path, *rest: object) -> str:
+        def unproven(*args: object, **kwargs: object) -> str:
+            scratch = Path(str(args[4]))
             (scratch / "compile-proof").mkdir(parents=True)
             (scratch / "compile-proof" / "alpha.c").write_text("int alpha(void) { return f(); }\n")
             raise Held("m2c", "alpha: m2c/type compile proof failed: too few arguments")
