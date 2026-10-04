@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
+from unbake.config import Held
 from unbake.decomp.needs import LayoutNeed, Need, register_resolver
 from unbake.layout.split import Edit
-from unbake.config import Held
 
 
 @dataclass(frozen=True)
@@ -96,9 +96,9 @@ def layouts(source: str | Path, *, project: Any = None, policy: Any = None, vers
         held("source", "C text or Path required")
     if re.search(r"^\s*#\s*(include|if|ifdef|ifndef|elif)\b", source, re.M):
         held("source preprocessing", "conditional declarations and includes require project preprocessing")
-    from unbake.layout.structs_parser import Parser
+    from unbake import cdecl
 
-    return Parser(source).parse()
+    return cdecl.records(source)
 
 
 def resolve(pending: list[Need], project: Any, policy: Any) -> list[Edit]:

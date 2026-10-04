@@ -3,10 +3,11 @@
 import re
 from collections.abc import Callable
 
-from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
+from pycparser import c_ast  # type: ignore[import-untyped]
 
-from unbake.decomp.draft_context import _typedefs
+from unbake import cdecl
 from unbake.config import Held
+from unbake.decomp.draft_context import _typedefs
 
 _TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', re.S)
 
@@ -69,12 +70,12 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
         typedefs = "\n".join(f"typedef int {name};" for name in sorted(_typedefs(context)))
         expression = None
         try:
-            tree = c_parser.CParser().parse(typedefs + "\nvoid __m2c_value(void) { " + value + "; }")
+            tree = cdecl.parse(typedefs + "\nvoid __m2c_value(void) { " + value + "; }")
             expression = tree.ext[-1].body.block_items[0]
             addressable = isinstance(expression, (c_ast.ID, c_ast.ArrayRef, c_ast.StructRef)) or (
                 isinstance(expression, c_ast.UnaryOp) and expression.op == "*"
             )
-        except (c_parser.ParseError, AttributeError, IndexError):
+        except (cdecl.ParseError, AttributeError, IndexError):
             addressable = False
         if not addressable:
             if (

@@ -3,8 +3,9 @@
 import re
 from typing import Any
 
-from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
+from pycparser import c_ast  # type: ignore[import-untyped]
 
+from unbake import cdecl
 from unbake.decomp.draft_context import _typedefs
 from unbake.decomp.draft_macros import calls
 
@@ -27,8 +28,8 @@ def normalize(source: str, context: str) -> str:
     parsed = calls(parsed, "M2C_BITWISE", lambda args: "(" + args[-1] + ")")
     parsed = re.sub(r"/\*.*?\*/|//[^\n]*|^\s*#[^\n]*", " ", parsed, flags=re.S | re.M)
     try:
-        tree = c_parser.CParser().parse("\n".join(f"typedef int {name};" for name in sorted(names)) + "\n" + parsed)
-    except c_parser.ParseError:
+        tree = cdecl.parse("\n".join(f"typedef int {name};" for name in sorted(names)) + "\n" + parsed)
+    except cdecl.ParseError:
         return source
     assignments: dict[str, list[Any]] = {name: [] for name in candidates}
     sized: set[str] = set()

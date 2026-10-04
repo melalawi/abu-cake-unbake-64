@@ -7,11 +7,12 @@ import subprocess
 from itertools import pairwise
 from pathlib import Path
 
-from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
+from pycparser import c_ast  # type: ignore[import-untyped]
 
-from unbake.layout import split
+from unbake import cdecl
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
+from unbake.layout import split
 from unbake.typemap.declarations import clean
 
 
@@ -28,8 +29,8 @@ def definitions(project: Project, policy: Host, source: Path, version: str, text
     if result.returncode:
         raise Held("try", "trial.entries_source: " + result.stderr.strip())
     try:
-        tree = c_parser.CParser().parse(clean(result.stdout))
-    except c_parser.ParseError as error:
+        tree = cdecl.parse(clean(result.stdout))
+    except cdecl.ParseError as error:
         raise Held("try", f"trial.entries_source: {error}") from error
     return {
         node.decl.name for node in tree.ext if isinstance(node, c_ast.FuncDef) and "static" not in node.decl.storage

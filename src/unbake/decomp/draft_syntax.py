@@ -2,8 +2,9 @@
 
 from typing import Any
 
-from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
+from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
+from unbake import cdecl
 from unbake.config import Held
 
 
@@ -17,8 +18,8 @@ def address_arithmetic(source: str, context: str, function: str) -> str:
 
     prefix = clean(context).rstrip() + "\n"
     try:
-        tree = c_parser.CParser().parse(prefix + clean(source))
-    except c_parser.ParseError as error:
+        tree = cdecl.parse(prefix + clean(source))
+    except cdecl.ParseError as error:
         raise Held("m2c", f"{function}: unsupported C draft syntax: {error}") from error
     aliases: dict[str, Any] = {}
     tags: dict[str, Any] = {}

@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from unbake import cdecl
+from unbake.config import Project
 from unbake.layout import split_apply
 from unbake.layout.structs import Layout, held
-from unbake.layout.structs_parser import Parser
-from unbake.config import Project
 
 
 def home(project: Project) -> Path:
@@ -40,14 +40,14 @@ def consolidate(project: Project) -> None:
         if destination.exists()
         else ('#ifndef UNBAKE_STRUCTS_H\n#define UNBAKE_STRUCTS_H\n#include "types.h"\n\n#endif\n')
     )
-    known = {record.name: record for record in Parser(text).parse()}
+    known = {record.name: record for record in cdecl.records(text)}
     moved: list[Path] = []
     for root in project.include:
         for path in sorted(Path(root).glob("func_*.h")):
             if not re.fullmatch(r"func_[0-9A-Fa-f]{8}(?:_fields|_declarations)?", path.stem):
                 continue
             content = path.read_text()
-            records = Parser(content).parse()
+            records = cdecl.records(content)
             if not records:
                 continue
             remainder = content
@@ -69,7 +69,7 @@ def consolidate(project: Project) -> None:
             moved.append(path)
     if not moved:
         return
-    Parser(text).parse()
+    cdecl.records(text)
     replacements = {path.name: destination.name for path in moved}
     edits: dict[Path, str] = {destination: text}
     for root in (*project.include, project.src):

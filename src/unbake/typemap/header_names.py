@@ -7,9 +7,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
-from unbake.config import Held, Host, Project
 from unbake import atomic as atomic_files
+from unbake.config import Held, Host, Project
+from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
 
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
@@ -161,10 +161,11 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
     """Compare declarator structure, not parameter names or typedef spelling."""
     from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
-    from unbake.typemap.declarations import _SeededParser, canonical, declarator
+    from unbake import cdecl
+    from unbake.typemap.declarations import canonical, declarator
 
     def parse(spelling: str) -> Any:
-        parser = _SeededParser(dict.fromkeys(aliases, True))
+        parser = cdecl.parser(aliases)
         return parser.parse("typedef " + declarator(spelling, "__type_identity") + ";").ext[0].type
 
     def shape(node: Any, active: tuple[str, ...] = ()) -> object:
@@ -357,8 +358,8 @@ def source_names(
     """
     import json
 
-    from unbake.fold.source_views import _preprocessed_lines, _version_lines
     from unbake.cache import Cache, key
+    from unbake.fold.source_views import _preprocessed_lines, _version_lines
     from unbake.typemap.declarations import clean
     from unbake.typemap.storage import generated
 

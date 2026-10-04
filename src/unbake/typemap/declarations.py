@@ -10,15 +10,16 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
+from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
+from unbake import atomic as atomic_files
+from unbake import cdecl
+from unbake.config import Held, Host, Project
 from unbake.decomp.draft_context import ordered_headers
 from unbake.decomp.header_declarations import attribute_source, declaration_source
 from unbake.decomp.header_declarations import declarations as header_declarations
 from unbake.layout.structs_parser import Parser
-from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
-from unbake import atomic as atomic_files
 from unbake.typemap import storage
 
 _BOUNDARY = "extern int __unbake_feedback_boundary;"
@@ -249,18 +250,6 @@ class ProvenStructs(Mapping[str, Any]):
         return {**self.template[name], "provenance": self.provenance}
 
 
-class _SeededParser(c_parser.CParser):  # type: ignore[misc]
-    """Resume the file scope of an exact preprocessed prefix (pinned pycparser 3)."""
-
-    def __init__(self, scope: dict[str, bool]) -> None:
-        super().__init__()
-        self.scope = scope
-
-    def _parse_translation_unit_or_empty(self) -> Any:
-        self._scope_stack = [self.scope.copy()]
-        return super()._parse_translation_unit_or_empty()
-
-
 class _FullDeclarationUnit(Exception):
     """A source changes the layout meaning of its shared header prefix."""
 
@@ -370,7 +359,7 @@ def extract(
     source = clean(source, line_markers=owned_source is not None or authored_headers is not None)
     source = _declaration_unit(source)
     try:
-        parser = _parser or (c_parser.CParser() if _scope is None else _SeededParser(_scope))
+        parser = _parser or cdecl.parser(_scope or {})
         tree = parser.parse(source)
     except Exception as error:
         raise Held("solve", f"types.declaration: {provenance}: {error}") from error
@@ -606,7 +595,7 @@ def published(
         if not marker:
             raise Held("solve", "types.declaration: missing preprocessor source boundary")
     cleaned = clean(prefix, line_markers=True)
-    parser = c_parser.CParser()
+    parser = cdecl.parser()
     seed = extract(
         cleaned,
         {},
@@ -639,7 +628,7 @@ def published(
     prototypes = _portable_signatures(result, seed["aliases"])
     if prototypes:
         try:
-            _SeededParser(scope).parse("\n".join(prototypes))
+            cdecl.parse("\n".join(prototypes), typedefs=scope)
         except Exception as error:
             raise Held("solve", f"types.declaration: {provenance}: emitted prototype: {error}") from error
     return result
@@ -718,9 +707,7 @@ def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict
         return _collect(project, policy, Path(temporary), facts.store(policy), keys)
 
 
-def _collect(
-    project: Project, policy: Host | None, scratch: Path, store: Any, keys: list[str]
-) -> list[dict[str, Any]]:
+def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, keys: list[str]) -> list[dict[str, Any]]:
     from unbake.typemap import facts
 
     seeds = []

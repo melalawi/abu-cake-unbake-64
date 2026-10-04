@@ -7,9 +7,10 @@ from functools import lru_cache
 
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
-from unbake.decomp.header_declarations import declaration_source, declarations
+from unbake import cdecl
 from unbake.config import Held
-from unbake.typemap.declarations import _SeededParser, _type, canonical
+from unbake.decomp.header_declarations import declaration_source, declarations
+from unbake.typemap.declarations import _type, canonical
 
 
 def spans(text: str) -> list[tuple[int, int]]:
@@ -77,7 +78,7 @@ def _aliases(text: str) -> dict[str, str]:
                     row = row[:begin] + row[begin + token.end() :]
                     break
         try:
-            tree = _SeededParser(dict.fromkeys(names, True)).parse(declaration_source(row))
+            tree = cdecl.parse(declaration_source(row), typedefs=names)
         except Exception:
             continue
         _primitive_types(tree)
@@ -100,7 +101,7 @@ def _signature(text: str, items: tuple[tuple[str, str], ...]) -> str:
     row = declarations(text)
     scope = dict.fromkeys(row.uses | row.typedefs | mapping.keys(), True)
     try:
-        tree = _SeededParser(scope).parse(declaration_source(text))
+        tree = cdecl.parse(declaration_source(text), typedefs=scope)
     except Exception:
         # Unsupported compiler syntax is equal only when its bytes agree.
         return normalized(text)
@@ -198,7 +199,7 @@ def _body_signature(body: str, mapping: dict[str, str]) -> str:
     source = "struct DeclarationBody " + declaration_source(body) + ";"
     try:
         names = declarations(source).uses | mapping.keys()
-        tree = _SeededParser(dict.fromkeys(names, True)).parse(source)
+        tree = cdecl.parse(source, typedefs=names)
     except Exception:
         return normalized(declaration_source(body))
 

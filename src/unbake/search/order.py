@@ -9,11 +9,12 @@ from copy import deepcopy
 from itertools import pairwise
 from typing import Any, cast
 
-from unbake.work.compare import Compared
+from unbake import cdecl
 from unbake.config import Held
 from unbake.search.core import Context, Mutation
 from unbake.search.loops import variants as loop_variants
 from unbake.search.loops import walk
+from unbake.work.compare import Compared
 
 
 def _items(node: Any, ast: Any) -> list[Any]:
@@ -353,7 +354,7 @@ def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     if time.monotonic() >= deadline:
         return
     try:
-        from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
+        from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
     except ImportError as error:
         raise Held("order", "pycparser is required") from error
     # Comments are whitespace; keep string literals byte-for-byte.
@@ -366,8 +367,8 @@ def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     if re.search(r"^\s*#", cleaned, re.M):
         raise Held("order", "source.preprocessed is required (directives remain)")
     try:
-        tree = c_parser.CParser().parse(cleaned)
-    except (c_parser.ParseError, AssertionError) as error:
+        tree = cdecl.parse(cleaned)
+    except (cdecl.ParseError, AssertionError) as error:
         raise Held("order", f"source.syntax: {error}") from error
     functions = [node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function_name]
     if len(functions) != 1:
