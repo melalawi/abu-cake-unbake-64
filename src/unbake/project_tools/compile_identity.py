@@ -10,7 +10,9 @@ import fcntl
 import hashlib
 import json
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from unbake.project_tools.atomic import write
 from unbake.project_tools.host import resolve_tool
@@ -138,6 +140,59 @@ def publish_stamp(path: Path, content: str) -> None:
             write(path, payload)
 
 
+def assembler_headers(data: Mapping[str, Any], version: str, kind: str = "as") -> list[str]:
+    """Track the same include-directory inputs that the assembly cache hashes."""
+    flags = [
+        *(data["sn64_asflags"] if kind == "cc" else data["asflags"]),
+        "-I" + str(Path(data["asm"]) / version / "include"),
+    ]
+    headers: list[str] = []
+    previous = False
+    for flag in flags:
+        if flag == "-I" and not previous:
+            previous = True
+        elif previous or flag.startswith("-I"):
+            root = Path(flag if previous else flag[2:])
+            previous = False
+            headers.extend(str(path) for path in sorted(root.rglob("*")) if path.is_file())
+    if previous:
+        raise ValueError("assembler include option missing its value")
+    return list(dict.fromkeys(headers))
+
+
+def repair_assembly_depfiles(recipe: Path, build: Path, version: str) -> None:
+    """Migrate assembler include metadata without rerunning either compiler."""
+    from unbake.project_tools.codegen import dependency_paths
+
+    data = json.loads(recipe.read_text())
+    kinds = {ident: compiler["kind"] for ident, compiler in data["compilers"].items()}
+    sn64 = "sn64" in kinds.values()
+    headers = {"asm": assembler_headers(data, version), "src": assembler_headers(data, version, "cc") if sn64 else []}
+    marker = build / ".assembly-dependencies"
+    payload = (json.dumps([headers, kinds, data["default_compiler"], data["units"]], sort_keys=True) + "\n").encode()
+    if marker.is_file() and marker.read_bytes() == payload:
+        return
+    for category in ("asm", "src"):
+        if category == "src" and not sn64:
+            continue
+        base = build / "obj" / category
+        for path in base.rglob("*.d"):
+            if category == "src":
+                unit = path.relative_to(base).stem
+                ident = data["units"].get(unit, data["default_compiler"])
+                if kinds[ident] != "sn64":
+                    continue
+            text = path.read_text()
+            if ":" not in text:
+                continue
+            target = text.split(":", 1)[0]
+            dependencies = list(dict.fromkeys([*dependency_paths(text), *headers[category]]))
+            updated = target + ": " + " ".join(dependencies) + "\n"
+            if updated != text:
+                write(path, updated.encode())
+    write(marker, payload)
+
+
 def sync_drivers(recipe: Path) -> None:
     """Use the cache's projection for installed driver logic, ignoring comments."""
     from unbake.project.cache import key
@@ -189,10 +244,16 @@ def sync_binaries(recipe: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--recipe", type=Path, required=True)
+    parser.add_argument("--build", type=Path)
+    parser.add_argument("--version")
     args = parser.parse_args()
     try:
         sync_binaries(args.recipe)
         sync_drivers(args.recipe)
+        if args.build is not None or args.version is not None:
+            if args.build is None or args.version is None:
+                raise ValueError("--build and --version are required together")
+            repair_assembly_depfiles(args.recipe, args.build, args.version)
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, f"HELD(identity): {error}\n")
 

@@ -34,7 +34,7 @@ from unbake.project_tools.codegen import (
 from unbake.project_tools.codegen import (
     preprocessed_dependencies as preprocessed_dependencies,
 )
-from unbake.project_tools.compile_identity import driver_content, selected_pins
+from unbake.project_tools.compile_identity import assembler_headers, driver_content, selected_pins
 from unbake.project_tools.host import resolve_tool
 
 
@@ -169,8 +169,12 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
     if not out.exists() or out.read_bytes() != cached.read_bytes():
         with staging(out) as pending:
             shutil.copyfile(cached, pending)
-    if args.kind == "as" and args.depfile and not args.depfile.exists():
-        args.depfile.write_text((args.dep_target or str(out)) + ": " + str(args.source) + "\n")
+    if args.depfile and (args.kind == "as" or sn64):
+        existing = dependency_paths(args.depfile.read_text()) if args.depfile.is_file() else []
+        dependencies = list(
+            dict.fromkeys([str(args.source), *existing, *assembler_headers(data, args.version, args.kind)])
+        )
+        args.depfile.write_text((args.dep_target or str(out)) + ": " + " ".join(dependencies) + "\n")
     if args.kind == "cc" and args.depfile and args.depfile.is_file():
         words = dependency_paths(args.depfile.read_text())
         dependency_hashes = {str(Path(word)): dependency_hash(word) for word in words}

@@ -98,7 +98,7 @@ $(LD_SCRIPT) $(LINK_SCRIPTS) $(BUILD)/symbol-addresses.txt $(BUILD)/unit-ranges.
 # Executable mtimes and manifest rows are publication metadata. Compare actual
 # bytes once before evaluating object prerequisites; unchanged stamps keep mtimes.
 ifneq ($(filter-out setup clean distclean,$(if $(MAKECMDGOALS),$(MAKECMDGOALS),all)),)
-IDENTITY_STATUS := $(shell python3 $(TOOLS)/compile_identity.py --recipe $(RECIPE) || echo failed)
+IDENTITY_STATUS := $(shell python3 $(TOOLS)/compile_identity.py --recipe $(RECIPE) --build $(BUILD) --version $(VERSION) || echo failed)
 ifneq ($(strip $(IDENTITY_STATUS)),)
 $(error HELD(identity): compiler identity refresh failed)
 endif

@@ -301,6 +301,71 @@ class IdentityStampTests(unittest.TestCase):
         self.assertEqual(args.output.read_bytes(), artifact.read_bytes())
         self.assertEqual(sum(path.is_file() for path in args.cache_root.rglob("*")), 2)
 
+    def test_cached_assembly_retains_include_dependencies_for_both_flag_spellings(self):
+        project, _ = fixture(self.root, case=self)
+        write_rendered(project)
+        recipe = project.tools / "build.json"
+        original = json.loads(recipe.read_text())
+        source = self.root / "asm/us/first.s"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b".text\n")
+        include = source.parent / "include/macro.inc"
+        include.parent.mkdir()
+        include.write_bytes(b"assembler macro")
+        extra = self.root / "extra/header.inc"
+        extra.parent.mkdir()
+        extra.write_bytes(b"extra macro")
+        artifact = self.root / "cached-as.o"
+        artifact.write_bytes(b"cached assembly")
+        for flags in (["-Iextra"], ["-I", "extra"]):
+            with self.subTest(flags=flags):
+                data = copy.deepcopy(original)
+                data["asflags"] += flags
+                args = argparse.Namespace(
+                    recipe=recipe,
+                    output=self.root / "first.o",
+                    source=source,
+                    kind="as",
+                    version="us",
+                    unit="first",
+                    non_matching="0",
+                    depfile=self.root / "first.d",
+                    dep_target="first.built",
+                    cache_root=self.root / "cache",
+                )
+                with (
+                    patch.object(compile.Cache, "produce", return_value=artifact),
+                    patch.object(compile, "run", side_effect=AssertionError("cache hit must not invoke assembler")),
+                ):
+                    compile.compile_object(args, data)
+                dependencies = compile.dependency_paths(args.depfile.read_text())
+                self.assertIn(str(source), dependencies)
+                self.assertIn("asm/us/include/macro.inc", dependencies)
+                self.assertIn("extra/header.inc", dependencies)
+
+    def test_old_assembly_depfiles_migrate_atomically_and_only_once(self):
+        project, _ = fixture(self.root, case=self)
+        write_rendered(project)
+        include = self.root / "asm/us/include/macro.inc"
+        include.parent.mkdir(parents=True)
+        include.write_bytes(b"macro")
+        build = project.build / "us"
+        depfile = build / "obj/asm/first.d"
+        depfile.parent.mkdir(parents=True)
+        original = b"first.built: \\\n asm/us/first.s\n"
+        depfile.write_bytes(original)
+        sibling = self.root / "original.d"
+        sibling.hardlink_to(depfile)
+        identity.repair_assembly_depfiles(project.tools / "build.json", build, "us")
+        self.assertIn("asm/us/include/macro.inc", depfile.read_text())
+        self.assertNotIn("\\", compile.dependency_paths(depfile.read_text()))
+        self.assertEqual(sibling.read_bytes(), original)
+        stamp = depfile.stat().st_mtime_ns
+        with patch.object(identity, "write", wraps=identity.write) as write:
+            identity.repair_assembly_depfiles(project.tools / "build.json", build, "us")
+        write.assert_not_called()
+        self.assertEqual(depfile.stat().st_mtime_ns, stamp)
+
     def test_refresh_migrates_old_graph_preserves_provenance_and_stamps(self):
         project, _ = fixture(self.root, case=self)
         write_rendered(project)
