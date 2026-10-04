@@ -85,6 +85,10 @@ class Pool:
         except BrokenProcessPool:
             return self._fresh().submit(fn, item)
 
+    def submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
+        """One task; a broken pool is replaced first. The caller retries a crashed task at most once."""
+        return self._submit(fn, item)
+
     def map(self, fn: Callable[[T], R], items: Sequence[T]) -> Iterator[R]:
         """Results in item order; at most `size` tasks in flight."""
         pending: deque[tuple[T, Future[R], int]] = deque()
