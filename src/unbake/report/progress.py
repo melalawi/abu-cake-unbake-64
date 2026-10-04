@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import struct
 from pathlib import Path
 from typing import Any, cast
 
@@ -258,6 +259,16 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     return before + block + after
 
 
+def f32(value: float) -> float:
+    """The shortest decimal that reads back as the same float32: objdiff report percentages are proto3 floats."""
+    single = struct.unpack(">f", struct.pack(">f", value))[0]
+    for digits in range(1, 10):
+        shortest = float(f"{single:.{digits}g}")
+        if struct.unpack(">f", struct.pack(">f", shortest))[0] == single:
+            return shortest
+    return float(single)
+
+
 def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
     size = row.end - row.start
     matched = row.kind == "c"
@@ -270,7 +281,7 @@ def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
     }
     function: dict[str, Any] = {"name": row.name, "size": str(size), "metadata": {}, "address": "0"}
     section: dict[str, Any] = {"name": ".text", "size": str(size), "metadata": {}}
-    fuzzy = 100.0 if matched else best
+    fuzzy = 100.0 if matched else (None if best is None else f32(best))
     if fuzzy is not None:
         measures["fuzzy_match_percent"] = fuzzy
         function["fuzzy_match_percent"] = fuzzy
@@ -317,23 +328,24 @@ def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
     )
 
     def share(part: float, whole: float) -> float:
-        return 100.0 * part / whole if whole else 0.0
+        return f32(100.0 * part / whole) if whole else 0.0
 
     measures = {
         "fuzzy_match_percent": share(fuzzy_bytes, total),
-        "total_code": str(total),
-        "matched_code": str(matched),
+        "total_code": total,
+        "matched_code": matched,
         "matched_code_percent": share(matched, total),
         "matched_data_percent": 100.0,
         "total_functions": len(rows),
         "matched_functions": len(matched_rows),
         "matched_functions_percent": share(len(matched_rows), len(rows)),
-        "complete_code": str(matched),
+        "complete_code": matched,
         "complete_code_percent": share(matched, total),
         "complete_data_percent": 100.0,
         "total_units": len(rows),
         "complete_units": len(matched_rows),
     }
+    # Summary counters are native integers (what _native_counts reads back); unit rows keep objdiff's proto3 strings.
     return {"measures": measures, "units": units, "version": 2}
 
 
