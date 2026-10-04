@@ -376,7 +376,17 @@ class _PublishedHeaders:
             )
             if re.search(r"\b(?:__COUNTER__|_Pragma|__INCLUDE_LEVEL__)\b", logical):
                 return None
-            return [(m[1], m[2].strip()) for m in re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", logical, re.M)]
+            rows = [(m[1], m[2].strip()) for m in re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", logical, re.M)]
+            depth = 0
+            for kind, _ in rows:
+                if kind in {"if", "ifdef", "ifndef"}:
+                    depth += 1
+                elif kind in {"else", "elif", "endif"}:
+                    if not depth:
+                        return None
+                    if kind == "endif":
+                        depth -= 1
+            return rows if depth == 0 else None
 
         def scan(
             path: Path, rows: list[tuple[str, str]] | None, inherited: set[str], visiting: frozenset[Path]
@@ -496,7 +506,7 @@ class _PublishedHeaders:
                 return error
 
         prepared = self.prepared.get(version)
-        if prepared is None:
+        if prepared is None or len({source.parent for source in sources}) > 1:
             return [individual(source) for source in sources]
         if version not in self.batch_safe:
             self.batch_safe[version] = not any(
@@ -513,18 +523,14 @@ class _PublishedHeaders:
             changed = set().union(*(row[1] for index in selected if (row := inputs[index]) is not None))
             reset = "".join(f"#undef {name}\n" + self.macros[version].get(name, "") for name in sorted(changed))
             marker = "__unbake_feedback_unit_" + uuid4().hex + "_"
-            files = []
             units = []
             try:
                 for number, index in enumerate(selected):
                     row = inputs[index]
                     assert row is not None
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", prefix=version + ".", suffix=".c", dir=self.scratch, delete=False
-                    ) as stream:
-                        stream.write(f'#line 1 "{sources[index]}"\n' + row[0])
-                        files.append(Path(stream.name))
-                    units.append(f"extern int {marker}{number};\n" + reset + f'#include "{files[-1]}"\n')
+                    units.append(
+                        f"extern int {marker}{number};\n" + reset + f'#line 1 "{sources[index]}"\n' + row[0] + "\n"
+                    )
                 units.append(f"extern int {marker}{len(selected)};\n")
                 expanded = _preprocess(
                     self.project, [*command[:-1], "-iquote", str(sources[selected[0]].parent), "-"], "".join(units)
@@ -547,9 +553,6 @@ class _PublishedHeaders:
                     results[index] = prefix, frames[2 * number + 2]
             except Held:
                 selected = []
-            finally:
-                for path in files:
-                    path.unlink(missing_ok=True)
         accepted = set(selected)
         for index, source in enumerate(sources):
             if index not in accepted:

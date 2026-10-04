@@ -156,6 +156,10 @@ class FeedbackPreprocessingTests(unittest.TestCase):
             "__COUNTER__;\n",
             '_Pragma("pack(1)");\n',
             "__INCLUDE_LEVEL__;\n",
+            "#if 1\n",
+            "#if 0\n",
+            "#endif\n",
+            "#else\n",
         ]
         for text in cases:
             with self.subTest(text=text), tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +210,32 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                             expected = "double" if path == altered or version == "eu" else "int"
                             self.assertIn(f"{expected} {path.stem}", text)
             self.assertTrue(all(len(entries) <= 4 for entries in batch.batch_effects.values()))
+
+    def test_batch_streams_units_without_per_source_temporary_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = self.fixture(root)
+            sources = [root / "alpha.c", root / "beta.c"]
+            for source in sources:
+                source.write_text(f"VALUE {source.stem}(void) {{}}\n")
+            with (
+                patch.object(declarations, "_preprocess", side_effect=self.cpp(batch, [])),
+                patch.object(
+                    declarations.tempfile, "NamedTemporaryFile", side_effect=AssertionError("per-source file")
+                ),
+            ):
+                actual = batch.batch("us", sources)
+            self.assertIn("int alpha", actual[0][1])
+            self.assertIn("int beta", actual[1][1])
+
+    def test_distinct_source_directories_keep_individual_include_search(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = self.fixture(root)
+            sources = [root / "alpha.c", root / "nested/beta.c"]
+            with patch.object(batch, "source", side_effect=lambda version, source: ("", source.stem)) as individual:
+                self.assertEqual(batch.batch("us", sources), [("", "alpha"), ("", "beta")])
+                self.assertEqual(individual.call_count, 2)
 
     def test_dynamic_baseline_macros_use_individual_preprocessing(self):
         for macro in ("__COUNTER__", "_Pragma", "__INCLUDE_LEVEL__"):
