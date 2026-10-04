@@ -265,6 +265,10 @@ class _PublishedHeaders:
         self.macros: dict[str, dict[str, str]] = {}
         self.batch_headers: dict[Path, str] = {}
         self.batch_guards: dict[Path, str | None] = {}
+        self.batch_effects: dict[
+            Path, list[tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str] | None]]
+        ] = {}
+        self.batch_directives: dict[Path, list[tuple[str, str]] | None] = {}
 
     def source(self, version: str, source: Path) -> str | tuple[str, str]:
         project, policy = self.project, self.policy
@@ -352,12 +356,10 @@ class _PublishedHeaders:
         return prefix, suffix
 
     def _batch_input(self, version: str, source: Path) -> tuple[str, set[str]] | None:
-        """Find every macro a literal include closure can change; otherwise isolate it."""
+        """Enumerate macro effects, caching closures under their observed guard state."""
         macros = self.macros[version]
-        changed: set[str] = set()
-        seen: set[Path] = set()
 
-        def inspect(path: Path, text: str) -> bool:
+        def directives(text: str) -> list[tuple[str, str]] | None:
             logical = re.sub(r"\\\r?\n", "", text)
             logical = re.sub(
                 r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*',
@@ -366,9 +368,18 @@ class _PublishedHeaders:
                 flags=re.S,
             )
             if re.search(r"\b(?:__COUNTER__|_Pragma|__INCLUDE_LEVEL__)\b", logical):
-                return False
-            for directive in re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", logical, re.M):
-                kind, argument = directive[1], directive[2].strip()
+                return None
+            return [(m[1], m[2].strip()) for m in re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", logical, re.M)]
+
+        def scan(
+            path: Path, rows: list[tuple[str, str]] | None, inherited: set[str], visiting: frozenset[Path]
+        ) -> tuple[set[str] | None, set[str]]:
+            effects: set[str] = set()
+            observed: set[str] = set()
+            if rows is None:
+                return None, observed
+            current = set(inherited)
+            for kind, argument in rows:
                 if kind not in {
                     "define",
                     "undef",
@@ -383,12 +394,10 @@ class _PublishedHeaders:
                     "error",
                     "warning",
                 }:
-                    return False
+                    return None, observed
                 if kind in {"define", "undef"}:
                     name = re.match(r"[A-Za-z_]\w*", argument)
-                    if name is None:
-                        return False
-                    if name[0] in {
+                    if name is None or name[0] in {
                         "__LINE__",
                         "__FILE__",
                         "__BASE_FILE__",
@@ -399,44 +408,66 @@ class _PublishedHeaders:
                         "__INCLUDE_LEVEL__",
                         "__has_include",
                     }:
-                        return False
-                    changed.add(name[0])
+                        return None, observed
+                    effects.add(name[0])
+                    current.add(name[0])
                 elif kind == "include":
                     include = re.fullmatch(r'[<"]([^>"\n]+)[>"]', argument)
                     if include is None:
-                        return False
+                        return None, observed
                     roots = ([path.parent] if argument.startswith('"') else []) + list(self.project.include)
                     found = next((root / include[1] for root in roots if (root / include[1]).is_file()), None)
                     if found is None:
-                        return False
-                    found = found.resolve()
-                    # These exact files were consumed by the prefix. Sources
-                    # which alter their guards still get their closure scanned.
-                    if found in seen:
-                        continue
-                    seen.add(found)
-                    if found not in self.batch_headers:
-                        self.batch_headers[found] = found.read_text()
-                    if found not in self.batch_guards:
-                        self.batch_guards[found] = _outer_guard(self.batch_headers[found])
-                    guard = self.batch_guards[found]
-                    if guard is not None and guard in macros and guard not in changed:
-                        continue
-                    if not inspect(found, self.batch_headers[found]):
-                        return False
-            return True
+                        return None, observed
+                    child, guards = header(found.resolve(), current, visiting)
+                    observed.update(guards)
+                    if child is None:
+                        return None, observed
+                    effects.update(child)
+                    current.update(child)
+            return effects, observed
+
+        def header(path: Path, changed: set[str], visiting: frozenset[Path]) -> tuple[set[str] | None, set[str]]:
+            entries = self.batch_effects.setdefault(path, [])
+            for guards, context, defined, cached_effects in entries:
+                if changed.intersection(guards) == context and guards.intersection(macros) == defined:
+                    return None if cached_effects is None else set(cached_effects), set(guards)
+            if path not in self.batch_headers:
+                self.batch_headers[path] = path.read_text()
+                self.batch_guards[path] = _outer_guard(self.batch_headers[path])
+                self.batch_directives[path] = directives(self.batch_headers[path])
+            guard = self.batch_guards[path]
+            observed = {guard} if guard is not None else set()
+            if guard is not None and guard in macros and guard not in changed:
+                effects: set[str] | None = set()
+            elif path in visiting:
+                return None, observed
+            else:
+                effects, nested = scan(path, self.batch_directives[path], changed, visiting | {path})
+                observed.update(nested)
+            entries.append(
+                (
+                    frozenset(observed),
+                    frozenset(changed.intersection(observed)),
+                    frozenset(observed.intersection(macros)),
+                    None if effects is None else frozenset(effects),
+                )
+            )
+            del entries[:-4]
+            return effects, observed
 
         text = source.read_text()
-        if not inspect(source, text):
+        effects, _ = scan(source, directives(text), set(), frozenset({source}))
+        if effects is None:
             return None
         from unbake.typemap.split import consumer_macro
 
         macro = consumer_macro(source.stem)
         if (self.project.include[0] / "shared/consumers" / (source.stem + ".h")).is_file():
-            changed.add(macro)
+            effects.add(macro)
             definition = macros.get(macro, f"#define {macro} 1\n")
             text = f"#undef {macro}\n" + definition + f'#line 1 "{source}"\n' + text
-        return text, changed
+        return text, effects
 
     def batch(self, version: str, sources: list[Path]) -> list[str | tuple[str, str] | Held]:
         """One cpp for a bounded batch, restoring its exact macro state per source.

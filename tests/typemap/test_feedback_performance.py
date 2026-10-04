@@ -26,6 +26,8 @@ class FeedbackPreprocessingTests(unittest.TestCase):
         batch.guarded = {}
         batch.batch_headers = {}
         batch.batch_guards = {}
+        batch.batch_effects = {}
+        batch.batch_directives = {}
         batch.prepared = {v: ("", ["mock-cpp", "-P", "-x", v, "-"]) for v in ("us", "eu")}
         batch.macros = {v: {"VALUE": f"#define VALUE {value}\n"} for v, value in (("us", "int"), ("eu", "float"))}
         return batch
@@ -182,6 +184,25 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                 actual = batch.batch("us", sources)
             self.assertIn("double alpha", actual[0][1])
             self.assertIn("int beta", actual[1][1])
+
+    def test_cached_header_effects_observe_later_guard_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = self.fixture(root)
+            batch.macros["us"]["GUARD"] = "#define GUARD 1\n"
+            (root / "include/mutate.h").write_text("#ifndef GUARD\n#define GUARD\n#define VALUE double\n#endif\n")
+            ordinary, altered = root / "alpha.c", root / "beta.c"
+            ordinary.write_text('#include "mutate.h"\nVALUE alpha(void) {}\n')
+            altered.write_text('#undef GUARD\n#include "mutate.h"\nVALUE beta(void) {}\n')
+            calls = []
+            with patch.object(declarations, "_preprocess", side_effect=self.cpp(batch, calls)):
+                for version in ("us", "eu", "us", "eu"):
+                    for sources in ([ordinary, altered], [altered, ordinary], [ordinary, ordinary]):
+                        actual = batch.batch(version, sources)
+                        for path, (_, text) in zip(sources, actual, strict=True):
+                            expected = "double" if path == altered or version == "eu" else "int"
+                            self.assertIn(f"{expected} {path.stem}", text)
+            self.assertTrue(all(len(entries) <= 4 for entries in batch.batch_effects.values()))
 
     def test_receipt_order_and_bounded_preprocessor_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
