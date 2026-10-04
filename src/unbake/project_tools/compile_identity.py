@@ -44,6 +44,13 @@ def selected_pins(groups: dict[str, dict[str, str]], cc: Path, tools: Path, kind
 
 
 class _Logic(ast.NodeTransformer):
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST:
+        if node.module is not None:
+            node.module = node.module.removeprefix("unbake.project_tools.")
+            if node.module == "unbake.project.cache":
+                node.module = "cache"
+        return node
+
     def visit_Expr(self, node: ast.Expr) -> ast.AST | None:
         return None if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str) else node
 
@@ -100,9 +107,7 @@ def driver_stamp_name(name: str, kind: str, sn64: bool) -> str:
 
 def driver_content(path: Path, kind: str | None = None, sn64: bool = False) -> bytes:
     """Hash executable generator logic, excluding comments and linker-only ELF methods."""
-    content = path.read_text().replace("from unbake.project_tools.", "from ")
-    content = content.replace("from unbake.project.cache import", "from cache import")
-    tree = ast.parse(content)
+    tree = ast.parse(path.read_text())
     if path.name == "elf.py":
         for node in tree.body:
             if isinstance(node, ast.ClassDef) and node.name == "Object":

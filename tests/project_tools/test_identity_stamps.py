@@ -28,6 +28,16 @@ class IdentityStampTests(unittest.TestCase):
         os.chdir(self.root)
         compile.tool_digest.cache_clear()
 
+    def test_import_normalization_preserves_executable_string_literals(self):
+        driver = self.root / "driver.py"
+        library = 'from unbake.project_tools.codegen import prepare\nvalue = "from unbake.project_tools.kind"\n'
+        driver.write_text(library)
+        before = identity.driver_content(driver)
+        driver.write_text(library.replace("from unbake.project_tools.codegen", "from codegen"))
+        self.assertEqual(identity.driver_content(driver), before)
+        driver.write_text(driver.read_text().replace("from unbake.project_tools.kind", "from kind"))
+        self.assertNotEqual(identity.driver_content(driver), before)
+
     def test_stamp_publication_table_and_hardlinks(self):
         stamp = self.root / "stamp"
         identity.publish_stamp(stamp, "same")
