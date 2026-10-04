@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 from collections import defaultdict
@@ -18,10 +19,43 @@ from unbake.layout.symbol_identity import similarity_distribution
 from unbake.project import setup, workspace
 from unbake.project.config import Held, Project, SetupPolicy, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
-from unbake.project.rom import load
+from unbake.project.rom import Rom, load
 
 
-def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[str, Any]]:
+def retained_assertions(
+    functions: dict[str, list[split.Function]],
+    images: dict[str, Rom],
+    assertions: list[dict[str, Any]],
+    *,
+    verify_retained: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Verify configured-name assertions without retiring changed boundaries."""
+    current = {(v, f.start): f for v, rows in functions.items() for f in rows}
+    checks: dict[str, list[tuple[dict[str, Any], str]]] = defaultdict(list)
+    for assertion in assertions:
+        placements = assertion["placements"]
+        if any((f := current.get((p["version"], p["start"]))) is None or f.end != p["end"] for p in placements):
+            raise Held("setup", f"setup.symbol_assertion_stale: {assertion['name']}: boundary changed")
+        if verify_retained:
+            for placement in placements:
+                checks[placement["version"]].append((placement, assertion["name"]))
+    # Consume one cartridge at a time when verifying retained names.
+    for version, placements in checks.items():
+        if version not in images:
+            raise Held("setup", "setup.symbol_assertion_stale: unknown VERSION")
+        image = images[version].image()
+        for placement, name in placements:
+            start, end = placement["start"], placement["end"]
+            if (
+                not 0 <= start < end <= len(image)
+                or hashlib.sha256(image[start:end]).hexdigest() != placement["body_sha256"]
+            ):
+                raise Held("setup", f"setup.symbol_assertion_stale: {name}: bytes changed")
+        del image
+    return assertions, []
+
+
+def plan(project: Project, policy: SetupPolicy, *, retain_names: bool = False) -> tuple[dict[str, str], dict[str, Any]]:
     """Only instruction/position/graph evidence establishes identity."""
     ff = {v: port.functions(project, v) for v in project.versions}
     images = {v: load(project.version(v).baserom, retain_data=False) for v in project.versions}
@@ -39,19 +73,27 @@ def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[st
         or set(layout.get("versions", {})) != set(project.versions)
     ):
         raise Held("setup", "setup.symbol_layout_stale: ROM pins, project identity or layout versions differ")
+    assertions = layout.get("symbol_assertions", [])
+    if retain_names:
+        retained_assertions(ff, images, assertions, verify_retained=True)
     evidence: dict[str, dict[int, str]] = {}
     details: dict[str, dict[int, dict[str, Any]]] = {}
-    names = planner.correspondence(
-        images,
-        ff,
-        project.names_from,
-        symbol_policy=SymbolPolicy(policy.symbol_similarity_threshold, policy.symbol_similarity_margin),
-        evidence=evidence,
-        symbol_evidence=details,
-        preserve_names=True,
-        loaded_spans={v: row["loaded_spans"] for v, row in layout["versions"].items()},
-        assertions=layout.get("symbol_assertions", []),
-    )
+    if retain_names:
+        names = {v: {f.start: f.name for f in rows} for v, rows in ff.items()}
+        evidence = {v: {f.start: "retained configured name" for f in rows} for v, rows in ff.items()}
+        details = {v: {f.start: {"reason": "retained-configured-name"} for f in rows} for v, rows in ff.items()}
+    else:
+        names = planner.correspondence(
+            images,
+            ff,
+            project.names_from,
+            symbol_policy=SymbolPolicy(policy.symbol_similarity_threshold, policy.symbol_similarity_margin),
+            evidence=evidence,
+            symbol_evidence=details,
+            preserve_names=True,
+            loaded_spans={v: row["loaded_spans"] for v, row in layout["versions"].items()},
+            assertions=assertions,
+        )
     destinations: dict[str, set[str]] = defaultdict(set)
     placements = []
     for v, rows in ff.items():
@@ -123,6 +165,7 @@ def plan(project: Project, policy: SetupPolicy) -> tuple[dict[str, str], dict[st
         "data_symbols": data,
         "symbol_policy": {"threshold": policy.symbol_similarity_threshold, "margin": policy.symbol_similarity_margin},
         "similarity_distribution": similarity_distribution(details),
+        "retain_symbol_names": retain_names,
         "placements": placements,
         "replacements": replacements,
         "old_items": len(destinations),
@@ -157,8 +200,8 @@ def rewrite_layout(text: str, replacements: dict[str, str]) -> str:
     return "".join(lines)
 
 
-def run(project: Project, policy: SetupPolicy, confirm: str | None) -> list[str]:
-    replacements, report = plan(project, policy)
+def run(project: Project, policy: SetupPolicy, confirm: str | None, *, retain_names: bool = False) -> list[str]:
+    replacements, report = plan(project, policy, retain_names=retain_names)
     inputs = setup._inputs(project)
     token = planner.digest([inputs, report])
     directory = project.build / "setup"

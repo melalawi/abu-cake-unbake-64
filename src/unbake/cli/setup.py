@@ -25,6 +25,9 @@ def register(phases: Subparsers) -> None:
     parser.add_argument(
         "--replan-symbols", action="store_true", help="Review anchored symbol correspondence on retained boundaries."
     )
+    parser.add_argument(
+        "--retain-symbol-names", action="store_true", help="Review current boundaries with configured names retained."
+    )
     parser.add_argument("--compilers", action="store_true", help="Inspect compiler registry pins.")
     parser.add_argument("--supply", type=Path, metavar="DIR")
     parser.add_argument("--compiler", action="append", default=[], metavar="REGION=ID")
@@ -46,6 +49,8 @@ def pairs(values: list[str], flag: str) -> dict[str, str]:
 def run(args: argparse.Namespace, project: PendingProject) -> bool:
     from unbake.project import census, config, flow, setup, setup_config, toolchain
 
+    if getattr(args, "retain_symbol_names", False) and not args.replan_symbols:
+        raise Held("setup", "setup.symbol_layout: --retain-symbol-names requires --replan-symbols")
     if getattr(args, "refresh_helpers", False):
         if project.state != "ready":
             raise Held("setup", "setup.helper_refresh: ready project required")
@@ -97,7 +102,15 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
         from unbake.layout import symbol_replan
 
         policy = config.load_policy(args.policy, stage="setup")
-        return receipt("setup", symbol_replan.run(config.load(project.root), policy, args.confirm))
+        return receipt(
+            "setup",
+            symbol_replan.run(
+                config.load(project.root),
+                policy,
+                args.confirm,
+                retain_names=getattr(args, "retain_symbol_names", False),
+            ),
+        )
     if args.repropose_compilers:
         if project.state != "ready":
             raise Held("setup", "setup.compiler_refresh: ready project required")
