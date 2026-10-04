@@ -295,7 +295,8 @@ def _seed_generations(project: Project, staged: Project) -> None:
                 _relocate_generation(destination, project.root, staged.root)
                 staged.build_link(version).symlink_to(destination.name)
         if project.asm.is_dir():
-            shutil.copytree(project.asm, staged.asm)
+            # Assembly is editable source: staged writers may update it in place.
+            shutil.copytree(project.asm, staged.asm, copy_function=shutil.copy2)
 
 
 def _relocate_generation(generation: Path, source: Path, destination: Path) -> None:

@@ -556,6 +556,15 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual((self.project.asm / "example.s").read_bytes(), b"original assembly")
         self.assertEqual(os.readlink(self.project.build_link("us")), "us.0")
 
+    def test_seeded_assembly_uses_independent_copies(self) -> None:
+        self.project.asm.mkdir()
+        tree = self.project.build / "seed-stage"
+        setup._copy_inputs(self.project, tree, setup._inputs(self.project))
+        staged = config.load(tree)
+        with patch.object(setup.shutil, "copytree") as copytree:
+            setup._seed_generations(self.project, staged)
+        copytree.assert_called_once_with(self.project.asm, staged.asm, copy_function=shutil.copy2)
+
     def test_duplicate_gfx_definition_refuses_without_overwriting_human_header(self) -> None:
         header = self.project.include[0] / "human.h"
         content = "/* Owner header */\ntypedef union { unsigned int words[2]; } Gfx;\n"
