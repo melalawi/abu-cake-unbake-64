@@ -8,10 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import assemble
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.project_tools.layout import place, transfer_private
 from unbake.project_tools.pool_slices import Provider, link_pools
-from unbake.project_tools.rodata import relocated
+from unbake.objects.rodata import relocated
 
 
 class PoolOwnershipTests(unittest.TestCase):
@@ -264,7 +264,7 @@ class PoolOwnershipTests(unittest.TestCase):
         self.assertEqual([r["owner"] for r in rows], [None, None])
 
     def test_stale_piece_disagreement_is_named_before_publication(self):
-        from unbake.project_tools.literal_layout import replace
+        from unbake.objects.literal_layout import replace
         from unbake.project_tools.pool_slices import piece
 
         with tempfile.TemporaryDirectory() as directory:

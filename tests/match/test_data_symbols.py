@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from tests.decomp.support import assemble, fixture
 from unbake.match import data_symbols
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 class DataSymbolTests(unittest.TestCase):

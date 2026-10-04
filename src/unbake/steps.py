@@ -16,7 +16,7 @@ from typing import Any
 
 from unbake.cache import key
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def _path(project: Project) -> Path:

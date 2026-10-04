@@ -22,7 +22,7 @@ from pathlib import Path
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 _FINGERPRINT_PARTS = ("extract.py",)
 _C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)c(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)

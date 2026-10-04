@@ -9,9 +9,9 @@ from unbake.decomp.needs import SymbolNeed
 from unbake.layout import split
 from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
-from unbake.project import build
+from unbake import runner
 from unbake.config import Held, Host, Project
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 def unresolved(content: str, known: set[str]) -> set[str]:
@@ -44,11 +44,11 @@ def unresolved(content: str, known: set[str]) -> set[str]:
 def prepare(project: Project, policy: Host, function: str, version: str, out: Path) -> list[SymbolNeed]:
     """Compile only unresolved references through the build's content-keyed cache."""
     source = project.src / f"{function}.c"
-    content = build.preprocess_object(project, policy, source, version)
+    content = runner.preprocess(project, policy, source, version, unit=function)
     _, known = split.symbols(project.version(version).symbols)
-    if not unresolved(content.decode("utf-8"), set(known)):
+    if not unresolved(content, set(known)):
         return []
-    obj = build.compile_object(project, policy, source, version, out)
+    obj = runner.compile_unit(project, policy, source, version, unit=function)
     return needs(project, function, version, obj)
 
 

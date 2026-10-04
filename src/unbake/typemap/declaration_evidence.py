@@ -15,7 +15,7 @@ from unbake.layout import split as inventory
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
-from unbake.match import imports
+from unbake.fold import imports
 from unbake.cache import memo
 from unbake.config import Held, Host, Project, relative_text
 from unbake.typemap import split
@@ -383,7 +383,7 @@ def plan_many(project: Project, policy: Host, sources: tuple[Path, ...]) -> tupl
     """
     from dataclasses import replace
 
-    from unbake.match import declarations as source_declarations
+    from unbake.fold import declarations as source_declarations
 
     headers = Headers.read(project)
     original = dict(headers.texts)

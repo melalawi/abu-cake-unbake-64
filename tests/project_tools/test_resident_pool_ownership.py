@@ -7,10 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.decomp.support import assemble
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.project_tools.layout import place_object, resident_slices
 from unbake.project_tools.link_inputs import Objects, Selectors, Spans
-from unbake.project_tools.rodata import relocated
+from unbake.objects.rodata import relocated
 
 
 class ResidentPoolTests(unittest.TestCase):

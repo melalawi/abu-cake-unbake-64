@@ -105,4 +105,4 @@ def command(executable: str, assembly: str) -> list[str]:
         launcher = shlex.split(wrapped[1]) if wrapped else []
     if not launcher or not any("python" in Path(item).name for item in launcher):
         raise Held("m2c", "configured decompiler has no Python interpreter for virtual FPR analysis")
-    return [*launcher, str(Path(__file__).parents[1] / "project_tools/m2c_registers.py"), executable]
+    return [*launcher, str(Path(__file__).parents[1] / "decomp/m2c_registers.py"), executable]

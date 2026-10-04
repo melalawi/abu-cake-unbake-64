@@ -15,7 +15,7 @@ from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
 from unbake.fold.rewrite_view import View
 from unbake.cache import Cache, key
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def _gnu_blank(view: str, blank: Any) -> str:

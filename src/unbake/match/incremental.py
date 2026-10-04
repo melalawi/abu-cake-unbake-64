@@ -17,10 +17,10 @@ from unbake.match import forked, reporting, staging
 from unbake.fold.common import held
 from unbake.project import build, makefile
 from unbake.config import Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.project_tools import extract, layout
 from unbake.project_tools.codegen import dependency_paths
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.typemap.storage import file_digest
 
 

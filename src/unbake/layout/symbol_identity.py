@@ -607,8 +607,8 @@ def data_slots(
     is no nearest-label or surrounding-address inference.
     """
     from unbake.compilers.families.mips import Relocation
-    from unbake.project_tools.elf import Object
-    from unbake.project_tools.literal_layout import signed
+    from unbake.objects.elf import Object
+    from unbake.objects.literal_layout import signed
 
     if object_path is not None and object_path.is_file():
         obj = Object(object_path)

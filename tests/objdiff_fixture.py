@@ -5,7 +5,7 @@ import struct
 import subprocess
 from pathlib import Path
 
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 def side(path, function):

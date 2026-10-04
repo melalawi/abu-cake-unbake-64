@@ -13,7 +13,7 @@ from unittest.mock import patch
 from tests.helper_fixture import extraction
 from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.project_tools import atomic, compile, extract
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 class AtomicTests(unittest.TestCase):
@@ -262,7 +262,7 @@ class AtomicTests(unittest.TestCase):
                         patch.object(compile, "tool_digest", return_value="tools"),
                         patch.object(compile, "file_signature", return_value=(0, 0, 0, 0, 0)),
                         patch.object(compile.Cache, "produce", side_effect=produce),
-                        patch("unbake.project_tools.elf.Object"),
+                        patch("unbake.objects.elf.Object"),
                         patch("abumasn64.assemble.assemble", side_effect=assemble),
                         patch("unbake.project_tools.resolve_external_branches.read_symbols", return_value=({}, {})),
                         patch(

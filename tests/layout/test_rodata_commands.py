@@ -16,10 +16,10 @@ from tests.decomp.support import assemble
 from tests.layout.test_split import ProjectFixture
 from unbake.cli import rodata
 from unbake.config import Policy, Project
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.project_tools.layout import resident
-from unbake.project_tools.literal_layout import arrange
-from unbake.project_tools.rodata import relocated
+from unbake.objects.literal_layout import arrange
+from unbake.objects.rodata import relocated
 
 
 class RodataCommandTests(unittest.TestCase):

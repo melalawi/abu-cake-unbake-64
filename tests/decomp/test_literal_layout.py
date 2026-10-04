@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 
 from tests.decomp.support import assemble
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.project_tools.layout import resident
-from unbake.project_tools.literal_layout import arrange
-from unbake.project_tools.rodata import placement, relocated
+from unbake.objects.literal_layout import arrange
+from unbake.objects.rodata import placement, relocated
 
 
 class LiteralLayoutTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class LiteralLayoutTests(unittest.TestCase):
                 for number, symbol in enumerate(symbols):
                     if symbol["name"] in ("first", "second"):
                         struct.pack_into(">I", data, number * 16, 0)
-                from unbake.project_tools.literal_layout import replace
+                from unbake.objects.literal_layout import replace
 
                 replace(obj, index, data)
             obj.path.write_bytes(obj.data)

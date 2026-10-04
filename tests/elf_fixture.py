@@ -77,7 +77,7 @@ def write_object(path: Path, sections: dict[str, bytes], symbols=(), *, relocati
 
 def linked_fixture(path, objects, addresses):
     """Write an explicit linked-image fixture from the tiny relocatable tables."""
-    from unbake.project_tools.elf import Object
+    from unbake.objects.elf import Object
 
     contents, symbols = {}, []
     for object_path in objects:

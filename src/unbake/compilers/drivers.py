@@ -30,6 +30,24 @@ class Tools:
 
 MAKE_TOOLS = Tools("$(CPP)", "$(AS)", "$(N64LINK)")
 
+# One template per invocation kind. Each {field} is a list of words (runner) or one make variable (Makefile).
+# preprocess writes UNIT.i on stdout from the project root; compile and assemble run in the object's directory.
+TEMPLATES: dict[str, dict[str, tuple[str, ...] | None]] = {
+    "ido": {
+        "preprocess": ("{cc}", "{includes}", "{codegen}", "{defines}", "-E", "{source}"),
+        "compile": ("{cc}", "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
+        "assemble": None,
+    },
+    "sn64": {
+        "preprocess": ("{cpp}", "{includes}", "{cppflags}", "{defines}", "{source}"),
+        "compile": ("{cc}", "-quiet", "{codegen}", "{name}.i", "-o", "{name}.s"),
+        "assemble": ("{n64link}", "asn64", "--as", "{as}", "{asflags}", "{name}.s", "-o", "{name}.o"),
+    },
+}
+DEPEND = ("{cpp}", "-MM", "-MG", "{includes}", "{defines}", "{source}")
+# Kinds whose objects keep trailing zero padding after the last function (n64link place --trim otherwise).
+UNTRIMMED = frozenset({"sn64"})
+
 
 @dataclass(frozen=True)
 class Steps:
@@ -40,6 +58,28 @@ class Steps:
     compile: tuple[str, ...]
     assemble: tuple[str, ...] | None
     depend: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Parts:
+    """A unit's flags split the way every template uses them."""
+
+    kind: str
+    cc: str
+    includes: tuple[str, ...]
+    codegen: tuple[str, ...]
+    defines: tuple[str, ...]
+
+
+def render(template: tuple[str, ...], values: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """Fill a template: a word that is exactly {field} splices that field's words."""
+    result: list[str] = []
+    for word in template:
+        if word.startswith("{") and word.endswith("}"):
+            result.extend(values[word[1:-1]])
+        else:
+            result.append(word.format_map({key: " ".join(value) for key, value in values.items()}))
+    return tuple(result)
 
 
 def consumer_define(project: Project, unit: str) -> str | None:
@@ -109,26 +149,85 @@ def gnu_as_flags(project: Project) -> tuple[str, ...]:
     return (*GNU_AS_FLAGS, *(flag for flag in project.sn64_asflags if flag != "-mips3"))
 
 
-def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
-    """The commands for UNIT from SOURCE (a path relative to the project root)."""
+def _split(values: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(includes, codegen, defines) in their original relative order."""
+    includes, codegen, defines = [], [], []
+    pending = iter(values)
+    for flag in pending:
+        if flag in ("-I", "-D", "-U", "-include", "-isystem", "-iquote", "-imacros"):
+            value = next(pending, None)
+            if value is None:
+                raise Held("compile", f"compile.flags: {flag}: missing value")
+            (includes if flag not in ("-D", "-U") else defines).extend((flag, value))
+        elif flag.startswith("-I"):
+            includes.append(flag)
+        elif flag.startswith(("-D", "-U")):
+            defines.append(flag)
+        elif flag != "-c":
+            codegen.append(flag)
+    return includes, codegen, defines
+
+
+def compiler_parts(project: Project, ident: str) -> tuple[list[str], list[str], list[str]]:
+    """A configured compiler's own flags as (includes, codegen, defines)."""
+    return _split(list(project.compilers[ident].cflags))
+
+
+def unit_parts(project: Project, unit: str) -> tuple[list[str], list[str], list[str]]:
+    """A unit's extra [units] flags as (includes, codegen, defines)."""
+    return _split(list(project.unit_flags.get(unit, ())))
+
+
+def parts(project: Project, version: str, unit: str, *, non_matching: bool = False) -> Parts:
+    """Everything a template needs for UNIT in VERSION; the Makefile composes the same lists from variables."""
     compiler = project.compiler_for(unit)
-    cc = str(compiler.cc.relative_to(project.root) if compiler.cc.is_relative_to(project.root) else compiler.cc)
-    unit_flags = flags(project, version, unit, non_matching=non_matching)
-    name = Path(unit).name
-    include_flags = [flag for flag in unit_flags if flag.startswith("-I")]
-    define_flags = [flag for flag in unit_flags if flag.startswith(("-D", "-U"))]
-    depend = (tools.cpp, "-MM", "-MG", *include_flags, *define_flags, source)
-    if compiler.kind == "ido":
-        preprocess = (cc, *(flag for flag in unit_flags if flag != "-c"), "-E", source)
-        compile_ = (cc, *codegen_flags(unit_flags), "-c", f"{name}.i", "-o", f"{name}.o")
-        return Steps("ido", preprocess, compile_, None, depend)
+    if compiler.kind not in TEMPLATES:
+        raise Held("compile", f"compiler.{compiler.id}.kind: {compiler.kind}: no driver")
+    root = project.root
+    project_includes = [f"-I{p.relative_to(root) if p.is_relative_to(root) else p}" for p in project.include]
+    c_includes, c_codegen, c_defines = compiler_parts(project, compiler.id)
+    u_includes, u_codegen, u_defines = unit_parts(project, unit)
+    defines = [*c_defines, *("-D" + macro for macro in project.version(version).macros)]
+    if non_matching:
+        defines.append("-DNON_MATCHING=1")
+    guard = consumer_define(project, unit)
+    if guard is not None:
+        defines.append(guard)
+    defines.extend(u_defines)
+    codegen = [*c_codegen, *u_codegen]
     if compiler.kind == "sn64":
-        preprocess_flags, cc1_flags = partition_sn64(unit_flags)
-        preprocess = (tools.cpp, *include_flags, *project.cppflags, *preprocess_flags, source)
-        compile_ = (cc, "-quiet", *cc1_flags, f"{name}.i", "-o", f"{name}.s")
-        assemble = (tools.n64link, "asn64", "--as", tools.mips_as, *gnu_as_flags(project), f"{name}.s", "-o", f"{name}.o")
-        return Steps("sn64", preprocess, compile_, assemble, depend)
-    raise Held("compile", f"compiler.{compiler.id}.kind: {compiler.kind}: no driver")
+        partition_sn64(codegen)
+    cc = str(compiler.cc.relative_to(root) if compiler.cc.is_relative_to(root) else compiler.cc)
+    return Parts(
+        compiler.kind, cc, (*project_includes, *c_includes, *u_includes), tuple(codegen), tuple(defines)
+    )
+
+
+def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
+    """The commands for UNIT from SOURCE (a path relative to the project root, or any quoted word)."""
+    unit_parts_ = parts(project, version, unit, non_matching=non_matching)
+    values = {
+        "cc": (unit_parts_.cc,),
+        "cpp": (tools.cpp,),
+        "as": (tools.mips_as,),
+        "n64link": (tools.n64link,),
+        "includes": unit_parts_.includes,
+        "codegen": unit_parts_.codegen,
+        "defines": unit_parts_.defines,
+        "cppflags": project.cppflags,
+        "asflags": gnu_as_flags(project),
+        "source": (source,),
+        "name": (Path(unit).name,),
+    }
+    template = TEMPLATES[unit_parts_.kind]
+    assemble = template["assemble"]
+    return Steps(
+        unit_parts_.kind,
+        render(template["preprocess"] or (), values),
+        render(template["compile"] or (), values),
+        render(assemble, values) if assemble is not None else None,
+        render(DEPEND, values),
+    )
 
 
 def preprocessor_options(project: Project, version: str, unit: str, *, absolute: bool) -> list[str]:

@@ -8,7 +8,7 @@ from pathlib import Path
 from unbake.decomp.gbi_expr import Ambiguous, Word, pure, scalar, unwrap
 from unbake.decomp.gbi_source import Macro, macros, tokens, word_builder
 
-HEADER = Path(__file__).parents[1] / "project_tools/abi.h"
+HEADER = Path(__file__).parents[1] / "templates/abi.h"
 TYPE_HEADER = HEADER.with_name("acmd.h")
 
 

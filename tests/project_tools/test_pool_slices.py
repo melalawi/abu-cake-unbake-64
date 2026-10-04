@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from tests.decomp.support import assemble
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.project_tools.extract import instruction_symbols, pool_rows, raw_storage, unit_ranges
 from unbake.project_tools.layout import transfer_private, transfer_selectors
 
@@ -230,7 +230,7 @@ class PoolSliceTests(unittest.TestCase):
             table = rebuilt.section(names[1])
             assert table is not None
             self.assertEqual([offset for offset, _, _ in rebuilt.relocations(table)], [0, 4])
-            from unbake.project_tools.rodata import relocated
+            from unbake.objects.rodata import relocated
 
             self.assertEqual(relocated(rebuilt, names[1], 0x80002000), image[0x80:0x88])
             for row, name in zip(slices, names, strict=True):

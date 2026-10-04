@@ -11,7 +11,7 @@ from typing import Any
 
 from unbake import inputs
 from unbake.config import Held, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def digest(content: bytes) -> str:
@@ -84,7 +84,7 @@ _symbol_digests: dict[Path, tuple[str, str]] = {}
 
 def symbol_digest(path: Path) -> str:
     """Pin exactly the extraction symbol facts consumed by map_program."""
-    from unbake.project_tools.extract import discovered_symbols, symbols_from
+    from unbake.extract import discovered_symbols, symbols_from
 
     content = inputs.digest(path)
     cached = _symbol_digests.get(path)

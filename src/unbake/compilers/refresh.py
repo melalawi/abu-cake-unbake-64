@@ -13,10 +13,10 @@ import toml  # type: ignore[import-untyped]
 from unbake import config
 from unbake.compilers import files as compiler_files
 from unbake.compilers import propose as compiler_proposal
-from unbake.project import build, census, setup, setup_config
+from unbake.project import census, setup, setup_config
 from unbake.config import Held, PendingProject, Host
 from unbake.project.flow import LayoutManifest
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]:
@@ -71,23 +71,22 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
         outputs[project.root / "config.toml"] = (tree / "config.toml").read_bytes()
         from unbake.typemap.mapping import compiler_inputs
 
-        with build.lock(project):
-            if setup._inputs(project) != fingerprint:
-                raise Held("setup", "setup.proposal_stale: project inputs changed during compiler refresh")
-            mapped = compiler_inputs(project, outputs[project.root / "config.toml"])
-            if mapped is not None:
-                outputs[mapped[0]] = mapped[1]
-            before = {path: path.read_bytes() if path.is_file() else None for path in outputs}
-            try:
-                for path, content in outputs.items():
-                    compiler_files.atomic_bytes(path, content)
-                    if path.is_relative_to(project.tools):
-                        path.chmod((tree / path.relative_to(project.root)).stat().st_mode & 0o777)
-            except BaseException:
-                for path, old_content in before.items():
-                    if old_content is None:
-                        path.unlink(missing_ok=True)
-                    else:
-                        compiler_files.atomic_bytes(path, old_content)
-                raise
-    return ["compiler proposal accepted; recipes updated; layout and map retained", "run unbake solve"]
+        if setup._inputs(project) != fingerprint:
+            raise Held("setup", "setup.proposal_stale: project inputs changed during compiler refresh")
+        mapped = compiler_inputs(project, outputs[project.root / "config.toml"])
+        if mapped is not None:
+            outputs[mapped[0]] = mapped[1]
+        before = {path: path.read_bytes() if path.is_file() else None for path in outputs}
+        try:
+            for path, content in outputs.items():
+                compiler_files.atomic_bytes(path, content)
+                if path.is_relative_to(project.tools):
+                    path.chmod((tree / path.relative_to(project.root)).stat().st_mode & 0o777)
+        except BaseException:
+            for path, old_content in before.items():
+                if old_content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    compiler_files.atomic_bytes(path, old_content)
+            raise
+    return ["compiler proposal accepted; recipes updated; layout and map retained", "run unbake check"]

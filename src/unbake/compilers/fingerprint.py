@@ -20,7 +20,7 @@ from unbake.compilers.propose import (
 from unbake.config import Held, Host, Project
 from unbake.project.rom import Rom, shingles
 from unbake.compilers.registry import CompilerSpec
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 @dataclass(frozen=True)
@@ -278,7 +278,7 @@ def choose(
 def prove(project_scratch: Project, region: Region, candidates: Sequence[CompilerSpec], policy: Host) -> Decision:
     from unbake.decomp import m2c
     from unbake.compilers import registry as toolchain
-    from unbake.project import build
+    from unbake import runner
     from unbake.project.rom import load
 
     if not candidates:
@@ -330,8 +330,7 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
                     selected = replace(
                         project, default_compiler=candidate.id, units={**project.units, function.name: candidate.id}
                     )
-                    out = work / candidate.id / (function.name + ".o")
-                    build.compile_object(selected, policy, source, version, out)
+                    out = runner.compile_unit(selected, policy, source, version, unit=function.name)
                     identical = reproduces(out, function.name, data[function.start : function.end])
                 except (Held, OSError, ValueError, struct.error) as error:
                     errors[f"{candidate.id}/{function.name}"] = str(error)

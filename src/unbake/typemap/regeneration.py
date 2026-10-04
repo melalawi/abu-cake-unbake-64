@@ -16,7 +16,7 @@ from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
 from unbake.cache import Cache, key, memo
 from unbake.config import Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.typemap import header_names, split, storage
 
 

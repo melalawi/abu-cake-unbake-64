@@ -6,7 +6,7 @@ from typing import Any
 from unbake.families.gcc import Gcc
 from unbake.families.ido import Ido
 from unbake.config import Held
-from unbake.project_tools.rodata import fragment, placement, relocated
+from unbake.objects.rodata import fragment, placement, relocated
 
 
 def words(*values: int) -> Any:
@@ -26,7 +26,7 @@ def Object(
     data_rels: Any = (),
 ) -> Any:
     """A minimal ELF fixture read by the production object parser."""
-    from unbake.project_tools.elf import Object as ElfObject
+    from unbake.objects.elf import Object as ElfObject
 
     names = ["", ".text", section or ".unused", ".symtab", ".strtab", ".rel.text", ".rel.data", ".shstrtab"]
     shstrings = b"\0"

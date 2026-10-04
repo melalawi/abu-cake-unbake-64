@@ -82,7 +82,7 @@ class PlacementTests(unittest.TestCase):
         import re
 
         from tests.elf_fixture import write_object
-        from unbake.project_tools.elf import Object
+        from unbake.objects.elf import Object
 
         text, symbols = bytearray(), []
         for object_name, section_name in re.findall(r"(obj/src/\w+\.o)\((\.\w+)\)", script.read_text()):

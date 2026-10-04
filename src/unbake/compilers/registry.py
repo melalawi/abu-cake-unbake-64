@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING, Any
 
 from unbake.compilers import files as compiler_files
 from unbake.config import Held
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 if TYPE_CHECKING:
-    from unbake.config import Host, Project, Host
+    from unbake.config import Project, Host
 
 REGISTRY_PATH = Path(__file__).with_name("registry.toml")
 MANIFEST = "compilers.sha256"

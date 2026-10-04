@@ -15,7 +15,7 @@ from unittest.mock import patch
 from unbake.layout.header_context import Headers
 from unbake.match import batch, batch_fold, forked, incremental, relink, reporting, source_views, staging
 from unbake.config import Held
-from unbake.project_tools.rodata import insert_fragment
+from unbake.objects.rodata import insert_fragment
 
 
 class FoldWarmupTests(unittest.TestCase):
@@ -266,7 +266,7 @@ class IndexedStagingTests(unittest.TestCase):
             )
             (new / obj).with_suffix(".built").write_bytes(b"new receipt")
             self.assertEqual((old / obj).with_suffix(".built").read_bytes(), b".built")
-            from unbake.project_tools.atomic import write
+            from unbake.atomic import write
 
             write(new / obj, b"changed object")
             self.assertEqual((old / obj).read_bytes(), b".o")

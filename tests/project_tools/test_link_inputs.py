@@ -10,10 +10,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tests.decomp.support import assemble
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 from unbake.project_tools.layout import place, place_object, transfer_private
 from unbake.project_tools.link_inputs import Objects, Selectors, Spans, clone
-from unbake.project_tools.literal_layout import arrange, replace
+from unbake.objects.literal_layout import arrange, replace
 
 
 def parsed(path, *, data):
@@ -354,7 +354,7 @@ class TransformTests(unittest.TestCase):
             )
             raw = bytes.fromhex("12345678")
             read = Mock(return_value=raw)
-            with patch("unbake.project_tools.literal_layout.write") as publish:
+            with patch("unbake.objects.literal_layout.write") as publish:
                 for _ in range(2):
                     self.assertEqual(arrange(obj, ".rdata", {}, 0x80002000, read, emit_resident=True), 0x80003000)
                 publish.assert_not_called()

@@ -11,7 +11,7 @@ from typing import cast
 from unbake.work.score import Compare
 from unbake.compilers.families.gcc.schedule import Schedule
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 @dataclass(frozen=True)

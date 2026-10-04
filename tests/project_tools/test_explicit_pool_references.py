@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.layout.test_rodata import Object, words
-from unbake.project_tools.literal_layout import arrange
+from unbake.objects.literal_layout import arrange
 
 
 class ExplicitPoolReferenceTests(unittest.TestCase):
@@ -20,8 +20,8 @@ class ExplicitPoolReferenceTests(unittest.TestCase):
             obj = Object()
             with (
                 self.subTest(label=label),
-                patch("unbake.project_tools.literal_layout.storage", return_value=anchors),
-                patch("unbake.project_tools.literal_layout.write") as publish,
+                patch("unbake.objects.literal_layout.storage", return_value=anchors),
+                patch("unbake.objects.literal_layout.write") as publish,
             ):
 
                 def read(address, size):

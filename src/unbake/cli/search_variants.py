@@ -32,7 +32,6 @@ def register(parser: argparse.ArgumentParser) -> None:
 def run(context: Context) -> Result:
     from unbake.work import search
 
-    found = search.search(
-        context.project(), context.require_host(), context.args.file.resolve(), context.args.method, context.args.seconds
-    )
+    project, host = context.ready("buildfiles")
+    found = search.search(project, host, context.args.file.resolve(), context.args.method, context.args.seconds)
     return Result.ok(NAME, found.document(), found.lines(), context.cmd("compare", found.best_file))

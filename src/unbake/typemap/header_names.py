@@ -9,7 +9,7 @@ from typing import Any
 
 from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 _TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)

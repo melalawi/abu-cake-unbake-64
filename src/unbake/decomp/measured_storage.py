@@ -6,7 +6,7 @@ from pathlib import Path
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
 from unbake.config import Held, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def prepare(project: Project, function: str, source: str, assembly: str) -> tuple[str, Path | None]:

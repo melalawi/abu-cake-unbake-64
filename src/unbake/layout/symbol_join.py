@@ -13,14 +13,13 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, cast
 
-from unbake.cli.common import suggest
 from unbake.layout import planner, port, split, symbol_identity, symbol_replan
 from unbake import config
 from unbake.project import setup
 from unbake.config import Held, Project, Host
 from unbake.project.flow import LayoutManifest
 from unbake.project.rom import load
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def read(path: Path) -> list[dict[str, Any]]:
@@ -363,7 +362,6 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
 
 def run(project: Project, policy: Host, path: Path, *, apply: bool) -> list[str]:
     command = shlex.join(["unbake", "split", "join", "--map", str(path.resolve())])
-    suggest(command if apply else command + " --apply", on_refusal=True)
     assertions = read(path)
     directory = project.build / "setup" / ("join-" + uuid.uuid4().hex)
     directory.mkdir(parents=True)

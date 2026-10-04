@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 def generate(command, **kwargs):

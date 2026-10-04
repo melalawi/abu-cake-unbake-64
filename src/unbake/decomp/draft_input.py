@@ -6,7 +6,6 @@ import hashlib
 import json
 import math
 import re
-import shlex
 import struct
 from pathlib import Path
 

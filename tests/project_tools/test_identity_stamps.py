@@ -44,12 +44,12 @@ class IdentityStampTests(unittest.TestCase):
         driver.write_text(direct)
         before = identity.driver_content(driver)
         library = (
-            "from unbake.project_tools import atomic as atomic_files\n"
+            "from unbake import atomic as atomic_files\n"
             "atomic_files.write(destination, content)\natomic_files.text(args.depfile, text)\n"
         )
         for code in (
             library,
-            library.replace("from unbake.project_tools import atomic as atomic_files", "import atomic as atomic_files"),
+            library.replace("from unbake import atomic as atomic_files", "import atomic as atomic_files"),
         ):
             driver.write_text(code)
             self.assertEqual(identity.driver_content(driver), before)

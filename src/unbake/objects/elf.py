@@ -4,7 +4,7 @@ import struct
 from pathlib import Path
 from typing import TypedDict
 
-from unbake.project_tools.atomic import write
+from unbake.atomic import write
 
 
 class Symbol(TypedDict):

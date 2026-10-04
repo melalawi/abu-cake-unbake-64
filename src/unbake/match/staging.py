@@ -20,7 +20,7 @@ from unbake.fold.common import (
 )
 from unbake.project import build, makefile
 from unbake.config import Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.project_tools.compile_identity import driver_names, driver_stamp_name
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
@@ -465,7 +465,7 @@ def independent_objects(generation: Path) -> None:
 
 def object_identity(path: Path) -> str:
     """Fingerprint link inputs while excluding IDO's nonloaded source/debug table."""
-    from unbake.project_tools.elf import Object
+    from unbake.objects.elf import Object
 
     data = path.read_bytes()
     try:

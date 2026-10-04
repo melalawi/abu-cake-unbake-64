@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from unbake.config import Held
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 T = TypeVar("T")
 MEMO_ENTRIES_PER_KIND = 64

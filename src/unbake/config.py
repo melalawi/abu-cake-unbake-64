@@ -530,12 +530,16 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
 _RESOURCES = ("resources.cores", "resources.workers", *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")))
 _CACHE = ("cache.root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_bytes")
 _BINUTILS = ("tools.cpp", "tools.mips_as", "tools.mips_ld", "tools.mips_objcopy", "tools.n64link")
-_COMPARE = (*_RESOURCES, *_CACHE, *_BINUTILS)
+# buildfiles writes the CI workflow for [publish].branch, so every command that may regenerate it needs it.
+_BUILDFILES = (*_BINUTILS, "publish.branch")
+_COMPARE = (*_RESOURCES, *_CACHE, *_BUILDFILES)
 _PUBLISH = ("publish.remote", "publish.branch", "publish.author_name", "publish.author_email", "publish.credential")
 _SETUP = (
     *_RESOURCES,
     *_CACHE,
-    *_BINUTILS,
+    *_BUILDFILES,
+    "tools.make",
+    "tools.path",
     "tools.splat",
     "setup.version_jobs",
     "setup.probe_count",
@@ -561,7 +565,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
     ),
     "publish": (*_COMPARE, *_PUBLISH),
     "boundary": (*_RESOURCES, *_CACHE, "tools.splat", "tools.cpp"),
-    "check": ("resources.cores", "tools.make", "tools.path"),
+    "check": (*_RESOURCES, *_CACHE, *_BUILDFILES, "tools.make", "tools.path"),
     "explain": (*_CACHE, "tools.cpp", "tools.mips_objdump", "tools.splat"),
     "cycle": (
         *_COMPARE,
@@ -574,7 +578,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
         "cycle.min_history",
         "cycle.debounce_ms",
     ),
-    "recompute": (*_RESOURCES, *_CACHE, *_BINUTILS),
+    "recompute": (*_RESOURCES, *_CACHE, *_BUILDFILES),
 }
 
 

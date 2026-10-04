@@ -13,7 +13,7 @@ from time import monotonic
 from uuid import uuid4
 
 from unbake.config import Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 _sink: ContextVar[Callable[[str], object] | None] = ContextVar("publication_sink", default=None)
 _report: ContextVar[Path | None] = ContextVar("publication_report", default=None)

@@ -2,7 +2,7 @@
 
 import unittest
 
-from unbake.project_tools.rodata import defer_bss
+from unbake.objects.rodata import defer_bss
 
 
 class LinkerTests(unittest.TestCase):

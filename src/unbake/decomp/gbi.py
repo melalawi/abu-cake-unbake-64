@@ -28,11 +28,11 @@ from unbake.decomp.gbi_source import (
     word_builder,
 )
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 OtherOptions: TypeAlias = list[str] | dict[int, str]
 
-HEADER = Path(__file__).parents[1] / "project_tools/gbi.h"
+HEADER = Path(__file__).parents[1] / "templates/gbi.h"
 PREVIOUS_HEADER_SHA256 = "b75732e39ebd8e07ba0fbd2ec7c871939b03073dd73b7124c0e38148cb3549aa"
 SYNC = {0xE6: "gDPLoadSync", 0xE7: "gDPPipeSync", 0xE8: "gDPTileSync", 0xE9: "gDPFullSync"}
 FORMATS = {0: "G_IM_FMT_RGBA", 1: "G_IM_FMT_YUV", 2: "G_IM_FMT_CI", 3: "G_IM_FMT_IA", 4: "G_IM_FMT_I"}
@@ -740,11 +740,8 @@ def source_microcode(source: str, default: str | None) -> str | None:
 
 
 def microcode(project: Project) -> str | None:
-    from unbake.project.makefile import recipe
-
-    build = recipe(project)
     definitions = " ".join(
-        [*build.cppflags, *(flag for compiler in project.compilers.values() for flag in compiler.cflags)]
+        [*project.cppflags, *(flag for compiler in project.compilers.values() for flag in compiler.cflags)]
     )
     variants = [
         variant

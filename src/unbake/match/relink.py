@@ -12,7 +12,7 @@ from pathlib import Path
 from unbake.match import reporting
 from unbake.project import build, makefile
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def source_key(project: Project, policy: Host, source: Path, version: str) -> str:
@@ -186,7 +186,7 @@ def place_changed(project: Project, version: str, generation: Path) -> bool:
     import argparse
 
     from unbake.project_tools import layout
-    from unbake.project_tools.rodata import insert_fragment
+    from unbake.objects.rodata import insert_fragment
 
     snapshot = generation / "retained-layout.json"
     if not snapshot.is_file():

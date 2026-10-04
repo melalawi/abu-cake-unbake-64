@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from unbake.config import Held
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.compilers.registry import Download

@@ -115,7 +115,7 @@ class MultiEntryCliTests(unittest.TestCase):
             destination = Path(command[command.index("-o") + 1])
             objects = command[command.index("-o") + 2 :]
             from tests.elf_fixture import write_object
-            from unbake.project_tools.elf import Object
+            from unbake.objects.elf import Object
 
             code, symbols = bytearray(), []
             for path in objects:
@@ -292,7 +292,7 @@ class MultiEntryCliTests(unittest.TestCase):
             self.assertIn(f"OK(submit): {version}:", output)
 
     def test_moved_entry_fails_even_when_every_instruction_is_identical(self):
-        from unbake.project_tools.elf import Object
+        from unbake.objects.elf import Object
 
         for version in self.project.versions:
             target = self.project.build_link(version) / "obj/asm/alpha.o"
@@ -322,7 +322,7 @@ class MultiEntryCliTests(unittest.TestCase):
         self.assertEqual(manifest["versions"], list(self.project.versions))
 
     def test_inferred_fragment_can_be_covered_only_by_identical_owner_bytes(self):
-        from unbake.project_tools.elf import Object
+        from unbake.objects.elf import Object
 
         self.source.write_text("void alpha(int *p) { p[0] = 0; p[1] = 0; }\n")
         for version in self.project.versions:
@@ -347,7 +347,7 @@ class MultiEntryCliTests(unittest.TestCase):
         self.assertIn("owner fuzzy bar: FAIL", output)
 
     def test_entry_size_difference_is_not_waived_by_equal_interval_bytes(self):
-        from unbake.project_tools.elf import Object
+        from unbake.objects.elf import Object
 
         for version in self.project.versions:
             target = self.project.build_link(version) / "obj/asm/alpha.o"

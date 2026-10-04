@@ -196,7 +196,7 @@ class Tools:
         return results
 
     def prove(self, project, policy, version, generation, retained, **kwargs):
-        from unbake.project_tools.elf import Object
+        from unbake.objects.elf import Object
 
         ranges = extract.unit_ranges(project.version(version).split.read_text())
         names = [name for name in ranges if (project.src / (name + ".c")).is_file()]

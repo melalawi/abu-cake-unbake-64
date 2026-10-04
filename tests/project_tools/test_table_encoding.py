@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 
 from tests.layout.test_rodata import Object, words
 from unbake.layout.rodata_owners import Span, proved_tables
-from unbake.project_tools.literal_layout import arrange
-from unbake.project_tools.rodata import relocated, table_pointer_bias
+from unbake.objects.literal_layout import arrange
+from unbake.objects.rodata import relocated, table_pointer_bias
 
 
 class TableEncodingTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class TableEncodingTests(unittest.TestCase):
         for emit in (False, True):
             obj = self.object()
             read = Mock(return_value=raw)
-            with self.subTest(emit=emit), patch("unbake.project_tools.literal_layout.write") as publish:
+            with self.subTest(emit=emit), patch("unbake.objects.literal_layout.write") as publish:
                 self.assertEqual(
                     arrange(obj, ".rdata", targets, 0x80401000, read, emit_resident=emit, persist=False), 0x80003000
                 )
@@ -56,7 +56,7 @@ class TableEncodingTests(unittest.TestCase):
 
     def test_wrong_table_still_refuses(self):
         obj = self.object()
-        with patch("unbake.project_tools.literal_layout.write") as publish:
+        with patch("unbake.objects.literal_layout.write") as publish:
             with self.assertRaisesRegex(ValueError, "bytes.*disagree"):
                 arrange(
                     obj,

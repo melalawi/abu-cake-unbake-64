@@ -10,7 +10,7 @@ from typing import Any
 
 from unbake.config import Held, Host, Project
 from unbake.layout import split
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.work import compare
 
 

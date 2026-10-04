@@ -73,10 +73,10 @@ def _rodata(project: Project, function: str) -> list[dict[str, object]]:
     return [item.document() for item in census.objects if function in item.owners]
 
 
-def _needs(project: Project, function: str) -> str:
+def _needs(project: Project, host: Host, function: str) -> str:
     from unbake.decomp import guide
 
-    return guide.run(project, function, None)
+    return guide.run(project, host, function, None)
 
 
 def _order(project: Project, host: Host, function: str, file: Path | None) -> Any:
@@ -113,7 +113,7 @@ def explain(project: Project, host: Host, subject: str, sections: tuple[str, ...
         elif name == "rodata":
             report.sections[name] = _rodata(project, function)
         elif name == "needs":
-            report.sections[name] = _needs(project, function)
+            report.sections[name] = _needs(project, host, function)
         elif name == "order":
             report.sections[name] = _order(project, host, function, file)
         elif name == "similar":

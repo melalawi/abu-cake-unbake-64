@@ -8,12 +8,12 @@ from uuid import uuid4
 
 from unbake.project import hygiene
 from unbake.config import SCHEMA_VERSION, Held
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def readme_text(target: Path) -> str:
     """A minimal owner document with a tool-owned Progress body."""
-    template = Path(__file__).parents[1] / "project_tools" / "README.ready.md"
+    template = Path(__file__).parents[1] / "templates" / "README.ready.md"
     return template.read_text().replace("@TITLE@", target.name)
 
 
@@ -31,7 +31,7 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
     git = shutil.which("git")
     if git is None:
         raise Held("init", "git: missing executable")
-    template = Path(__file__).parents[1] / "project_tools" / "CONTRIBUTING.pending.md"
+    template = Path(__file__).parents[1] / "templates" / "CONTRIBUTING.pending.md"
     try:
         contributing = template.read_text()
     except OSError as error:

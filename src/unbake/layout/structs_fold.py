@@ -18,8 +18,8 @@ from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS, Aggregate
-from unbake.config import Held, Project, load_policy
-from unbake.project_tools import atomic as atomic_files
+from unbake.config import Held, Host, Project
+from unbake import atomic as atomic_files
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -321,6 +321,7 @@ def fold(
     destination: Path | None = None,
     prove_headers: bool = True,
     context: Headers | None = None,
+    host: Host | None = None,
 ) -> list[Edit]:
     """Merge fields into existing include headers, returning edits without writing.
 
@@ -676,14 +677,16 @@ def fold(
                     "project compiler context required for header compile proof",
                 )
             if prove_headers:
-                _prove_includers(project, edits)
+                if host is None:
+                    raise Held("structs", "structs.header_proof: the host config (unbake.toml) is required")
+                _prove_includers(project, edits, host)
     return edits
 
 
-def _prove_includers(project: Project, edits: list[Edit]) -> None:
+def _prove_includers(project: Project, edits: list[Edit], policy: Host) -> None:
     label = ", ".join(str(edit.path) for edit in edits)
     try:
-        _compile_includers(project, edits)
+        _compile_includers(project, edits, policy)
     except Held as error:
         if error.reason.startswith(label):
             raise
@@ -692,7 +695,7 @@ def _prove_includers(project: Project, edits: list[Edit]) -> None:
         held(label, f"header compile proof unavailable: {error}")
 
 
-def _compile_includers(project: Project, edits: list[Edit]) -> None:
+def _compile_includers(project: Project, edits: list[Edit], policy: Host) -> None:
     """Compile all possible includers in a physical overlay before returning edits.
 
     Conditional literal includes are deliberately overapproximated. Computed
@@ -786,7 +789,6 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
     if not includers:
         return
     label = ", ".join(str(edit.path) for edit in edits)
-    policy = load_policy()
     # TMPDIR must be explicit and outside the project; never stage a proposed
     # header over the live one, even transiently.
     temporary_root = os.environ.get("TMPDIR")

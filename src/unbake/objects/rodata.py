@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 @dataclass(frozen=True)

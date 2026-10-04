@@ -7,7 +7,7 @@ from unittest.mock import patch
 from tests.layout.test_rodata import Object, words
 from unbake.layout.rodata_owners import Span, classify, proved_tables
 from unbake.config import Held
-from unbake.project_tools.rodata import table_addresses
+from unbake.objects.rodata import table_addresses
 
 
 class CompilerTableTests(unittest.TestCase):

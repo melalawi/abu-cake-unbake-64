@@ -4,9 +4,9 @@ import re
 import struct
 from collections.abc import Callable, Mapping
 
-from unbake.project_tools.atomic import write
-from unbake.project_tools.elf import Object
-from unbake.project_tools.rodata import pools, relocated, table_pointer_bias
+from unbake.atomic import write
+from unbake.objects.elf import Object
+from unbake.objects.rodata import pools, relocated, table_pointer_bias
 
 ANCHOR = re.compile(r"unbake_rodata_([0-9A-F]{8})_([0-9A-F]+)$")
 

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from unbake.layout import freshness, index, map, redeclarations
+from unbake.layout import index, map, redeclarations
 from unbake.config import Held, Host, Project
 from unbake.typemap import storage
 
@@ -127,11 +127,8 @@ def run(project: Project, policy: Host | None = None, *, dry_run: bool = False) 
     value = copy.deepcopy(database.load(project, allow_stale=True))
     assert value is not None
     if not dry_run:
-        from unbake.project import build
-
-        with build.lock(project), freshness.transaction(project):
-            count = units(project)
-            return count + _run(project, policy, value)
+        count = units(project)
+        return count + _run(project, policy, value)
     return _run(project, policy, value, dry_run=dry_run) + units(project, dry_run=dry_run)
 
 
@@ -157,7 +154,7 @@ def _run(
         ).encode()
     if dry_run:
         return install(project, outputs, dry_run=True)
-    return freshness.publish(project, policy, outputs)
+    return install(project, outputs)
 
 
 def units(project: Project, *, dry_run: bool = False) -> int:

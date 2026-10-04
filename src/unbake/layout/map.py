@@ -11,7 +11,7 @@ from typing import Any, NoReturn
 
 from unbake.layout import split
 from unbake.config import Held, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 @dataclass(frozen=True)

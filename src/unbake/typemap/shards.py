@@ -12,7 +12,7 @@ from typing import Any
 
 from unbake import inputs
 from unbake.config import Held
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def pack(value: object) -> bytes:
@@ -82,7 +82,6 @@ class Writer:
 
     def finish(self) -> Path:
 
-        from unbake.typemap import storage
 
         self.connection.commit()
         self.connection.close()

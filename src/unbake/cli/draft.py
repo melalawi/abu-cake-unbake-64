@@ -36,7 +36,8 @@ def run(context: Context) -> Result:
     function = context.args.function
     if not re.fullmatch(r"[A-Za-z_]\w*", function):
         raise Held("draft", f"draft.function: {function}: expected a C identifier")
-    made = draft.draft(context.project(), context.require_host(), function, replace=context.args.replace)
+    project, host = context.ready("extract", "types", "buildfiles")
+    made = draft.draft(project, host, function, replace=context.args.replace)
     data = {"function": function, "file": str(made.file), "versions": list(made.versions)}
     lines = [f"draft: {made.file}", f"versions: {', '.join(made.versions)}"]
     return Result.ok(NAME, data, lines, context.cmd("compare", made.file))

@@ -4,16 +4,15 @@ import tempfile
 from pathlib import Path
 
 from unbake.layout import split
-from unbake.project import build
+from unbake import runner
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
-from unbake.project_tools.elf import Object
+from unbake import atomic as atomic_files
+from unbake.objects.elf import Object
 
 
 def code(project: Project, policy: Host, version: str, source: Path, mode: int) -> object:
     """Compare allocated sections and relocation identities from cached objects."""
-    output = source.with_suffix(".o")
-    build.compile_object(project, policy, source, version, output, non_matching=bool(mode))
+    output = runner.compile_unit(project, policy, source, version, unit=source.stem, non_matching=bool(mode))
     obj = Object(output)
     return tuple(
         (

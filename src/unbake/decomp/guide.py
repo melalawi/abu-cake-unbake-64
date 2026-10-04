@@ -14,7 +14,7 @@ from unbake.decomp.commands import prefix
 from unbake.decomp.indexed import table_guidance
 from unbake.decomp.needs import LayoutNeed, Need, SymbolNeed
 from unbake.decomp.symbols import Binding, DataRow, references, required, symbol_line
-from unbake.config import Held, Project, load_policy
+from unbake.config import Held, Host, Project
 
 _C_TYPES = {
     "f32": "f32",
@@ -171,13 +171,13 @@ def resident_row(reader: RomReader, address: int, size: int) -> DataRow:
     return DataRow(row.path, start, end, ".data" if kind == "bin" else "." + kind)
 
 
-def run(project: Project, function: str, version: str | None) -> str:
+def run(project: Project, host: Host, function: str, version: str | None) -> str:
     """Read a configured function's target and print data declarations and prologue."""
     selected = list(project.versions) if version is None else [version]
-    return "\n\n".join(f"VERSION {name}\n{for_version(project, function, name)}" for name in selected)
+    return "\n\n".join(f"VERSION {name}\n{for_version(project, host, function, name)}" for name in selected)
 
 
-def for_version(project: Project, function: str, version: str) -> str:
+def for_version(project: Project, host: Host, function: str, version: str) -> str:
     """Compose guidance for one configured VERSION without printing it."""
     from unbake.decomp import rom
 
@@ -191,7 +191,7 @@ def for_version(project: Project, function: str, version: str) -> str:
     from unbake.decomp.guide_layout import resolve
 
     refs = references(target, values.get("_gp"))
-    settled, field_guidance = resolve(project, load_policy(), project.src / (function + ".c"), version, values, refs)
+    settled, field_guidance = resolve(project, host, project.src / (function + ".c"), version, values, refs)
     for ref in refs:
         aliases = [name for name, address in values.items() if address == ref.address]
         if (

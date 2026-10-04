@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake.compilers.families.gcc.schedule import Schedule
-from unbake.project_tools.elf import Object
-from unbake.project_tools.rodata import Pool
+from unbake.objects.elf import Object
+from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.decomp.explain import Allocation

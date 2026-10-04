@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import re
 import struct
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from unbake.layout import split
-from unbake.config import Held, Host, Project
+from unbake.config import Held, Project
 
 
 @dataclass(frozen=True)

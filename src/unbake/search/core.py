@@ -18,7 +18,7 @@ from unbake.compilers.ranking import measured_candidate_rank
 from unbake.process import read_text
 from unbake.config import Held, Host, Project
 from unbake.work.compare import Compared, measure
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 @dataclass(frozen=True)

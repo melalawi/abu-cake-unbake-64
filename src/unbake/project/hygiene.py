@@ -2,7 +2,6 @@
 
 import io
 import subprocess
-from dataclasses import fields
 from pathlib import Path
 
 from unbake.config import Held, Host, Project
@@ -52,14 +51,11 @@ def ignore_text(project: Project) -> str:
         *base_ignore_text(project.root).splitlines(),
         f"/{project.roms.relative_to(project.root).as_posix()}/",
         f"/{project.build.relative_to(project.root).as_posix()}/",
-        f"/{project.asm.relative_to(project.root).as_posix()}/",
         "/.splat/",
         "/.unbake/",
     ]
     entries.extend(f"/{directory.as_posix()}/" for directory in compiler_directories(project))
-    tools = project.tools.relative_to(project.root).as_posix()
-    entries.extend((f"/{tools}/compile/binaries/", f"/{tools}/compile/drivers/*.sha256"))
-    entries.append(f"/{tools}/clone-policy.toml")
+    entries.append(f"/{project.tools.relative_to(project.root).as_posix()}/.downloads/")
     required = {entry.removeprefix("/") for entry in entries if entry.startswith("/") or entry.endswith("/")}
     lines: list[str] = []
     seen: set[str] = set()
@@ -114,9 +110,7 @@ def tracked_findings(project: Project, policy: Host) -> list[str]:
     directories = compiler_directories(project)
     prefixes = tuple("/" + name + "/" for name in ("home", "mnt", "opt"))
     policy_paths = tuple(
-        str(value)
-        for field in fields(policy)
-        if isinstance(value := getattr(policy, field.name), Path) and value.is_absolute()
+        str(value) for value in (policy.cache_root, policy.n64link, policy.cpp) if Path(value).is_absolute()
     )
     records = [record for record in result.stdout.split(b"\0") if record]
     blobs = [record.split(b"\t", 1)[0].split()[1] for record in records]
@@ -133,7 +127,7 @@ def tracked_findings(project: Project, policy: Host) -> list[str]:
         if mode == b"120000" or path.is_symlink() or any(parent.is_symlink() for parent in path.parents):
             findings.append(f"HELD(check): {name}: tracked symlink")
             continue
-        if path.is_relative_to(project.roms) or path.is_relative_to(project.build) or path.is_relative_to(project.asm):
+        if path.is_relative_to(project.roms) or path.is_relative_to(project.build) or relative.parts[:1] == ("asm",):
             findings.append(f"HELD(check): {name}: tracked ROM or generated output")
             continue
         if any(relative.is_relative_to(directory) for directory in directories):

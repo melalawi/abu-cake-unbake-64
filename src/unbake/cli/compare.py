@@ -30,7 +30,8 @@ def register(parser: argparse.ArgumentParser) -> None:
 def run(context: Context) -> Result:
     from unbake.work import compare
 
-    measured = compare.compare(context.project(), context.require_host(), context.args.file.resolve())
+    project, host = context.ready("buildfiles")
+    measured = compare.compare(project, host, context.args.file.resolve())
     data = measured.document()
     following = (
         context.cmd("publish", context.args.file) if measured.exact else f"stop: edit {context.args.file}, then compare again"

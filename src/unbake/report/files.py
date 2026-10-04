@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def write(path: Path, content: bytes) -> None:

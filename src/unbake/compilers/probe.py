@@ -12,8 +12,8 @@ from unbake.process import run_tool
 from unbake.compilers import profiles as compiler_profiles
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, PendingProject, Host
-from unbake.project_tools import atomic as atomic_files
-from unbake.project_tools.elf import Object
+from unbake import atomic as atomic_files
+from unbake.objects.elf import Object
 
 CANONICAL = (
     "int identity(int x) { return x; }\n"

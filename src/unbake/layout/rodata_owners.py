@@ -3,7 +3,6 @@
 import bisect
 import hashlib
 import itertools
-import json
 import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
@@ -13,10 +12,9 @@ from unbake.decomp.rom import project_reader
 from unbake.layout import split
 from unbake.layout.rodata_references import Reference, collect, words
 from unbake.config import Held, Project
-from unbake.project.makefile import recipe
-from unbake.project_tools.elf import Object
-from unbake.project_tools.literal_layout import storage
-from unbake.project_tools.rodata import pools, relocated, table_addresses, table_pointer_bias
+from unbake.objects.elf import Object
+from unbake.objects.literal_layout import storage
+from unbake.objects.rodata import pools, relocated, table_addresses, table_pointer_bias
 
 
 @dataclass(frozen=True)
@@ -92,17 +90,13 @@ class Census:
 def scan(project: Project, version: str) -> Census:
     configured = project.version(version)
     image = configured.baserom.read_bytes()
-    build = project.build_link(version)
-    elfpath = build / (project.name + ".elf")
-    elf = Object(elfpath) if elfpath.is_file() else None
+    objects_dir = project.build / version / "src"
     _, configured_symbols = split.symbols(configured.symbols)
     values = {name: entry[0] for name, entry in configured_symbols.items()}
-    if elf is not None:
-        values.update({s["name"]: s["value"] for entries in elf.symbols.values() for s in entries if s["name"]})
     _, _, segments = split.layout(configured.split)
     spans = [
-        Span(m["address"], m["start"], m["end"], m["table_entry_bias"], "resident")
-        for m in recipe(project).resident_mappings.get(version, [])
+        Span(m.address, m.start, m.end, m.table_entry_bias, "resident")
+        for m in project.resident_mappings.get(version, ())
     ]
     for segment in segments:
         for row in segment.rows:
@@ -114,17 +108,14 @@ def scan(project: Project, version: str) -> Census:
     if any(a.stop > b.address for a, b in itertools.pairwise(spans)):
         raise Held("rodata", "overlapping constant runtime spans")
     functions = split.functions(project, version)
-    units = json.loads((build / "objdiff.json").read_text())["units"] if (build / "objdiff.json").is_file() else []
-    targets = {u["name"]: build / u["target_path"] for u in units}
     refs: list[Reference] = []
     errors: list[str] = []
     compiler_tables: list[tuple[str, int, int]] = []
     for f in functions:
         owner = Path(f.path).stem
-        path = build / ("obj/src" if f.kind == "c" else "obj/asm") / (f.path + ".o")
-        if not path.is_file():
-            path = targets.get(owner, path)
-        obj = Object(path) if path.is_file() else None
+        # Published units have objects from make or compare; unmatched code is read from the ROM only.
+        path = objects_dir / (Path(f.path).name + ".o")
+        obj = Object(path) if f.kind == "c" and path.is_file() else None
         found, failures = collect(owner, image[f.start : f.end], obj, values.get("_gp"))
         refs.extend(r for r in found if any(span.address <= r.address < span.stop for span in spans))
         errors.extend(failures)
@@ -134,7 +125,7 @@ def scan(project: Project, version: str) -> Census:
             except ValueError as error:
                 errors.append(f"{owner}: {error}")
     datarefs: dict[int, set[str]] = defaultdict(set)
-    for path in sorted((build / "obj").rglob("*.o")):
+    for path in sorted(objects_dir.glob("*.o")):
         obj = Object(path)
         for index, header in enumerate(obj.sections):
             if header[1] != 1 or not header[2] & 2 or obj.names[index] == ".text":
@@ -146,13 +137,12 @@ def scan(project: Project, version: str) -> Census:
                         values[symbol["name"]] + int.from_bytes(material[offset : offset + 4], "big")
                     ) & 0xFFFFFFFF
                     if any(span.address <= address < span.stop for span in spans):
-                        datarefs[address].add(path.relative_to(build).as_posix())
+                        datarefs[address].add(path.relative_to(project.build).as_posix())
     objects = classify(image, functions, spans, refs, values, datarefs, compiler_tables)
     snapshot = {
         "rom_sha1": hashlib.sha1(image).hexdigest(),
         "split_sha256": hashlib.sha256(configured.split.read_bytes()).hexdigest(),
         "symbols_sha256": hashlib.sha256(configured.symbols.read_bytes()).hexdigest(),
-        "elf_sha256": hashlib.sha256(elfpath.read_bytes()).hexdigest() if elf is not None else "",
     }
     return Census(version, objects, refs, errors, spans, snapshot, functions)
 

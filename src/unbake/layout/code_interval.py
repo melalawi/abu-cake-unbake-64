@@ -11,11 +11,10 @@ from typing import Any
 
 from unbake.layout import boundary, split
 from unbake.layout.rodata_references import collect
-from unbake.config import Held, Host, Project, load_policy
-from unbake.project.makefile import recipe
+from unbake.config import Held, Host, Project
 
 
-def prove(project: Project, version: str, start: int, end: int, policy: Host | None = None) -> dict[str, Any]:
+def prove(project: Project, version: str, start: int, end: int, policy: Host) -> dict[str, Any]:
     configured = project.version(version)
     image = configured.baserom.read_bytes()
     if hashlib.sha1(image).hexdigest() != configured.baserom_sha1:
@@ -28,7 +27,6 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host | N
     if start >= end or start % 4 or end % 4 or end > min(split.end(row), len(image)):
         raise Held("split", "split.code.interval: required increasing word-aligned offsets within one data row")
     address = split.address(row, configured.split) + start - row.start
-    policy = policy or load_policy()
     with tempfile.NamedTemporaryFile(prefix="code-", suffix=".bin") as target:
         target.write(image[start:end])
         target.flush()
@@ -68,7 +66,7 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host | N
     # Callback/dispatch tables can store physical pointers. A bias is accepted
     # only when several neighbouring entries independently target declared code;
     # merely finding a numeric word equal to the requested entry is insufficient.
-    mappings = recipe(project).resident_mappings.get(version, [])
+    mappings = project.resident_mappings.get(version, ())
     for segment in segments:
         for table in segment.rows:
             if table.kind not in ("data", "rodata", "rdata") or "vram" not in segment.fields:
@@ -78,7 +76,7 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host | N
             if not any(table_address <= ref < table_address + stop - table.start for ref in referenced):
                 continue
             biases = {0, 0x80000000}
-            biases.update(m["table_entry_bias"] for m in mappings if m["start"] <= table.start < m["end"])
+            biases.update(m.table_entry_bias for m in mappings if m.start <= table.start < m.end)
             for at in range((table.start + 3) // 4 * 4, stop - 3, 4):
                 pointer = struct.unpack_from(">I", image, at)[0]
                 for bias in sorted(biases):

@@ -15,14 +15,13 @@ from typing import Any, cast
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.cli.common import suggest
-from unbake.layout import planner, port, split, symbol_identity, symbol_proof
+from unbake.layout import planner, port, split, symbol_identity
 from unbake.layout.symbol_identity import similarity_distribution
 from unbake.project import setup
 from unbake.config import Held, Project, Host, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import Rom, load
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def retained_assertions(
@@ -230,7 +229,7 @@ def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bo
     )
     if confirm is None:
         print(f"OK(setup): review build/setup/symbol-proposal.json; setup --replan-symbols --confirm {token}")
-        suggest(f"unbake setup --replan-symbols --confirm {token}")
+        print(f"next: unbake setup --redo-symbol-matching --confirm {token}")
         return ["symbol proposal ready; executable boundaries retained"]
     if confirm != token:
         raise Held("setup", "setup.symbol_proposal_stale: symbol proposal or project inputs changed")
@@ -274,16 +273,14 @@ def publish(
         for f in port.functions(project, v):
             groups[replacements.get(f.name, f.name)].add(project.compiler_reference(f.name))
     affected = set(replacements) | set(replacements.values())
-    units = {name: ident for name, ident in data.get("units", {}).items() if name not in affected}
+    units = {name: row for name, row in data.get("units", {}).items() if name not in affected}
     for name in set(replacements.values()):
-        # Joined placements that disagree build with the default first; try ranks the rest.
+        # Joined placements that disagree build with the default first; compare ranks the rest.
         if len(groups[name]) == 1 and (ident := next(iter(groups[name]))) != project.default_compiler:
-            units[name] = ident
+            units[name] = {"compiler": ident}
     data.pop("units", None)
     if units:
         data["units"] = dict(sorted(units.items()))
-    # Data identities rebind addresses per version, which only the full proof covers.
-    fast = symbol_proof.available(project, replacements) and not binding_data.get("renames")
     with tempfile.TemporaryDirectory(prefix="symbol-proof-", dir=directory) as temporary:
         tree = Path(temporary) / "tree"
         setup._copy_inputs(project, tree, inputs)
@@ -297,15 +294,14 @@ def publish(
             for path in header.rglob("*.h"):
                 atomic_files.text(path, rewrite(path.read_text(), header_names))
         removed = []
-        if not fast:
-            for source in (tree / project.src.relative_to(project.root)).rglob("*.c"):
-                atomic_files.text(source, rewrite(source.read_text(), header_names))
-                if source.stem in replacements:
-                    target = source.with_name(replacements[source.stem] + ".c")
-                    if target.exists() and target.read_bytes() != source.read_bytes():
-                        raise Held("split", f"split.join.authored_source: {source.name}: joined C sources differ")
-                    removed.append(source.relative_to(tree).as_posix())
-                    source.replace(target)
+        for source in (tree / project.src.relative_to(project.root)).rglob("*.c"):
+            atomic_files.text(source, rewrite(source.read_text(), header_names))
+            if source.stem in replacements:
+                target = source.with_name(replacements[source.stem] + ".c")
+                if target.exists() and target.read_bytes() != source.read_bytes():
+                    raise Held("split", f"split.join.authored_source: {source.name}: joined C sources differ")
+                removed.append(source.relative_to(tree).as_posix())
+                source.replace(target)
         for v, version in report["layout"]["versions"].items():
             if "split_yaml" in version["evidence"]:
                 version["evidence"]["split_yaml"] = rewrite_layout(version["evidence"]["split_yaml"], replacements)
@@ -323,43 +319,8 @@ def publish(
         with atomic_files.stream(tree / "build/setup/symbol-correspondence.json", "w") as stream:
             json.dump({k: v for k, v in report.items() if k != "layout"}, stream, indent=2, sort_keys=True)
             stream.write("\n")
-        if fast:
-            from unbake import config
-
-            staged = config.load(tree)
-            setup.run(staged, policy)
-            # Header changes are identifier substitutions only. Authored C
-            # references and edited compiled headers force the full proof in
-            # available(); retained object bindings are checked and relinked
-            # below, without reparsing an unchanged SDK type context.
-            if replacements:
-                receipts, assembly, generations = symbol_proof.prove(project, staged, policy, replacements)
-            else:
-                receipts = [
-                    f"{v}: name-only proof; SHA1 OK; unchanged bindings and cached cartridge reused"
-                    for v in project.versions
-                ]
-                assembly = []
-                generations = setup._generations(project, project.versions)
-            setup._publish(
-                project,
-                staged,
-                inputs,
-                fresh=True,
-                generations=generations,
-                assembly_changes=assembly,
-                relocated_generations=True,
-                reuse_generations=not replacements,
-            )
-            return [*receipts, "ready: name-only symbol transaction published"]
         del report, data, groups
-        # Symbol updates rebuild every object. Prove versions in turn so
-        # simultaneous large linkers do not multiply resident cartridge work.
-        # The per-version build still uses the configured core budget.
-        proof_policy = replace(policy, setup_version_jobs=1)
-        return setup._prove_publish(
-            project, tree, proof_policy, inputs, fresh=True, supply=None, removed_inputs=tuple(removed)
-        )
+        return setup._prove_publish(project, tree, policy, inputs, fresh=True, supply=None, removed_inputs=tuple(removed))
 
 
 def data_symbols_text(text: str, version: str, replacements: dict[str, str], data: dict[str, Any]) -> str:

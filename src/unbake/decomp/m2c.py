@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-import shlex
-import tempfile
 from pathlib import Path
 
 from unbake.decomp import draft_abi, gbi, measured_storage, similar
@@ -20,7 +18,6 @@ from unbake.decomp.draft_input import (
     jump_tables,
     private_constants,
     stack_locals,
-    version_for,
     whole_body,
 )
 from unbake.decomp.draft_layouts import normalize
@@ -30,7 +27,7 @@ from unbake.decomp.field_access import share
 from unbake.process import read_text, run_tool
 from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def _headers(project: Project) -> list[tuple[Path, str]]:

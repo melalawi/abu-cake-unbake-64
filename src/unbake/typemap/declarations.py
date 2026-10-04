@@ -18,7 +18,7 @@ from unbake.decomp.header_declarations import declarations as header_declaration
 from unbake.layout.structs_parser import Parser
 from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.typemap import storage
 
 _BOUNDARY = "extern int __unbake_feedback_boundary;"

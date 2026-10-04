@@ -41,7 +41,7 @@ from unbake import config
 from unbake.compilers import choice as compiler_choice
 from unbake.project import build, makefile, setup, workspace
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.report import progress
 
 # Rules the fold resolves: they are judged on the folded text, not on admission.

@@ -137,7 +137,7 @@ def resolve(pending: list[Need], project: Any, policy: Any) -> list[Edit]:
         )
     from unbake.layout.structs_fold import fold
 
-    return fold(records, project) if records else []
+    return fold(records, project, host=policy) if records else []
 
 
 register_resolver(LayoutNeed, 30, resolve)

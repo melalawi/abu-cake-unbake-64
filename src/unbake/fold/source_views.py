@@ -15,7 +15,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
 from unbake.fold.common import held
 from unbake.config import Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def parsers(

@@ -21,7 +21,7 @@ from typing import Any
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.typemap import declarations, storage
 
 FACTS = "facts"

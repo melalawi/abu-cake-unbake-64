@@ -119,7 +119,7 @@ class LinkIdentityTests(unittest.TestCase):
         import struct
 
         from tests.elf_fixture import write_object
-        from unbake.project_tools.elf import Object
+        from unbake.objects.elf import Object
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

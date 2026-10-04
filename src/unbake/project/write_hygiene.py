@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 # These streams contain no generated project data and need stable lock inodes.
@@ -19,7 +18,7 @@ def violations(path: Path, content: str) -> list[str]:
     """Conservatively guard all Python destinations, including indirect paths."""
     name = path.as_posix()
     allowed = _LOCKS.get(name, set()) | _STATE.get(name, set())
-    if name == "project_tools/atomic.py":
+    if name == "atomic.py":
         return []  # The single implementation owns fresh-file writes and copying.
     tree = ast.parse(content)
     aliases: dict[str, str] = {}
@@ -94,30 +93,12 @@ def violations(path: Path, content: str) -> list[str]:
     return result
 
 
-def makefile_violations(content: str) -> list[str]:
-    """Keep recipe outputs behind compile.py or the atomic command wrapper."""
-    result = []
-    for number, line in enumerate(content.splitlines(), 1):
-        if not line.startswith("\t"):
-            continue
-        command = re.sub(r"[12]?>\s*/dev/null\b", "", line)
-        direct = bool(re.search(r"(?<![\w.-])(cp|install|tee|touch)\s", command)) or ">" in command
-        compiler = bool(
-            re.search(r"\$\((CC|AS|LD|OBJCOPY)\)", command)
-            or re.search(r"(?:^\s*@?|[;&|]\s*|--\s+)(?:\S*/)?(?:\w+-)*(gcc|as|ld|objcopy)\s", command)
-        )
-        wrapped = "atomic.py" in command and "--output" in command and " -- " in command
-        if direct or (compiler and not wrapped):
-            result.append(f"project_tools/Makefile:{number}: use atomic publication: {line.strip()}")
-    return result
-
 
 def main() -> int:
     root = Path(__file__).parents[1]
     errors = [
         error for path in sorted(root.rglob("*.py")) for error in violations(path.relative_to(root), path.read_text())
     ]
-    errors.extend(makefile_violations((root / "project_tools/Makefile").read_text()))
     for error in errors:
         print(error)
     return int(bool(errors))

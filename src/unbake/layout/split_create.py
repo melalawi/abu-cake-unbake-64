@@ -15,7 +15,7 @@ from pathlib import Path
 
 from unbake.layout import split_analysis
 from unbake.config import Held, Host
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def without_comments(text: str) -> str:
@@ -50,12 +50,12 @@ def create(
     code_ranges: Sequence[tuple[int, int, int]] | None = None,
 ) -> str:
     """Keep Splat's measured layout, anchoring every output in a VERSION tree."""
-    from unbake.config import load_policy
     from unbake.project.rom import stem as valid_stem
 
     valid_stem(stem, "name")
     valid_stem(version, "VERSION")
-    policy = load_policy() if policy is None else policy
+    if policy is None:
+        raise Held("split", "split.create: the host config (unbake.toml) is required")
     executable = shutil.which(str(policy.splat))
     if executable is None:
         raise Held("init", f"policy.splat {policy.splat}: missing executable")

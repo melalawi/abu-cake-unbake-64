@@ -11,7 +11,7 @@ from pathlib import Path
 from unbake.layout import split
 from unbake.config import Project
 from unbake.project_tools import extract, layout
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 _CONTRIBUTION = re.compile(r"^\s+(\.[\w.]+)\s*\n?\s*(0x[\da-fA-F]+)\s+(0x[\da-fA-F]+)\s+(obj/[^\s]+\.o)\s*$", re.M)
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from unbake.config import Held, Host, Project
 from unbake.fold import apply
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.work import compare
 
 

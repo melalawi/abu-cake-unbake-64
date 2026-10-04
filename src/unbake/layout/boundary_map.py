@@ -19,7 +19,7 @@ from unbake.layout import split, split_apply
 from unbake.config import Held
 
 if TYPE_CHECKING:
-    from unbake.project.build import BuildResult
+    from unbake.build import Outcome
     from unbake.config import Host, Project
 
 
@@ -215,7 +215,7 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
     return edits
 
 
-def apply(project: Project, policy: Host, changes: Sequence[Change]) -> list[BuildResult]:
+def apply(project: Project, policy: Host, changes: Sequence[Change]) -> Outcome | None:
     """Apply all versions or roll back; name refused changes on any ROM failure."""
     edits = plan(project, changes)
     try:
@@ -223,9 +223,8 @@ def apply(project: Project, policy: Host, changes: Sequence[Change]) -> list[Bui
     except Held as error:
         names = ", ".join(f"{item.version}:{item.function}" for item in changes)
         raise Held("boundary-map", f"refused {names}; all map edits rolled back; {error.reason}") from error
-    failed = {result.version for result in results if not result.ok}
-    if failed:
-        names = ", ".join(f"{item.version}:{item.function}" for item in changes if item.version in failed)
-        logs = ", ".join(str(result.log) for result in results if not result.ok)
-        raise Held("boundary-map", f"ROM verification refused {names}; all map edits rolled back; logs {logs}")
+    if results is not None and not results.ok:
+        names = ", ".join(f"{item.version}:{item.function}" for item in changes)
+        detail = "; ".join(results.lines())
+        raise Held("boundary-map", f"make check refused {names}; all map edits rolled back; {detail}")
     return results

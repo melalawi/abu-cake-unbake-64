@@ -86,6 +86,14 @@ class Context:
             raise Held("config", f"unbake.toml: {self.command} needs host configuration")
         return self.host
 
+    def ready(self, *names: str) -> tuple[Project, Host]:
+        """The project and host after bringing the named derived steps up to date (steps.STEPS)."""
+        from unbake import steps
+
+        project, host = self.project(), self.require_host()
+        steps.ensure(project, host, names)
+        return project, host
+
     def cmd(self, *words: str | Path) -> str:
         """A runnable `unbake ...` line for this project, from any working directory."""
         tokens = ["unbake"]

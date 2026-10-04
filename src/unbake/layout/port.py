@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import csv
-import re
-from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.layout import split, split_apply
-from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
-from unbake.project_tools.elf import Object
+from unbake.layout import split
+from unbake.config import Held, Project
+from unbake.objects.elf import Object
 
 
 def relocation_masks(path: Path, size: int) -> dict[int, int]:

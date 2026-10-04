@@ -11,7 +11,7 @@ from tests.support import test_policy
 from unbake.decomp.score import diff
 from unbake.decomp.trial import comparison_identical
 from unbake.decomp.trial_compare import compare_object
-from unbake.project_tools.elf import Object
+from unbake.objects.elf import Object
 
 
 class NativePoolTests(unittest.TestCase):

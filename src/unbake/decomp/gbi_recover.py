@@ -25,7 +25,7 @@ from unbake.decomp.gbi_source import (
     word_builder,
 )
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 RULES = frozenset({"raw-gfx", "local-gbi-macro"})
 

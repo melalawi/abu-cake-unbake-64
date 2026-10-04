@@ -244,7 +244,7 @@ def fold_source(
         raise Held("layout", f"layout.member.{function}: source has no group")
     destination = project.include[0] / owner.header
     context, promoted, moved_spans = _local_typedefs(project, headers, parsers, records, destination)
-    edits = fold(records, project, destination=destination, prove_headers=prove_headers, context=context)
+    edits = fold(records, project, destination=destination, prove_headers=prove_headers, context=context, host=policy)
     if promoted:
         by_path = {edit.path: edit for edit in promoted}
         for edit in edits:

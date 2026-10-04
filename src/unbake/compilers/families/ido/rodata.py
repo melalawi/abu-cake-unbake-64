@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from unbake.config import Held
-from unbake.project_tools.elf import Object
-from unbake.project_tools.rodata import Pool, pools
+from unbake.objects.elf import Object
+from unbake.objects.rodata import Pool, pools
 
 
 def literal_pools(obj: Object) -> list[Pool]:

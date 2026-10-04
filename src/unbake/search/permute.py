@@ -22,7 +22,7 @@ from typing import Any, cast
 from unbake.work.compare import Compared
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 from unbake.search.core import Context, Mutation
 
 

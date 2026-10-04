@@ -22,7 +22,7 @@ from unbake.project.census import Census
 from unbake.config import Held, PendingProject, Host, SymbolPolicy
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
-from unbake.project_tools import atomic as atomic_files
+from unbake import atomic as atomic_files
 
 
 def digest(value: Any) -> str:
