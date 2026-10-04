@@ -1,5 +1,7 @@
 """Shared declaration preflight and final source regressions."""
 
+import hashlib
+import json
 from dataclasses import asdict
 from itertools import pairwise
 from unittest.mock import patch
@@ -9,7 +11,7 @@ from unbake.decomp import needs
 from unbake.layout.header_context import Headers
 from unbake.layout.structs import layouts
 from unbake.layout.structs_parser import Parser
-from unbake.match import declarations, source_views
+from unbake.match import declarations, source_views, staging
 
 
 class DeclarationTests(MatchFixture):
@@ -23,6 +25,33 @@ class DeclarationTests(MatchFixture):
         for mock in (boundary(structs, output), boundary(declarations, output)):
             mock.start()
             self.addCleanup(mock.stop)
+
+    def test_publication_rewrites_removed_helper_import_in_existing_source(self):
+        helper = self.project.include[0] / "common/draft_fields_alpha.h"
+        owner = self.project.include[0] / "fixture.h"
+        owner.write_text("struct Measured {int value;};\n")
+        lookup = self.project.build / "layout/index.json"
+        lookup.parent.mkdir(parents=True, exist_ok=True)
+        lookup.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "headers": {"fixture.h": hashlib.sha256(owner.read_bytes()).hexdigest()},
+                    "symbols": {"Measured": "fixture.h"},
+                    "clusters": {},
+                }
+            )
+        )
+        path = self.project.src / "alpha.c"
+        body = "int alpha(struct Measured *p) {return p->value;}\n"
+        path.write_text('#include "types.h"\n#include "common/draft_fields_alpha.h"\n' + body)
+        self.assertEqual(staging.publication_sources(self.project, {helper}), [path])
+        final = path.read_text()
+        self.assertNotIn("draft_fields", final)
+        self.assertIn('#include "fixture.h"', final)
+        self.assertIn('#include "types.h"', final)
+        self.assertIn(body, final)
+        self.assertEqual(staging.publication_sources(self.project, {helper}), [])
 
     def test_promoted_callback_collision_keeps_consumer_specific_provider(self):
         rows = (

@@ -271,6 +271,26 @@ class IndexedStagingTests(unittest.TestCase):
             write(new / obj, b"changed object")
             self.assertEqual((old / obj).read_bytes(), b".o")
 
+    def test_retention_preserves_proved_link_providers_when_make_inventory_lags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old, new = Path(directory) / "old", Path(directory) / "new"
+            new.mkdir()
+            obj = old / "obj/src/published.o"
+            obj.parent.mkdir(parents=True)
+            for suffix in (".o", ".d", ".inputs.json", ".built"):
+                obj.with_suffix(suffix).write_bytes(suffix.encode())
+            (old / ".split.mk").write_text("C_OBJECTS :=\nASM_OBJECTS :=\n")
+            (old / "fixture.ld").write_text("SECTIONS { .text : { obj/src/published.o(.text); } }")
+            with patch.object(Path, "rglob", side_effect=AssertionError("build-tree scan")):
+                staging.retain(old, new)
+            for suffix in (".o", ".d", ".inputs.json", ".built"):
+                self.assertEqual((new / "obj/src/published.o").with_suffix(suffix).read_bytes(), suffix.encode())
+            borrowed = Path(directory) / "borrowed"
+            borrowed.mkdir()
+            staging.retain(old, borrowed, borrowed=True)
+            staging.independent_objects(borrowed)
+            self.assertTrue((borrowed / "obj/src/published.o").is_file())
+
     def test_inventory_refuses_escape_and_missing_graph_never_walks(self):
         for graph, expected in [(None, ()), ("C_OBJECTS := $(BUILD)/obj/../outside.o\n", "held")]:
             with self.subTest(graph=graph), tempfile.TemporaryDirectory() as directory:

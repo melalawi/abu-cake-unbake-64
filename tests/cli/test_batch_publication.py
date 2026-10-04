@@ -152,9 +152,9 @@ class BatchPublicationCliTests(unittest.TestCase):
             header.write_bytes(header.read_bytes() + b"\n/* feedback wrote header */\n")
             return ["OK(types): mocked; follow-up: mock"]
 
-        def refresh(project, generations):
+        def refresh(project, generations, **kwargs):
             events.append(("refresh", None))
-            original(project, generations)
+            original(project, generations, **kwargs)
             for generation in generations.values():
                 for stamp in (generation / "obj").rglob("*.built"):
                     self.assertGreaterEqual(stamp.stat().st_mtime_ns, header.stat().st_mtime_ns)

@@ -272,6 +272,46 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.assertEqual(receipts, {p: p.read_bytes() for p in receipts})
         self.assertEqual(generations, {v: self.project.build_link(v).resolve() for v in self.project.versions})
 
+    def test_feedback_header_retirement_rebinds_source_and_dependencies_in_transaction(self):
+        from unbake.layout import index
+        from unbake.match import batch
+
+        self.cli("submit", self.sources[0])
+        published = self.project.src / "alpha.c"
+        helper = self.project.include[0] / "common/draft_fields_alpha.h"
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_text("struct Measured {int value;};\n")
+        index.update(self.project, {helper: helper.read_text()})
+        published.write_text('#include "common/draft_fields_alpha.h"\n' + published.read_text())
+        for version in self.project.versions:
+            generation = self.project.build_link(version).resolve()
+            self.tools.compile(self.project, self.policy, [published], version, generation / "obj/src")
+            obj = generation / "obj/src/alpha.o"
+            obj.with_suffix(".d").write_text("target: src/alpha.c include/common/draft_fields_alpha.h\n")
+
+        def retire(project, policy, candidates, previous, strict=False):
+            lookup = index.load(project)
+            lookup["headers"].pop("common/draft_fields_alpha.h")
+            lookup["symbols"] = {
+                name: home for name, home in lookup["symbols"].items() if home != "common/draft_fields_alpha.h"
+            }
+            helper.unlink()
+            index.path(project).write_bytes(index.encoded(lookup))
+            return []
+
+        with patch.object(batch, "_feedback", side_effect=retire):
+            self.cli("submit", published)
+        self.assertFalse(helper.exists())
+        self.assertNotIn("draft_fields_alpha", published.read_text())
+        for version in self.project.versions:
+            generation = self.project.build_link(version).resolve()
+            obj = generation / "obj/src/alpha.o"
+            self.assertTrue(obj.is_file())
+            self.assertNotIn("draft_fields_alpha", obj.with_suffix(".d").read_text())
+            self.assertEqual(obj.with_suffix(".built").stat().st_mtime_ns, 1)
+        record = json.loads((self.project.build / "types/proven.json").read_text())["records"]["alpha"]
+        self.assertEqual(record["source_sha256"], hashlib.sha256(published.read_bytes()).hexdigest())
+
     def test_republication_feedback_failure_restores_previous_receipts_and_file(self):
         from unittest.mock import patch
 

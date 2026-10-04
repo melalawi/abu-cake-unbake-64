@@ -1011,7 +1011,11 @@ def _commit(
         touched.update(
             project.build / "types" / name for name in ("proven.json", "database.json", "summary.json", "redraft.json")
         )
-        touched.update(index.headers(project))
+        previous_headers = set(index.headers(project)) | {
+            project.root / path.relative_to(staged.root) for path in index.headers(staged)
+        }
+        touched.update(previous_headers)
+        touched.update(project.src.glob("*.c"))
         touched.add(index.path(project))
         before = {path: path.read_bytes() if path.exists() else None for path in touched}
         swapped = []
@@ -1027,6 +1031,30 @@ def _commit(
                 swap(project.build_link(version), generation)
                 swapped.append(version)
             progress.write(project, policy, reports=reports)
+            with reporting.phase("type_feedback", sources=len(candidates)):
+                followups = _feedback(config.load(project.root), policy, candidates, current, strict=republication)
+            stale: set[Path] = set()
+            rewritten = staging.publication_sources(project, previous_headers)
+            if rewritten:
+                for generation in published_generations.values():
+                    for path in rewritten:
+                        obj = generation / "obj/src" / (path.stem + ".o")
+                        if obj.is_file():
+                            stale.add(staging.invalidate_receipt(obj))
+                        obj.with_suffix(".inputs.json").unlink(missing_ok=True)
+                type_context.feedback_many(
+                    project,
+                    [(path.stem, path, split.holding_versions(project, path.stem), {}) for path in rewritten],
+                    policy=policy,
+                    regenerate=False,
+                )
+            stale.update(
+                staging.publication_dependencies(project, staged, published_generations, previous=previous_headers)
+            )
+            # Feedback owns shared header writes. Refresh only after its last
+            # write so an immediate independent check reuses the proved objects.
+            if published_generations is generations:
+                staging.publication_stamps(project, generations, stale=stale)
             ledger.parent.mkdir(parents=True, exist_ok=True)
             with atomic_files.stream(ledger, "a", encoding="utf-8") as output:
                 for candidate in candidates:
@@ -1043,12 +1071,6 @@ def _commit(
                         "at": datetime.now(UTC).isoformat(),
                     }
                     output.write(json.dumps(row, sort_keys=True) + "\n")
-            with reporting.phase("type_feedback", sources=len(candidates)):
-                followups = _feedback(config.load(project.root), policy, candidates, current, strict=republication)
-            # Feedback owns shared header writes. Refresh only after its last
-            # write so an immediate independent check reuses the proved objects.
-            if published_generations is generations:
-                staging.publication_stamps(project, generations)
             reporting.record(
                 "published",
                 sources=[candidate.function for candidate in candidates],

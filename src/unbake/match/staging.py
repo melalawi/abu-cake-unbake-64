@@ -10,7 +10,8 @@ from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 
-from unbake.layout import split, split_apply
+from unbake.layout import apply, split, split_apply
+from unbake.layout import index as declaration_index
 from unbake.match.common import (
     held,
     read,
@@ -191,6 +192,10 @@ def object_paths(generation: Path) -> tuple[Path, ...]:
     if not graph.is_file():
         return ()
     names = re.findall(r"\$\(BUILD\)/(obj/[^\s:]+\.o)(?=\s|$)", graph.read_text())
+    # Incremental proofs can leave Make's inventory behind the proved link
+    # script. Retain its providers too, before a fresh extraction replaces it.
+    for script in generation.glob("*.ld"):
+        names.extend(re.findall(r"(obj/[^\s();]+\.o)\s*\(", script.read_text()))
     paths = {Path(name) for name in names}
     if any(path.is_absolute() or ".." in path.parts for path in paths):
         held(f"submit.objects: {graph}: object outside generation")
@@ -492,10 +497,38 @@ def unchanged_objects(current: Path, generation: Path) -> bool:
     return True
 
 
-def publication_dependencies(project: Project, staged: Project, generations: dict[str, Path]) -> None:
+def publication_sources(project: Project, previous: set[Path]) -> list[Path]:
+    """Rebind imports when feedback retired generated headers in this publication."""
+    removed = {path for path in previous if not path.is_file()}
+    if not removed:
+        return []
+    names = {
+        path.relative_to(root).as_posix() for path in removed for root in project.include if path.is_relative_to(root)
+    }
+    rewritten = []
+    lookup = declaration_index.load(project)
+    ownership = None
+    for path in sorted(project.src.glob("*.c")):
+        before = path.read_text()
+        if not names.intersection(apply._INCLUDE.findall(before)):
+            continue
+        if ownership is None:
+            from unbake.layout import map
+
+            ownership = map.load(project)
+        after = apply.source(project, before, path.stem, {}, ownership=ownership, lookup=lookup, previous=names)
+        if after != before:
+            atomic_files.text(path, after)
+            rewritten.append(path)
+    return rewritten
+
+
+def publication_dependencies(
+    project: Project, staged: Project, generations: dict[str, Path], *, previous: set[Path] | None = None
+) -> set[Path]:
     """Publish dependency evidence in project coordinates, never scratch coordinates."""
     prefixes = [str(staged.root) + "/", str(project.root) + "/"]
-    if staged.root.is_relative_to(project.root):
+    if staged.root != project.root and staged.root.is_relative_to(project.root):
         prefixes.insert(0, staged.root.relative_to(project.root).as_posix() + "/")
 
     def local(text: str) -> str:
@@ -503,12 +536,36 @@ def publication_dependencies(project: Project, staged: Project, generations: dic
             text = text.replace(prefix, "")
         return text
 
+    stale: set[Path] = set()
+    removed = {local(str(path)) for path in previous or () if not path.is_file()}
+    # Every live generated home is a conservative replacement prerequisite.
+    # Retire the receipt instead of certifying changed dependency bytes here.
+    replacements = (
+        sorted(local(str(path)) for path in declaration_index.headers(project) if path.is_file()) if removed else []
+    )
     for generation in generations.values():
         for obj in object_paths(generation):
             dependency = (generation / obj).with_suffix(".d")
             if dependency.is_file():
                 before = dependency.read_text()
                 after = local(before)
+                affected = False
+                lines = []
+                for line in after.replace("\\\n", " ").splitlines(keepends=True):
+                    if ":" in line:
+                        target, prerequisites = line.split(":", 1)
+                        words = prerequisites.split()
+                        if removed.intersection(words):
+                            affected = True
+                            words = list(
+                                dict.fromkeys([*(word for word in words if word not in removed), *replacements])
+                            )
+                            line = target + ": " + " ".join(words) + "\n"
+                    lines.append(line)
+                if affected:
+                    after = "".join(lines)
+                    stale.add(invalidate_receipt(generation / obj))
+                    (generation / obj).with_suffix(".inputs.json").unlink(missing_ok=True)
                 if after != before:
                     atomic_files.text(dependency, after)
             evidence = (generation / obj).with_suffix(".inputs.json")
@@ -518,8 +575,18 @@ def publication_dependencies(project: Project, staged: Project, generations: dic
                 if rebound != saved:
                     atomic_files.text(evidence, json.dumps(rebound, sort_keys=True))
 
+    return stale
 
-def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
+
+def invalidate_receipt(obj: Path) -> Path:
+    """Keep Make's intermediate receipt present but older than all source inputs."""
+    receipt = obj.with_suffix(".built")
+    atomic_files.text(receipt, "")
+    os.utime(receipt, ns=(1, 1))
+    return receipt
+
+
+def publication_stamps(project: Project, generations: dict[str, Path], *, stale: set[Path] | None = None) -> None:
     """Mark the successful proof's graph and objects current after input writes.
 
     Called under the publication lock: all project inputs still equal the proved
@@ -534,7 +601,7 @@ def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
             if obj.parts[1] not in {"src", "asm"}:
                 continue
             receipt = (generation / obj).with_suffix(".built")
-            if receipt.is_file() and not receipt.is_symlink():
+            if receipt.is_file() and not receipt.is_symlink() and receipt not in (stale or ()):
                 atomic_files.receipt(receipt)
         for name in (".split.mk", ".split"):
             path = generation / name
