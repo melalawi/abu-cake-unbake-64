@@ -623,7 +623,6 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
         if (
             saved.get("inputs_sha256") == inputs
             and saved.get("project_id") == project.id
-            and saved.get("workspace_id") == project.workspace_id
             and saved.get("names_from") == census.names_from
             and saved.get("rom_sha1") == {census.names[rom.path]: rom.sha1 for rom in census.cartridges}
         ):
@@ -795,7 +794,6 @@ def plan_layout(project: PendingProject, census: Census, policy: SetupPolicy) ->
         data_symbols=data,
         schema=1,
         project_id=project.id,
-        workspace_id=project.workspace_id,
         rom_sha1={census.names[rom.path]: rom.sha1 for rom in census.cartridges},
         names_from=census.names_from,
         versions=versions,

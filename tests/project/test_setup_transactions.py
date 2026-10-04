@@ -46,7 +46,7 @@ class SetupTransactionTests(unittest.TestCase):
                 "default_compiler": "fixture",
                 "layout_cap": 2,
             },
-            workspace={"id": self.project.workspace_id},
+            workspace={"id": self.project.checkout_id},
             paths={
                 "roms": "roms",
                 "build": "build",
@@ -118,13 +118,13 @@ class SetupTransactionTests(unittest.TestCase):
         path = self.root / "config.toml"
         original = path.read_text() + '\n[workspace]\nid = "retired-checkout"\n'
         path.write_text(original)
-        identity = self.project.workspace_id
+        identity = self.project.checkout_id
         with redirect_stdout(io.StringIO()) as output, patch("unbake.layout.map.ensure"):
             code = main(["--project", str(self.root), "setup", "--refresh-helpers"])
         self.assertEqual(code, 0, output.getvalue())
         self.assertIn("OK(setup)", output.getvalue())
         self.assertEqual(path.read_text(), setup_config.strip_workspace(original))
-        self.assertEqual(config.load(self.root).workspace_id, identity)
+        self.assertEqual(config.load(self.root).checkout_id, identity)
         stamp = path.stat().st_mtime_ns
         with redirect_stdout(io.StringIO()), patch("unbake.layout.map.ensure"):
             self.assertEqual(main(["--project", str(self.root), "setup", "--refresh-helpers"]), 0)
@@ -133,7 +133,7 @@ class SetupTransactionTests(unittest.TestCase):
     def test_public_plain_setup_strips_workspace(self) -> None:
         path = self.root / "config.toml"
         path.write_text(path.read_text() + '\n[workspace]\nid = "retired-checkout"\n')
-        identity = self.project.workspace_id
+        identity = self.project.checkout_id
         with (
             redirect_stdout(io.StringIO()) as output,
             patch("unbake.layout.map.ensure"),
@@ -143,7 +143,7 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual(code, 0, output.getvalue())
         self.assertIn("every cartridge byte proved", output.getvalue())
         self.assertNotIn("workspace", tomllib.loads(path.read_text()))
-        self.assertEqual(config.load(self.root).workspace_id, identity)
+        self.assertEqual(config.load(self.root).checkout_id, identity)
 
     def test_helper_refresh_failure_restores_retired_config(self) -> None:
         path = self.root / "config.toml"
@@ -508,7 +508,7 @@ class SetupTransactionTests(unittest.TestCase):
         layout = {
             "schema": 1,
             "project_id": pending.id,
-            "workspace_id": pending.workspace_id,
+            "checkout_id": pending.checkout_id,
             "rom_sha1": {"us": rom.sha1},
             "names_from": "us",
             "inputs_sha256": {},
@@ -528,7 +528,7 @@ class SetupTransactionTests(unittest.TestCase):
         proposal = {
             "schema": 1,
             "project_id": pending.id,
-            "workspace_id": pending.workspace_id,
+            "checkout_id": pending.checkout_id,
             "rom_sha1": {"us": rom.sha1},
             "layout_sha256": "a" * 64,
             "inputs_sha256": {},

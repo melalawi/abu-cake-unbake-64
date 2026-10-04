@@ -37,7 +37,7 @@ class PartialsTest(unittest.TestCase):
             self.splits[version] = path
         self.project = SimpleNamespace(
             id="00000000-0000-4000-8000-000000000001",
-            workspace_id="00000000-0000-4000-8000-000000000002",
+            checkout_id="00000000-0000-4000-8000-000000000002",
             name="fixture",
             root=self.root,
             src=self.src,
@@ -51,7 +51,7 @@ class PartialsTest(unittest.TestCase):
         typed = dict.fromkeys(("register", "order", "immediate", "relocation", "inserted", "missing", "changed"), 0)
         trial = SimpleNamespace(
             function="f",
-            work_identity={"schema": 1, "project_id": self.project.id, "workspace_id": self.project.workspace_id},
+            work_identity={"schema": 1, "project_id": self.project.id},
             source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
             compares={"us": SimpleNamespace(version="us", identical=1, of=3, typed=typed, lines=[])},
             needs=[],

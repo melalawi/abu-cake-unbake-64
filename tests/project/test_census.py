@@ -159,7 +159,7 @@ class CensusTests(unittest.TestCase):
             {
                 "schema": 1,
                 "project_id": self.project.id,
-                "workspace_id": self.project.workspace_id,
+                "checkout_id": self.project.checkout_id,
                 "names_from": "us",
                 "ingestion_complete": True,
                 "generated_inputs": [
@@ -180,7 +180,7 @@ class CensusTests(unittest.TestCase):
         self.supply("one")
         result = self.run_census()
         document = json.loads(result.manifest.read_text())
-        document["workspace_id"] = "00000000-0000-4000-8000-000000000000"
+        document["project_id"] = "00000000-0000-4000-8000-000000000000"
         result.manifest.write_text(json.dumps(document))
         with self.assertRaisesRegex(Held, "setup.roms.manifest"):
             census.candidates(self.project)

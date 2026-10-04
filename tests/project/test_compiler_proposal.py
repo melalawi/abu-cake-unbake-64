@@ -92,7 +92,7 @@ class ProposalTests(unittest.TestCase):
         layout: LayoutManifest = {
             "schema": 1,
             "project_id": self.project.id,
-            "workspace_id": self.project.workspace_id,
+            "checkout_id": self.project.checkout_id,
             "rom_sha1": {"us": cartridge_rom.sha1},
             "names_from": "us",
             "inputs_sha256": {},

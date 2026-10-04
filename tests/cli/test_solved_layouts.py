@@ -102,7 +102,7 @@ class SolvedLayoutCliTests(unittest.TestCase):
                 "versions": ["us"],
                 "target_sha256": {"us": mapped["functions"]["gamma"]["versions"]["us"]["target_sha256"]},
             }
-            receipt = {key: database[key] for key in ("schema", "project_id", "workspace_id", "rom_sha1")}
+            receipt = {key: database[key] for key in ("schema", "project_id", "rom_sha1")}
             receipt["records"] = {
                 "gamma": {"source": "src/gamma.c", "source_sha256": source_sha256, "versions": ["us"], "proof": proof}
             }

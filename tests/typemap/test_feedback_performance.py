@@ -396,7 +396,7 @@ class DeclarationReuseTests(unittest.TestCase):
     def test_independent_summary_changes_are_refused_before_whole_program_work(self):
         for case in ("digest", "identity", "large_missing"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
-                project = SimpleNamespace(build=Path(tmp), workspace_id="local")
+                project = SimpleNamespace(build=Path(tmp), checkout_id="local")
                 directory = project.build / "types"
                 directory.mkdir()
                 database = directory / "database.json"
@@ -410,7 +410,7 @@ class DeclarationReuseTests(unittest.TestCase):
                         storage.encoded(
                             {
                                 "schema": 1,
-                                "workspace_id": "local",
+                                "checkout_id": "local",
                                 "project_id": "wrong" if case == "identity" else "same",
                                 "database_sha256": "wrong" if case == "digest" else storage.file_digest(database),
                             }
@@ -418,7 +418,7 @@ class DeclarationReuseTests(unittest.TestCase):
                     )
                 with (
                     patch.object(
-                        storage, "identity", return_value={"schema": 1, "project_id": "same", "workspace_id": "local"}
+                        storage, "identity", return_value={"schema": 1, "project_id": "same", "checkout_id": "local"}
                     ),
                     patch.object(declarations, "collect") as collect,
                     patch.object(solver, "infer") as infer,

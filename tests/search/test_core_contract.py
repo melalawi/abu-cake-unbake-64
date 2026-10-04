@@ -159,7 +159,7 @@ class CoreTests(unittest.TestCase):
         }
         project: Any = SimpleNamespace(
             id="00000000-0000-4000-8000-000000000001",
-            workspace_id="00000000-0000-4000-8000-000000000002",
+            checkout_id="00000000-0000-4000-8000-000000000002",
             root=project_root,
             name="fixture",
             versions=("us", "eu"),
@@ -202,7 +202,7 @@ class CoreTests(unittest.TestCase):
                 comparisons,
                 [],
                 "try again",
-                work_identity={"schema": 1, "project_id": project.id, "workspace_id": project.workspace_id},
+                work_identity={"schema": 1, "project_id": project.id, "checkout_id": project.checkout_id},
             )
 
         class Proposals:

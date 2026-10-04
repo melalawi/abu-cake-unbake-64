@@ -663,7 +663,7 @@ def feedback_many(
         retained = project.build / "types/sources" / (digest + ".c")
         if not retained.is_file() or storage.file_digest(retained) != digest:
             storage.write(retained, content)
-    previous["records"].update(records)
+    previous = {**storage.identity(project), "records": {**previous["records"], **records}}
     storage.write(path, storage.encoded(previous))
     if not regenerate:
         return previous

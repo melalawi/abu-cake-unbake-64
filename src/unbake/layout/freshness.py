@@ -237,7 +237,7 @@ def prepare(
                 "rom_sha1": storage.identity(project)["rom_sha1"],
             }
         # Retain the original matched proof and its source identity as provenance.
-    return value
+    return {**storage.identity(project), "records": value["records"]}
 
 
 def keep_sources(project: Project, receipts: dict[str, Any]) -> None:

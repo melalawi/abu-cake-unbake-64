@@ -8,6 +8,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast, overload
+from uuid import NAMESPACE_URL, uuid5
+
+
+def relative_text(root: Path, text: str) -> str:
+    return re.sub(r"(?<![\w])/(?:[^\s\"']+)", lambda match: os.path.relpath(match[0], root), text)
+
 
 POLICY_PATH = Path(__file__).with_name("policy.toml")
 
@@ -66,7 +72,7 @@ class Project:
     units: dict[str, str]
     version_map: dict[str, Version]
     id: str
-    workspace_id: str
+    checkout_id: str
     roms: Path
     build: Path
     work: Path
@@ -245,7 +251,7 @@ CONFIG_SECTIONS = frozenset({"schema", "project", "paths", "compilers", "units",
 class PendingProject:
     root: Path
     id: str
-    workspace_id: str
+    checkout_id: str
     state: str
     roms: Path
     build: Path
@@ -282,37 +288,7 @@ def _relative(value: object, label: str, root: Path) -> Path:
     return target
 
 
-def checkout_identity(root: Path, *, persist: bool = True) -> str:
-    """Read checkout-local identity; cloning a source must never create its state."""
-    from uuid import UUID, uuid4
-
-    from unbake.project.build import _lock
-    from unbake.project_tools import atomic as atomic_files
-
-    path = root / ".unbake/workspace-id"
-    if path.is_symlink() or path.parent.is_symlink():
-        raise Held("config", "workspace.id: local state is a symlink")
-    if not persist and not path.exists():
-        return str(uuid4())
-    try:
-        if persist:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with _lock(path.parent / "workspace.lock"):
-                if path.exists():
-                    value = path.read_text().strip()
-                else:
-                    value = str(uuid4())
-                    atomic_files.text(path, value + "\n")
-        else:
-            value = path.read_text().strip()
-        if str(UUID(value)) != value:
-            raise ValueError("expected canonical UUID")
-        return value
-    except (OSError, ValueError) as error:
-        raise Held("config", f"workspace.id: {path}: {error}") from error
-
-
-def load_pending(root: Path, *, persist_workspace: bool = True) -> PendingProject:
+def load_pending(root: Path) -> PendingProject:
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
     data = _read(path)
@@ -361,7 +337,7 @@ def load_pending(root: Path, *, persist_workspace: bool = True) -> PendingProjec
     return PendingProject(
         root,
         identity(project, "project.id"),
-        checkout_identity(root, persist=persist_workspace),
+        str(uuid5(NAMESPACE_URL, str(root))),
         state,
         roms,
         build,
@@ -374,11 +350,11 @@ def load_pending(root: Path, *, persist_workspace: bool = True) -> PendingProjec
     )
 
 
-def load(root: Path, *, text: str | None = None, persist_workspace: bool = True) -> Project:
+def load(root: Path, *, text: str | None = None) -> Project:
     """Load ready configuration; text supplies staged config.toml content for this root."""
     root = Path(root).expanduser().resolve()
     path = root / "config.toml"
-    pending = load_pending(root, persist_workspace=persist_workspace)
+    pending = load_pending(root)
     if pending.state != "ready":
         raise Held("config", "project.state: awaiting-roms; run unbake setup")
     if text is None:
@@ -492,7 +468,7 @@ def load(root: Path, *, text: str | None = None, persist_workspace: bool = True)
         units,
         version_map,
         pending.id,
-        pending.workspace_id,
+        pending.checkout_id,
         pending.roms,
         pending.build,
         pending.work,

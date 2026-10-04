@@ -70,7 +70,7 @@ class ExclusionTests(MainCase):
                 dict(
                     schema=1,
                     project_id=self.project.id,
-                    workspace_id=self.project.workspace_id,
+                    checkout_id=self.project.checkout_id,
                     subject="alpha",
                     source="build/drafts/alpha/alpha.c",
                 )
@@ -155,7 +155,7 @@ class ExclusionIdentityTests(MainCase):
         value = dict(
             schema=1,
             project_id=self.project.id,
-            workspace_id=self.project.workspace_id,
+            checkout_id=self.project.checkout_id,
             rom_sha1={v: self.project.version(v).baserom_sha1 for v in self.project.versions},
             versions=versions,
         )
@@ -196,9 +196,9 @@ class ExclusionIdentityTests(MainCase):
     def test_changed_identity_boundary_and_unknown_names_never_refresh(self):
         path, (evidence_path, value) = self.renamed_reservation()
         before = path.read_bytes()
-        for key in ("project_id", "workspace_id", "rom_sha1", "boundary", "duplicate"):
+        for key in ("project_id", "rom_sha1", "boundary", "duplicate"):
             altered = json.loads(json.dumps(value))
-            if key in ("project_id", "workspace_id"):
+            if key in ("project_id",):
                 altered[key] = "changed"
             elif key == "rom_sha1":
                 altered[key]["us"] = "0" * 40

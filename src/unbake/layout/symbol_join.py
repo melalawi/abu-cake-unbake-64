@@ -54,7 +54,6 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
     pins = {v: project.version(v).baserom_sha1 for v in project.versions}
     if (
         layout.get("project_id") != project.id
-        or layout.get("workspace_id") != project.workspace_id
         or layout.get("rom_sha1") != pins
         or {v: image.sha1 for v, image in images.items()} != pins
         or set(functions) != set(records)

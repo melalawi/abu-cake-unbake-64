@@ -80,14 +80,13 @@ def _inputs(
 
 
 def _verify_identity(project: PendingProject, census: Census, layout: LayoutManifest) -> dict[str, str]:
-    for key in ("schema", "project_id", "workspace_id", "rom_sha1", "versions", "names_from", "inputs_sha256"):
+    for key in ("schema", "project_id", "rom_sha1", "versions", "names_from", "inputs_sha256"):
         if key not in layout:
             raise Held("setup", f"setup.compiler_proposal: layout.{key}: missing input")
     hashes = {census.names[rom.path]: rom.sha1 for rom in census.cartridges}
     if (
         layout["schema"] != 1
         or layout["project_id"] != project.id
-        or layout["workspace_id"] != project.workspace_id
         or layout["rom_sha1"] != hashes
         or set(layout["versions"]) != set(hashes)
         or layout["names_from"] != census.names_from
@@ -106,8 +105,8 @@ def _choices(project: PendingProject, choices: dict[str, str] | None) -> dict[st
         return {}
     try:
         previous = json.loads(path.read_bytes())
-        if previous["project_id"] != project.id or previous["workspace_id"] != project.workspace_id:
-            raise ValueError("proposal belongs to another project or workspace")
+        if previous["project_id"] != project.id:
+            raise ValueError("proposal belongs to another project")
         saved = previous.get("choices", {})
         if not isinstance(saved, dict) or any(
             not isinstance(k, str) or not isinstance(v, str) for k, v in saved.items()
@@ -333,7 +332,6 @@ def propose_compilers(
     document: dict[str, Any] = {
         "schema": 1,
         "project_id": project.id,
-        "workspace_id": project.workspace_id,
         "rom_sha1": hashes,
         "layout_sha256": digest(layout),
         "inputs_sha256": _inputs(project, layout, policy, selected),

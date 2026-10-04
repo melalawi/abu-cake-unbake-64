@@ -53,7 +53,7 @@ class Ledger:
         name = _text(getattr(project, "name", None), "project.name")
         if Path(name).name != name or name in (".", ".."):
             raise Held("decomp", "project.name: required single directory name")
-        self.path = state_root / project.id / project.workspace_id / "assignments.jsonl"
+        self.path = state_root / project.id / project.checkout_id / "assignments.jsonl"
         hours = getattr(self.policy, "assignment_idle_hours", None)
         if isinstance(hours, bool) or not isinstance(hours, (float, int)) or not math.isfinite(hours) or hours <= 0:
             raise Held("decomp", "policy.assignment_idle_hours: required positive hours")

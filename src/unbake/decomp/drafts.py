@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 from unbake.decomp.candidate_ranking import candidate_rank
 from unbake.decomp.score import percent, weakest
 from unbake.layout import split
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, relative_text
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
@@ -78,13 +78,13 @@ class Store:
         name = getattr(project, "name", None)
         if not isinstance(name, str) or not name or Path(name).name != name or name in (".", ".."):
             raise Held("drafts", "project.name must be a single directory name")
-        for key in ("id", "workspace_id"):
+        for key in ("id", "checkout_id"):
             value = getattr(project, key, None)
             if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f-]{36}", value):
                 raise Held("drafts", f"project.{key}: required explicit UUID")
         self.policy = policy
         self.project = project
-        self.root = Path(state_root) / project.id / project.workspace_id / "drafts"
+        self.root = Path(state_root) / project.id / project.checkout_id / "drafts"
 
     def add(self, trial: Trial, source: Path, score: dict[str, float]) -> str:
         function = _function(_required(trial, "function"))
@@ -126,7 +126,7 @@ class Store:
                 "identical": identical,
                 "of": total,
                 "typed": typed,
-                "lines": lines,
+                "lines": [relative_text(self.project.root, line) for line in lines],
             }
             scores[version] = percent(score[version], f"score[{version}]", "drafts")
         preconditions = _required(trial, "preconditions")
@@ -148,8 +148,8 @@ class Store:
             "sha256": sha,
             "compares": comparisons,
             "score": scores,
-            "preconditions": preconditions,
-            "next_command": next_command,
+            "preconditions": [relative_text(self.project.root, reason) for reason in preconditions],
+            "next_command": relative_text(self.project.root, next_command),
             "identical_everywhere": identical_everywhere,
             "at": datetime.now(UTC).isoformat(),
             "work": dict(_required(trial, "work_identity")),
@@ -225,10 +225,9 @@ class Store:
                     ):
                         if name not in row:
                             raise Held("drafts", f"{path}:{number}: {name} is missing")
-                    if (row["work"].get("schema"), row["work"].get("project_id"), row["work"].get("workspace_id")) != (
+                    if (row["work"].get("schema"), row["work"].get("project_id")) != (
                         1,
                         self.project.id,
-                        self.project.workspace_id,
                     ):
                         raise Held("drafts", f"{path}:{number}: trial.identity: incompatible work record")
                     _function(row["function"])

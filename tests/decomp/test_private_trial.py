@@ -44,7 +44,7 @@ class PrivateTrialTests(unittest.TestCase):
             units={},
             version_map={},
             id="id",
-            workspace_id="workspace",
+            checkout_id="workspace",
             roms=root / "roms",
             build=root / "build",
             work=root / "build/work",

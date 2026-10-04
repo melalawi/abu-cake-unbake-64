@@ -70,7 +70,7 @@ class SymbolRuleTests(unittest.TestCase):
         layout = {
             "schema": 1,
             "project_id": self.configuration["project"]["id"],
-            "workspace_id": config.load(self.project).workspace_id,
+            "checkout_id": config.load(self.project).checkout_id,
             "names_from": "us",
             "rom_sha1": {},
             "versions": {},

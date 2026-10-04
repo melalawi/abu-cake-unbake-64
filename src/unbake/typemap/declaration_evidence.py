@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,7 @@ from unbake.layout.split import Edit
 from unbake.layout.structs_parser import Parser
 from unbake.match import imports
 from unbake.project.cache import remembered
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, relative_text
 from unbake.typemap import split
 
 _MARKER = re.compile(r"/\* unbake declaration evidence: (evidence_[a-f0-9]+) \*/")
@@ -392,7 +393,13 @@ def plan_many(project: Project, policy: Policy, sources: tuple[Path, ...]) -> tu
             text = source.read_text()
             prefix, end = inject(project, headers, text, source.stem, tuple(project.versions))
             if not end:
-                reports.append({"source": str(source), "status": "reused", "reason": "no absent authored declarations"})
+                reports.append(
+                    {
+                        "source": os.path.relpath(source, project.root),
+                        "status": "reused",
+                        "reason": "no absent authored declarations",
+                    }
+                )
                 continue
             prefix = prefix[:end]
             parser, records = headers.parse(prefix)
@@ -437,10 +444,20 @@ def plan_many(project: Project, policy: Policy, sources: tuple[Path, ...]) -> tu
                 marker = f"/* unbake declaration evidence: {label} */\n/* unbake evidence input: {retained} */\n"
                 headers.texts[edit.path] = text[:end] + marker + text[end:]
             reports.append(
-                {"source": str(source), "status": "admitted", "reason": "authored declarations through shared fold"}
+                {
+                    "source": os.path.relpath(source, project.root),
+                    "status": "admitted",
+                    "reason": "authored declarations through shared fold",
+                }
             )
         except (Held, OSError) as error:
-            reports.append({"source": str(source), "status": "held", "reason": str(error)})
+            reports.append(
+                {
+                    "source": os.path.relpath(source, project.root),
+                    "status": "held",
+                    "reason": relative_text(project.root, str(error)),
+                }
+            )
     edits = [
         Edit(path, original.get(path, ""), text, tuple(project.versions))
         for path, text in headers.texts.items()

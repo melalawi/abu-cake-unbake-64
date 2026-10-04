@@ -22,7 +22,7 @@ from unbake.decomp.trial_source import annotate_divergence
 from unbake.decomp.trial_target import inputs as trial_inputs
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import entries as entry_layout
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Policy, Project, relative_text
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object
 
@@ -298,7 +298,7 @@ def try_draft(
             if set(selected) == set(owning_versions(original_project, function, None))
             else [*prefix(original_project), "try", str(source)]
         )
-    atomic_files.text(work / "report.txt", render(trial) + "\n", encoding="utf-8")
+    atomic_files.text(work / "report.txt", relative_text(project.root, render(trial)) + "\n", encoding="utf-8")
     print(render(trial))
     return trial
 

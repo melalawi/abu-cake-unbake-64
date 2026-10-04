@@ -20,7 +20,6 @@ def canonical(project: Project, names: list[str], rows: list[Function]) -> list[
         if (
             evidence.get("schema") != 1
             or evidence.get("project_id") != project.id
-            or evidence.get("workspace_id") != project.workspace_id
             or evidence.get("rom_sha1") != {v: project.version(v).baserom_sha1 for v in project.versions}
         ):
             return names

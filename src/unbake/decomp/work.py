@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
 import shutil
@@ -187,7 +188,7 @@ def compilation_project(project: Project, source: Path) -> Project:
     if view.is_file():
         from unbake.match.staging import project_at
 
-        return project_at(project, Path(json.loads(view.read_bytes())["root"]))
+        return project_at(project, project.root / json.loads(view.read_bytes())["root"])
     overlay_data(project, source)
     return overlay_project(project, source.parent) if (source.parent / "overlay.json").is_file() else project
 
@@ -248,7 +249,7 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
         atomic_files.text(path, text)
     result = staged.src / source.name
     atomic_files.text(result, folded.source)
-    atomic_files.write(result.parent / "trial-view.json", encoded({"root": str(tree)}))
+    atomic_files.write(result.parent / "trial-view.json", encoded({"root": os.path.relpath(tree, project.root)}))
     return result
 
 
@@ -337,7 +338,6 @@ def current_trial(
     for key in (
         "schema",
         "project_id",
-        "workspace_id",
         "source_sha256",
         "overlay_sha256",
         "names_from",
@@ -420,7 +420,6 @@ def identity(
         {
             "schema": 1,
             "project_id": project.id,
-            "workspace_id": project.workspace_id,
             "rom_sha1": {v: project.version(v).baserom_sha1 for v in versions},
             "kind": "function",
             "subject": source.stem,
@@ -444,7 +443,9 @@ def identity(
             "needs": {"headers": overlay_inputs["edits"]},
             "entries": entry_inventory,
             "evidence": {
-                "overlay_directory": str(source.parent) if (source.parent / "overlay.json").is_file() else None,
+                "overlay_directory": os.path.relpath(source.parent, project.root)
+                if (source.parent / "overlay.json").is_file()
+                else None,
             },
         },
     )

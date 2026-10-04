@@ -246,7 +246,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         digest = hashlib.sha256(published.read_bytes()).hexdigest()
         self.assertEqual(record["source_sha256"], digest)
         self.assertEqual(record["proof"]["source_sha256"], digest)
-        ledger = self.policy.state_root / self.project.id / self.project.workspace_id / "receipts/match.jsonl"
+        ledger = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts/match.jsonl"
         publication = json.loads(ledger.read_text().splitlines()[-1])
         self.assertEqual(publication["source_sha256"], digest)
         self.cli("solve")
@@ -256,7 +256,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.cli("submit", source)
         published = self.project.src / source.name
         proven = self.project.build / "types/proven.json"
-        ledger = self.policy.state_root / self.project.id / self.project.workspace_id / "receipts/match.jsonl"
+        ledger = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts/match.jsonl"
         receipts = {p: p.read_bytes() for p in (proven, ledger)}
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
         compiled = len(self.tools.compiled)
@@ -324,7 +324,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         published.write_bytes(published.read_bytes() + b"\n/* edited */\n")
         edited = published.read_bytes()
         proven = self.project.build / "types/proven.json"
-        ledger = self.policy.state_root / self.project.id / self.project.workspace_id / "receipts/match.jsonl"
+        ledger = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts/match.jsonl"
         receipts = {p: p.read_bytes() for p in (proven, ledger)}
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
 

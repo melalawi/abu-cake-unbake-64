@@ -154,10 +154,10 @@ class CloneTests(unittest.TestCase):
         evidence = self.project.build / "setup"
         evidence.mkdir()
         prefix = b'{"padding":"'
-        middle = b'","workspace_id":"'
+        middle = b'","project_id":"'
         padding = b"x" * (1024 * 1024 - 18 - len(prefix) - len(middle))
         layout = evidence / "layout.json"
-        layout.write_bytes(prefix + padding + middle + self.project.workspace_id.encode() + b'"}')
+        layout.write_bytes(prefix + padding + middle + self.project.id.encode() + b'"}')
         (evidence / "us.json").write_bytes(b'{"providers": []}')
         (evidence / "symbol-proposal.json").write_bytes(b"unread review")
         (evidence / "proof-old").mkdir()
@@ -172,15 +172,18 @@ class CloneTests(unittest.TestCase):
         with patch.object(Path, "read_bytes", read), patch.object(clone, "prepare", return_value=False):
             result = clone.create(self.project, self.policy, self.destination, self.project.versions)
         copied = result.build / "setup"
-        self.assertEqual(json.loads((copied / "layout.json").read_bytes())["workspace_id"], result.workspace_id)
+        self.assertEqual(json.loads((copied / "layout.json").read_bytes())["project_id"], result.id)
         self.assertEqual((copied / "us.json").read_bytes(), b'{"providers": []}')
         self.assertFalse((copied / "symbol-proposal.json").exists())
         self.assertFalse((copied / "proof-old").exists())
-        self.assertIn(self.project.workspace_id.encode(), layout.read_bytes())
+        self.assertIn(self.project.id.encode(), layout.read_bytes())
 
     def test_analysis_receipts_remain_fresh_and_shards_share_atomic_storage(self) -> None:
+        from unbake.project.setup_config import strip_workspace
         from unbake.typemap import database, mapping, shards, storage
 
+        config_path = self.project.root / "config.toml"
+        config_path.write_text(strip_workspace(config_path.read_text()))
         for name in ("setup", "map", "types", "layout"):
             (self.project.build / name).mkdir()
         storage.write(self.project.build / "setup/layout.json", storage.encoded(storage.identity(self.project)))
@@ -225,7 +228,7 @@ class CloneTests(unittest.TestCase):
                     "functions": {},
                     "unknown": [],
                     "conflicts": [],
-                    "receipt_path": str(self.project.root / "src/alpha.c"),
+                    "receipt_path": "src/alpha.c",
                 }
             ),
         )
@@ -245,7 +248,7 @@ class CloneTests(unittest.TestCase):
         self.assertFalse((result.build / "map/.facts-unpublished.sqlite").exists())
         self.assertFalse((result.build / "types/database.json.partial").exists())
         value = database.load(result)
-        self.assertEqual(value["receipt_path"], str(result.root / "src/alpha.c"))
+        self.assertEqual(value["receipt_path"], "src/alpha.c")
         mapping.load_map(result)
         new_digest = storage.file_digest(result.build / "types/database.json")
         self.assertEqual(storage.read(result.build / "types/summary.json", "summary")["database_sha256"], new_digest)
@@ -313,9 +316,9 @@ class CloneTests(unittest.TestCase):
         with patch.object(clone, "prepare", return_value=False):
             result = clone.create(self.project, self.policy, self.destination, self.project.versions)
         self.assertEqual(result.id, self.project.id)
-        self.assertNotEqual(result.workspace_id, self.project.workspace_id)
+        self.assertNotEqual(result.checkout_id, self.project.checkout_id)
         self.assertNotIn("[workspace]", (self.destination / "config.toml").read_text())
-        self.assertEqual(config.load(self.destination).workspace_id, result.workspace_id)
+        self.assertEqual(config.load(self.destination).checkout_id, result.checkout_id)
         self.assertIn("/.unbake/", (self.destination / ".gitignore").read_text())
         self.assertEqual((self.destination / "Makefile").read_bytes(), (self.live / "Makefile").read_bytes())
         self.assertEqual((self.destination / "docs/setup/owner.json").read_bytes(), evidence.read_bytes())
@@ -540,7 +543,7 @@ class CloneTests(unittest.TestCase):
         with patch.object(clone, "prepare", return_value=False):
             cloned = clone.create(self.project, self.policy, self.destination, self.project.versions)
         self.assertEqual(cloned.id, self.project.id)
-        self.assertNotEqual(cloned.workspace_id, self.project.workspace_id)
+        self.assertNotEqual(cloned.checkout_id, self.project.checkout_id)
         self.assertIn("/.unbake/", (self.destination / ".gitignore").read_text())
         self.assertIn("/tools/clone-policy.toml", (self.destination / ".gitignore").read_text())
         self.assertEqual((self.destination / "Makefile").read_bytes(), (self.live / "Makefile").read_bytes())

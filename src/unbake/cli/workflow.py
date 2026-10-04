@@ -51,10 +51,9 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None, new
     # Editable current work takes precedence over another fresh draft.
     for path in sorted(project.drafts.glob("*/manifest.json")):
         manifest = json.loads(path.read_bytes())
-        if (manifest.get("schema"), manifest.get("project_id"), manifest.get("workspace_id")) != (
+        if (manifest.get("schema"), manifest.get("project_id")) != (
             1,
             project.id,
-            project.workspace_id,
         ):
             continue
         subject = manifest.get("subject")

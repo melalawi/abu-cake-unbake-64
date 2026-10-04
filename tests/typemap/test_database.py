@@ -43,34 +43,12 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "types.abi.target_stale"):
             mapped_body(self.project, "alpha", "us")
 
-    def test_solve_recovers_workspace_mismatch_and_rebinds_database(self) -> None:
-        from dataclasses import replace
-
-        map_program(self.project)
-        first = solve(self.project)
-        rebound = replace(self.project, workspace_id="00000000-0000-4000-8000-000000000099")
-        original = (rebound.build / "types/database.json").read_bytes()
-        self.assertEqual(load(rebound)["workspace_id"], rebound.workspace_id)
-        self.assertEqual((rebound.build / "types/database.json").read_bytes(), original)
-        result = solve(rebound)
-        self.assertEqual(result["workspace_id"], rebound.workspace_id)
-        self.assertEqual(result["revision"], first["revision"] + 1)
-        self.assertEqual(load(rebound)["workspace_id"], rebound.workspace_id)
-        summary = storage.read(rebound.build / "types/summary.json", "types.summary")
-        self.assertEqual(summary["workspace_id"], rebound.workspace_id)
-        self.assertEqual(summary["database_sha256"], storage.file_digest(rebound.build / "types/database.json"))
-
-    def test_workspace_recovery_rebuilds_an_unusable_semantic_index(self) -> None:
-        from dataclasses import replace
-
-        map_program(self.project)
-        solve(self.project)
-        path = self.project.build / "types/database.json"
-        path.write_bytes(path.read_bytes() + b" ")
-        rebound = replace(self.project, workspace_id="00000000-0000-4000-8000-000000000099")
-        result = solve(rebound)
-        self.assertEqual(load(rebound)["workspace_id"], rebound.workspace_id)
-        self.assertEqual(result["revision"], 1)
+    def test_legacy_workspace_field_is_ignored_without_mutation(self) -> None:
+        value = {**storage.identity(self.project), "workspace_id": "legacy", "path": "/old/checkout"}
+        original = dict(value)
+        storage.validate_identity(self.project, value, "evidence")
+        self.assertEqual(value, original)
+        self.assertNotIn("workspace_id", storage.identity(self.project))
 
     def test_solve_refuses_different_project_or_rom_on_recovery(self) -> None:
         from dataclasses import replace
@@ -85,18 +63,9 @@ class DatabaseTests(unittest.TestCase):
                 summary[field] = "different"
                 storage.write(path, storage.encoded(summary))
                 with self.assertRaisesRegex(Held, "identity changed"):
-                    solve(replace(self.project, workspace_id="another-workspace"))
+                    solve(replace(self.project, checkout_id="another-workspace"))
                 summary[field] = original
                 storage.write(path, storage.encoded(summary))
-
-    def test_identity_boundary_rebinds_once_and_preserves_payload(self) -> None:
-        from dataclasses import replace
-
-        rebound = replace(self.project, workspace_id="another-workspace")
-        value = {**storage.identity(self.project), "payload": {"sha256": "pinned"}}
-        self.assertTrue(storage.validate_identity(rebound, value, "evidence"))
-        self.assertEqual(value, {**storage.identity(rebound), "payload": {"sha256": "pinned"}})
-        self.assertFalse(storage.validate_identity(rebound, value, "evidence"))
 
     def test_consumers_refuse_project_rom_and_schema_before_rebinding(self) -> None:
         from dataclasses import replace
@@ -105,7 +74,7 @@ class DatabaseTests(unittest.TestCase):
 
         map_program(self.project)
         solve(self.project)
-        rebound = replace(self.project, workspace_id="another-workspace")
+        rebound = replace(self.project, checkout_id="another-workspace")
         for relative, consumer in (("types/database.json", load), ("map/facts.json", load_map)):
             path = self.project.build / relative
             original = path.read_bytes()

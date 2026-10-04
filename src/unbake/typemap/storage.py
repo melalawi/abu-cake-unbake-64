@@ -65,22 +65,13 @@ def identity(project: Project) -> dict[str, Any]:
     return {
         "schema": 1,
         "project_id": project.id,
-        "workspace_id": project.workspace_id,
         "rom_sha1": {v: project.version(v).baserom_sha1 for v in project.versions},
     }
 
 
-def validate_identity(project: Project, value: dict[str, Any], key: str) -> bool:
-    """Validate portable evidence and rebind its in-memory checkout identity.
-
-    Return whether recovery occurred. Persist only through normal publication,
-    keeping content digests and transactional rollback guards intact.
-    """
-    if any(value.get(field) != expected for field, expected in identity(project).items() if field != "workspace_id"):
-        raise Held("solve", f"{key}: project/workspace/ROM identity changed")
-    recovered = value.get("workspace_id") != project.workspace_id
-    value["workspace_id"] = project.workspace_id
-    return recovered
+def validate_identity(project: Project, value: dict[str, Any], key: str) -> None:
+    if any(value.get(field) != expected for field, expected in identity(project).items()):
+        raise Held("solve", f"{key}: project/ROM identity changed")
 
 
 def changed_source(project: Project) -> Path | None:
@@ -149,7 +140,10 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
         from unbake.typemap import declaration_evidence
 
         result.update(
-            {"declaration-source:" + str(path): file_digest(path) for path in declaration_evidence.files(project)}
+            {
+                "declaration-source:" + os.path.relpath(path, project.root): file_digest(path)
+                for path in declaration_evidence.files(project)
+            }
         )
         result.update(
             {

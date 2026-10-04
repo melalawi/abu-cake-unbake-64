@@ -44,7 +44,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     versions = owning_versions(project, function, None)
     naming = versions[0]
     remembered = draft_presence.attempts(project).get(function)
-    previous = Path(remembered["scratch"]) if remembered and getattr(args, "redraft", False) else None
+    previous = project.root / remembered["scratch"] if remembered and getattr(args, "redraft", False) else None
     scratch = scratch_directory(project, args.scratch or previous or default_scratch(project, policy), "draft")
     _database, context = ("", "") if args.without_type_db else type_context.snapshot(project, function)
     destination = scratch / "drafts" / function

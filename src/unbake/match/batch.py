@@ -1004,7 +1004,7 @@ def _commit(
         for candidate in candidates:
             if drafts.source_identity(candidate.source.read_bytes()) != candidate.sha256:
                 held(f"{candidate.function}: source_sha256 changed during proof")
-        ledger = Path(policy.state_root) / project.id / project.workspace_id / "receipts" / "match.jsonl"
+        ledger = Path(policy.state_root) / project.id / project.checkout_id / "receipts" / "match.jsonl"
         report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
         touched = set(writes) | {ledger, project.root / "README.md"} | report_paths
         republication = any(candidate.republication for candidate in candidates)

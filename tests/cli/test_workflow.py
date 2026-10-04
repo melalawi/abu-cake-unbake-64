@@ -120,7 +120,7 @@ class WorkflowTests(MatchFixture):
         manifest = {
             "schema": 1,
             "project_id": self.project.id,
-            "workspace_id": self.project.workspace_id,
+            "checkout_id": self.project.checkout_id,
             "subject": "alpha",
         }
         path = directory / "manifest.json"
@@ -133,7 +133,7 @@ class WorkflowTests(MatchFixture):
             action, reason = workflow.select(self.project, self.policy, new=True)
             self.assertTrue(action.endswith(" draft beta"), action)
             self.assertIn("alpha (private draft)", reason)
-            manifest["workspace_id"] = "other"
+            manifest["project_id"] = "other"
             path.write_text(json.dumps(manifest))
             action, reason = workflow.select(self.project, self.policy, new=True)
             self.assertTrue(action.endswith(" draft alpha"), action)

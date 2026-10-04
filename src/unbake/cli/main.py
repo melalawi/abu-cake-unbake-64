@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
             return int(next_command.run(args, pending) or invocation.refused)
         if phase == "setup":
             return int(setup.run(args, config.load_pending(root)) or invocation.refused)
-        project = config.load(root, persist_workspace=phase != "clone")
+        project = config.load(root)
         policy = config.load_policy()
         refused = dispatch(args, project, policy)
         if phase == "clone" and not refused and not invocation.refused:

@@ -24,7 +24,7 @@ class PlanningTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.project: Any = SimpleNamespace(
             id="00000000-0000-4000-8000-000000000001",
-            workspace_id="00000000-0000-4000-8000-000000000002",
+            checkout_id="00000000-0000-4000-8000-000000000002",
             name="fixture",
             root=self.root / "project",
             versions=("us", "eu"),
@@ -89,7 +89,7 @@ class PlanningTests(unittest.TestCase):
         source.write_text(f"int {function}(void) {{ return 0; }} /* {suffix} */\n")
         trial: Any = SimpleNamespace(
             function=function,
-            work_identity={"schema": 1, "project_id": self.project.id, "workspace_id": self.project.workspace_id},
+            work_identity={"schema": 1, "project_id": self.project.id},
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares={
                 v: SimpleNamespace(

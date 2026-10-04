@@ -131,7 +131,7 @@ class MatchFixture(unittest.TestCase):
             units={},
             version_map=version_map,
             id="00000000-0000-4000-8000-000000000001",
-            workspace_id="00000000-0000-4000-8000-000000000002",
+            checkout_id="00000000-0000-4000-8000-000000000002",
             roms=self.root / "roms",
             build=self.root / "build",
             work=self.root / "build/work",
@@ -292,7 +292,7 @@ class MatchFixture(unittest.TestCase):
         (self.store.root / "trials.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
 
     def matched(self) -> list[dict[str, Any]]:
-        path = self.policy.state_root / self.project.id / self.project.workspace_id / "receipts" / "match.jsonl"
+        path = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts" / "match.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def assert_untouched(self) -> None:

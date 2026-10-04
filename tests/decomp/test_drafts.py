@@ -19,7 +19,7 @@ class DraftsTest(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.project: Any = SimpleNamespace(
             id="00000000-0000-4000-8000-000000000001",
-            workspace_id="00000000-0000-4000-8000-000000000002",
+            checkout_id="00000000-0000-4000-8000-000000000002",
             root=self.root / "project",
             name="fixture",
             src=self.root / "project/src",
@@ -56,7 +56,7 @@ class DraftsTest(unittest.TestCase):
         }
         trial: Any = SimpleNamespace(
             function=function,
-            work_identity={"schema": 1, "project_id": self.project.id, "workspace_id": self.project.workspace_id},
+            work_identity={"schema": 1, "project_id": self.project.id},
             source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
             compares=compares,
             preconditions=[],

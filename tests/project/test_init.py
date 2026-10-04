@@ -36,7 +36,6 @@ class InitTests(unittest.TestCase):
                     {
                         ".git",
                         ".gitignore",
-                        ".unbake",
                         "roms",
                         "config.toml",
                         "layout.toml",

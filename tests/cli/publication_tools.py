@@ -97,7 +97,7 @@ class Tools:
             [],
             "unbake submit " + str(source),
         )
-        result.work_identity = {"schema": 1, "project_id": project.id, "workspace_id": project.workspace_id}
+        result.work_identity = {"schema": 1, "project_id": project.id, "checkout_id": project.checkout_id}
         drafts.Store(policy, project).add(result, source, {v: 100.0 for v in selected})
         return result
 

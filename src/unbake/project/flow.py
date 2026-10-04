@@ -12,7 +12,6 @@ from unbake.project.config import PendingProject, SetupPolicy
 class Identity(TypedDict):
     schema: int
     project_id: str
-    workspace_id: str
     rom_sha1: dict[str, str]
 
 

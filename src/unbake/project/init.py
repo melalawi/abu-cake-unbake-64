@@ -54,9 +54,6 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
 
         atomic_files.write(target / "layout.toml", encoded(Map(layout_cap, ())))
         atomic_files.text(target / ".gitignore", hygiene.base_ignore_text(target))
-        from unbake.project.config import checkout_identity
-
-        checkout_identity(target)
         (target / "roms").mkdir()
         atomic_files.text(target / "README.md", readme_text(target))
         atomic_files.text(target / "CONTRIBUTING.md", contributing)

@@ -44,7 +44,6 @@ def ingest_manifest(project: PendingProject) -> dict[str, Any] | None:
             or type(previous.get("schema")) is not int
             or previous.get("schema") != 1
             or previous.get("project_id") != project.id
-            or previous.get("workspace_id") != project.workspace_id
         ):
             raise ValueError("incompatible manifest")
         if previous.get("ingestion_complete") is not True:
@@ -221,7 +220,6 @@ def run(
         "schema": 1,
         "ingestion_complete": False,
         "project_id": project.id,
-        "workspace_id": project.workspace_id,
         "names_from": selected,
         "renames": renames,
         "version_order": list(order) if order is not None else None,

@@ -27,7 +27,7 @@ class FreshnessTests(unittest.TestCase):
             include=(root / "include",),
             build=root / "build",
             id="project",
-            workspace_id="workspace",
+            checkout_id="workspace",
             versions=(),
         )
         self.project.src.mkdir()
@@ -284,43 +284,8 @@ class FreshnessTests(unittest.TestCase):
             self.assertEqual(apply.run(self.project), 3)
         self.assertEqual(order, ["units", "refresh", "publish"])
 
-    def test_apply_recovers_foreign_database_and_authenticated_cutover_receipts(self):
-        from contextlib import nullcontext
-
-        self.value.update(storage.identity(self.project))
-        storage.write(self.project.build / "types/database.json", storage.encoded(self.value))
-        folder = self.project.build / "types/sources"
-        folder.mkdir()
-        (folder / (storage.digest(self.original) + ".c")).write_bytes(self.original)
-        self.source.write_bytes(self.outputs[self.source])
-        self.project.workspace_id = "new-workspace"
-        with self.assertRaisesRegex(Held, "published source changed"):
-            storage.inputs(self.project, headers=True)
-        before = (self.project.build / "types/proven.json").read_bytes()
-
-        def publish(project, policy, value, **kwargs):
-            self.assertEqual(value["workspace_id"], project.workspace_id)
-            self.value = value
-            return self.publish()
-
-        with (
-            patch.object(map, "load", return_value=self.ownership),
-            patch("unbake.project.build.lock", return_value=nullcontext()),
-            patch.object(apply, "units", return_value=0),
-            patch.object(freshness, "refresh", side_effect=lambda p, policy, value: (value, set())),
-            patch.object(apply, "_run", side_effect=publish),
-        ):
-            apply.run(self.project)
-        self.assertIsNone(storage.changed_source(self.project))
-        for name in ("database", "proven"):
-            value = storage.read(self.project.build / f"types/{name}.json", "evidence")
-            self.assertEqual(value["workspace_id"], self.project.workspace_id)
-        receipt = storage.read(self.project.build / "types/proven.json", "evidence")
-        self.assertEqual(receipt["records"]["first"]["proof"], self.receipt["records"]["first"]["proof"])
-        self.assertNotEqual((self.project.build / "types/proven.json").read_bytes(), before)
-
     def test_foreign_receipt_recovery_refuses_project_rom_and_authored_changes(self):
-        self.project.workspace_id = "new-workspace"
+        self.project.checkout_id = "new-workspace"
         self.source.write_bytes(self.original + b"/* real edit */\n")
         before = (self.project.build / "types/proven.json").read_bytes()
         for field in ("project_id", "rom_sha1"):

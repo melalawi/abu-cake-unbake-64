@@ -77,7 +77,6 @@ def plan(project: Project, policy: SetupPolicy, *, retain_names: bool = False) -
         {v: image.sha1 for v, image in images.items()} != pins
         or layout.get("rom_sha1") != pins
         or layout.get("project_id") != project.id
-        or layout.get("workspace_id") != project.workspace_id
         or set(layout.get("versions", {})) != set(project.versions)
     ):
         raise Held("setup", "setup.symbol_layout_stale: ROM pins, project identity or layout versions differ")

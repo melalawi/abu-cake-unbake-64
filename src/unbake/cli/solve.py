@@ -5,7 +5,7 @@ from pathlib import Path
 
 from unbake.cli import common
 from unbake.layout.split import Edit
-from unbake.project.config import Policy, Project
+from unbake.project.config import Policy, Project, relative_text
 from unbake.project_tools import atomic as atomic_files
 from unbake.typemap import redrafts, solve, storage
 
@@ -47,7 +47,14 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         if reports:
             storage.write(
                 project.build / "types/declaration-admission.json",
-                storage.encoded({"schema": 1, "state": "held", "reason": str(error), "records": reports}),
+                storage.encoded(
+                    {
+                        "schema": 1,
+                        "state": "held",
+                        "reason": relative_text(project.root, str(error)),
+                        "records": reports,
+                    }
+                ),
             )
         for edit in reversed(edits):
             if edit.before:
