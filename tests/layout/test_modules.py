@@ -2,7 +2,7 @@
 
 import unittest
 
-from unbake.layout.map import Member
+from unbake.layout.map import SIGNALS, Member
 from unbake.layout.modules import Evidence, Function, merged_order, padding, plan, version_evidence
 
 RETURN, NOP = 0x03E00008, 0
@@ -234,6 +234,7 @@ class PlanTests(unittest.TestCase):
             with self.subTest(name):
                 found = plan(members(names, partial), ("us", "eu"), evidence, orders(names), cap, cuts)
                 self.assertEqual([("".join(group), list(signals)) for group, signals in found], expected)
+                self.assertLessEqual({s for _, signals in found for s in signals}, set(SIGNALS))
 
     def test_a_cut_needs_adjacent_rows_in_every_holding_version(self) -> None:
         evidence = {"us": Evidence(cuts={("a", "b")}), "eu": Evidence(cuts={("a", "b")})}

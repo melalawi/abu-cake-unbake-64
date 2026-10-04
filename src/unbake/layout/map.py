@@ -37,7 +37,7 @@ class Group:
         return f"{self.segment}/{self.name}.h"
 
 
-SIGNALS = ("callee", "cap", "padding", "rodata", "split", "version")
+SIGNALS = ("callee", "cap", "chain", "padding", "rodata", "split", "version")
 """Evidence that formed an inferred group (layout.modules)."""
 
 
