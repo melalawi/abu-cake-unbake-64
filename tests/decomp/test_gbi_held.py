@@ -13,11 +13,11 @@ from unittest.mock import patch
 
 from pycparser import c_ast, c_parser
 
+from unbake.config import Held, Project
 from unbake.decomp import checks, gbi
 from unbake.decomp.gbi_expr import split
 from unbake.decomp.gbi_source import expand, invocations, macros
 from unbake.project import setup
-from unbake.config import Held, Project
 
 
 class HeldPacketsTest(unittest.TestCase):

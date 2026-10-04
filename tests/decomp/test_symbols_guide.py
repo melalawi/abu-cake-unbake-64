@@ -6,11 +6,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-from unbake.decomp import guide, needs, symbols, symbols_edits
-from unbake.decomp.needs import LabelNeed, SymbolNeed
+from tests.kit import host_values
 from unbake.compilers.families import family_for
 from unbake.compilers.families.mips import Relocation
 from unbake.config import Compiler, Held, Host, Project, Version
+from unbake.decomp import guide, needs, symbols, symbols_edits
+from unbake.decomp.needs import LabelNeed, SymbolNeed
 
 
 def pair(address: int, opcode: int = 0x31) -> tuple[int, int]:
@@ -40,53 +41,24 @@ def project_for(symbols_path: Path) -> Project:
         "Fixture",
         "us",
         tuple(versions),
-        root / "src",
-        (root / "include",),
-        root / "asm",
-        root / "tools",
         {compiler.id: compiler},
         compiler.id,
         {},
         versions,
-        id="00000000-0000-4000-8000-000000000001",
-        checkout_id="00000000-0000-4000-8000-000000000002",
-        roms=root / "roms",
-        build=root / "build",
-        work=root / "build/work",
-        drafts=root / "build/drafts",
+        "00000000-0000-4000-8000-000000000001",
+        2,
+        (),
+        (),
+        (),
     )
 
 
 class SymbolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.family = family_for("ido-7.1")
-        root = Path(tempfile.gettempdir()).resolve()
-        self.policy = Host(
-            setup_version_jobs=4,
-            cores=1,
-            stall_trials=1,
-            search_beam=1,
-            assignment_idle_hours=1,
-            cache_root=root / "cache",
-            state_root=root / "state",
-            objdiff_cli=root / "objdiff",
-            objdiff_sha256="0" * 64,
-            m2c=root / "m2c",
-            splat=root / "splat",
-            mips_ld=mips_tool("ld"),
-            mips_objdump=mips_tool("objdump"),
-            mips_readelf=mips_tool("readelf"),
-            same_game_similarity=0.1,
-            probe_count=1,
-            mips_as=mips_tool("as"),
-            mips_objcopy=root / "objcopy",
-            cpp=root / "cpp",
-            asflags=(),
-            cppflags=(),
-            sn64_asflags=(),
-            permuter_archive=root / "permuter.tar",
-            permuter_sha256="0" * 64,
-        )
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.policy = Host.from_values(host_values(Path(directory.name)), "draft")
         self.rows = (symbols.DataRow("pool", 0x800C0000, 0x800D0000, ".rodata"),)
 
     def test_constant_pointer_inference_and_load_widths(self) -> None:

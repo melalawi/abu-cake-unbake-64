@@ -8,8 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from unbake.decomp import checks
 from unbake.config import Held
+from unbake.decomp import checks
 
 
 class ChecksTest(unittest.TestCase):

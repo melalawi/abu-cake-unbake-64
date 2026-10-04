@@ -2,7 +2,7 @@
 
 import unittest
 
-from unbake.cycle.rank import Attempt, Candidate, rank
+from unbake.cycle.rank import Candidate, History, rank
 
 WINDOW = {"min_bytes": 16, "max_bytes": 4096, "min_history": 3}
 
@@ -11,8 +11,8 @@ def cand(name: str, size: int, carryover: bool = False) -> Candidate:
     return Candidate(name, size, ("us",), carryover, 0.0)
 
 
-def attempts(size: int, exact: list[bool], minutes: float) -> list[Attempt]:
-    return [Attempt(f"h{size}-{i}", size, flag, minutes) for i, flag in enumerate(exact)]
+def attempts(size: int, exact: list[bool], minutes: float) -> list[History]:
+    return [History(f"h{size}-{i}", size, flag, minutes) for i, flag in enumerate(exact)]
 
 
 def names(result: list[Candidate]) -> list[str]:

@@ -6,8 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from unbake.layout import symbol_replan
 from unbake.config import Held
+from unbake.layout import symbol_replan
 
 
 class RetainedAssertionTests(unittest.TestCase):
@@ -50,9 +50,9 @@ class RetainedAssertionTests(unittest.TestCase):
     def test_retained_name_review_is_an_explicit_setup_option(self):
         from unbake.cli.main import make_parser
 
-        args = make_parser().parse_args(["setup", "--replan-symbols", "--retain-symbol-names"])
-        self.assertTrue(args.replan_symbols)
-        self.assertTrue(args.retain_symbol_names)
+        args = make_parser().parse_args(["setup", "--redo-symbol-matching", "--keep-symbol-names"])
+        self.assertTrue(args.redo_symbol_matching)
+        self.assertTrue(args.keep_symbol_names)
 
     def test_retained_name_review_preserves_data_bindings_without_replaying_renames(self):
         original = {

@@ -8,8 +8,12 @@ failure raises TaskFailed naming worker.crash or worker.memory.
 
 from __future__ import annotations
 
+import atexit
 import multiprocessing
+import os
 import resource
+import shutil
+import tempfile
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
@@ -42,7 +46,29 @@ def _cap(memory_worker_bytes: int) -> None:
     resource.setrlimit(resource.RLIMIT_DATA, (memory_worker_bytes, memory_worker_bytes))
 
 
+# The fork server listens on a socket in multiprocessing's private temp dir; sun_path holds 107 bytes.
+_SOCKET_ROOM = 107 - len("/pymp-xxxxxxxx/listener-xxxxxxxx")
+
+
+def _socket_directory() -> None:
+    """Put multiprocessing's private dir under XDG_RUNTIME_DIR when TMPDIR is too long for the socket path."""
+    config = multiprocessing.process.current_process()._config  # type: ignore[attr-defined]
+    if "tempdir" in config or len(tempfile.gettempdir()) <= _SOCKET_ROOM:
+        return
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    if not runtime or len(runtime) > _SOCKET_ROOM:
+        raise Held(
+            "pool",
+            f"pool.socket: TMPDIR {tempfile.gettempdir()} is too long for the worker socket; "
+            "set XDG_RUNTIME_DIR or a shorter TMPDIR",
+        )
+    directory = tempfile.mkdtemp(prefix="pymp-", dir=runtime)
+    atexit.register(shutil.rmtree, directory, ignore_errors=True)
+    config["tempdir"] = directory
+
+
 def _executor(size: int, memory_worker_bytes: int) -> ProcessPoolExecutor:
+    _socket_directory()
     return ProcessPoolExecutor(
         max_workers=size,
         mp_context=multiprocessing.get_context("forkserver"),

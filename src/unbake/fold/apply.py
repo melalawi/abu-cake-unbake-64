@@ -6,10 +6,10 @@ so fold edits a private copy; tidy leaves those copies in the work dir and land 
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake.config import Held, Host, Project, draft_view
 from unbake.decomp import checks, gbi
 from unbake.fold import declarations, notes
@@ -38,7 +38,7 @@ def view(project: Project, function: str) -> Project:
     private = work_root / owner.header
     if shared.is_file() and not private.exists():
         private.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(shared, private)
+        atomic_files.copyfile(shared, private)
     return drafted
 
 

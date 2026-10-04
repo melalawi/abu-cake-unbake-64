@@ -15,8 +15,8 @@ from unbake.layout.structs_fold import fold
 
 class DeclarationTests(unittest.TestCase):
     def setUp(self):
-        from tests.preprocessor import output
         from tests.kit import boundary
+        from tests.preprocessor import output
         from unbake.layout import structs
         from unbake.typemap import declarations
 
@@ -148,12 +148,13 @@ class DeclarationTests(unittest.TestCase):
             source = root / "source.c"
             source.write_text('#include "count.h"\n#if ACTIVE\nstruct Roster { u32 slots[SLOT_COUNT]; };\n#endif\n')
             project = SimpleNamespace(
+                cppflags=("-undef", "-nostdinc"),
                 root=root,
                 include=(include,),
                 compiler_for=lambda path: SimpleNamespace(cflags=("-DOTHER=1",)),
                 version=lambda version: SimpleNamespace(macros=("ACTIVE=1",)),
             )
-            policy = SimpleNamespace(cpp=Path(cpp), cppflags=("-undef", "-nostdinc"))
+            policy = SimpleNamespace(cpp=Path(cpp))
             self.assertEqual(layouts(source, project=project, policy=policy, version="us")[0].size, 32)
             for kwargs, missing in [
                 ({}, "project"),
@@ -168,8 +169,8 @@ class DeclarationTests(unittest.TestCase):
 
 class FoldTests(unittest.TestCase):
     def setUp(self):
-        from tests.preprocessor import output
         from tests.kit import boundary
+        from tests.preprocessor import output
         from unbake.layout import structs
         from unbake.typemap import declarations
 
@@ -188,6 +189,7 @@ class FoldTests(unittest.TestCase):
             source = root / "draft.c"
             source.write_text("struct Record { unsigned int value; };")
             project = SimpleNamespace(
+                cppflags=("-undef", "-nostdinc"),
                 root=root,
                 include=(include,),
                 versions=("us", "eu"),
@@ -197,7 +199,7 @@ class FoldTests(unittest.TestCase):
                 ),
                 src=root / "src",
             )
-            policy = SimpleNamespace(cpp=Path("fixture-cpp"), cppflags=("-undef", "-nostdinc"))
+            policy = SimpleNamespace(cpp=Path("fixture-cpp"))
             pending = [
                 needs.decode(row)
                 for row in json.loads(
@@ -553,8 +555,8 @@ if __name__ == "__main__":
 
 class DefinitionOrderTests(unittest.TestCase):
     def setUp(self):
-        from tests.preprocessor import output
         from tests.kit import boundary
+        from tests.preprocessor import output
         from unbake.layout import structs
         from unbake.typemap import declarations
 

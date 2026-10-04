@@ -8,9 +8,10 @@ from typing import cast
 from unittest.mock import patch
 
 from tests.decomp.support import fixture
+from tests.kit import with_value
+from unbake.config import Held, Host
 from unbake.decomp import gbi
 from unbake.decomp.gbi_expr import Ambiguous
-from unbake.config import Held, Host
 
 
 class GbiTests(unittest.TestCase):
@@ -369,7 +370,9 @@ void f(void) {
                 "print('void alpha(void) { Gfx *p=dl++; p->words.w0=0xE7000000; p->words.w1=0; }')\n"
             )
             tool.chmod(0o755)
-            policy.m2c = tool
-            draft = m2c.draft(project, cast(Host, policy), "alpha", "us", project.work)
-            self.assertIn("gDPPipeSync", draft.read_text())
-            self.assertIn('#include "gbi.h"', draft.read_text())
+            policy = with_value(policy, "tools.m2c", tool)
+            draft = m2c.draft(
+                project, cast(Host, policy), "alpha", "us", project.work, project.root / "extract/us", type_context=""
+            )
+            self.assertIn("gDPPipeSync", draft)
+            self.assertIn('#include "gbi.h"', draft)

@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import cast
 
 from tests.layout.test_split import ProjectFixture
+from unbake.config import Held, Host, Project
 from unbake.decomp.symbols_edits import data_symbol
 from unbake.layout import data_symbols
-from unbake.config import Held, Host, Project
 
 
 class DataProjectFixture(ProjectFixture):

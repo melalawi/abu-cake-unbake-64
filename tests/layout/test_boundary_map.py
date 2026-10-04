@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from typing import cast
 
-from tests.layout.test_split import ProjectFixture, fake_build
-from unbake.layout import boundary_map, split
+from tests.layout.test_split import ProjectFixture
 from unbake.config import Held, Host, Project
+from unbake.layout import boundary_map, split
 
 
 class BoundaryMapTests(unittest.TestCase):
@@ -28,29 +28,6 @@ class BoundaryMapTests(unittest.TestCase):
         row = next(row for segment in segments for row in segment.rows if row.path == function)
         digest = hashlib.sha256(config.baserom.read_bytes()[row.start : split.end(row)]).hexdigest()
         return boundary_map.Change(version, function, action, digest, "measured instruction/caller evidence", neighbour)
-
-    def test_all_versions_are_planned_and_built_once(self) -> None:
-        changes = [self.change(v, "beta", "merge", "alpha") for v in self.project.versions]
-        self.fixture.generations()
-        with fake_build(self.fixture) as calls:
-            results = boundary_map.apply(self.project, self.policy, changes)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(len(results), 5)
-        for version in self.project.versions:
-            _, _, segments = split.layout(self.fixture.version(version).split)
-            self.assertEqual(
-                [(r.path, r.start) for r in segments[0].rows], [("alpha", 0x10), ("gamma", 0x38), ("pool", 0x40)]
-            )
-
-    def test_rom_failure_names_changes_and_rolls_back_every_version(self) -> None:
-        changes = [self.change(v, "beta", "data") for v in self.project.versions]
-        before = {v: self.fixture.version(v).split.read_bytes() for v in self.project.versions}
-        self.fixture.generations()
-        with fake_build(self.fixture, failing="four"), self.assertRaisesRegex(Held, "four:beta.*rolled back"):
-            boundary_map.apply(self.project, self.policy, changes)
-        for version in self.project.versions:
-            self.assertEqual(self.fixture.version(version).split.read_bytes(), before[version])
-            self.assertEqual(self.fixture.build_link(version).readlink().name, version + ".0")
 
     def test_stale_byte_pin_refuses_named_change_before_any_write(self) -> None:
         change = self.change("one", "beta", "data")

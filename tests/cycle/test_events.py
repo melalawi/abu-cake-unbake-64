@@ -1,12 +1,11 @@
 """Cycle event schema: every event validates with its required fields and refuses without them."""
 
-import copy
+import io
+import json
 import unittest
 
-from unbake.config import Held
 from unbake.cycle import events
 
-BASE = {"v": 1, "seq": 1, "t": "2026-10-04T00:00:00Z"}
 REQUIRED = {
     "cycle.start": "project versions functions workers cores memory_total_bytes cache_root stop remote branch",
     "fn.queued": "function bytes versions carryover best_percent",
@@ -29,42 +28,37 @@ REQUIRED = {
 }
 
 
-def line(event: str, fields: list[str]) -> dict:
-    return {**BASE, "event": event, **{field: "x" for field in fields}}
+def fields(event: str) -> dict:
+    return dict.fromkeys(events.SCHEMA[event][0], "x")
 
 
 class EventTests(unittest.TestCase):
-    def test_every_designed_event_exists_and_requires_its_fields(self) -> None:
-        self.assertEqual(set(events.EVENTS), set(REQUIRED))
+    def test_every_designed_event_exists_with_exactly_its_required_fields(self) -> None:
+        self.assertEqual(set(events.SCHEMA), set(REQUIRED))
         for event, names in REQUIRED.items():
             with self.subTest(event):
-                self.assertLessEqual(set(names.split()), set(events.EVENTS[event]) | set(BASE) | {"event"})
+                self.assertEqual(events.SCHEMA[event][0], frozenset(names.split()))
 
-    def test_validate_accepts_complete_lines(self) -> None:
-        for event in events.EVENTS:
-            with self.subTest(event):
-                events.validate(line(event, list(events.EVENTS[event])))
+    def test_validate_refuses_each_missing_field_and_unknown_names(self) -> None:
+        for event, (required, _) in events.SCHEMA.items():
+            events.validate(event, fields(event))
+            for missing in required:
+                with self.subTest(event=event, missing=missing), self.assertRaises(events.SchemaError):
+                    events.validate(event, {k: v for k, v in fields(event).items() if k != missing})
+            with self.subTest(event=event, extra=True), self.assertRaises(events.SchemaError):
+                events.validate(event, {**fields(event), "surprise": 1})
+        with self.assertRaises(events.SchemaError):
+            events.validate("fn.nonsense", {})
 
-    def test_validate_refuses_each_missing_field(self) -> None:
-        for event, fields in events.EVENTS.items():
-            for missing in fields:
-                if missing in BASE or missing == "event":
-                    continue
-                with self.subTest(event=event, missing=missing):
-                    value = line(event, [f for f in fields if f != missing])
-                    value.pop(missing, None)
-                    with self.assertRaises(Held):
-                        events.validate(value)
-
-    def test_validate_refuses_bad_envelopes(self) -> None:
-        good = line("fn.draft.start", ["function"])
-        cases = [
-            ("no seq", {k: v for k, v in good.items() if k != "seq"}),
-            ("no time", {k: v for k, v in good.items() if k != "t"}),
-            ("no event", {k: v for k, v in good.items() if k != "event"}),
-            ("wrong version", {**good, "v": 2}),
-            ("unknown event", {**good, "event": "fn.nonsense"}),
-        ]
-        for label, value in cases:
-            with self.subTest(label), self.assertRaises(Held):
-                events.validate(copy.deepcopy(value))
+    def test_emitter_writes_numbered_envelopes_and_refuses_before_writing(self) -> None:
+        stream = io.StringIO()
+        emitter = events.Emitter(stream)
+        emitter.emit("fn.draft.start", function="alpha")
+        emitter.emit("fn.exact", function="alpha", bytes=12, sha256="s")
+        with self.assertRaises(events.SchemaError):
+            emitter.emit("fn.exact", function="alpha")
+        lines = [json.loads(line) for line in stream.getvalue().splitlines()]
+        self.assertEqual(
+            [(r["v"], r["seq"], r["event"]) for r in lines], [(1, 1, "fn.draft.start"), (1, 2, "fn.exact")]
+        )
+        self.assertTrue(all(r["t"] for r in lines))

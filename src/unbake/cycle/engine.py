@@ -127,7 +127,7 @@ class Stop:
         self.started = time.monotonic()
         self.activity = self.started
 
-    def touch(self) -> None:
+    def note_activity(self) -> None:
         self.activity = time.monotonic()
 
     def timeout(self) -> float | None:
@@ -354,7 +354,7 @@ def run(
                         file=result["file"],
                         seconds=round(result["seconds"], 3),
                     )
-                    stopper.touch()
+                    stopper.note_activity()
                     start(row)
                 elif kind == "compare":
                     function, _file, done = payload
@@ -389,7 +389,7 @@ def run(
                         tries=row.tries,
                         seconds=round(result["seconds"], 3),
                     )
-                    stopper.touch()
+                    stopper.note_activity()
                     if result["exact"]:
                         emitter.emit("fn.exact", function=function, bytes=row.bytes, sha256=row.sha256)
                         finish_land(row)
@@ -405,7 +405,7 @@ def run(
                     if sha == row.sha256:
                         continue
                     row.file, row.sha256 = str(path), sha
-                    stopper.touch()
+                    stopper.note_activity()
                     emitter.emit("fn.edit", function=row.function, file=row.file, sha256=sha)
                     old = inflight.get(row.function)
                     if old is not None:

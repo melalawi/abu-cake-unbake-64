@@ -5,13 +5,19 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-# These streams contain no generated project data and need stable lock inodes.
+# Lock files need stable inodes and hold no project data.
 _LOCKS = {
     "cache.py": {'(path.parent / ".lock").open("a")'},
     "extract.py": {'(archive.parent / ".lock").open("a")'},
-    "project/toolchain.py": {'(cache / f".{spec.id}.lock").open("a")'},
+    "compilers/registry.py": {'(cache / f".{spec.id}.lock").open("a")'},
+    "lock.py": {"os.open(target, os.O_RDWR | os.O_CREAT, 0o644)"},
 }
-_STATE: dict[str, set[str]] = {}
+# Writes that are atomic by construction: one O_APPEND line per attempt, and a tarball into the fresh
+# path the cache hands its producer (the cache publishes it by rename).
+_STATE: dict[str, set[str]] = {
+    "work/attempts.py": {"os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)"},
+    "extract.py": {'tarfile.open(destination, "w")'},
+}
 
 
 def violations(path: Path, content: str) -> list[str]:
@@ -55,14 +61,12 @@ def violations(path: Path, content: str) -> list[str]:
                 ):
                     unsafe = True
                 # Exclusive creation cannot truncate an existing shared inode.
-        if called in {"os.open", "os.fdopen"}:
-            # Existing descriptor streams are allowed only for the two fresh
-            # mkstemp-backed, streaming JSON writers.
+        graph_touch = attr == "touch" and name == "typemap/solver.py"
+        if called in {"os.open", "os.fdopen"} or (attr == "touch" and not graph_touch):
+            # One descriptor stream: storage.s mkstemp-backed JSON writer (solver.touch is a graph method).
             unsafe = not (
                 name == "typemap/storage.py" and called == "os.fdopen" and ast.unparse(node.args[0]) == "descriptor"
             )
-        if attr == "touch" and name != "typemap/solver.py":
-            unsafe = ".inuse" not in ast.unparse(func)
         if unsafe:
             code = ast.get_source_segment(content, node) or ""
             if code in allowed:

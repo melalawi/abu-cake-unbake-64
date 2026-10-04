@@ -116,9 +116,7 @@ def canonical(text: str) -> str:
     if default not in compilers:
         counts = Counter(concrete.values())
         if not counts:
-            raise Held(
-                "setup", "project.default_compiler: no configured compiler; run unbake setup --repropose-compilers"
-            )
+            raise Held("setup", "project.default_compiler: no configured compiler; run unbake setup --redo-compilers")
         default = min(counts, key=lambda ident: (-counts[ident], ident))
         data["project"]["default_compiler"] = default
     data.pop("units", None)

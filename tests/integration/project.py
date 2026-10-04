@@ -41,15 +41,28 @@ n=$(sed -n 's/.*return \\([0-9]*\\);.*/\\1/p' "$in" | head -1)
 printf "\\044\\002\\000\\\\$(printf %03o "$n")\\003\\340\\000\\010\\000\\000\\000\\000" > "$out"
 """
 LD = """#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -T|-Map|--defsym) shift 2 ;; -*) shift ;; *) files="$files $1"; shift ;; esac; done
+while [ $# -gt 0 ]; do case "$1" in
+  -o) out="$2"; shift 2 ;;
+  -T|-Map|--defsym) shift 2 ;;
+  -*) shift ;;
+  *) files="$files $1"; shift ;;
+esac; done
 cat $files > "$out"
 """
 OBJCOPY = """#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in -I|-O|--rename-section|--pad-to|--gap-fill) shift 2 ;; -*) shift ;; *) files="$files $1"; shift ;; esac; done
+while [ $# -gt 0 ]; do case "$1" in
+  -I|-O|--rename-section|--pad-to|--gap-fill) shift 2 ;;
+  -*) shift ;;
+  *) files="$files $1"; shift ;;
+esac; done
 set -- $files
 cp "$1" "$2"
 """
 OBJDIFF = "#!/bin/sh\nexit 0\n"
+# What the generated Makefile runs besides the fixture tools; a [tools].path dir must not expose Python.
+HOST_COMMANDS = (
+    "sh cat cmp cp cut dd dirname env find grep head ls mkdir mv printf rm sed sha1sum sha256sum sort tail tr"
+).split()
 
 
 def run(command: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
@@ -73,8 +86,17 @@ class FixtureCase(unittest.TestCase):
     def install_tools(self) -> None:
         bin_dir = self.base / "bin"
         bin_dir.mkdir()
-        scripts = {"cpp": CPP, "mips_as": COPY, "n64link": COPY, "mips_ld": LD, "mips_objcopy": OBJCOPY,
-                   "objdiff": OBJDIFF, "splat": OBJDIFF, "m2c": OBJDIFF, "mips_objdump": OBJDIFF, "mips_readelf": OBJDIFF}
+        scripts = {
+            "cpp": CPP,
+            "mips_as": COPY,
+            "n64link": COPY,
+            "mips_ld": LD,
+            "mips_objcopy": OBJCOPY,
+            "splat": OBJDIFF,
+            "m2c": OBJDIFF,
+            "mips_objdump": OBJDIFF,
+            "mips_readelf": OBJDIFF,
+        }
         for name, text in scripts.items():
             (bin_dir / name).write_text(text)
             (bin_dir / name).chmod(0o755)
@@ -82,16 +104,34 @@ class FixtureCase(unittest.TestCase):
         cc.parent.mkdir(parents=True, exist_ok=True)
         cc.write_text(CC)
         cc.chmod(0o755)
-        (self.root / "tools" / "compilers.sha256").write_text(f"{hashlib.sha256(CC.encode()).hexdigest()}  tools/ido-7.1/cc\n")
+        (self.root / "tools" / "compilers.sha256").write_text(
+            f"{hashlib.sha256(CC.encode()).hexdigest()}  tools/ido-7.1/cc\n"
+        )
         self.bin = bin_dir
 
     def write_host(self) -> None:
         values = host_values(self.base)
         tools = values["tools"]
-        for key in ("cpp", "mips_as", "mips_ld", "mips_objcopy", "mips_objdump", "mips_readelf", "n64link", "splat", "m2c", "objdiff"):
+        for key in (
+            "cpp",
+            "mips_as",
+            "mips_ld",
+            "mips_objcopy",
+            "mips_objdump",
+            "mips_readelf",
+            "n64link",
+            "splat",
+            "m2c",
+        ):
             tools[key] = str(self.bin / key)
         tools["make"] = shutil.which("make") or "/usr/bin/make"
-        tools["path"] = [str(self.bin), "/usr/bin", "/bin"]
+        host_bin = self.base / "hostbin"
+        host_bin.mkdir()
+        for name in HOST_COMMANDS:
+            found = shutil.which(name)
+            if found:
+                (host_bin / name).symlink_to(found)
+        tools["path"] = [str(self.bin), str(host_bin)]
         values["cache"]["root"] = str(self.base / "cache")
         values["cache"]["max_bytes"], values["cache"]["trim_to_bytes"] = 10**8, 10**7
         values["publish"].update(remote=str(self.remote), branch="main")

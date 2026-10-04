@@ -9,8 +9,8 @@ from unittest.mock import Mock, patch
 from tests.project_fixture import ProjectCase
 from unbake.cdecl import LayoutParser
 from unbake.config import Held
-from unbake.layout.structs import layouts
 from unbake.fold import rewrite_view, type_rewrite
+from unbake.layout.structs import layouts
 
 
 def dump(tokens):

@@ -7,7 +7,6 @@ objects where make expects them (build/<v>/src/UNIT.o); drafts write under build
 from __future__ import annotations
 
 import hashlib
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -65,7 +64,7 @@ def compile_unit(
             process.run_tool(compile_argv, work, "compile")
             if commands.assemble is not None:
                 process.run_tool(list(commands.assemble), work, "compile")
-            shutil.copyfile(work / f"{name}.o", destination)
+            atomic_files.copyfile(work / f"{name}.o", destination)
 
     cached = cache.Cache(host.cache_root).produce("object", content_key, make)
     output = object_path(project, version, unit, file)

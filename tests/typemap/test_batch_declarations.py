@@ -43,6 +43,7 @@ class BatchDeclarationsTests(unittest.TestCase):
                     shared.mkdir()
                     (shared / "typemap.h").write_text("Missing unrelated;\n")
                     project = SimpleNamespace(
+                        cppflags=("-P",),
                         root=root,
                         build=root / "build",
                         include=(include,),
@@ -54,7 +55,7 @@ class BatchDeclarationsTests(unittest.TestCase):
                         },
                         version=lambda v: SimpleNamespace(macros=("VERSION_" + v,)),
                     )
-                    policy = SimpleNamespace(cpp=Path("mock-cpp"), cppflags=("-P",), cores=2, cache_root=root / "cache")
+                    policy = SimpleNamespace(cpp=Path("mock-cpp"), cores=2, cache_root=root / "cache")
                     entries = []
                     for name in ("good", "bad", "dependent", "other"):
                         path = root / (name + ".c")

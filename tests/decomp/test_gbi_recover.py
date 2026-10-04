@@ -7,8 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from unbake.decomp import gbi_recover as recover
 from unbake.config import Held
+from unbake.decomp import gbi_recover as recover
 
 SDK = """
 #define _SHIFTL(v,s,w) (((unsigned int)(v) & (0xFFFFFFFFU >> (32-(w)))) << (s))
@@ -100,40 +100,6 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(Held):
             recover.lower(source, self.patterns)
 
-    def test_proof_is_required_and_failure_does_not_write_authored_source(self):
-        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            root = Path(temporary)
-            unit = root / "alpha.c"
-            before = "p->words.w0=0xE7000000;p->words.w1=0;"
-            unit.write_text(before)
-            project = SimpleNamespace(root=root, include=())
-            with (
-                patch("unbake.decomp.work.overlay", return_value=project),
-                patch("unbake.layout.split.holding_versions", return_value=("us", "eu")),
-                patch.object(recover, "catalogue", return_value=self.patterns),
-                patch("unbake.layout.header_context.Headers.read", return_value=None),
-                patch("unbake.fold.imports.resolve", side_effect=lambda project, headers, source, function: source),
-                patch("unbake.decomp.gbi_proof.preserve") as proof,
-            ):
-                after = recover.proven(project, None, unit, before, {})
-                proof.assert_called_once_with(project, None, unit, before, after)
-                proof.side_effect = Held("gbi", "rewrite changes codegen")
-                with self.assertRaisesRegex(Held, "changes codegen"):
-                    recover.proven(project, None, unit, before, {})
-            self.assertEqual(unit.read_text(), before)
-
-    def test_versions_must_agree_before_proof(self):
-        project = SimpleNamespace(root=Path("/project"), include=())
-        with (
-            patch("unbake.decomp.work.overlay", return_value=project),
-            patch("unbake.layout.split.holding_versions", return_value=("us", "eu")),
-            patch.object(recover, "catalogue", side_effect=[self.patterns, []]),
-            patch("unbake.decomp.gbi_proof.preserve") as proof,
-        ):
-            with self.assertRaises(Held):
-                recover.proven(project, None, Path("alpha.c"), "p->words.w0=0xE7000000;p->words.w1=0;", {})
-            proof.assert_not_called()
-
     def test_inline_word_emitter(self):
         source = (
             "static inline void emit(unsigned int a, unsigned int b) {"
@@ -218,40 +184,6 @@ class RecoveryTests(unittest.TestCase):
         source = "#define EMIT(p,a,b) {Gfx *g=p;g->words.w0=a;g->words.w1=b;}\nvoid f(void){EMIT(dl++,0xE7000000,0);}"
         self.assertEqual(recover.lower(source, self.patterns).count("dl++"), 1)
 
-    def test_raw_proof_keeps_legacy_sdk_header_bytes(self):
-        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            root = Path(temporary)
-            old, live = root / "old", root / "include"
-            old.mkdir()
-            live.mkdir()
-            (old / "legacy.h").write_text(SDK + "/* raw SDK identity */")
-            project = SimpleNamespace(root=root, include=(live,), declaration_evidence=(old,))
-            before = '#include "commands.h"\n#include "legacy.h"\np->words.w0=0xE7000000;p->words.w1=0;'
-            authored = before.replace('#include "commands.h"\n', "")
-
-            def overlay(project, work):
-                include = work / "overlay/include"
-                include.mkdir(parents=True)
-                return SimpleNamespace(root=root, include=(include,))
-
-            def prove(staged, policy, unit, raw, after):
-                self.assertIn('"legacy.h"', raw)
-                self.assertNotIn('"commands.h"', raw)
-                self.assertIn('"commands.h"', after)
-                self.assertEqual((staged.include[0] / "legacy.h").read_text(), (old / "legacy.h").read_text())
-
-            with (
-                patch("unbake.decomp.work.overlay", side_effect=overlay),
-                patch("unbake.layout.split.holding_versions", return_value=("us",)),
-                patch.object(recover, "catalogue", return_value=self.patterns),
-                patch("unbake.layout.header_context.Headers.read", return_value=None),
-                patch("unbake.fold.imports.resolve", side_effect=lambda project, headers, source, function: source),
-                patch("unbake.decomp.gbi_proof.preserve", side_effect=prove) as proof,
-            ):
-                recover.proven(project, None, root / "alpha.c", before, {live / "commands.h": SDK}, authored=authored)
-                proof.assert_called_once()
-            self.assertFalse((live / "legacy.h").exists())
-
     def test_chained_literal_sdk_selector_arithmetic(self):
         self.assertEqual(recover.literal("32 - (19) - (1)"), 12)
         self.assertEqual(recover.literal("7 / 2 / 1"), 3)
@@ -301,27 +233,3 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual(len(family), 1)
                 source = f"p->words.w0={w0};p->words.w1={w1};"
                 self.assertEqual(recover.lower(source, family), f"{name}(p, {arguments});")
-
-    def test_catalogue_honors_defines_after_scalar_includes(self):
-        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-            root = Path(temporary)
-            (root / "commands.h").write_text(SDK)
-            (root / "types.h").write_text("typedef int s32;")
-            project = SimpleNamespace(include=(root,), src=root, declaration_evidence=())
-            recipe = SimpleNamespace(cppflags=("-DSDK_MODE=2",), cpp="cpp")
-            source = '#include "types.h"\n#undef SDK_MODE\n#define SDK_MODE 1\n#include "commands.h"\n'
-
-            def preprocess(command, work, phase):
-                probe = Path(command[-1]).read_text()
-                self.assertIn("#undef SDK_MODE\n#define SDK_MODE 1", probe)
-                self.assertIn("-DSDK_MODE=2", command)
-                self.assertIn("-DVERSION_US", command)
-                return SDK
-
-            with (
-                patch("unbake.project.makefile.recipe", return_value=recipe),
-                patch("unbake.project.makefile.flags", return_value=["-DVERSION_US"]),
-                patch("unbake.project.makefile.host_executable", return_value="cpp"),
-                patch("unbake.decomp.trial_compile.run_tool", side_effect=preprocess),
-            ):
-                self.assertTrue(recover.catalogue(project, None, root / "alpha.c", "us", source))

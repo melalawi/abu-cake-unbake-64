@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.kit import boundary
+from tests.kit import boundary, script_output
 from tests.project_fixture import make
 from unbake.config import Host, Project
 
@@ -17,15 +17,33 @@ def fixture(
 ) -> tuple[Project, Host, Path]:
     """A ready project, its host and a NON_MATCHING alpha draft; cpp runs in process (tests.preprocessor)."""
     from tests.preprocessor import output
+    from unbake import process
     from unbake.layout import map as ownership
     from unbake.layout import structs
     from unbake.typemap import declarations
 
-    for module in (structs, declarations):
-        mock = boundary(module, output)
+    project, host = make(directory, words, versions)
+
+    def frontend(command, **kwargs):
+        """Tool processes in process: cpp and cc -E through the fixture preprocessor, the fixture compiler
+        writes its -o file, test-authored scripts run in place. argv[0] resolves against cwd, as exec does."""
+        import subprocess
+
+        executable = Path(kwargs.get("cwd", ".")) / command[0]
+        if "cpp" in executable.name or "-E" in command:
+            return output(command, **kwargs)
+        if executable.name == "cc" and executable.is_relative_to(project.tools):
+            if getattr(case, "compiler_error", ""):
+                return subprocess.CompletedProcess(command, 1, "", case.compiler_error)
+            if "-o" in command:
+                (Path(kwargs.get("cwd", ".")) / command[command.index("-o") + 1]).write_bytes(b"compiler output")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return script_output([str(executable), *command[1:]], **kwargs)
+
+    for module, execute in ((structs, output), (declarations, output), (process, frontend)):
+        mock = boundary(module, execute)
         mock.start()
         case.addCleanup(mock.stop)
-    project, host = make(directory, words, versions)
     source = directory / "alpha.c"
     source.write_text("/* NON_MATCHING: returns one. */\nint alpha(void) { return 1; }\n", encoding="utf-8")
 

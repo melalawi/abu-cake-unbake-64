@@ -57,7 +57,7 @@ class ProjectFlowTests(FixtureCase):
     def test_publish_of_a_mismatch_writes_and_commits_nothing(self) -> None:
         before = run(["git", "rev-parse", "HEAD"], self.root).stdout
         path = self.work("alpha", EXACT.format(name="alpha", value=9))
-        code, lines, stderr = self.unbake("publish", str(path))
+        code, lines, _stderr = self.unbake("publish", str(path))
         self.assertEqual(lines[-1]["status"], "held" if code == 1 else lines[-1]["status"])
         self.assertNotEqual(code, 0)
         self.assertEqual(run(["git", "rev-parse", "HEAD"], self.root).stdout, before)

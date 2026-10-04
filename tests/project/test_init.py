@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from unbake import config
-from unbake.project import init
 from unbake.config import Held
+from unbake.project import init
 
 
 class InitTests(unittest.TestCase):

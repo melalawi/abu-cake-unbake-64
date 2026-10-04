@@ -3,19 +3,17 @@
 import os
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 from pycparser import c_parser  # type: ignore[import-untyped]
 
 from tests.decomp.support import fixture
+from unbake.config import Held
 from unbake.decomp import checks, measured_storage
 from unbake.decomp.draft_abi import declarations
 from unbake.decomp.draft_asm import address_aliases
 from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.field_access import share
-from unbake.config import Held
 from unbake.typemap.declarations import clean
 
 

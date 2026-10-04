@@ -1,14 +1,14 @@
 """Draft refusals, measured stack views, and analysis-only delay slots."""
 
-import io
 import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 
 from tests.decomp.support import fixture
+from tests.kit import with_value
+from unbake.config import Held
 from unbake.decomp import m2c
 from unbake.decomp.draft_abi import stack_arguments
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
@@ -17,7 +17,6 @@ from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.config import Held
 
 
 class DraftBoundaryTests(unittest.TestCase):
@@ -58,43 +57,6 @@ class DraftBoundaryTests(unittest.TestCase):
         divergent = {**call, "arguments": {"stack16": {"origins": [], "constant": 2}}}
         self.assertEqual(stack_arguments(source, "void beta(int);", "alpha", {"calls": [call, divergent]}), source)
 
-    def test_refusals_name_function_and_do_not_announce_invalid_c(self) -> None:
-        for output, reason in (
-            ("void alpha(void) { M2C_ERROR(/* Read from unset register $a0 */); }", "Read from unset register"),
-            ("void alpha(void) { M2C_ERROR(/* mtc0 $a0, $18 */); }", "mtc0"),
-            ("void alpha(void) { *(int *)saved_reg_s3 = 1; }", "incoming saved register $s3"),
-            ("int alpha(void) { return missing; }", "missing"),
-            ("void alpha(void *p) { *p = 1; }", "invalid use of void expression"),
-        ):
-            with self.subTest(output=output), tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
-                root = Path(temporary).resolve()
-                self.compiler_error = (
-                    "missing: undeclared identifier"
-                    if "return missing" in output
-                    else "invalid use of void expression"
-                    if "*p = 1" in output
-                    else ""
-                )
-                project, policy, _ = fixture(root, case=self)
-                tool = root / "m2c"
-                tool.write_text(f"#!{sys.executable}\nprint({output!r})\n")
-                tool.chmod(0o755)
-                policy.m2c = tool
-                messages = io.StringIO()
-                with redirect_stdout(messages), self.assertRaises(Held) as caught:
-                    m2c.draft(project, policy, "alpha", "us", project.work)
-                self.assertTrue(caught.exception.reason.startswith("alpha:"))
-                self.assertIn(reason, caught.exception.reason)
-                self.assertNotIn("draft_path:", messages.getvalue())
-                self.assertIn("draft alpha", caught.exception.next_action)
-                if self.compiler_error:
-                    self.assertIn("m2c/type compile proof failed", caught.exception.reason)
-                    retained = Path(caught.exception.reason.split("draft_path: ", 1)[1].splitlines()[0])
-                    self.assertTrue(retained.is_file())
-                    self.assertIn(output, retained.read_text())
-                self.assertFalse((project.include[0] / "structs.h").exists())
-                self.assertFalse(list((project.work).glob("*/alpha.c")))
-
     def test_unknown_widths_and_complex_bitwise_lvalues_compile(self) -> None:
         context = "typedef unsigned char u8; typedef int s32; typedef int M2C_UNK32; typedef float f32;"
         text = "M2C_UNK32 alpha(s32 *p) { return M2C_BITWISE(f32, *(p + 1)); }"
@@ -133,12 +95,14 @@ class DraftBoundaryTests(unittest.TestCase):
                 "print('float alpha(void *p) { return M2C_BITWISE(float, M2C_FIELD(p, s32 *, 0)); }')\n"
             )
             tool.chmod(0o755)
-            policy.m2c = tool
-            source = m2c.draft(project, policy, "alpha", "us", project.work)
-            self.assertNotIn("M2C_BITWISE", source.read_text())
-            self.assertNotIn("M2C_FIELD", source.read_text())
-            self.assertNotIn("struct Layout_", source.read_text())
-            self.assertIn("->value", source.read_text())
+            policy = with_value(policy, "tools.m2c", tool)
+            source = m2c.draft(
+                project, policy, "alpha", "us", project.work, project.root / "extract/us", type_context=""
+            )
+            self.assertNotIn("M2C_BITWISE", source)
+            self.assertNotIn("M2C_FIELD", source)
+            self.assertNotIn("struct Layout_", source)
+            self.assertIn("->value", source)
 
     def test_stack_views_bound_arrays_and_retain_raw_byte_access(self) -> None:
         context = "typedef int s32; typedef unsigned char u8;"

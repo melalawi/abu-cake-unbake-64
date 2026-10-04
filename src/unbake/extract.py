@@ -13,7 +13,6 @@ import fcntl
 import json
 import os
 import re
-import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -108,7 +107,7 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
         dump = staging / ".splat" / "splat_symbols.csv"
         if not dump.is_file():
             raise Held("extract", f"extract.splat.{version}: splat wrote no symbol dump")
-        shutil.copyfile(dump, staging / "splat_symbols.csv")
+        atomic_files.copyfile(dump, staging / "splat_symbols.csv")
         committed = instruction_symbols(staging / "asm", discovered_symbols(dump, symbols_from([configured.symbols])))
         units = unit_addresses(configured.split.read_text())
         for name, address in units.items():

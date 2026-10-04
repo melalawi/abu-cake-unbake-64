@@ -6,8 +6,8 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake.layout.header_context import Headers
 from unbake.fold import declarations, imports
+from unbake.layout.header_context import Headers
 
 
 class ImportTests(TestCase):

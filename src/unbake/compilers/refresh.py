@@ -38,7 +38,7 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
     }
     compiler_files.atomic_bytes(compiler_proposal.proposal_path(pending), compiler_proposal.encoded(proposal))
     for line in compiler_proposal.receipt(proposal):
-        print("OK(setup): " + line.replace("setup --confirm", "setup --repropose-compilers --confirm"))
+        print("OK(setup): " + line.replace("setup --confirm", "setup --redo-compilers --confirm"))
     compiler_proposal.confirm_proposal(pending, measured, layout, proposal, policy, confirm=confirm)
     fingerprint = setup._inputs(project)
     original = (project.root / "config.toml").read_bytes()

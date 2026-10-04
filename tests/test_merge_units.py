@@ -1,32 +1,39 @@
-"""Merge-unit runs: maximal runs of adjacent matched members within one group."""
+"""Merge-unit runs: maximal runs of adjacent landed members within one group."""
 
 import unittest
 
 from unbake.layout import merge_units
+from unbake.layout.map import Group
 
 
-def layout(*groups: tuple[str, list[str]], splits: list[tuple[str, str]] | None = None) -> dict:
-    return {
-        "group": [{"name": name, "segment": "main", "members": members} for name, members in groups],
-        "split": [list(pair) for pair in splits or []],
-    }
+def group(name: str, members: str, split: str = "") -> Group:
+    return Group(name, "main", "default", tuple(members), split=tuple(split))
 
 
-# DRAFT interface: the layout argument is the parsed layout.toml table; splits are a top-level list of pairs.
 class RunsTests(unittest.TestCase):
     def test_runs(self) -> None:
-        abcde = ["a", "b", "c", "d", "e"]
+        g = group("g", "abcde")
         cases = [
-            ("all matched is one run", layout(("g", abcde)), set(abcde), [("a", "b", "c", "d", "e")]),
-            ("unmatched member breaks the run", layout(("g", abcde)), {"a", "b", "d", "e"}, [("a", "b"), ("d", "e")]),
-            ("single matched member is no run", layout(("g", abcde)), {"a", "c", "e"}, []),
-            ("nothing landed", layout(("g", abcde)), set(), []),
-            ("runs never cross groups", layout(("g", ["a", "b"]), ("h", ["c", "d"])), {"b", "c"}, []),
-            ("two groups each give a run", layout(("g", ["a", "b"]), ("h", ["c", "d"])), set("abcd"), [("a", "b"), ("c", "d")]),
-            ("split pair is excluded", layout(("g", abcde), splits=[("b", "c")]), set(abcde), [("a", "b"), ("c", "d", "e")]),
-            ("split leaving one member drops it", layout(("g", ["a", "b", "c"]), splits=[("b", "c")]), set("abc"), [("a", "b")]),
-            ("unlanded names are ignored", layout(("g", ["a", "b"])), {"a", "b", "zzz"}, [("a", "b")]),
+            ("all landed is one run", [g], set("abcde"), [("a", "b", "c", "d", "e")]),
+            ("unlanded member breaks the run", [g], set("abde"), [("a", "b"), ("d", "e")]),
+            ("single landed members are no run", [g], set("ace"), []),
+            ("nothing landed", [g], set(), []),
+            ("runs never cross groups", [group("g", "ab"), group("h", "cd")], set("bc"), []),
+            ("two groups each give a run", [group("g", "ab"), group("h", "cd")], set("abcd"), [("a", "b"), ("c", "d")]),
+            (
+                "a split member starts a new run",
+                [group("g", "abcde", "c")],
+                set("abcde"),
+                [("a", "b"), ("c", "d", "e")],
+            ),
+            ("split leaving one member drops it", [group("g", "abc", "c")], set("abc"), [("a", "b")]),
+            ("unknown landed names are ignored", [group("g", "ab")], {"a", "b", "zzz"}, [("a", "b")]),
         ]
-        for label, table, landed, expected in cases:
+        for label, groups, landed, expected in cases:
             with self.subTest(label):
-                self.assertEqual(sorted(merge_units.runs(table, landed)), sorted(expected))
+                found = merge_units.member_runs(groups, landed, lambda left, right: True)
+                self.assertEqual([members for _, members in found], expected)
+
+    def test_rows_that_do_not_join_break_the_run(self) -> None:
+        found = merge_units.member_runs([group("g", "abc")], set("abc"), lambda left, right: left != "b")
+        self.assertEqual([members for _, members in found], [("a", "b")])

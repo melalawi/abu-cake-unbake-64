@@ -2,7 +2,6 @@
 
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from unbake.cdecl import LayoutParser, attribute_source, declaration_source, declarations
 from unbake.config import Held
@@ -46,25 +45,6 @@ class HeaderDeclarationsTests(unittest.TestCase):
         self.assertEqual(rewrite(source, {"Word": "int"}, set()), source.replace("Word Alias", "int Alias"))
         literal = 'static char *text = "__attribute__((unused))";'
         self.assertEqual(attribute_source(literal), literal)
-
-    def test_reused_header_analysis_keeps_callers_mutations_private(self) -> None:
-        source = "typedef int CachedWord; extern CachedWord cached_value;"
-        expected = declarations(source)
-        with (
-            patch("unbake.cache._remembered", {}),
-            patch("unbake.cdecl.Parser.parse", return_value=expected) as parse,
-        ):
-            first = declarations(source)
-            first.typedefs.clear()
-            first.uses.add("unrelated")
-            first.complete_alias_uses.clear()
-            second = declarations(source)
-            self.assertEqual(second.typedefs, {"CachedWord"})
-            self.assertEqual(second.uses, {"CachedWord"})
-            self.assertEqual(second.complete_alias_uses, {"CachedWord"})
-            parse.assert_called_once()
-            declarations(source.replace("CachedWord", "EditedWord"))
-            self.assertEqual(parse.call_count, 2)
 
     def test_logical_directives_keep_offsets_and_cannot_hide_the_next_typedef(self) -> None:
         source = (

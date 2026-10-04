@@ -23,7 +23,7 @@ SAMPLE_KEY = {
     "path": "cache.root",
     "dirs": "tools.path",
     "fraction": "setup.same_game_similarity",
-    "hex64": "tools.objdiff_sha256",
+    "hex64": "tools.permuter_sha256",
     "text": "publish.remote",
     "envname": "publish.credential_env",
 }
@@ -106,7 +106,7 @@ class HostRefusalTests(TempCase):
         self.values = host_values(self.root)
 
     def test_missing_value_names_key_and_command(self) -> None:
-        for command, dotted in [("compare", "tools.objdiff"), ("check", "tools.make"), ("publish", "publish.remote")]:
+        for command, dotted in [("compare", "tools.n64link"), ("check", "tools.make"), ("publish", "publish.remote")]:
             with self.subTest(command=command, key=dotted):
                 host = Host.from_values(edited(self.values, dotted), command)
                 section, key = dotted.split(".")
@@ -129,20 +129,23 @@ class HostRefusalTests(TempCase):
         plain = self.root / "plain"
         plain.write_text("not executable")
         plain.chmod(0o644)
-        cases = [("relative", "bin/make", "expected absolute path"), ("absent", str(self.root / "nope"), "missing executable"),
-                 ("not executable", str(plain), f"missing executable {plain}"),
-                 ("directory", str(self.root), "missing executable")]
+        cases = [
+            ("relative", "bin/make", "expected absolute path"),
+            ("absent", str(self.root / "nope"), "missing executable"),
+            ("not executable", str(plain), f"missing executable {plain}"),
+            ("directory", str(self.root), "missing executable"),
+        ]
         for label, value, message in cases:
             with self.subTest(label):
                 host = Host.from_values(edited(self.values, "tools.make", value), "check")
                 with self.assertRaisesRegex(Held, rf"unbake\.toml \[tools\]\.make: {message}"):
-                    host.make
+                    host.get("tools.make")
 
     def test_valid_values_read_back_typed(self) -> None:
         host = Host.from_values(self.values, "check")
         self.assertEqual((host.cores, host.cache_max_bytes), (4, 1_000))
         self.assertEqual(host.same_game_similarity, 0.5)
-        self.assertEqual(host.objdiff_sha256, "a" * 64)
+        self.assertEqual(host.permuter_sha256, "b" * 64)
         self.assertEqual(host.tool_path, (self.root / "bin",))
 
     def test_cross_key_rules(self) -> None:
@@ -193,7 +196,7 @@ class ProjectConfigTests(TempCase):
             with self.subTest(section):
                 path = self.root / "config.toml"
                 with self.assertRaises(Held) as raised:
-                    self.load(self.BASE + f"[{section}]\nroms = \"roms\"\n")
+                    self.load(self.BASE + f'[{section}]\nroms = "roms"\n')
                 self.assertEqual(raised.exception.reason, f"{path} [{section}]: retired section; remove it")
 
     def test_unknown_build_key_is_refused(self) -> None:
@@ -204,4 +207,3 @@ class ProjectConfigTests(TempCase):
         layout = config.Layout(self.root)
         self.assertEqual(layout.include, (self.root / "include",))
         self.assertEqual(layout.work, self.root / "build" / "work")
-

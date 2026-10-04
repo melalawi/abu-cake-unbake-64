@@ -1,53 +1,35 @@
-"""The headers step: merge-only declarations and include edits only for sources whose needs changed."""
+"""The headers step plan: only changed bytes, and never removing a name that published C spells."""
 
-from pathlib import Path
-from types import SimpleNamespace
+from unittest.mock import patch
 
-from tests.kit import TempCase
-from unbake.layout import headers
-
-# DRAFT interface: solution is {"symbols": {name: group header}}; HeaderPlan(changed, include_edits).
+from tests.project_fixture import ProjectCase
+from unbake.config import Held
+from unbake.layout import header_step
 
 
-class HeaderPlanTests(TempCase):
+class HeaderPlanTests(ProjectCase):
     def setUp(self) -> None:
         super().setUp()
-        self.include = self.root / "include" / "main"
-        self.include.mkdir(parents=True)
-        (self.root / "src").mkdir()
-        self.project = SimpleNamespace(root=self.root, src=self.root / "src", include=(self.root / "include",))
-        self.write_source("a", ["foo"], ["main/g1.h"])
-        self.write_source("b", ["bar"], ["main/g2.h"])
-        (self.include / "g1.h").write_text("int foo(void);\n")
-        (self.include / "g2.h").write_text("int bar(void);\n")
+        self.header = self.project.include[-1] / "main" / "g.h"
+        self.header.parent.mkdir()
+        self.header.write_text("int foo(void);\nint stale(void);\n")
+        (self.project.src / "alpha.c").write_text('#include "main/g.h"\nint alpha(void) { return foo(); }\n')
 
-    def write_source(self, name: str, uses: list[str], includes: list[str]) -> None:
-        text = "".join(f'#include "{home}"\n' for home in includes)
-        text += "".join(f"int {name}_{use}(void) {{ return {use}(); }}\n" for use in uses)
-        (self.root / "src" / f"{name}.c").write_text(text)
+    def plan(self, outputs: dict) -> dict:
+        with patch.object(header_step.apply, "render", return_value=outputs):
+            return header_step.plan(self.project, self.host)
 
-    def edited_sources(self, plan) -> set[str]:
-        return {Path(path).stem for path in plan.include_edits}
+    def test_unchanged_outputs_plan_nothing(self) -> None:
+        self.assertEqual(self.plan({self.header: self.header.read_bytes()}), {})
 
-    def test_unchanged_solution_edits_nothing(self) -> None:
-        plan = headers.plan(self.project, {"symbols": {"foo": "main/g1.h", "bar": "main/g2.h"}})
-        self.assertEqual((plan.changed, plan.include_edits), ({}, {}))
+    def test_new_and_changed_files_are_planned(self) -> None:
+        other = self.header.with_name("h.h")
+        changed = {self.header: b"int foo(void);\nint stale(void);\nint more(void);\n", other: b"int bar(void);\n"}
+        self.assertEqual(self.plan(changed), changed)
 
-    def test_only_sources_whose_needed_names_changed_get_include_edits(self) -> None:
-        plan = headers.plan(self.project, {"symbols": {"foo": "main/g1.h", "bar": "main/g3.h"}})
-        self.assertEqual(self.edited_sources(plan), {"b"})
-        self.assertIn("main/g3.h", next(iter(plan.include_edits.values())))
-        self.assertTrue(any(path.name == "g3.h" for path in plan.changed))
+    def test_merge_only_refuses_removing_a_used_name(self) -> None:
+        with self.assertRaisesRegex(Held, r"headers.merge_only: .*g.h: would remove foo used by published C"):
+            self.plan({self.header: b"int stale(void);\n"})
 
-    def test_merge_only_never_removes_a_used_declaration(self) -> None:
-        plan = headers.plan(self.project, {"symbols": {"bar": "main/g2.h"}})
-        for path, data in plan.changed.items():
-            if path.name == "g1.h":
-                self.assertIn(b"foo", data)
-        self.assertNotIn("a", self.edited_sources(plan))
-
-    def test_unused_declaration_may_leave_a_header(self) -> None:
-        (self.include / "g2.h").write_text("int bar(void);\nint stale(void);\n")
-        plan = headers.plan(self.project, {"symbols": {"foo": "main/g1.h", "bar": "main/g2.h"}})
-        data = next((data for path, data in plan.changed.items() if path.name == "g2.h"), b"int bar(void);\n")
-        self.assertIn(b"bar", data)
+    def test_unused_name_may_leave_a_header(self) -> None:
+        self.assertEqual(self.plan({self.header: b"int foo(void);\n"}), {self.header: b"int foo(void);\n"})

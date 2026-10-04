@@ -18,9 +18,9 @@ FUNCTIONS = ("alpha", "beta", "gamma")
 
 def assembly(function: str, words: list[int]) -> str:
     return (
-        f".set noreorder\n.text\n.balign 4\n.globl {function}\n.type {function}, @function\n{function}:\n"
-        + "".join(f".word 0x{word:08X}\n" for word in words)
-        + f".size {function}, .-{function}\n"
+        f'.include "macro.inc"\n\n.section .text, "ax"\n\nglabel {function}\n'
+        + "".join(f"/* {index * 4:X} */ .word 0x{word:08X}\n" for index, word in enumerate(words))
+        + f"endlabel {function}\n"
     )
 
 
@@ -45,7 +45,8 @@ def make(directory: Path, words: list[int] | None = None, versions: tuple[str, .
             cursor += len(bodies[name]) * 4
         (definitions / "game.yaml").write_text(
             "name: fixture\nsegments:\n  - [0x0, header, header]\n"
-            f"  - name: main\n    type: code\n    start: 0x40\n    vram: 0x{start:X}\n    subalign: 4\n    subsegments:\n"
+            f"  - name: main\n    type: code\n    start: 0x40\n    vram: 0x{start:X}\n"
+            "    subalign: 4\n    subsegments:\n"
             + "".join(f"      - [0x{offsets[name]:X}, asm, {name}]\n" for name in FUNCTIONS)
             + f"  - [0x{cursor:X}]\n"
         )
@@ -55,7 +56,7 @@ def make(directory: Path, words: list[int] | None = None, versions: tuple[str, .
         rom = root / "roms" / f"baserom.{v}.z64"
         all_words = [word for name in FUNCTIONS for word in bodies[name]]
         rom.write_bytes(bytes.fromhex("80371240") + bytes(0x3C) + struct.pack(f">{len(all_words)}I", *all_words))
-        asm = root / "asm" / v
+        asm = root / "extract" / v / "asm"
         asm.mkdir(parents=True)
         for name in FUNCTIONS:
             (asm / f"{name}.s").write_text(assembly(name, bodies[name]))

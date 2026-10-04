@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,22 +37,25 @@ def input_key(project: Project) -> str:
 
 def runs(project: Project) -> list[tuple[layout_map.Group, tuple[str, ...]]]:
     """Mergeable runs, in layout order."""
+    landed = {path.stem for path in project.src.glob("*.c")}
+    return member_runs(layout_map.load(project).groups, landed, lambda left, right: _joins(project, left, right))
+
+
+def member_runs(
+    groups: Iterable[layout_map.Group], landed: set[str], joins: Callable[[str, str], bool]
+) -> list[tuple[layout_map.Group, tuple[str, ...]]]:
+    """Maximal runs (two or more) of adjacent landed members of one group; a split member starts a new run."""
     found = []
-    for group in layout_map.load(project).groups:
+    for group in groups:
         current: list[str] = []
         for member in (*group.members, None):
-            mergeable = (
-                member is not None
-                and (project.src / f"{member}.c").is_file()
-                and not (current and member in group.split)
-                and (not current or _joins(project, current[-1], member))
-            )
-            if mergeable:
-                current.append(member)  # type: ignore[arg-type]
+            extends = member is not None and member in landed and member not in group.split
+            if member is not None and extends and current and joins(current[-1], member):
+                current.append(member)
                 continue
             if len(current) >= 2:
                 found.append((group, tuple(current)))
-            current = [member] if member is not None and (project.src / f"{member}.c").is_file() else []
+            current = [member] if member is not None and member in landed else []
     return found
 
 
