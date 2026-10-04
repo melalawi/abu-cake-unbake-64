@@ -1,7 +1,11 @@
 """Merge-unit runs: maximal runs of adjacent landed members within one group."""
 
 import unittest
+from unittest import mock
 
+from tests.project_fixture import ProjectCase
+from unbake import config
+from unbake.layout import map as layout_map
 from unbake.layout import merge_units
 from unbake.layout.map import Group
 
@@ -37,3 +41,28 @@ class RunsTests(unittest.TestCase):
     def test_rows_that_do_not_join_break_the_run(self) -> None:
         found = merge_units.member_runs([group("g", "abc")], set("abc"), lambda left, right: left != "b")
         self.assertEqual([members for _, members in found], [("a", "b")])
+
+
+class RunTests(ProjectCase):
+    versions = ("us",)
+
+    def test_a_proven_run_drops_absorbed_members_and_the_layout_still_loads(self) -> None:
+        layout = self.project.root / "layout.toml"
+        groups = (Group("g", "main", "default", ("alpha", "beta")), Group("gamma", "main", "default", ("gamma",)))
+        layout.write_bytes(layout_map.encoded(layout_map.Map(2, groups)))
+        split_path = self.project.version("us").split
+        for name in ("alpha", "beta"):
+            (self.project.src / f"{name}.c").write_text(f"int {name}(void) {{ return 0; }}\n")
+            split_path.write_text(split_path.read_text().replace(f"asm, {name}]", f"c, {name}]"))
+        project = config.load(self.project.root)
+        with (
+            mock.patch.object(merge_units, "prove", return_value=True),
+            mock.patch.object(merge_units, "_commit"),
+            mock.patch("unbake.buildfiles.write", return_value=[]),
+        ):
+            lines = merge_units.run(project, self.host)
+        self.assertEqual(lines, ["merge g alpha..beta: proven and committed"])
+        loaded = {group.name: group for group in layout_map.load(config.load(self.project.root)).groups}
+        self.assertEqual((loaded["g"].members, loaded["g"].evidence), (("alpha",), "proven"))
+        self.assertNotIn("beta]", split_path.read_text())
+        self.assertFalse((self.project.src / "beta.c").exists())

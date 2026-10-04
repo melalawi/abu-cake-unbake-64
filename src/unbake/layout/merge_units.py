@@ -5,8 +5,8 @@ rows are contiguous in every holding version, held by the same versions, built b
 separated by a recorded `split` cut. The merged source is src/<first>.c: the union of the members' include
 lines, then their bodies in address order. It is proved like a land: in every holding version the strict
 `n64link place` link of the merged unit must equal the ROM bytes of the whole run.
-- Pass: write the merged source, remove the others, absorb their split rows into the first row, mark the group
-  `evidence = "proven"`, commit "Merge units into <group> run".
+- Pass: write the merged source, remove the others, drop them from the group, absorb their split rows into the
+  first row, mark the group `evidence = "proven"`, commit "Merge units into <group> run".
 - Fail: record every member after the first as a split cut, so the run is never tried again until someone
   removes the cut (the evidence changed).
 """
@@ -172,11 +172,14 @@ def run(project: Project, host: Host) -> list[str]:
             atomic_files.text(project.src / f"{members[0]}.c", source)
             for member in members[1:]:
                 (project.src / f"{member}.c").unlink()
+            # The group drops the absorbed members while their rows still exist, so the layout stays valid.
+            kept = tuple(m for m in group.members if m not in members[1:])
+            layout = _group_update(project, group.name, group.segment, members=kept, evidence="proven")
             touched = [
                 project.src / f"{members[0]}.c",
                 *(project.src / f"{m}.c" for m in members[1:]),
+                layout,
                 *_absorb_rows(project, members),
-                _group_update(project, group.name, group.segment, evidence="proven"),
             ]
             reloaded = project_config.load(project.root)
             touched += buildfiles.write(reloaded, host)
