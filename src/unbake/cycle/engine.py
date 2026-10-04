@@ -130,18 +130,32 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+BUSY = frozenset({"drafting", "comparing", "landing"})
+
+
 class Stop:
+    """idle:N counts only time when no function is drafting, comparing or landing; after:N is wall time."""
+
     def __init__(self, condition: str | None) -> None:
         self.condition = condition or "all-landed"
         self.started = time.monotonic()
         self.activity = self.started
+        self.busy = False
 
     def note_activity(self) -> None:
         self.activity = time.monotonic()
 
-    def timeout(self) -> float | None:
+    def timeout(self, rows: dict[str, Row]) -> float | None:
+        """Seconds until the condition is reached; None while work is running or for all-landed."""
         kind, _, value = self.condition.partition(":")
         if kind == "idle":
+            if any(row.stage in BUSY for row in rows.values()):
+                self.busy = True
+                return None
+            if self.busy:
+                # Idle time starts when the last draft, compare or land finishes.
+                self.busy = False
+                self.note_activity()
             return max(0.0, self.activity + int(value) - time.monotonic())
         if kind == "after":
             return max(0.0, self.started + int(value) * 60 - time.monotonic())
@@ -150,7 +164,7 @@ class Stop:
     def reached(self, rows: dict[str, Row]) -> bool:
         if self.condition == "all-landed":
             return all(row.stage in ("landed", "held", "failed") for row in rows.values())
-        timeout = self.timeout()
+        timeout = self.timeout(rows)
         return timeout is not None and timeout <= 0
 
 
@@ -335,7 +349,7 @@ def run(
         try:
             while not stopper.reached(rows):
                 try:
-                    kind, payload = inbox.get(timeout=stopper.timeout())
+                    kind, payload = inbox.get(timeout=stopper.timeout(rows))
                 except queue.Empty:
                     continue
                 if kind == "draft":
