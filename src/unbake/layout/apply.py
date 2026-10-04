@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from unbake.decomp.header_declarations import declaration_source
 from unbake.layout import index, map, redeclarations
 from unbake.project.config import Held, Policy, Project
 from unbake.typemap import storage
@@ -15,11 +14,30 @@ from unbake.typemap import storage
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"][^\n]*(?:\n|$)', re.M)
 
 
+def _spelled(text: str) -> set[str]:
+    """Every name the source spells, including macro bodies; include lines and comments are not uses."""
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
+    code = re.sub(r"^[ \t]*#[ \t]*include[^\n]*", " ", code, flags=re.M)
+    return set(re.findall(r"\b[A-Za-z_]\w*\b", code))
+
+
+def _local_names(text: str) -> set[str]:
+    from unbake.decomp.header_declarations import declarations
+
+    return {
+        name
+        for start, end in redeclarations.spans(text)
+        for variant in redeclarations.variants(text[start:end])
+        for name in declarations(variant).declared
+    }
+
+
 def rewrite(text: str, member: str, ownership: map.Map, lookup: dict[str, Any], *, previous: set[str]) -> str:
     owner = ownership.owners.get(member)
     if owner is None:
         raise Held("layout", f"layout.member.{member}: source has no group")
-    tokens = set(re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text)))
+    # A header is imported only for names the source does not already declare itself.
+    tokens = _spelled(text) - _local_names(text)
     homes = {owner.header} | {lookup["symbols"][name] for name in tokens if name in lookup["symbols"]}
     homes.update(home for name in tokens for home in lookup.get("type_headers", {}).get(name, ()))
     includes = "".join(f'#include "{home}"\n' for home in sorted(homes))
