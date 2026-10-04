@@ -140,6 +140,7 @@ def _headers(
     line_markers: bool,
     ordered: list[Path] | None = None,
     raw: bool = False,
+    include_generated: bool = True,
 ) -> str:
     if ordered is None:
         ordered = ordered_headers(contents)
@@ -161,7 +162,8 @@ def _headers(
         raise Held("solve", "policy.cpp: required for typed header preprocessing")
     source = "".join(f'#include "{path}"\n' for path in ordered)
     if extra is not None:
-        source += "".join(f'#include "{path}"\n' for path in _generated_context(project))
+        if include_generated:
+            source += "".join(f'#include "{path}"\n' for path in _generated_context(project))
         if raw:
             source += _BOUNDARY + "\n"
         from unbake.typemap.split import consumer_macro
@@ -217,16 +219,21 @@ class _PublishedHeaders:
     Stateful preprocessor extensions retain the ordinary full-unit path.
     """
 
-    def __init__(self, project: Project, policy: Policy | None, scratch: Path) -> None:
+    def __init__(self, project: Project, policy: Policy | None, scratch: Path, *, source_context: bool = False) -> None:
         self.project, self.policy, self.scratch = project, policy, scratch
-        self.contents = {
-            path: path.read_text()
-            for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
-            if not storage.generated(project, path)
-        }
+        self.include_generated = not source_context
+        self.contents = (
+            {}
+            if source_context
+            else {
+                path: path.read_text()
+                for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
+                if not storage.generated(project, path)
+            }
+        )
         self.ordered = ordered_headers(self.contents)
         texts = list(self.contents.values())
-        generated = _generated_context(project)
+        generated = [] if source_context else _generated_context(project)
         texts.extend(path.read_text() for path in generated)
         self.replay = policy is not None and not any(
             re.search(r"__COUNTER__|^\s*#\s*pragma\b", text, re.M) for text in texts
@@ -259,13 +266,22 @@ class _PublishedHeaders:
         if self.replay and version not in self.prepared:
             assert policy is not None
             raw = _headers(
-                project, policy, version, self.contents, source, line_markers=False, ordered=self.ordered, raw=True
+                project,
+                policy,
+                version,
+                self.contents,
+                source,
+                line_markers=False,
+                ordered=self.ordered,
+                raw=True,
+                include_generated=self.include_generated,
             )
             prefix, marker, _ = raw.partition(_BOUNDARY + "\n")
             if not marker:
                 raise Held("solve", "types.declaration: missing preprocessor source boundary")
             prelude = "".join(f'#include "{path}"\n' for path in self.ordered)
-            prelude += "".join(f'#include "{path}"\n' for path in _generated_context(project))
+            if self.include_generated:
+                prelude += "".join(f'#include "{path}"\n' for path in _generated_context(project))
             command = _cpp_command(project, policy, version, extra=True, line_markers=False)
             macros = _preprocess(project, [*command[:-1], "-dM", "-"], prelude)
             # A provider must support cpp's macro dump, including fixture providers.
@@ -286,7 +302,15 @@ class _PublishedHeaders:
         prepared = self.prepared.get(version)
         if prepared is None:
             return _headers(
-                project, policy, version, self.contents, source, line_markers=False, ordered=self.ordered, raw=True
+                project,
+                policy,
+                version,
+                self.contents,
+                source,
+                line_markers=False,
+                ordered=self.ordered,
+                raw=True,
+                include_generated=self.include_generated,
             )
         prefix, command = prepared
         from unbake.typemap.split import consumer_macro
@@ -788,7 +812,12 @@ def validate_sources(
     project.build.mkdir(parents=True, exist_ok=True)
     refused = {}
     with tempfile.TemporaryDirectory(prefix=".declarations-", dir=project.build) as temporary:
-        headers_batch = _PublishedHeaders(project, policy, Path(temporary))
+        # Admission follows the compiler's actual source imports, including
+        # transitive providers and forced includes. Analysis imports every
+        # authored header and the generated umbrella; an unrelated provider's
+        # failure there must not veto the batch. Imported declarations remain
+        # in each suffix so the existing per-source refusal owns the hold.
+        headers_batch = _PublishedHeaders(project, policy, Path(temporary), source_context=True)
         published = _PublishedDeclarations()
         tasks: list[tuple[str, Path, str, dict[str, Any]]] = [
             (function, source, version, {}) for function, source, versions in entries for version in versions

@@ -1,7 +1,9 @@
 """Shared prefix reuse preserves independent source declarations and provenance."""
 
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.project.config import Held
@@ -9,6 +11,89 @@ from unbake.typemap import declarations, storage
 
 
 class BatchDeclarationsTests(unittest.TestCase):
+    def test_admission_partitions_provider_failures_by_actual_imports(self):
+        # CPP is the external boundary: simulate its token output, including macro
+        # replay and a dependent source's bad declaration on only one VERSION.
+        for mode in ("replay", "fallback", "pragma", "forced"):
+            for reverse in (False, True):
+                with self.subTest(mode=mode, reverse=reverse), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    include = root / "include"
+                    include.mkdir()
+                    (include / "types.h").write_text(
+                        "#ifndef TYPES_H\n#define TYPES_H\ntypedef int Word;\n#endif\n"
+                        + ("#pragma once\n" if mode == "pragma" else "")
+                    )
+                    (include / "unrelated.h").write_text("Missing authored;\n")
+                    shared = include / "shared"
+                    shared.mkdir()
+                    (shared / "typemap.h").write_text("Missing unrelated;\n")
+                    project = SimpleNamespace(
+                        root=root,
+                        build=root / "build",
+                        include=(include,),
+                        default_compiler="cc",
+                        compilers={
+                            "cc": SimpleNamespace(
+                                cflags=("-include", str(include / "unrelated.h")) if mode == "forced" else ()
+                            )
+                        },
+                        version=lambda v: SimpleNamespace(macros=("VERSION_" + v,)),
+                    )
+                    policy = SimpleNamespace(cpp=Path("mock-cpp"), cppflags=("-P",), cores=2)
+                    entries = []
+                    for name in ("good", "bad", "dependent", "other"):
+                        path = root / (name + ".c")
+                        path.write_text(
+                            '#include "types.h"\n'
+                            + (
+                                '#include "shared/broken.h"\n'
+                                if name == "bad"
+                                else '#include "shared/transitive.h"\n'
+                                if name == "dependent"
+                                else ""
+                            )
+                            + f"Word {name}(Word value) {{return value;}}\n"
+                        )
+                        entries.append((name, path, ("us", "eu")))
+                    if reverse:
+                        entries.reverse()
+                    inputs = []
+
+                    def cpp(project, command, text, inputs=inputs, mode=mode, shared=shared, include=include):
+                        inputs.append(text)
+                        if "-dM" in command:
+                            return "#define TYPES_H\n" if mode == "replay" else ""
+                        prefix = "typedef int Word;\n" if str(include / "types.h") in text else ""
+                        if str(include / "unrelated.h") in text or "-include" in command:
+                            prefix += "Missing authored;\n"
+                        if str(shared / "typemap.h") in text:
+                            prefix += "Missing unrelated;\n"
+                        boundary = declarations._BOUNDARY in text
+                        path = Path(text.split('"')[-2] if boundary else text.split('"')[1])
+                        content = path.read_text().replace("shared/transitive.h", "shared/broken.h")
+                        if "shared/broken.h" in content and "-DVERSION_eu" in command:
+                            content = "Missing provider;\n"
+                        suffix = content.replace('#include "types.h"', "typedef int Word;").replace(
+                            '#include "shared/broken.h"', ""
+                        )
+                        return prefix + declarations._BOUNDARY + "\n" + suffix if boundary else suffix
+
+                    with patch.object(declarations, "_preprocess", side_effect=cpp):
+                        refused = declarations.validate_sources(project, policy, entries)
+                        # Analysis deliberately still sees the whole type DB.
+                        with tempfile.TemporaryDirectory(dir=root) as scratch:
+                            analysis = declarations._PublishedHeaders(project, policy, Path(scratch))
+                            text = analysis.source("us", root / "good.c")
+                            with self.assertRaises(Held):
+                                declarations._PublishedDeclarations().extract(text, {}, root / "good.c")
+                    self.assertEqual(
+                        set(refused),
+                        {"good", "bad", "dependent", "other"} if mode == "forced" else {"bad", "dependent"},
+                    )
+                    self.assertTrue(all("types.declaration" in reason for reason in refused.values()))
+                    self.assertIn(str(shared / "typemap.h"), inputs[-2] if mode == "replay" else inputs[-1])
+
     def test_failed_prefix_is_parsed_once_without_retaining_exception_frames(self):
         prefix = "typedef Missing Missing;\n"
         with self.assertRaises(Held) as expected:
