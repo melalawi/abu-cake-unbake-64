@@ -229,7 +229,7 @@ class VolatileRewriteTests(unittest.TestCase):
         from unbake.match import batch_fold
 
         source = '#include "../unresolved.h"\nvoid f(void) {}'
-        candidate = SimpleNamespace(function="f", content=source.encode(), versions=("us",))
+        candidate = SimpleNamespace(function="f", content=source.encode(), versions=("us",), source=Path("f.c"))
         with (
             patch("unbake.match.declarations.fold_source", return_value=SimpleNamespace(source=source)),
             self.assertRaisesRegex(Held, "local-include.*unresolved.h"),
