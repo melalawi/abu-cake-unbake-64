@@ -194,6 +194,7 @@ def refresh_helpers(project: Project) -> None:
         except (OSError, ValueError) as error:
             raise Held("setup", f"helper recipe provenance {recipe}: {error}") from error
         files = makefile.helper_sources(project) | makefile.scoped_settings(project, data)
+        files["Makefile"] = makefile.render(project, data=data)["Makefile"]
         paths = {project.root / relative for relative in files}
         manifest = project.tools / "compiler.sha256"
         paths.add(manifest)

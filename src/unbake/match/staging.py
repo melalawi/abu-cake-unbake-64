@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -19,8 +20,7 @@ from unbake.match.common import (
 )
 from unbake.project import build, makefile
 from unbake.project.config import Project
-from unbake.project_tools.compile_identity import driver_names, selected_pins
-from unbake.project_tools.host import resolve_tool
+from unbake.project_tools.compile_identity import driver_names, driver_stamp_name
 
 # Retained trials and local environments are outputs, not cartridge build inputs.
 _OUTPUTS = frozenset({".git", "artifacts", ".unbake", ".splat", ".mypy_cache", ".ruff_cache", ".pytest_cache"})
@@ -233,24 +233,6 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
         return
     data = json.loads(recipe.read_text())
     version = generation.name.rsplit(".", 1)[0]
-    groups: dict[str, dict[str, str]] = {}
-    manifest = tools / "compiler.sha256"
-    if manifest.is_file():
-        for row in manifest.read_text().splitlines():
-            fields = row.split(maxsplit=1)
-            if len(fields) == 2 and not row.startswith("#"):
-                name = fields[1].lstrip("*")
-                groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
-    root = tools.parent
-    executables: dict[str, Path] = {}
-
-    def executable(value: str) -> Path:
-        if value not in executables:
-            executables[value] = (
-                root / value if "/" in value and not value.startswith("policy:") else Path(resolve_tool(value))
-            )
-        return executables[value]
-
     independent_objects(generation)
     indexed = object_paths(generation) if (generation / ".split.mk").is_file() else None
     for kind in ("src", "asm"):
@@ -274,22 +256,25 @@ def chunk_stale_sources(generation: Path, tools: Path, symbols: Path) -> None:
             compiler = data["compilers"][ident] if ident else None
             sn64 = compiler is not None and compiler["kind"] == "sn64"
             inputs = [
-                tools / "compile/drivers" / (name + ".sha256")
+                tools / "compile/drivers" / driver_stamp_name(name, "cc" if kind == "src" else "as", sn64)
                 for name in driver_names("cc" if kind == "src" else "as", sn64)
             ]
             inputs.append(tools / "compile" / version / ((ident if kind == "src" else "assembly") + ".json"))
             if kind == "src" and compiler:
-                cc = Path(compiler["cc"])
-                inputs.extend(
-                    root / name
-                    for name in {str(cc), *selected_pins(groups, cc, tools.relative_to(root), compiler["kind"])}
-                )
+                inputs.append(tools / "compile/binaries" / (ident + ".sha256"))
                 inputs.append(tools / "compile/units" / (unit + ".json"))
             if sn64:
                 assert compiler is not None
-                inputs.extend((tools / "compile/drivers/abumasn64.sha256", executable(compiler["as"])))
+                inputs.extend(
+                    (
+                        tools / "compile/drivers/abumasn64.sha256",
+                        tools / "compile/binaries" / (hashlib.sha256(compiler["as"].encode()).hexdigest() + ".sha256"),
+                    )
+                )
             elif kind == "asm" and data.get("as"):
-                inputs.append(executable(data["as"]))
+                inputs.append(
+                    tools / "compile/binaries" / (hashlib.sha256(data["as"].encode()).hexdigest() + ".sha256")
+                )
             if kind == "asm" and sn64:
                 inputs.append(generation / "asm-symbols" / (unit + ".txt"))
             if any(path.is_file() and path.stat().st_mtime_ns > receipt.stat().st_mtime_ns for path in inputs):

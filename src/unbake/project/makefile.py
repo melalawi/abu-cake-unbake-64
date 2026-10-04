@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import shlex
 from collections.abc import Iterable
@@ -12,7 +13,7 @@ from typing import Any, Literal, overload
 
 from unbake.project.cache import key
 from unbake.project.config import Held, Policy, Project, SetupPolicy
-from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
+from unbake.project_tools.compile_identity import driver_content, driver_names, driver_stamp_name
 
 TEMPLATES = Path(__file__).parents[1] / "project_tools"
 
@@ -323,33 +324,33 @@ def driver_settings(project: Project) -> dict[str, str]:
         )
     for name in {name for kind in ("cc", "as") for sn64 in (False, True) for name in driver_names(kind, sn64)}:
         files[f"{tools}/compile/drivers/{name}.sha256"] = key(driver_content(TEMPLATES / name)) + "\n"
+    for kind in ("cc", "as"):
+        for sn64 in (False, True):
+            name = driver_stamp_name("codegen.py", kind, sn64)
+            files[f"{tools}/compile/drivers/{name}"] = key(driver_content(TEMPLATES / "codegen.py", kind, sn64)) + "\n"
     return files
 
 
-def compile_rules(project: Project) -> str:
-    data = description(project)
+def compile_rules(project: Project, *, data: dict[str, Any] | None = None) -> str:
+    data = description(project) if data is None else data
     tools = relative(project, project.tools)
-    manifest = project.tools / "compiler.sha256"
-    groups: dict[str, dict[str, str]] = {}
-    if manifest.is_file():
-        for row in manifest.read_text().splitlines():
-            fields = row.split(maxsplit=1)
-            if len(fields) == 2 and not row.startswith("#"):
-                name = fields[1].lstrip("*")
-                groups.setdefault(str(Path(name).parent), {})[name] = fields[0]
 
     def dependencies(ident: str | None, kind: str) -> str:
         compiler = data["compilers"][ident] if ident else None
         sn64 = compiler is not None and compiler["kind"] == "sn64"
-        inputs = [f"{tools}/compile/drivers/{name}.sha256" for name in driver_names(kind, sn64)]
+        inputs = [f"{tools}/compile/drivers/{driver_stamp_name(name, kind, sn64)}" for name in driver_names(kind, sn64)]
         inputs.append(f"{tools}/compile/$(VERSION)/{ident if kind == 'cc' else 'assembly'}.json")
         if kind == "cc" and compiler:
-            cc = Path(compiler["cc"])
-            inputs.extend(sorted({str(cc), *selected_pins(groups, cc, Path(tools), compiler["kind"])}))
+            inputs.append(f"{tools}/compile/binaries/{ident}.sha256")
         if sn64 and compiler:
-            inputs.extend(("$(call resolve-tool," + compiler["as"] + ")", f"{tools}/compile/drivers/abumasn64.sha256"))
+            inputs.extend(
+                (
+                    f"{tools}/compile/binaries/{hashlib.sha256(compiler['as'].encode()).hexdigest()}.sha256",
+                    f"{tools}/compile/drivers/abumasn64.sha256",
+                )
+            )
         elif kind == "as":
-            inputs.append("$(call resolve-tool," + data["as"] + ")")
+            inputs.append(f"{tools}/compile/binaries/{hashlib.sha256(data['as'].encode()).hexdigest()}.sha256")
         return " ".join(inputs)
 
     overrides = " ".join("$(BUILD)/obj/src/" + unit + ".built" for unit in data["units"])
@@ -362,10 +363,13 @@ def compile_rules(project: Project) -> str:
     for unit in sorted(units):
         lines.append(f"$(BUILD)/obj/src/{unit}.built: {tools}/compile/units/{unit}.json")
     lines.append(f"$(ASM_OBJECTS:.o=.built): {dependencies(data['assembly_compiler'], 'as')}")
+    assembly = data["assembly_compiler"]
+    if assembly and data["compilers"][assembly]["kind"] == "sn64":
+        lines.append("$(ASM_OBJECTS:.o=.built): $(BUILD)/obj/asm/%.built: $(BUILD)/asm-symbols/%.txt")
     return "\n".join(lines)
 
 
-def render(project: Project) -> dict[str, str]:
+def render(project: Project, *, data: dict[str, Any] | None = None) -> dict[str, str]:
     build = recipe(project)
     project.version(project.names_from)
     values = {
@@ -382,7 +386,7 @@ def render(project: Project) -> dict[str, str]:
         "LD": shell_words([host_tool(project, build.ld, "mips_ld")]),
         "OBJCOPY": shell_words([host_tool(project, build.objcopy, "mips_objcopy")]),
         "SPLAT": shell_words([host_tool(project, build.splat, "splat")]),
-        "COMPILE_RULES": compile_rules(project),
+        "COMPILE_RULES": compile_rules(project, data=data),
     }
     blocks = []
     for name in project.versions:
@@ -400,6 +404,6 @@ def render(project: Project) -> dict[str, str]:
             content = content.replace("@" + placeholder + "@", value)
         return content
 
-    files = helpers(project)
+    files = helpers(project) if data is None else helper_sources(project) | scoped_settings(project, data)
     files.update({"Makefile": fill("Makefile"), "CONTRIBUTING.md": fill("CONTRIBUTING.md")})
     return files

@@ -66,9 +66,14 @@ def read_recipe(path: Path) -> Recipe:
 
 
 @lru_cache(maxsize=64)
-def tool_digest(paths: tuple[Path, ...]) -> str:
+def tool_digest(
+    paths: tuple[Path, ...],
+    kind: str | None = None,
+    sn64: bool = False,
+    signatures: tuple[tuple[int, int, int, int, int], ...] = (),
+) -> str:
     """Fingerprint immutable build tools once per compiler process."""
-    return key(*(driver_content(path) if path.suffix == ".py" else path for path in paths))
+    return key(*(driver_content(path, kind, sn64) if path.suffix == ".py" else path for path in paths))
 
 
 def file_signature(path: Path) -> tuple[int, int, int, int, int]:
@@ -133,7 +138,12 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
         prepared.content,
         prepared.source_name,
         json.dumps([prepared.generation, prepared.assembler_flags], sort_keys=True),
-        tool_digest(tuple(prepared.inputs)),
+        tool_digest(
+            tuple(prepared.inputs),
+            args.kind,
+            compiler is not None and compiler["kind"] == "sn64",
+            tuple(file_signature(path) for path in prepared.inputs),
+        ),
         *prepared.assembler_inputs,
     )
     cached = Cache(args.cache_root or cache_root()).produce(args.kind, digest, prepared.produce)
