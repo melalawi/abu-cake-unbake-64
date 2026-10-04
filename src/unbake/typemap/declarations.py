@@ -269,6 +269,7 @@ class _PublishedHeaders:
             Path, list[tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str] | None]]
         ] = {}
         self.batch_directives: dict[Path, list[tuple[str, str]] | None] = {}
+        self.batch_includes: dict[tuple[Path, str], Path | None] = {}
 
     def source(self, version: str, source: Path) -> str | tuple[str, str]:
         project, policy = self.project, self.policy
@@ -415,11 +416,15 @@ class _PublishedHeaders:
                     include = re.fullmatch(r'[<"]([^>"\n]+)[>"]', argument)
                     if include is None:
                         return None, observed
-                    roots = ([path.parent] if argument.startswith('"') else []) + list(self.project.include)
-                    found = next((root / include[1] for root in roots if (root / include[1]).is_file()), None)
-                    if found is None:
+                    key = path.parent, argument
+                    if key not in self.batch_includes:
+                        roots = ([path.parent] if argument.startswith('"') else []) + list(self.project.include)
+                        found = next((root / include[1] for root in roots if (root / include[1]).is_file()), None)
+                        self.batch_includes[key] = None if found is None else found.resolve()
+                    resolved = self.batch_includes[key]
+                    if resolved is None:
                         return None, observed
-                    child, guards = header(found.resolve(), current, visiting)
+                    child, guards = header(resolved, current, visiting)
                     observed.update(guards)
                     if child is None:
                         return None, observed
@@ -457,8 +462,8 @@ class _PublishedHeaders:
             del entries[:-4]
             return effects, observed
 
-        text = source.read_text()
-        effects, _ = scan(source, directives(text), set(), frozenset({source}))
+        effects, _ = header(source, set(), frozenset())
+        text = self.batch_headers[source]
         if effects is None:
             return None
         from unbake.typemap.split import consumer_macro

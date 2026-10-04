@@ -28,6 +28,7 @@ class FeedbackPreprocessingTests(unittest.TestCase):
         batch.batch_guards = {}
         batch.batch_effects = {}
         batch.batch_directives = {}
+        batch.batch_includes = {}
         batch.prepared = {v: ("", ["mock-cpp", "-P", "-x", v, "-"]) for v in ("us", "eu")}
         batch.macros = {v: {"VALUE": f"#define VALUE {value}\n"} for v, value in (("us", "int"), ("eu", "float"))}
         return batch
@@ -203,6 +204,21 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                             expected = "double" if path == altered or version == "eu" else "int"
                             self.assertIn(f"{expected} {path.stem}", text)
             self.assertTrue(all(len(entries) <= 4 for entries in batch.batch_effects.values()))
+
+    def test_source_closure_reuse_preserves_each_versions_guard_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = self.fixture(root)
+            source = root / "alpha.c"
+            source.write_text('#include "mutate.h"\nVALUE alpha(void) {}\n')
+            (root / "include/mutate.h").write_text("#ifndef GUARD\n#define GUARD\n#define VALUE double\n#endif\n")
+            batch.macros["us"]["GUARD"] = "#define GUARD 1\n"
+            with patch.object(declarations, "_preprocess", side_effect=self.cpp(batch, [])):
+                for version in ("us", "eu", "us", "eu"):
+                    actual = batch.batch(version, [source])[0][1]
+                    self.assertIn(("int" if version == "us" else "double") + " alpha", actual)
+            self.assertIn(source, batch.batch_effects)
+            self.assertEqual(len(batch.batch_effects[source]), 2)
 
     def test_concurrent_header_analysis_publishes_complete_cache_entries(self):
         from concurrent.futures import ThreadPoolExecutor
