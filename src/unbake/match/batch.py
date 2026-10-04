@@ -16,7 +16,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +41,6 @@ from unbake.project import build, compiler_choice, config, makefile, setup, work
 from unbake.project.config import Held, Policy, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.report import progress
-from unbake.typemap import storage
 
 # Rules the fold resolves: they are judged on the folded text, not on admission.
 FOLDED_RULES = frozenset(
@@ -276,10 +274,6 @@ class _Inputs:
         # The build lock holds these inputs still; a refusal repeats per source.
         self.owners: dict[str, Any] | None = None
         self.trials: dict[str, list[Any]] | None = None
-        proven = project.build / "types/proven.json"
-        self.proven = storage.read(proven, "types.feedback") if proven.is_file() else {}
-        if self.proven:
-            storage.validate_identity(project, self.proven, "types.feedback")
         try:
             self.owners = {v: split.owners_by_alias(project, v) for v in project.versions}
             self.trials = (
@@ -340,19 +334,6 @@ def _admit(project: Project, policy: Policy, inputs: _Inputs, source: Path) -> C
     published = destination.is_file() and not drafts.is_partial(destination.read_text())
     republication = published and source.resolve() == destination.resolve()
     if republication:
-        proven = project.build / "types/proven.json"
-        if proven.is_file():
-            value = getattr(inputs, "proven", None)
-            if value is None:
-                value = storage.read(proven, "types.feedback")
-                storage.validate_identity(project, value, "types.feedback")
-            record = value.get("records", {}).get(function, {})
-            if (
-                record.get("source") == str(destination.relative_to(project.root))
-                and record.get("source_sha256") == hashlib.sha256(content).hexdigest()
-            ):
-                return None
-        # Re-prove a published unit as matched C regardless of an older trial.
         return Candidate(function, source, content, sha, versions, True, republication=True)
     if latest is not None and not latest["identical_everywhere"]:
         from unbake.match.nonmatching import admit
@@ -1004,13 +985,10 @@ def _commit(
         for candidate in candidates:
             if drafts.source_identity(candidate.source.read_bytes()) != candidate.sha256:
                 held(f"{candidate.function}: source_sha256 changed during proof")
-        ledger = Path(policy.state_root) / project.id / project.checkout_id / "receipts" / "match.jsonl"
         report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
-        touched = set(writes) | {ledger, project.root / "README.md"} | report_paths
+        touched = set(writes) | {project.root / "README.md"} | report_paths
         republication = any(candidate.republication for candidate in candidates)
-        touched.update(
-            project.build / "types" / name for name in ("proven.json", "database.json", "summary.json", "redraft.json")
-        )
+        touched.update(project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json"))
         previous_headers = set(index.headers(project)) | {
             project.root / path.relative_to(staged.root) for path in index.headers(staged)
         }
@@ -1042,12 +1020,6 @@ def _commit(
                         if obj.is_file():
                             stale.add(staging.invalidate_receipt(obj))
                         obj.with_suffix(".inputs.json").unlink(missing_ok=True)
-                type_context.feedback_many(
-                    project,
-                    [(path.stem, path, split.holding_versions(project, path.stem), {}) for path in rewritten],
-                    policy=policy,
-                    regenerate=False,
-                )
             stale.update(
                 staging.publication_dependencies(project, staged, published_generations, previous=previous_headers)
             )
@@ -1055,22 +1027,6 @@ def _commit(
             # write so an immediate independent check reuses the proved objects.
             if published_generations is generations:
                 staging.publication_stamps(project, generations, stale=stale)
-            ledger.parent.mkdir(parents=True, exist_ok=True)
-            with atomic_files.stream(ledger, "a", encoding="utf-8") as output:
-                for candidate in candidates:
-                    if not candidate.matched:
-                        continue
-                    row = {
-                        "function": candidate.function,
-                        "versions": list(candidate.versions),
-                        "sha256": candidate.sha256,
-                        "source": str((project.src / f"{candidate.function}.c").relative_to(project.root)),
-                        "source_sha256": storage.file_digest(project.src / f"{candidate.function}.c"),
-                        "fakematch": list(checks.fakematches(candidate.final)),
-                        "compiler_evidence": candidate.compiler,
-                        "at": datetime.now(UTC).isoformat(),
-                    }
-                    output.write(json.dumps(row, sort_keys=True) + "\n")
             reporting.record(
                 "published",
                 sources=[candidate.function for candidate in candidates],
@@ -1134,19 +1090,10 @@ def _feedback(
     strict: bool = False,
 ) -> list[str]:
     """Feed every proved layout back to solve once for the whole batch."""
-    entries = []
-    owners_by_version = {version: split.owners_by_alias(project, version) for version in project.versions}
+    entries: list[tuple[str, Path, tuple[str, ...], dict[str, str]]] = []
     for candidate in candidates:
-        if not candidate.matched:
-            continue
-        targets = {}
-        for version in candidate.versions:
-            owners = owners_by_version[version].get(candidate.function, [])
-            kind = "src" if candidate.republication else "asm"
-            target = previous[version] / "obj" / kind / (owners[0].path + ".o") if owners else None
-            if target is not None and target.is_file():
-                targets[version] = hashlib.sha256(target.read_bytes()).hexdigest()
-        entries.append((candidate.function, project.src / f"{candidate.function}.c", candidate.versions, targets))
+        if candidate.matched:
+            entries.append((candidate.function, project.src / f"{candidate.function}.c", candidate.versions, {}))
     if not entries:
         return []
     try:
@@ -1158,22 +1105,8 @@ def _feedback(
             from unbake.cli.guidance import command
 
             followup = command(project.root, "solve")
-            return [f"OK(types): refreshed {len(entries)} matched source proofs; follow-up: {followup}"]
+            return [f"OK(types): updated map facts for {len(entries)} published sources; follow-up: {followup}"]
     except (Held, OSError, ValueError, RuntimeError) as error:
-        if isinstance(error, Held) and error.reason.startswith("types.feedback.source_sha256:"):
-            stale = storage.changed_source(project)
-            proven = project.build / "types/proven.json"
-            records = storage.read(proven, "types.feedback").get("records", {}) if proven.is_file() else {}
-            seeded = all(
-                records.get(function, {}).get("source_sha256") == storage.file_digest(source)
-                for function, source, _, _ in entries
-            )
-            if (
-                seeded
-                and stale is not None
-                and stale.resolve() not in {source.resolve() for _, source, _, _ in entries}
-            ):
-                return [f"OK(types): {error.reason}; follow-up: {storage.submit_command(project, stale)}"]
         if strict:
             raise
         reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"

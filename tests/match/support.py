@@ -292,8 +292,7 @@ class MatchFixture(unittest.TestCase):
         (self.store.root / "trials.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
 
     def matched(self) -> list[dict[str, Any]]:
-        path = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts" / "match.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return [{"function": path.stem} for path in self.src.glob("*.c") if not drafts.is_partial(path.read_text())]
 
     def assert_untouched(self) -> None:
         self.assertFalse(list(self.src.glob("*.c")))

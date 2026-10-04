@@ -4,7 +4,7 @@ import json
 import shlex
 from pathlib import Path
 
-from unbake.cli.guidance import command, resolve
+from unbake.cli.guidance import command
 from unbake.decomp import draft_presence, drafts, exclusions, fuzzy_bar, plan, type_context, work
 from unbake.decomp.assign import Ledger
 from unbake.decomp.trial_target import owning_versions
@@ -30,18 +30,6 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None, new
         ), "whole-program register, call and memory facts are required before drafting"
     if not (project.build / "types/database.json").is_file():
         return command(project.root, "solve"), "solve shared type constraints before drafting"
-    try:
-        type_context.required(project)
-    except Held as error:
-        if error.reason.startswith("types.feedback.source_sha256:"):
-            return resolve(project.root, missing="types.feedback.source_sha256"), error.reason
-        if error.reason.startswith("map.inputs_stale"):
-            return command(project.root, "solve"), error.reason
-        if error.reason.startswith("map."):
-            return command(project.root, "map"), error.reason
-        if error.reason.startswith("types."):
-            return command(project.root, "solve"), error.reason
-        raise
     redrafts = {} if new else type_context.redrafts(project)
     occupied = {name for row in Ledger(project, policy).open() for name in (row["function"], *row["names"].values())}
     store = drafts.Store(policy, project)

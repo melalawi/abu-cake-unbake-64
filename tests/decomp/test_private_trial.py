@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from unbake.decomp import trial, trial_data, trial_target, type_context, work
+from unbake.decomp import trial, trial_data, trial_target, work
 from unbake.decomp.needs import SymbolNeed
 from unbake.decomp.trial_compile import scratch_directory
 from unbake.project import makefile
@@ -146,20 +146,3 @@ class PrivateTrialTests(unittest.TestCase):
         self.assertEqual(makefile.relative(project, root / "shared"), str(root / "shared"))
         with self.assertRaisesRegex(Held, "explicit overlay root"):
             makefile.relative(project, self.root / "other")
-
-    def test_stale_snapshot_names_staleness_without_solving(self):
-        database = self.project.build / "types/database.json"
-        database.parent.mkdir(parents=True)
-        database.write_text("{}")
-        api = SimpleNamespace(load=unittest.mock.Mock(), context=unittest.mock.Mock(return_value="solved context"))
-        with (
-            patch.object(type_context, "provider", return_value=api),
-            patch.object(type_context, "required", side_effect=Held("draft", "types.inputs_stale: inputs changed")),
-            redirect_stdout(io.StringIO()) as output,
-        ):
-            digest, context = type_context.snapshot(self.project, "alpha")
-        self.assertEqual(digest, work.digest(b"{}"))
-        self.assertEqual(context, "solved context")
-        self.assertIn("snapshot: stale", output.getvalue())
-        api.load.assert_called_once_with(self.project, allow_stale=True)
-        api.context.assert_called_once_with(self.project, function="alpha", allow_stale=True)

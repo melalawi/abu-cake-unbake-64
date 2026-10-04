@@ -988,7 +988,6 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
         else:
             raise Held("solve", "types.summary: missing bounded semantic index for existing database")
     facts = refine(project, refresh_map(project) if facts is None else facts)
-    pinned = storage.inputs(project, headers=True)
     log = storage.FactLog(project.build / "types")
     try:
         result = infer(project, facts, declarations.collect(project, policy), constraint_log=log)
@@ -1018,12 +1017,9 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
         "map_shard": facts["shard"],
         "map_shard_sha256": facts["shard_sha256"],
         "abi_supplement": facts.get("abi_supplement"),
-        "inputs_sha256": pinned,
         "revision": revision,
         **result,
     }
-    if pinned != storage.inputs(project, headers=True):
-        raise Held("solve", "types.inputs_stale: declarations changed during solve")
     from unbake.typemap.database import publish
 
     publish(project, result, previous, policy=policy)

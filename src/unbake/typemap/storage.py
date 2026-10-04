@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -74,25 +73,7 @@ def validate_identity(project: Project, value: dict[str, Any], key: str) -> None
         raise Held("solve", f"{key}: project/ROM identity changed")
 
 
-def changed_source(project: Project) -> Path | None:
-    """Find the first published source that needs a new cartridge proof."""
-    proven = project.build / "types/proven.json"
-    if not proven.is_file():
-        return None
-    value = read(proven, "types.feedback")
-    validate_identity(project, value, "types.feedback")
-    for row in value.get("records", {}).values():
-        source: Path = project.root / row["source"]
-        if not source.is_file() or file_digest(source) != row["source_sha256"]:
-            return source
-    return None
-
-
-def submit_command(project: Project, source: Path) -> str:
-    return shlex.join(["unbake", "--project", str(project.root), "submit", str(source)])
-
-
-def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
+def inputs(project: Project) -> dict[str, str]:
     paths = {project.root / "config.toml"}
     symbol_inputs: dict[str, str] = {}
     for version in project.versions:
@@ -114,43 +95,8 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     # Extracted assembly is a disposable rendering: make prunes obsolete C-unit
     # assembly and rewrites other extraction outputs without changing the ROM.
     paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
-    if headers:
-        # Rendering consults source-local declaration contracts as well as receipts.
-        paths.update(project.src.rglob("*.c"))
-        ownership = project.root / "layout.toml"
-        if ownership.is_file():
-            paths.add(ownership)
-        paths.update(path for root in project.include for path in root.rglob("*.h") if not generated(project, path))
-        proven = project.build / "types/proven.json"
-        if proven.is_file():
-            paths.add(proven)
-            stale = changed_source(project)
-            if stale is not None:
-                raise Held(
-                    "solve",
-                    f"types.feedback.source_sha256: published source changed: {stale}; "
-                    f"re-prove with {submit_command(project, stale)}",
-                )
-            for row in read(proven, "types.feedback").get("records", {}).values():
-                source = project.root / row["source"]
-                paths.add(source)
     result = {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
     result.update(symbol_inputs)
-    if headers:
-        from unbake.typemap import declaration_evidence
-
-        result.update(
-            {
-                "declaration-source:" + os.path.relpath(path, project.root): file_digest(path)
-                for path in declaration_evidence.files(project)
-            }
-        )
-        result.update(
-            {
-                "declaration-feedback:" + str(path.relative_to(project.include[0])): digest(text.encode())
-                for path, text in declaration_evidence.feedback_components(project).items()
-            }
-        )
     return result
 
 

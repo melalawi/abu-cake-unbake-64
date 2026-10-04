@@ -325,7 +325,7 @@ class DatabaseFeedbackTests(TestCase):
         import tempfile
 
         from tests.decomp.support import fixture
-        from unbake.typemap import map_program, solve, storage
+        from unbake.typemap import map_program, solve
 
         with tempfile.TemporaryDirectory() as temporary:
             project, policy, _ = fixture(Path(temporary).resolve(), versions=("us", "eu"), case=self)
@@ -345,7 +345,6 @@ class DatabaseFeedbackTests(TestCase):
             layout_index.update(project, {e.path: e.after for e in edits})
             components = evidence.feedback_components(project)
             map_program(project)
-            before = storage.inputs(project, headers=True)
             database = solve(project, policy)
             self.assertEqual(
                 set(database["declaration_evidence"]),
@@ -354,7 +353,6 @@ class DatabaseFeedbackTests(TestCase):
             self.assertEqual(evidence.feedback_components(project), components)
             self.assertIn("EVIDENCE_VALUE", source)
             self.assertTrue(any("EVIDENCE_VALUE 7" in path.read_text() for path in layout_index.headers(project)))
-            self.assertEqual(before, storage.inputs(project, headers=True))
 
     def test_solve_keeps_retained_evidence_when_consumer_owns_the_alias(self):
         import tempfile
@@ -380,32 +378,9 @@ class DatabaseFeedbackTests(TestCase):
             map_program(project)
             solve(project, policy)
             self.assertEqual(evidence.feedback_components(project), retained)
-            self.assertEqual(
-                storage.read(project.build / "types/database.json", "db")["inputs_sha256"],
-                storage.inputs(project, headers=True),
-            )
+            self.assertNotIn("inputs_sha256", storage.read(project.build / "types/database.json", "db"))
             solve(project, policy)
             self.assertEqual(evidence.feedback_components(project), retained)
-
-    def test_external_header_changes_invalidate_pinned_inputs(self):
-        import tempfile
-
-        from tests.decomp.support import fixture
-        from unbake.typemap import storage
-
-        with tempfile.TemporaryDirectory() as temporary:
-            project, _, _ = fixture(Path(temporary).resolve(), versions=("us", "eu"), case=self)
-            external = Path(temporary) / "external"
-            external.mkdir()
-            header = external / "old.h"
-            header.write_text("typedef int T;\n")
-            project = replace(project, declaration_evidence=(external,))
-            before = storage.inputs(project, headers=True)
-            header.write_text("typedef float T;\n")
-            after = storage.inputs(project, headers=True)
-            self.assertNotEqual(before, after)
-            self.assertEqual(before.keys(), after.keys())
-            self.assertNotIn("declaration-source:" + str(header), storage.inputs(project, headers=False))
 
 
 class SolveAdmissionTests(MatchFixture):

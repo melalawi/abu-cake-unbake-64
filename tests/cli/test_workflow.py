@@ -11,12 +11,6 @@ from unbake.decomp.trial_compile import default_scratch
 
 
 class WorkflowTests(MatchFixture):
-    def setUp(self) -> None:
-        super().setUp()
-        context = patch.object(workflow.type_context, "required", return_value=("d" * 64, ""))
-        context.start()
-        self.addCleanup(context.stop)
-
     def types(self) -> None:
         for name in ("map/facts.json", "types/database.json"):
             path = self.project.build / name

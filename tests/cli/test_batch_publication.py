@@ -66,14 +66,13 @@ class BatchPublicationCliTests(unittest.TestCase):
         for version, generation in generations.items():
             self.tools.compile(self.project, self.policy, published, version, generation / "obj/src")
         before = {source: source.read_bytes() for source in published}
-        proven = self.project.build / "types/proven.json"
         from unbake.typemap import storage
 
         with (
             patch("unbake.typemap.solver.solve", side_effect=AssertionError("derived solve must be explicit")),
             patch.object(batch.progress, "measure", side_effect=AssertionError("unchanged native report")),
             patch.object(batch.build, "compile_versions", wraps=batch.build.compile_versions) as compiles,
-            patch.object(storage, "write", wraps=storage.write) as writes,
+            patch.object(storage, "write", wraps=storage.write),
             patch.object(batch, "_feedback", wraps=batch._feedback) as feedback,
         ):
             output = self.cli("submit", "--batch", *published)
@@ -81,11 +80,8 @@ class BatchPublicationCliTests(unittest.TestCase):
         self.assertEqual(feedback.call_count, 1)
         self.assertTrue(all(candidate.compiled for candidate in feedback.call_args.args[2]))
         self.assertTrue(all(not sources for call in compiles.call_args_list for sources, out in call.args[2].values()))
-        self.assertEqual(sum(call.args[0] == proven for call in writes.call_args_list), 1)
-        records = json.loads(proven.read_text())["records"]
-        for source, content in before.items():
-            self.assertEqual(source.read_bytes(), content)
-            self.assertEqual(records[source.stem]["source_sha256"], hashlib.sha256(content).hexdigest())
+        self.assertFalse((self.project.build / "types/proven.json").exists())
+        self.assertEqual(before, {source: source.read_bytes() for source in published})
         self.assertIn(": OK", self.make())
 
     def test_comment_only_republication_reuses_native_reports_after_compile(self):
@@ -171,10 +167,7 @@ class BatchPublicationCliTests(unittest.TestCase):
 
     def test_refresh_failure_after_feedback_restores_headers_and_type_receipts(self):
         before = fixture.PublicationBoundaryCliTests.inputs(self)
-        type_paths = [
-            self.project.build / "types" / name
-            for name in ("proven.json", "database.json", "summary.json", "redraft.json")
-        ]
+        type_paths = [self.project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json")]
         snapshots = {path: path.read_bytes() if path.is_file() else None for path in type_paths}
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
 

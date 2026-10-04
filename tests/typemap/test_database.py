@@ -89,30 +89,6 @@ class DatabaseTests(unittest.TestCase):
                     self.assertEqual(path.read_bytes(), before)
                     storage.write(path, original)
 
-    def test_build_extraction_details_do_not_stale_type_inputs(self) -> None:
-        build = self.project.build_link("us")
-        build.mkdir(parents=True, exist_ok=True)
-        table = build / "splat_symbols.csv"
-        table.write_text("name,vram_start,size,subsegment_type\ncell,80004000,4,asm\n")
-        before = storage.inputs(self.project, headers=True)
-        table.write_text("name,vram_start,size,subsegment_type\ncell,80004000,8,c\n")
-        self.assertEqual(storage.inputs(self.project, headers=True), before)
-        table.write_text("name,vram_start,size,subsegment_type\ncell,80004004,8,c\n")
-        self.assertNotEqual(storage.inputs(self.project, headers=True), before)
-        table.write_text("name,vram_start,size,subsegment_type\nother,80004000,8,c\n")
-        self.assertNotEqual(storage.inputs(self.project, headers=True), before)
-
-    def test_extraction_can_prune_assembly_without_staling_rom_facts(self) -> None:
-        before = storage.inputs(self.project, headers=True)
-        assembly = self.project.asm / "us" / "obsolete.s"
-        assembly.write_text("glabel obsolete\n.word 0x03E00008\n.word 0\n")
-        self.assertEqual(storage.inputs(self.project, headers=True), before)
-        assembly.unlink()
-        self.assertEqual(storage.inputs(self.project, headers=True), before)
-        rom = self.project.version("us").baserom
-        rom.write_bytes(rom.read_bytes() + b"changed")
-        self.assertNotEqual(storage.inputs(self.project, headers=True), before)
-
     def test_sibling_local_array_view_does_not_erase_published_extern(self) -> None:
         from unbake.typemap import database
 
@@ -143,7 +119,6 @@ class DatabaseTests(unittest.TestCase):
         source = self.project.src / "caller.c"
         source.write_text("extern void alpha(unsigned int arg0);\nvoid caller(void) { alpha(1); }\n")
         value["functions"]["alpha"].update(state="known", prototype="int alpha(int arg0);")
-        self.assertIn("src/caller.c", storage.inputs(self.project, headers=True))
         session = database.regeneration.Session(self.project, None)
         outputs = database._render(self.project, value, None, session)
         headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
@@ -302,20 +277,18 @@ class DatabaseTests(unittest.TestCase):
 
         with patch.object(database, "_render", side_effect=regroup):
             result = solve(self.project)
-        self.assertNotIn("include/provider.h", result["inputs_sha256"])
-        self.assertEqual(result["inputs_sha256"], storage.inputs(self.project, headers=True))
+        self.assertNotIn("inputs_sha256", result)
         self.assertIsNotNone(load(self.project))
         summary = storage.read(self.project.build / "types/summary.json", "types.summary")
         self.assertEqual(summary["database_sha256"], storage.file_digest(self.project.build / "types/database.json"))
         solve(self.project)
         self.assertIsNotNone(load(self.project))
 
-    def test_changed_header_and_map_refuse_stale_database(self) -> None:
+    def test_changed_header_and_map_keep_last_solved_cache(self) -> None:
         map_program(self.project)
         solve(self.project)
         (self.project.include[0] / "types.h").write_text("typedef float s32;\n")
-        with self.assertRaisesRegex(Held, "types.inputs_stale"):
-            load(self.project)
+        self.assertIsNotNone(load(self.project))
         self.project.version("us").symbols.write_text("alpha = 0x80001000;\n")
         solve(self.project)
 
@@ -490,22 +463,6 @@ class DatabaseTests(unittest.TestCase):
             solve(self.project)
         self.assertEqual(before, {path: path.read_bytes() for path in paths})
 
-    def test_feedback_refuses_fuzzy_and_unpublished_sources(self) -> None:
-        source = self.project.src / "alpha.c"
-        source.write_text("int alpha(void) { return 1; }\n")
-        with self.assertRaisesRegex(Held, "types.feedback.matched"):
-            feedback(self.project, "alpha", source, versions=["us", "eu"], proof={})
-        mapped = map_program(self.project)
-        proof = {
-            "matched": True,
-            "source_sha256": storage.digest(source.read_bytes()),
-            "versions": ["us", "eu"],
-            "target_sha256": {v: row["target_sha256"] for v, row in mapped["functions"]["alpha"]["versions"].items()},
-        }
-        with self.assertRaisesRegex(Held, "types.feedback.matched"):
-            feedback(self.project, "alpha", source, versions=["us", "eu"], proof=proof)
-        self.assertFalse((self.project.build / "types/proven.json").exists())
-
     def test_symbol_refresh_retains_unaffected_shard_and_adds_unaccessed_names(self) -> None:
         from unbake.typemap.mapping import refresh_map
 
@@ -677,7 +634,8 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(repeated["structs"][shape]["size"])
         shared = "\n".join(path.read_text() for path in layout_index.headers(project))
         self.assertIn(f"struct {shape} {{", shared)
-        self.assertIn(f"typedef struct {shape} RetainedShape;", shared)
+        # Unused aliases do not contribute to the published source contract.
+        self.assertNotIn("RetainedShape", source.read_text())
         self.assertIn("typedef int RetainedWord;", shared)
 
     def test_abi_supplement_retains_map_and_is_content_pinned(self) -> None:
@@ -768,24 +726,11 @@ class DatabaseTests(unittest.TestCase):
             result = feedback_many(self.project, entries, policy=self.policy)
         self.assertEqual(mapped_once.call_count, 1)
         self.assertEqual(solved_once.call_count, 1)
-        proven = storage.read(self.project.build / "types/proven.json", "types.feedback")
-        self.assertEqual(set(proven["records"]), {"alpha", "beta"})
-        for row in proven["records"].values():
-            retained = self.project.build / "types/sources" / (row["source_sha256"] + ".c")
-            self.assertEqual(retained.read_bytes(), (self.project.root / row["source"]).read_bytes())
+        self.assertFalse((self.project.build / "types/proven.json").exists())
+        self.assertFalse((self.project.build / "types/sources").exists())
         for function in ("alpha", "beta"):
             self.assertEqual(result["functions"][function]["state"], "known")
             self.assertEqual(result["functions"][function]["provenance"][0]["kind"], "proven")
-        invalid = [
-            {**entry, "proof": {**entry["proof"], "target_sha256": {"us": "bad", "eu": "bad"}}}
-            if entry["function"] == "beta"
-            else entry
-            for entry in entries
-        ]
-        before = (self.project.build / "types/proven.json").read_bytes()
-        with self.assertRaisesRegex(Held, "types.feedback.target_sha256"):
-            feedback_many(self.project, invalid, policy=self.policy)
-        self.assertEqual(before, (self.project.build / "types/proven.json").read_bytes())
 
     def test_proven_feedback_resolves_signature_and_marks_calling_neighbour(self) -> None:
         # Alpha's delay slot leaves its incoming argument available to beta.

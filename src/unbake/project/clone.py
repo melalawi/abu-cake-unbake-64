@@ -170,6 +170,8 @@ def copy_evidence(project: Project, cloned: Project) -> None:
         for path in directory.iterdir():
             if path.name.startswith(".") or path.name.endswith(".partial") or not path.is_file():
                 continue
+            if name == "types" and path.name == "proven.json":
+                continue
             if name == "setup" and path.name in setup._TRANSIENT_EVIDENCE:
                 continue
             target = cloned.build / name / path.name

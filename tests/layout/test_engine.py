@@ -374,6 +374,8 @@ class ApplyTests(unittest.TestCase):
         }
         outputs = {output: data, index.path(self.project): index.encoded(lookup)}
         with (
+            patch("unbake.project.build.build", return_value={"us": SimpleNamespace(ok=True)}),
+            patch("unbake.project.config.read_policy"),
             patch("unbake.typemap.database.load", return_value={}),
             patch("unbake.typemap.database._render", side_effect=lambda *a: dict(outputs)),
             patch("unbake.typemap.regeneration.Session") as session,
@@ -384,6 +386,37 @@ class ApplyTests(unittest.TestCase):
             )
             self.assertEqual(apply.run(self.project), 3)
             self.assertEqual(apply.run(self.project), 0)
+
+    def test_failed_cartridge_gate_restores_rewritten_sources_and_headers(self):
+        from unbake.project.config import Held
+
+        source = self.project.src / "first.c"
+        source.write_text("int first(void) {return 1;}\n")
+        header = self.project.include[0] / "span/one.h"
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_text("original header\n")
+        before = {path: path.read_bytes() for path in (source, header)}
+        with (
+            patch("unbake.typemap.database.load", return_value={}),
+            patch("unbake.typemap.database._render", return_value={}),
+            patch("unbake.typemap.regeneration.Session"),
+            patch.object(map, "load", return_value=self.ownership),
+            patch.object(apply, "_run") as run,
+        ):
+
+            def refuse(*args, **kwargs):
+                from unbake.layout import freshness
+
+                with (
+                    patch("unbake.project.build.build", return_value={"us": SimpleNamespace(ok=False)}),
+                    patch("unbake.project.config.read_policy"),
+                ):
+                    freshness.publish(self.project, None, {source: b"changed", header: b"changed"})
+
+            run.side_effect = refuse
+            with self.assertRaisesRegex(Held, "layout.proof"):
+                apply.run(self.project)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     def test_stale_removal_is_index_only_and_dry_run_preserves_everything(self):
         old = self.project.include[0] / "old.h"

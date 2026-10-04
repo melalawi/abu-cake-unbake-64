@@ -187,10 +187,7 @@ class CloneTests(unittest.TestCase):
         for name in ("setup", "map", "types", "layout"):
             (self.project.build / name).mkdir()
         storage.write(self.project.build / "setup/layout.json", storage.encoded(storage.identity(self.project)))
-        storage.write(
-            self.project.build / "types/proven.json",
-            storage.encoded({**storage.identity(self.project), "records": {}}),
-        )
+        storage.write(self.project.build / "types/proven.json", b"obsolete receipt")
         (self.project.build / "map/.facts-unpublished.sqlite").write_bytes(b"scratch")
         (self.project.build / "types/database.json.partial").write_bytes(b"scratch")
         writer = shards.Writer(self.project.build / "map")
@@ -220,7 +217,6 @@ class CloneTests(unittest.TestCase):
             storage.encoded(
                 {
                     **storage.identity(self.project),
-                    "inputs_sha256": storage.inputs(self.project, headers=True),
                     "map_sha256": storage.file_digest(facts),
                     "map_shard": shard.name,
                     "map_shard_sha256": storage.file_digest(shard),
@@ -260,14 +256,14 @@ class CloneTests(unittest.TestCase):
             self.assertEqual((source.stat().st_ino, storage.file_digest(source)), original[source])
         for source, before in original.items():
             self.assertEqual((source.stat().st_ino, storage.file_digest(source)), before)
-        # Rebasing must not turn stale pins into fresh evidence.
+        # Consumers can use the solved cache after input changes.
         changed = self.project.version("us").symbols
         changed.write_text(changed.read_text() + "\n")
         stale_destination = self.root / "stale"
         with patch.object(clone, "prepare", return_value=False):
             stale = clone.create(self.project, self.policy, stale_destination, self.project.versions)
-        with self.assertRaisesRegex(config.Held, "types.inputs_stale"):
-            database.load(stale)
+        self.assertIsNotNone(database.load(stale))
+        self.assertFalse((stale.build / "types/proven.json").exists())
 
     def test_prepare_upgrades_every_embedded_writer_and_preserves_shared_old_helpers(self) -> None:
         from unbake.project import makefile, setup

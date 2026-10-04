@@ -126,13 +126,12 @@ def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False
     map.load(project)
     value = copy.deepcopy(database.load(project, allow_stale=True))
     assert value is not None
-    if not dry_run and "inputs_sha256" in value:
+    if not dry_run:
         from unbake.project import build
 
         with build.lock(project), freshness.transaction(project):
             count = units(project)
-            value, previous = freshness.refresh(project, policy, value)
-            return count + _run(project, policy, value, previous=previous)
+            return count + _run(project, policy, value)
     return _run(project, policy, value, dry_run=dry_run) + units(project, dry_run=dry_run)
 
 
@@ -156,10 +155,9 @@ def _run(
         outputs[path] = source(
             project, text, path.stem, outputs, ownership=session.ownership, lookup=lookup, previous=previous
         ).encode()
-    receipts = freshness.prepare(project, session.sources, outputs, session.ownership, lookup, previous)
     if dry_run:
         return install(project, outputs, dry_run=True)
-    return freshness.publish(project, policy, value, outputs, session.sources, receipts)
+    return freshness.publish(project, policy, outputs)
 
 
 def units(project: Project, *, dry_run: bool = False) -> int:

@@ -152,7 +152,8 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         published = (self.project.src / source.name).read_text()
         self.assertIn("((struct First *)0)->data", published)
         generated = "\n".join(path.read_text() for path in index.headers(self.project))
-        self.assertIn("typedef char Bytes[4];", generated)
+        # Publication replaced the alias use with the shared array member.
+        self.assertNotIn("Bytes", published)
         self.assertEqual(Parser(generated).parse(), [])
         self.assertIn('#include "bytes.h"', published)
         self.assertIn('#include "main/alpha.h"', published)

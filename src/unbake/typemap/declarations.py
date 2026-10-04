@@ -1244,7 +1244,7 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
             seed["authored_structs"] = sorted(set(seed["authored_structs"]) | declared_layouts)
             seeds.append(seed)
     # C intervals in the ROM layout are already published matches, including
-    # sources predating feedback receipts. Import their actual compiler context;
+    # including every source in src/. Import their actual compiler context;
     # an unrelated generated umbrella must not redefine their local contracts.
     contracts = _PublishedDeclarations(contracts=True)
     source_headers = _PublishedHeaders(project, policy, scratch, source_context=True)
@@ -1266,33 +1266,8 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
         # The definition owns the function contract; imported prototypes are
         # dependencies, and cannot override a ROM-proven definition elsewhere.
         owned = published.extract(contract_text, {**provenance, "kind": "proven"}, source, compact=True)
-        seeds.append(consumed_contracts(owned, source.read_text()))
-    path = project.build / "types/proven.json"
-    if path.is_file():
-        records = storage.read(path, "types.feedback").get("records", {})
-        tasks = [
-            (function, project.root / row["source"], version, row)
-            for function, row in records.items()
-            for version in row["versions"]
-        ]
-        for (function, source, version, row), unit_text in _source_units(headers_batch, tasks):
-            if isinstance(unit_text, Held):
-                raise unit_text
-            seed = published.extract(
-                unit_text,
-                {
-                    "kind": "proven",
-                    "function": function,
-                    "version": version,
-                    "source": row["source"],
-                    "sha256": row["source_sha256"],
-                    "proof": row["proof"],
-                },
-                source,
-                compact=True,
-            )
-            seed["functions"] = {name: value for name, value in seed["functions"].items() if name == function}
-            seeds.append(seed)
+        owned["functions"] = {name: row for name, row in owned["functions"].items() if name == function}
+        seeds.append(owned)
     return seeds
 
 

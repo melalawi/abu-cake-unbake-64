@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from unbake.decomp.work import digest
-from unbake.layout import split
 from unbake.project.config import Held, Policy, Project
 
 
@@ -30,16 +29,7 @@ def required(project: Project, function: str | None = None) -> tuple[str, str]:
 
 def snapshot(project: Project, function: str) -> tuple[str, str]:
     """Read the last solved database without refreshing or publishing headers."""
-    api = provider()
-    try:
-        return required(project, function)
-    except Held as error:
-        if not error.reason.startswith("types.inputs_stale:"):
-            raise
-        api.load(project, allow_stale=True)
-        print("type database snapshot: stale; " + error.reason)
-        path = project.build / "types/database.json"
-        return digest(path.read_bytes()), str(api.context(project, function=function, allow_stale=True))
+    return required(project, function)
 
 
 def clear_redraft(project: Project, function: str, database: str) -> None:
@@ -61,26 +51,7 @@ def feedback(
     *,
     policy: Policy | None = None,
 ) -> None:
-    rom_targets = {}
-    for version in versions:
-        owners = [row for row in split.functions(project, version) if function in row.aliases]
-        if len(owners) != 1:
-            raise Held("types", f"types.feedback.target_sha256: {function}: ambiguous owner in {version}")
-        rom_targets[version] = digest(split.words(project, owners[0]))
-    provider().feedback(
-        project,
-        function,
-        source,
-        versions=list(versions),
-        policy=policy,
-        proof={
-            "matched": True,
-            "source_sha256": digest(source.read_bytes()),
-            "versions": list(versions),
-            "target_sha256": rom_targets,
-            "target_object_sha256": targets,
-        },
-    )
+    provider().feedback(project, function, source, versions=list(versions), proof={}, policy=policy)
 
 
 def feedback_many(
@@ -90,33 +61,9 @@ def feedback_many(
     policy: Policy | None = None,
     regenerate: bool = True,
 ) -> None:
-    proofs = []
-    owners_by_version = {version: split.owners_by_alias(project, version) for version in project.versions}
-    for function, source, versions, targets in entries:
-        rom_targets = {}
-        for version in versions:
-            owners = owners_by_version[version].get(function, [])
-            if len(owners) != 1:
-                raise Held("types", f"types.feedback.target_sha256: {function}: ambiguous owner in {version}")
-            rom_targets[version] = digest(split.words(project, owners[0]))
-        proofs.append(
-            {
-                "function": function,
-                "source": source,
-                "versions": list(versions),
-                "proof": {
-                    "matched": True,
-                    "source_sha256": digest(source.read_bytes()),
-                    "versions": list(versions),
-                    "target_sha256": rom_targets,
-                    "target_object_sha256": targets,
-                },
-            }
-        )
-    api = provider()
-    if not hasattr(api, "feedback_many"):
-        raise Held("types", "types.feedback.batch: whole-program provider lacks feedback_many")
-    if regenerate:
-        api.feedback_many(project, proofs, policy=policy)
-    else:
-        api.feedback_many(project, proofs, policy=policy, regenerate=False)
+    provider().feedback_many(
+        project,
+        [{"function": function, "source": source} for function, source, _, _ in entries],
+        policy=policy,
+        regenerate=regenerate,
+    )

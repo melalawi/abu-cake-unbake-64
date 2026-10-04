@@ -88,25 +88,12 @@ class SolvedLayoutCliTests(unittest.TestCase):
             self.assertIsNone(shape["size"])
             self.assertIn("padding_0[4]", shape["declaration"])
             self.assertEqual(database["globals"]["source"]["type"], "int")
-            # Restore the fixture's fixed-return C receipt. Its included
+            # Restore the fixture's fixed-return published C. Its included
             # generated declarations must not erase source bindings on solve.
             published = project.src / "gamma.c"
             published.write_text('#include "main/gamma.h"\nint gamma(void) { return 3; }\n')
             cartridge.split.write_text(cartridge.split.read_text().replace(", asm, gamma]", ", c, gamma]"))
             cli("map")
-            mapped = json.loads((project.build / "map/facts.json").read_text())
-            source_sha256 = hashlib.sha256(published.read_bytes()).hexdigest()
-            proof = {
-                "matched": True,
-                "source_sha256": source_sha256,
-                "versions": ["us"],
-                "target_sha256": {"us": mapped["functions"]["gamma"]["versions"]["us"]["target_sha256"]},
-            }
-            receipt = {key: database[key] for key in ("schema", "project_id", "rom_sha1")}
-            receipt["records"] = {
-                "gamma": {"source": "src/gamma.c", "source_sha256": source_sha256, "versions": ["us"], "proof": proof}
-            }
-            (project.build / "types/proven.json").write_text(json.dumps(receipt))
             cli("solve")
             cli("solve")
             repeated = json.loads((project.build / "types/database.json").read_text())["structs"][name]

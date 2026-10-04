@@ -188,7 +188,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         )
         setup._sdk_headers(self.project)
 
-    def test_external_draft_receipt_pins_landed_bytes_through_repeated_solve(self):
+    def test_external_draft_preserves_landed_bytes_through_repeated_solve(self):
         source = self.directory / "external-drafts/alpha.c"
         source.parent.mkdir()
         source.write_text(
@@ -203,73 +203,43 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         landed = published.read_bytes()
         self.assertNotEqual(original, landed)
         self.assertEqual(source.read_bytes(), original)
-        proven_path = self.project.build / "types/proven.json"
-        proven = proven_path.read_bytes()
-        record = json.loads(proven)["records"]["alpha"]
-        digest = hashlib.sha256(landed).hexdigest()
-        self.assertEqual(record["source"], "src/alpha.c")
-        self.assertEqual(record["source_sha256"], digest)
-        self.assertEqual(record["proof"]["source_sha256"], digest)
+        self.assertFalse((self.project.build / "types/proven.json").exists())
         for _ in range(2):
             self.cli("solve")
             self.assertEqual(published.read_bytes(), landed)
-            self.assertEqual(proven_path.read_bytes(), proven)
 
-    def test_published_edit_requests_resubmit_and_refreshes_both_receipts(self):
-        source = self.sources[0]
-        self.cli("try", source)
-        self.cli("submit", source)
-        published = self.project.src / source.name
-        landed = published.read_bytes()
-        proven_path = self.project.build / "types/proven.json"
-        proven = proven_path.read_bytes()
-        published.write_bytes(landed + b"\n")
-        result = self.run_cli(
-            [str(self.script), "--project", str(self.root), "solve"],
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("published source changed", result.stdout + result.stderr)
-        self.assertIn(f"submit {published}", result.stdout + result.stderr)
-        self.assertEqual(proven_path.read_bytes(), proven)
-        self.assertIn(f"submit {published}", self.cli("next"))
-        compiled = len(self.tools.compiled)
-        generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
-        self.cli("submit", published)
-        self.assertGreater(len(self.tools.compiled), compiled)
-        for version in self.project.versions:
-            self.assertNotEqual(self.project.build_link(version).resolve(), generations[version])
-        record = json.loads(proven_path.read_bytes())["records"][source.stem]
-        digest = hashlib.sha256(published.read_bytes()).hexdigest()
-        self.assertEqual(record["source_sha256"], digest)
-        self.assertEqual(record["proof"]["source_sha256"], digest)
-        ledger = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts/match.jsonl"
-        publication = json.loads(ledger.read_text().splitlines()[-1])
-        self.assertEqual(publication["source_sha256"], digest)
+    def test_comment_and_include_edits_leave_next_clean_and_allow_work(self):
+        self.install_sdk()
+        self.cli("submit", self.sources[0])
+        published = self.project.src / self.sources[0].name
+        # An obsolete, corrupt receipt cannot gate a consumer.
+        (self.project.build / "types/proven.json").write_text("obsolete receipt")
+        published.write_text('/* reviewed */\n#include "types.h"\n' + published.read_text())
+        output = self.cli("next", "--new")
+        self.assertNotIn("HELD(", output)
+        self.assertNotIn("re-prove", output)
+        self.assertNotIn(f"submit {published}", output)
         self.cli("solve")
+        self.cli("try", self.sources[1])
+        self.cli("submit", self.sources[1])
+        self.assertIn(": OK", self.make())
+        self.assertEqual((self.project.build / "types/proven.json").read_text(), "obsolete receipt")
+        self.assertFalse((self.project.build / "types/sources").exists())
 
-    def test_unchanged_published_source_is_noop_and_failed_edit_preserves_inputs(self):
+    def test_code_edit_is_caught_by_submit_and_check_without_receipts(self):
         source = self.sources[0]
         self.cli("submit", source)
         published = self.project.src / source.name
-        proven = self.project.build / "types/proven.json"
-        ledger = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts/match.jsonl"
-        receipts = {p: p.read_bytes() for p in (proven, ledger)}
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
-        compiled = len(self.tools.compiled)
-        self.assertIn("published source unchanged", self.cli("submit", published))
-        self.assertEqual(len(self.tools.compiled), compiled)
         published.write_text(published.read_text().replace("return 1", "return 2"))
         edited = published.read_bytes()
         result = self.run_cli([str(self.script), "--project", str(self.root), "submit", str(published)], env=self.env)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("expected", result.stdout + result.stderr)
         self.assertIn("produced", result.stdout + result.stderr)
+        result = self.run_cli(["make", "-j12", "check"], cwd=self.root, env=self.env)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(published.read_bytes(), edited)
-        self.assertEqual(receipts, {p: p.read_bytes() for p in receipts})
         self.assertEqual(generations, {v: self.project.build_link(v).resolve() for v in self.project.versions})
 
     def test_feedback_header_retirement_rebinds_source_and_dependencies_in_transaction(self):
@@ -309,10 +279,8 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             self.assertTrue(obj.is_file())
             self.assertNotIn("draft_fields_alpha", obj.with_suffix(".d").read_text())
             self.assertEqual(obj.with_suffix(".built").stat().st_mtime_ns, 1)
-        record = json.loads((self.project.build / "types/proven.json").read_text())["records"]["alpha"]
-        self.assertEqual(record["source_sha256"], hashlib.sha256(published.read_bytes()).hexdigest())
 
-    def test_republication_feedback_failure_restores_previous_receipts_and_file(self):
+    def test_republication_feedback_failure_restores_type_cache_and_file(self):
         from unittest.mock import patch
 
         from unbake.project.config import Held
@@ -323,13 +291,12 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         published = self.project.src / source.name
         published.write_bytes(published.read_bytes() + b"\n/* edited */\n")
         edited = published.read_bytes()
-        proven = self.project.build / "types/proven.json"
-        ledger = self.policy.state_root / self.project.id / self.project.checkout_id / "receipts/match.jsonl"
-        receipts = {p: p.read_bytes() for p in (proven, ledger)}
+        cache = self.project.build / "types/database.json"
+        before = cache.read_bytes()
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
 
         def failed_feedback(*args, **kwargs):
-            storage.write(proven, b"partial replacement receipt")
+            storage.write(cache, b"partial replacement cache")
             raise Held("submit", "types.feedback.target_sha256: injected failure")
 
         with patch("unbake.decomp.type_context.feedback_many", side_effect=failed_feedback):
@@ -338,32 +305,9 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             )
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("types.feedback.target_sha256", result.stdout + result.stderr)
+        self.assertEqual(cache.read_bytes(), before)
         self.assertEqual(published.read_bytes(), edited)
-        self.assertEqual(receipts, {p: p.read_bytes() for p in receipts})
         self.assertEqual(generations, {v: self.project.build_link(v).resolve() for v in self.project.versions})
-
-    def test_submit_succeeds_with_named_followup_for_another_stale_published_source(self):
-        first, second = self.sources
-        self.cli("submit", first)
-        stale = self.project.src / first.name
-        stale.write_bytes(stale.read_bytes() + b"\n/* edited */\n")
-        output = self.cli("submit", second)
-        self.assertIn("beta matched on VERSION", output)
-        self.assertIn("OK(types):", output)
-        self.assertNotIn("HELD(", output)
-        self.assertIn(f"submit {stale}", output.split("Next: ", 1)[1])
-        published = self.project.src / second.name
-        records = json.loads((self.project.build / "types/proven.json").read_bytes())["records"]
-        self.assertEqual(records["beta"]["source_sha256"], hashlib.sha256(published.read_bytes()).hexdigest())
-        self.assertNotEqual(records["alpha"]["source_sha256"], hashlib.sha256(stale.read_bytes()).hexdigest())
-        published.write_bytes(published.read_bytes() + b"\n/* another edit */\n")
-        output = self.cli("submit", published)
-        self.assertNotIn("HELD(", output)
-        self.assertIn(f"submit {stale}", output.split("Next: ", 1)[1])
-        records = json.loads((self.project.build / "types/proven.json").read_bytes())["records"]
-        self.assertEqual(records["beta"]["source_sha256"], hashlib.sha256(published.read_bytes()).hexdigest())
-        self.cli("submit", stale)
-        self.cli("solve")
 
     def test_installed_submit_resolves_sdk_commands_and_callbacks_and_folds_shared_types(self):
         self.install_sdk()
