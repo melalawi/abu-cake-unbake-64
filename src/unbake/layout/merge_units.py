@@ -5,8 +5,10 @@ rows are contiguous in every holding version, held by the same versions, built b
 separated by a recorded `split` cut. The merged source is src/<first>.c: the union of the members' include
 lines, then their bodies in address order. It is proved like a land: in every holding version the strict
 `n64link place` link of the merged unit must equal the ROM bytes of the whole run.
+- Every run is proved independently in the shared worker pool; one writer then applies the results in layout
+  order and makes one commit for the pass.
 - Pass: write the merged source, remove the others, drop them from the group, absorb their split rows into the
-  first row, mark the group `evidence = "proven"`, commit "Merge units into <group> run".
+  first row, mark the group `evidence = "proven"`.
 - Fail: record every member after the first as a split cut, so the run is never tried again until someone
   removes the cut (the evidence changed).
 """
@@ -149,51 +151,61 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
     )
 
 
+def _prove_job(job: tuple[Project, Host, tuple[str, ...], str]) -> bool:
+    """Worker body: one run's proof in every holding version."""
+    return prove(*job)
+
+
 def run(project: Project, host: Host) -> list[str]:
-    """Try each run once; return one line per attempt."""
-    from unbake import buildfiles
+    """Prove every run in the worker pool, then write and commit the results in layout order; one line per run."""
+    from unbake import buildfiles, pool
     from unbake import config as project_config
 
+    found = runs(project)
+    sources = [merged_source(project, members) for _, members in found]
+    proven = pool.run(
+        host, _prove_job, [(project, host, members, src) for (_, members), src in zip(found, sources, strict=True)]
+    )
+    if not found:
+        return []
+    layout = project.root / "layout.toml"
+    backup = {layout: layout.read_bytes()}
+    backup.update({project.version(v).split: project.version(v).split.read_bytes() for v in project.versions})
+    for _, members in found:
+        backup.update({project.src / f"{m}.c": (project.src / f"{m}.c").read_bytes() for m in members})
     lines = []
-    for stale, members in runs(project):
-        # An earlier merge in this pass may have rewritten the group; update from what layout.toml holds now.
-        group = next(
-            found
-            for found in layout_map.load(project).groups
-            if (found.name, found.segment) == (stale.name, stale.segment)
-        )
-        source = merged_source(project, members)
-        if not prove(project, host, members, source):
-            cuts = tuple(dict.fromkeys((*group.split, *members[1:])))
-            path = _group_update(project, group.name, group.segment, split=cuts)
-            _commit(project, host, [path], f"Record unit split in {group.name}")
-            lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; recorded as split")
-            continue
-        backup = {
-            path: path.read_bytes()
-            for path in [project.root / "layout.toml", *(project.src / f"{m}.c" for m in members)]
-        }
-        backup.update({project.version(v).split: project.version(v).split.read_bytes() for v in project.versions})
-        try:
+    touched: list[Path] = [layout]
+    try:
+        for (stale, members), source, passed in zip(found, sources, proven, strict=True):
+            # An earlier run in this pass may have rewritten the group; update from what layout.toml holds now.
+            group = next(
+                g for g in layout_map.load(project).groups if (g.name, g.segment) == (stale.name, stale.segment)
+            )
+            if not passed:
+                _group_update(
+                    project, group.name, group.segment, split=tuple(dict.fromkeys((*group.split, *members[1:])))
+                )
+                lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; recorded as split")
+                continue
             atomic_files.text(project.src / f"{members[0]}.c", source)
             for member in members[1:]:
                 (project.src / f"{member}.c").unlink()
             # The group drops the absorbed members while their rows still exist, so the layout stays valid.
             kept = tuple(m for m in group.members if m not in members[1:])
-            layout = _group_update(project, group.name, group.segment, members=kept, evidence="proven")
-            touched = [
-                project.src / f"{members[0]}.c",
-                *(project.src / f"{m}.c" for m in members[1:]),
-                layout,
-                *_absorb_rows(project, members),
-            ]
-            reloaded = project_config.load(project.root)
-            touched += buildfiles.write(reloaded, host)
-            _commit(project, host, touched, f"Merge units into {group.name} run")
-        except BaseException:
-            for path, content in backup.items():
-                atomic_files.write(path, content)
-            raise
-        lines.append(f"merge {group.name} {members[0]}..{members[-1]}: proven and committed")
-        project = project_config.load(project.root)
+            _group_update(project, group.name, group.segment, members=kept, evidence="proven")
+            touched += [project.src / f"{m}.c" for m in members]
+            touched += _absorb_rows(project, members)
+            lines.append(f"merge {group.name} {members[0]}..{members[-1]}: proven")
+        touched += buildfiles.write(project_config.load(project.root), host)
+        merged = sum(passed for passed in proven)
+        _commit(
+            project,
+            host,
+            sorted(set(touched)),
+            f"Merge units: {merged} proven runs, {len(found) - merged} recorded as split",
+        )
+    except BaseException:
+        for path, content in backup.items():
+            atomic_files.write(path, content)
+        raise
     return lines

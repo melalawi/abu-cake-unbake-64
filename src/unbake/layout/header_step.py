@@ -68,10 +68,12 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     for source in project.src.glob("*.c"):
         used |= apply.spelled(source.read_text())
     obsolete = {path: b"" for path in index.headers(project) - outputs.keys()}
-    for path, data in {**changed, **obsolete}.items():
+    # A name that moves to another generated header is not removed.
+    kept = set().union(*(declared(data.decode()) for path, data in outputs.items() if path.suffix == ".h"))
+    for path in {**changed, **obsolete}:
         if path.suffix != ".h" or not path.is_file():
             continue
-        removed = (declared(path.read_text()) - declared(data.decode())) & used
+        removed = (declared(path.read_text()) - kept) & used
         if removed:
             raise Held(
                 "headers", f"headers.merge_only: {path}: would remove {', '.join(sorted(removed))} used by published C"

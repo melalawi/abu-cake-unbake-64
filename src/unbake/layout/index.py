@@ -90,7 +90,9 @@ def headers(project: Project) -> frozenset[Path]:
 def _unindexed_headers(root: Path, ownership: Path, stamp: tuple[int, int, int]) -> frozenset[Path]:
     try:
         groups = tomllib.loads(ownership.read_text()).get("group", [])
-        names = {"common/types.h"}
+        # common/types.h and <segment>/types.h are the pre-co-usage homes, found so they are removed.
+        names = {"common/types.h", "common/data.h", "common/unused.h"}
+        names.update(path.relative_to(root).as_posix() for path in (root / "common").glob("types_*.h"))
         for group in groups:
             segment, name = group["segment"], group["name"]
             names.update((f"{segment}/{name}.h", f"{segment}/types.h", f"{segment}/data.h"))

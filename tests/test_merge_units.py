@@ -10,6 +10,10 @@ from unbake.layout import merge_units
 from unbake.layout.map import Group
 
 
+def in_process(host, fn, items):
+    return [fn(item) for item in items]
+
+
 def group(name: str, members: str, split: str = "") -> Group:
     return Group(name, "main", "default", tuple(members), split=tuple(split))
 
@@ -57,11 +61,13 @@ class RunTests(ProjectCase):
         project = config.load(self.project.root)
         with (
             mock.patch.object(merge_units, "prove", return_value=True),
-            mock.patch.object(merge_units, "_commit"),
+            mock.patch.object(merge_units, "_commit") as commit,
             mock.patch("unbake.buildfiles.write", return_value=[]),
+            mock.patch("unbake.pool.run", side_effect=in_process),
         ):
             lines = merge_units.run(project, self.host)
-        self.assertEqual(lines, ["merge g alpha..beta: proven and committed"])
+        self.assertEqual(lines, ["merge g alpha..beta: proven"])
+        commit.assert_called_once()
         loaded = {group.name: group for group in layout_map.load(config.load(self.project.root)).groups}
         self.assertEqual((loaded["g"].members, loaded["g"].evidence), (("alpha",), "proven"))
         self.assertNotIn("beta]", split_path.read_text())
@@ -82,10 +88,16 @@ class SecondRunTests(ProjectCase):
         project = config.load(self.project.root)
         with (
             mock.patch.object(merge_units, "runs", return_value=[(g, ("alpha", "beta")), (g, ("gamma",))]),
-            mock.patch.object(merge_units, "prove", return_value=True),
-            mock.patch.object(merge_units, "_commit"),
+            mock.patch.object(
+                merge_units, "prove", side_effect=lambda project, host, members, source: len(members) > 1
+            ),
+            mock.patch.object(merge_units, "_commit") as commit,
             mock.patch("unbake.buildfiles.write", return_value=[]),
+            mock.patch("unbake.pool.run", side_effect=in_process),
         ):
-            merge_units.run(project, self.host)
+            lines = merge_units.run(project, self.host)
         loaded = layout_map.load(config.load(self.project.root)).groups
         self.assertEqual(loaded[0].members, ("alpha", "gamma"))
+        self.assertEqual(lines[1], "merge g gamma..gamma: refused; recorded as split")
+        # Proofs run in the pool; the single writer commits the whole pass once.
+        commit.assert_called_once()

@@ -32,7 +32,7 @@ class SplitTests(unittest.TestCase):
         )
         for blocked, tags, expected in (
             ({"Callback"}, set(), set()),
-            (set(), set(), {self.root / "common/types.h"}),
+            (set(), set(), {self.root / "common/unused.h"}),
             ({"Callback"}, {"Foreign"}, set()),
         ):
             with self.subTest(blocked=blocked, tags=tags):
@@ -45,7 +45,7 @@ class SplitTests(unittest.TestCase):
     def test_owned_callback_does_not_select_same_named_aggregate_tag(self):
         layout = self.layout({"callback.h": "typedef struct Callback Callback; struct Callback {int value;};"})
         self.assertEqual(layout.required("Callback handler;", blocked={"Callback"}), set())
-        self.assertEqual(layout.required("struct Callback *p;", blocked={"Callback"}), {self.root / "common/types.h"})
+        self.assertEqual(layout.required("struct Callback *p;", blocked={"Callback"}), {self.root / "common/unused.h"})
 
     def test_callback_collision_names_are_deterministic_and_avoid_existing_providers(self):
         for shared, expected in (

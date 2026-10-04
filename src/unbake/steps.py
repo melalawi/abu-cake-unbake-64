@@ -93,8 +93,11 @@ def _rom_facts_key(project: Project, host: Host) -> str:
 
 
 def _rom_facts(project: Project, host: Host) -> None:
+    from unbake.layout import map as layout_map
     from unbake.typemap import mapping
 
+    # Modules are ROM interval evidence: infer them before types and headers read the groups.
+    layout_map.ensure(project)
     if (project.build / "map/facts.json").is_file():
         mapping.refresh_map(project)
     else:
@@ -204,7 +207,13 @@ STEPS: dict[str, Step] = {
     step.name: step
     for step in (
         Step("extract", "ROM sha1 or split rows changed", _extract_key, _extract),
-        Step("rom-facts", "interval or symbol rows changed", _rom_facts_key, _rom_facts, ("extract",)),
+        Step(
+            "rom-facts",
+            "interval or symbol rows changed (infers default modules)",
+            _rom_facts_key,
+            _rom_facts,
+            ("extract",),
+        ),
         Step("types", "a published source's facts changed", _types_key, _types, ("rom-facts",)),
         Step("headers", "layout.toml or the type solution changed", _headers_key, _headers, ("types",)),
         Step("buildfiles", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),

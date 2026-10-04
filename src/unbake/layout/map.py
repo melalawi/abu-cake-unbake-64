@@ -30,10 +30,15 @@ class Group:
     members: tuple[str, ...]
     only: dict[str, tuple[str, ...]] = field(default_factory=dict)
     split: tuple[str, ...] = ()
+    signals: tuple[str, ...] = ()
 
     @property
     def header(self) -> str:
         return f"{self.segment}/{self.name}.h"
+
+
+SIGNALS = ("callee", "cap", "padding", "rodata", "split", "version")
+"""Evidence that formed an inferred group (layout.modules)."""
 
 
 @dataclass(frozen=True)
@@ -100,7 +105,7 @@ def validate(value: dict[str, Any], versions: tuple[str, ...], members: dict[str
     for row in rows:
         if not isinstance(row, dict):
             refuse("group", "expected table")
-        unknown(row, {"name", "segment", "evidence", "members", "only", "split"}, "group")
+        unknown(row, {"name", "segment", "evidence", "members", "only", "split", "signals"}, "group")
         name = label(row.get("name"), "group.name")
         if name in {"types", "data"}:
             refuse(f"group.{name}", "duplicate or reserved group name")
@@ -128,8 +133,11 @@ def validate(value: dict[str, Any], versions: tuple[str, ...], members: dict[str
         if addresses != sorted(addresses):
             refuse(f"group.{name}.members", "members out of address order")
         evidence = row.get("evidence")
-        if evidence not in ("default", "hypothesis", "proven"):
-            refuse(f"group.{name}.evidence", "expected default, hypothesis or proven")
+        if evidence not in ("default", "inferred", "hypothesis", "proven"):
+            refuse(f"group.{name}.evidence", "expected default, inferred, hypothesis or proven")
+        signals = row.get("signals", [])
+        if not isinstance(signals, list) or any(s not in SIGNALS for s in signals) or signals != sorted(set(signals)):
+            refuse(f"group.{name}.signals", f"expected sorted distinct names from {', '.join(SIGNALS)}")
         only = row.get("only", {})
         if not isinstance(only, dict):
             refuse(f"group.{name}.only", "expected table")
@@ -147,25 +155,19 @@ def validate(value: dict[str, Any], versions: tuple[str, ...], members: dict[str
         if not isinstance(cuts, list) or any(c not in selected for c in cuts) or len(set(cuts)) != len(cuts):
             refuse(f"group.{name}.split", "expected distinct member cut points")
         groups.append(
-            Group(name, segment, evidence, tuple(selected), {k: tuple(v) for k, v in only.items()}, tuple(cuts))
+            Group(
+                name,
+                segment,
+                evidence,
+                tuple(selected),
+                {k: tuple(v) for k, v in only.items()},
+                tuple(cuts),
+                tuple(signals),
+            )
         )
     missing = members.keys() - seen
     if missing:
         refuse(f"member.{sorted(missing)[0]}", "missing from map")
-    return Map(cap, tuple(groups))
-
-
-def default(cap: int, members: dict[str, Member], versions: tuple[str, ...]) -> Map:
-    cap = positive(cap, "cap")
-    segments: dict[str, list[Member]] = {}
-    for member in sorted(members.values(), key=lambda m: (m.address, m.name)):
-        segments.setdefault(member.segment, []).append(member)
-    groups = []
-    for segment, rows in segments.items():
-        for offset in range(0, len(rows), cap):
-            run = rows[offset : offset + cap]
-            only = {m.name: m.versions for m in run if set(m.versions) != set(versions)}
-            groups.append(Group(f"code_{run[0].address:08X}", segment, "default", tuple(m.name for m in run), only))
     return Map(cap, tuple(groups))
 
 
@@ -189,6 +191,8 @@ def encoded(value: Map) -> bytes:
             lines.append("only = { " + ", ".join(pairs) + " }")
         if group.split:
             lines.append(f"split = {json.dumps(group.split)}")
+        if group.signals:
+            lines.append(f"signals = {json.dumps(group.signals)}")
     return ("\n".join(lines) + "\n").encode()
 
 
@@ -201,18 +205,25 @@ def load(project: Project) -> Map:
     return validate(value, project.versions, catalog(project))
 
 
-def ensure(project: Project) -> None:
+def ensure(project: Project) -> bool:
+    """Infer modules for every `default` group (all members when there are no groups); True when layout.toml changed."""
+    from unbake.layout import modules
+
     target = project.root / "layout.toml"
-    if target.is_file():
-        with target.open("rb") as source:
-            current = tomllib.load(source)
-        if current.get("group") != []:
-            return
-    with (project.root / "config.toml").open("rb") as source:
-        config = tomllib.load(source)
-    cap = positive(config["project"].get("layout_cap"), "project.layout_cap")
-    value = default(cap, catalog(project), project.versions)
-    atomic_files.write(project.root / "layout.toml", encoded(value))
+    try:
+        value = tomllib.loads(target.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise Held("layout", f"layout.map: {target}: {error}") from error
+    members = catalog(project)
+    cap = positive(value.get("cap"), "cap")
+    current = validate(value, project.versions, members) if value.get("group") else Map(cap, ())
+    if current.groups and all(group.evidence != "default" for group in current.groups):
+        return False
+    encoded_map = encoded(modules.infer(project, current, members))
+    if encoded_map == target.read_bytes():
+        return False
+    atomic_files.write(target, encoded_map)
+    return True
 
 
 def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> None:

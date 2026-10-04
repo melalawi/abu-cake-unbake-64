@@ -19,12 +19,70 @@ from unbake.typemap.split import guarded, required_providers
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
 
 
+SHARED_MIN_BYTES = 8192
+"""A co-usage set whose declarations render smaller than this joins the nearest larger set."""
+
+
+def shared_name(groups: frozenset[str]) -> str:
+    """The shared type header for one set of using group headers."""
+    return "common/types_" + hashlib.sha256("\n".join(sorted(groups)).encode()).hexdigest()[:12] + ".h"
+
+
+def shared_header(name: str) -> bool:
+    return re.fullmatch(r"common/types_[0-9a-f]{12}\.h", name) is not None
+
+
+def strongly_connected(nodes: list[Any], edges: Callable[[Any], list[Any]]) -> list[set[Any]]:
+    """Tarjan's components in a deterministic order (dependencies first)."""
+    index: dict[Any, int] = {}
+    low: dict[Any, int] = {}
+    stack: list[Any] = []
+    active: set[Any] = set()
+    groups: list[set[Any]] = []
+
+    def visit(node: Any) -> None:
+        index[node] = low[node] = len(index)
+        stack.append(node)
+        active.add(node)
+        for dep in edges(node):
+            if dep not in index:
+                visit(dep)
+                low[node] = min(low[node], low[dep])
+            elif dep in active:
+                low[node] = min(low[node], index[dep])
+        if low[node] == index[node]:
+            group = set()
+            while True:
+                member = stack.pop()
+                active.remove(member)
+                group.add(member)
+                if member == node:
+                    break
+            groups.append(group)
+
+    for node in nodes:
+        if node not in index:
+            visit(node)
+    return groups
+
+
+def co_usage(sizes: dict[frozenset[str], int], minimum: int) -> dict[frozenset[str], frozenset[str]]:
+    """Map each user-group set to the set whose shared header holds it.
+
+    A set below MINIMUM rendered bytes joins the kept set with the highest Jaccard overlap, then the smaller
+    set, then the first name. With no set at the floor, the largest set is kept."""
+    kept = sorted(key for key, size in sizes.items() if size >= minimum)
+    if not kept and sizes:
+        kept = [min(sizes, key=lambda key: (-sizes[key], sorted(key)))]
+    result = {key: key for key in kept}
+    for key in sorted(sizes.keys() - set(kept), key=sorted):
+        result[key] = min(kept, key=lambda other: (-len(key & other) / len(key | other), len(other), sorted(other)))
+    return result
+
+
 def validate_edges(root: Path, edges: dict[Path, set[Path]], authored: set[Path]) -> None:
-    def ancestor(parent: Path, child: Path) -> bool:
-        if parent in authored:
-            return True
-        p, c = parent.relative_to(root), child.relative_to(root)
-        return p == Path("common/types.h") or (p.name == "types.h" and p.parent == c.parent)
+    def ancestor(parent: Path) -> bool:
+        return parent in authored or shared_header(parent.relative_to(root).as_posix())
 
     active: set[Path] = set()
     done: set[Path] = set()
@@ -43,8 +101,10 @@ def validate_edges(root: Path, edges: dict[Path, set[Path]], authored: set[Path]
     for path in edges:
         visit(path)
     for path, deps in edges.items():
+        if path.relative_to(root).as_posix() == "common/unused.h":
+            continue
         for dep in deps:
-            if not ancestor(dep, path):
+            if not ancestor(dep):
                 raise Held("layout", f"layout.includes: downward include {path} -> {dep}")
 
 
@@ -148,20 +208,9 @@ class Layout:
         self.homes: dict[Path, Path] = {}
         self.groups = self._clusters()
         owners = ownership.owners
-        by_group = {g.header: g for g in ownership.groups}
-        by_group["common/types.h"] = Group("types", "common", "default", ())
-        for segment in set((symbol_segments or {}).values()):
-            by_group.setdefault(f"{segment}/types.h", Group("types", segment, "default", ()))
-        for paths in (fixed_homes or {}).values():
-            for path in paths:
-                relative = path.relative_to(root)
-                by_group.setdefault(
-                    relative.as_posix(), Group(relative.stem, relative.parent.as_posix(), "default", ())
-                )
-        users = {
-            path: {home.relative_to(root).as_posix() for home in (fixed_homes or {}).get(path, set())}
-            for path in contents
-        }
+        authored = authored or set()
+        fixed = fixed_homes or {}
+        users = {path: {home.relative_to(root).as_posix() for home in fixed.get(path, set())} for path in contents}
         source_providers: dict[Path, set[Path]] = {}
         for source, text in sources.items():
             owner = owners.get(source.stem)
@@ -171,42 +220,31 @@ class Layout:
 
             local = set().union(*(declarations(text[start:end]).declared for start, end in redeclarations.spans(text)))
             for provider in required_providers(text, self.providers, self.tags, self.aliases, local):
-                if provider not in (fixed_homes or {}):
+                if provider not in fixed:
                     users[provider].add(owner.header)
                     source_providers.setdefault(root / owner.header, set()).add(provider)
         for name, text in (declarations_by_name or {}).items():
-            owner = owners.get(name)
-            declaration_segment = (symbol_segments or {}).get(name)
-            selected = (
-                {owner.header}
-                if owner is not None
-                else ({f"{declaration_segment}/types.h"} if declaration_segment else {"common/types.h"})
-            )
+            selected = {self._declaration_home(name, owners, symbol_segments)}
             for provider in required_providers(text, self.providers, self.tags, self.aliases):
                 users[provider].update(selected)
         for path, row in self.parsed.items():
             users[path].update(owners[name].header for name in row.declared if name in owners)
-        # First close actual users, then account for retained, unreachable
-        # declarations living in common and close their prerequisites as well.
-        for retained in (False, True):
-            if retained:
-                for path in users:
-                    if not users[path] and path not in (authored or set()):
-                        users[path].update(by_group)
-            changed = True
-            while changed:
-                changed = False
-                for path, deps in self.dependencies.items():
-                    for dep in deps:
-                        added = users[path] - users[dep]
-                        if added:
-                            users[dep].update(added)
-                            changed = True
-        authored = authored or set()
-        for cluster in self.groups:
+        # A dependency is used by every user of its dependents.
+        changed = True
+        while changed:
+            changed = False
+            for path, deps in self.dependencies.items():
+                for dep in deps:
+                    added = users[path] - users[dep]
+                    if added:
+                        users[dep].update(added)
+                        changed = True
+        # One home per cluster: an authored path, the single using header, the shared header of its
+        # co-usage set, or common/unused.h when nothing uses it.
+        shared: dict[int, frozenset[str]] = {}
+        for number, cluster in enumerate(self.groups):
             used = set().union(*(users[p] for p in cluster))
-            pinned = set().union(*((fixed_homes or {}).get(path, set()) for path in cluster))
-            used.update(path.relative_to(root).as_posix() for path in pinned)
+            used.update(home.relative_to(root).as_posix() for path in cluster for home in fixed.get(path, set()))
             live_authored = cluster & authored
             if live_authored:
                 if len(cluster) != 1:
@@ -217,17 +255,38 @@ class Layout:
                     )
                 destination = next(iter(live_authored))
             elif len(used) == 1:
-                destination = root / by_group[next(iter(used))].header
+                destination = root / next(iter(used))
+            elif not used:
+                destination = root / "common/unused.h"
             else:
-                segments = {by_group[g].segment for g in used}
-                destination = root / (next(iter(segments)) + "/types.h" if len(segments) == 1 else "common/types.h")
+                shared[number] = frozenset(used)
+                continue
             for path in cluster:
                 self.homes[path] = destination
-        bodies: dict[Path, list[str]] = {root / "common/types.h": []}
+        sizes: dict[frozenset[str], int] = {}
+        for number, key in shared.items():
+            sizes[key] = sizes.get(key, 0) + sum(len(rendered[path]) for path in self.groups[number])
+        placement = co_usage(sizes, SHARED_MIN_BYTES)
+        names = {number: shared_name(placement[key]) for number, key in shared.items()}
+        # Merging sets can close an include cycle between shared headers; such headers become one.
+        cluster_of = {path: number for number, cluster in enumerate(self.groups) for path in cluster}
+        between: dict[str, set[str]] = {}
+        for number, name in names.items():
+            for path in self.groups[number]:
+                for dep in self.dependencies[path]:
+                    other = names.get(cluster_of[dep])
+                    if other is not None and other != name:
+                        between.setdefault(name, set()).add(other)
+        for component in strongly_connected(sorted(set(names.values())), lambda n: sorted(between.get(n, ()))):
+            first = min(component)
+            names = {number: first if name in component else name for number, name in names.items()}
+        for number, name in names.items():
+            for path in self.groups[number]:
+                self.homes[path] = root / name
+        bodies: dict[Path, list[str]] = {}
         edges: dict[Path, set[Path]] = {}
         for group in ownership.groups:
             bodies.setdefault(root / group.header, [])
-            bodies.setdefault(root / group.segment / "types.h", [])
             bodies.setdefault(root / group.segment / "data.h", [])
         for cluster in self.groups:
             destination = self.homes[next(iter(cluster))]
@@ -254,23 +313,18 @@ class Layout:
             if providers
         }
         for name, text in sorted((declarations_by_name or {}).items()):
-            owner = owners.get(name)
-            declaration_segment = (symbol_segments or {}).get(name)
-            if owner is not None:
-                destination = root / owner.header
-            elif declaration_segment is not None:
-                destination = root / declaration_segment / "data.h"
-            else:
-                destination = root / "common/types.h"
+            destination = root / self._declaration_home(name, owners, symbol_segments)
             bodies.setdefault(destination, []).append(text)
             self.symbols[name] = destination.relative_to(root).as_posix()
             deps = {self.homes[p] for p in required_providers(text, self.providers, self.tags, self.aliases)}
             edges.setdefault(destination, set()).update(deps - {destination})
-        # A source can rely on a transitive authored type import even when no
-        # synthesized prototype uses it. Its group retains that dependency.
+        # A source can rely on a transitive authored type import even when no synthesized prototype uses
+        # it; its group header retains that one. Generated homes are included by each source directly.
         for destination, providers in source_providers.items():
             edges.setdefault(destination, set()).update(
-                self.homes[provider] for provider in providers if self.homes[provider] != destination
+                self.homes[provider]
+                for provider in providers
+                if self.homes[provider] != destination and self.homes[provider] in authored
             )
         # A declaration can force a wider home (e.g. data uses a private type).
         # Refuse a downward edge instead of manufacturing a cyclic include.
@@ -309,36 +363,16 @@ class Layout:
         }
 
     def _clusters(self) -> list[set[Path]]:
-        index: dict[Path, int] = {}
-        low: dict[Path, int] = {}
-        stack: list[Path] = []
-        active: set[Path] = set()
-        groups: list[set[Path]] = []
+        return strongly_connected(sorted(self.contents), lambda path: sorted(self.dependencies[path]))
 
-        def visit(path: Path) -> None:
-            index[path] = low[path] = len(index)
-            stack.append(path)
-            active.add(path)
-            for dep in sorted(self.dependencies[path]):
-                if dep not in index:
-                    visit(dep)
-                    low[path] = min(low[path], low[dep])
-                elif dep in active:
-                    low[path] = min(low[path], index[dep])
-            if low[path] == index[path]:
-                group = set()
-                while True:
-                    member = stack.pop()
-                    active.remove(member)
-                    group.add(member)
-                    if member == path:
-                        break
-                groups.append(group)
-
-        for path in sorted(self.contents):
-            if path not in index:
-                visit(path)
-        return groups
+    @staticmethod
+    def _declaration_home(name: str, owners: dict[str, Group], segments: dict[str, str] | None) -> str:
+        """A prototype or extern lives in its owner's group header, else its segment's (or common) data.h."""
+        owner = owners.get(name)
+        if owner is not None:
+            return owner.header
+        segment = (segments or {}).get(name)
+        return f"{segment}/data.h" if segment is not None else "common/data.h"
 
     def include(self, path: Path, destination: Path | None = None) -> str:
         from unbake.typemap.storage import relative_root
