@@ -82,8 +82,13 @@ def groups(inventory: list[split.Function], bodies: dict[tuple[str, str], bytes]
             index = parent[index]
         return index
 
+    versions = [{item.version} for item in inventory]
+
     def join(left: int, right: int) -> None:
-        parent[root(right)] = root(left)
+        left, right = root(left), root(right)
+        if left != right:
+            parent[right] = left
+            versions[left] |= versions[right]
 
     aliases: dict[str, int] = {}
     equal: dict[bytes, list[int]] = {}
@@ -99,10 +104,8 @@ def groups(inventory: list[split.Function], bodies: dict[tuple[str, str], bytes]
             continue
         for index in indices[1:]:
             left, right = root(indices[0]), root(index)
-            left_versions = {item.version for offset, item in enumerate(inventory) if root(offset) == left}
-            right_versions = {item.version for offset, item in enumerate(inventory) if root(offset) == right}
-            if left == right or left_versions.isdisjoint(right_versions):
-                join(indices[0], index)
+            if left != right and versions[left].isdisjoint(versions[right]):
+                join(left, right)
     groups: dict[int, list[split.Function]] = {}
     for index, item in enumerate(inventory):
         groups.setdefault(root(index), []).append(item)
