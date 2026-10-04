@@ -23,14 +23,20 @@ def spelled(text: str) -> set[str]:
 
 
 def _local_names(text: str) -> set[str]:
+    """Names the source declares itself before its first use of them; a later declaration needs the header."""
     from unbake.cdecl import declarations
 
-    return {
-        name
-        for start, end in redeclarations.spans(text)
-        for variant in redeclarations.variants(text[start:end])
-        for name in declarations(variant).declared
-    }
+    first: dict[str, int] = {}
+    for start, end in redeclarations.spans(text):
+        for variant in redeclarations.variants(text[start:end]):
+            for name in declarations(variant).declared:
+                first[name] = min(first.get(name, start), start)
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", lambda m: " " * len(m[0]), text, flags=re.S)
+    code = re.sub(r"^[ \t]*#[ \t]*include[^\n]*", lambda m: " " * len(m[0]), code, flags=re.M)
+    used: dict[str, int] = {}
+    for match in re.finditer(r"\b[A-Za-z_]\w*\b", code):
+        used.setdefault(match[0], match.start())
+    return {name for name, start in first.items() if used.get(name, start) >= start}
 
 
 def rewrite(text: str, member: str, ownership: map.Map, lookup: dict[str, Any], *, previous: set[str]) -> str:

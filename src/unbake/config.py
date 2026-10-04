@@ -19,12 +19,23 @@ def relative_text(root: Path, text: str) -> str:
     return re.sub(r"(?<![\w])/(?:[^\s\"']+)", lambda match: os.path.relpath(match[0], root), text)
 
 
+def _held(kind: type[Held], args: tuple[Any, ...], state: dict[str, Any]) -> Held:
+    held = kind.__new__(kind, *args)
+    held.args = args
+    held.__dict__.update(state)
+    return held
+
+
 class Held(Exception):
     def __init__(self, phase: str, reason: str, *, next_action: str | None = None) -> None:
         self.phase = phase
         self.reason = reason
         self.next_action = next_action
         super().__init__(reason)
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Pickle by fields, so a refusal raised in a pool worker reaches the parent as itself, not as a crash."""
+        return (_held, (type(self), self.args, self.__dict__))
 
     @property
     def key(self) -> str:

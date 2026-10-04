@@ -293,7 +293,9 @@ def infer(project: Project, value: Map, members: dict[str, Member]) -> Map:
     stretch: list[Member] = []
 
     def flush() -> None:
-        for names, signals in plan(stretch, project.versions, evidence, orders, value.cap, cuts):
+        for planned, signals in plan(stretch, project.versions, evidence, orders, value.cap, cuts):
+            # The merged order decides membership; layout.toml lists a group's members by address.
+            names = tuple(sorted(planned, key=lambda n: (members[n].address, n)))
             only = {n: members[n].versions for n in names if set(members[n].versions) != set(project.versions)}
             first = members[names[0]]
             split_cuts = tuple(n for n in names[1:] if n in cuts)
