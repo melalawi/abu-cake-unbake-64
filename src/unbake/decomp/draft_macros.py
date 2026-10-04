@@ -51,6 +51,9 @@ def calls(source: str, name: str, replace: Callable[[list[str]], str]) -> str:
 
 def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
     """Use declared unknown scalar types and preserve lvalue bit reinterpretation."""
+    # m2c spells null pointer constants as NULL even when the project has
+    # no such macro. Integer zero needs no declaration in a C draft.
+    source = _TOKEN.sub(lambda token: "0" if token[0] == "NULL" else token[0], source)
     incoming = re.search(r"\bsaved_reg_([A-Za-z0-9]+)\b", re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S))
     if incoming:
         raise Held(

@@ -23,6 +23,26 @@ class DatabaseTests(unittest.TestCase):
         shared.mkdir(exist_ok=True)
         (shared / "typemap.h").write_text("")
 
+    def test_draft_map_snapshot_requires_unchanged_selected_caller_bytes(self) -> None:
+        from unbake.decomp.draft_abi import mapped_body
+        from unbake.typemap.mapping import load_map
+
+        map_program(self.project)
+        config = self.project.root / "config.toml"
+        config.write_text(config.read_text() + "\n# changed draft configuration\n")
+        with self.assertRaisesRegex(Held, "map.inputs_stale"):
+            load_map(self.project)
+        body = mapped_body(self.project, "alpha", "us")
+        self.assertIsNotNone(body)
+        self.assertIsNone(mapped_body(self.project, "absent", "us"))
+        row = next(row for row in split.functions(self.project, "us") if "alpha" in row.aliases)
+        cartridge = self.project.version("us").baserom
+        image = bytearray(cartridge.read_bytes())
+        image[row.start] ^= 1
+        cartridge.write_bytes(image)
+        with self.assertRaisesRegex(Held, "types.abi.target_stale"):
+            mapped_body(self.project, "alpha", "us")
+
     def test_solve_recovers_workspace_mismatch_and_rebinds_database(self) -> None:
         from dataclasses import replace
 

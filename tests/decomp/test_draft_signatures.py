@@ -47,6 +47,48 @@ class DraftSignatureTests(unittest.TestCase):
             self.assertIn("extern int beta(int);", result)
             self.assertIn("types.abi.declared", result)
 
+    def test_unspecified_callee_uses_complete_word_abi_for_stack_arguments(self) -> None:
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:
+            project, policy, _ = fixture(Path(temporary).resolve(), case=self)
+            registers = ["r4", "r5", "r6", "r7", "stack16", "stack20", "stack24", "stack28", "stack32"]
+            record = {
+                "abi_declaration": {"prototype": "int beta();", "reasons": ["existing unspecified C"]},
+                "abi": {"arity_known": True, "registers": registers, "missing": [], "conflicts": []},
+            }
+            database = {"functions": {"beta": record}}
+            result = declarations(
+                project,
+                cast(Policy, policy),
+                "us",
+                "jal beta\n",
+                "int beta();",
+                function="alpha",
+                database=database,
+            )
+            self.assertIn("extern int beta(" + ", ".join(["int"] * 9) + ");", result)
+            self.assertIn("types.abi.draft_words", result)
+            self.assertEqual(record["abi_declaration"]["prototype"], "int beta();")
+            for change in (
+                {"arity_known": False},
+                {"registers": ["r4", "stack32"]},
+                {"registers": ["f12", "r6"]},
+                {"missing": ["caller"]},
+                {"conflicts": ["input registers differ"]},
+            ):
+                with self.subTest(change=change):
+                    incomplete = {**record, "abi": {**record["abi"], **change}}
+                    result = declarations(
+                        project,
+                        cast(Policy, policy),
+                        "us",
+                        "jal beta\n",
+                        "",
+                        function="alpha",
+                        database={"functions": {"beta": incomplete}},
+                    )
+                    self.assertIn("extern int beta();", result)
+                    self.assertNotIn("types.abi.draft_words", result)
+
     def test_independent_saved_fprs_get_disjoint_pairs_without_a_capacity_limit(self) -> None:
         text = "\n".join(f"ldc1 $f{number}, {number * 8}($sp)" for number in range(20, 32))
         result = register_pairs(text, ("-mfp64",), "alpha")

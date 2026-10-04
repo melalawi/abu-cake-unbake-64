@@ -276,9 +276,10 @@ def _read_map(project: Project, *, allow_workspace: bool = False) -> dict[str, A
     return result
 
 
-def load_map(project: Project) -> dict[str, Any]:
+def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
+    """Read verified shards; snapshot consumers must separately pin selected targets."""
     result = _read_map(project)
-    if result.get("inputs_sha256") != storage.inputs(project):
+    if not allow_stale and result.get("inputs_sha256") != storage.inputs(project):
         raise Held("solve", "map.inputs_stale: run unbake solve to refresh affected map facts")
     result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
     return result

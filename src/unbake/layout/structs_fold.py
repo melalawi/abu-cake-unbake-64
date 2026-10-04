@@ -565,12 +565,16 @@ def fold(
         path = destination if destination is not None else shared.home(project)
         before = texts.get(path, "")
         guard = header_guard(context, path)
-        before_header = before or (
-            f"#ifndef {guard}\n#define {guard}\n"
-            + _scalar_include(project, context, list(additions.values()))
-            + "\n#endif\n"
+        existing_edit = next((edit for edit in edits if edit.path == path), None)
+        before_header = (
+            existing_edit.after
+            if existing_edit is not None
+            else before or (f"#ifndef {guard}\n#define {guard}\n\n#endif\n")
         )
-        imports = _type_includes(project, context, list(additions.values()), path, promoted)
+        # Existing generated homes need the same scalar prerequisites as new
+        # headers: consumers may include this home before the shared types.
+        imports = _scalar_include(project, context, list(additions.values()))
+        imports += _type_includes(project, context, list(additions.values()), path, promoted)
         extra = "".join(include + "\n" for include in imports.splitlines() if include not in before_header)
         if extra:
             # Dependencies such as n64sdk.h require the scalar home first.
@@ -586,10 +590,8 @@ def fold(
         new_declarations = "\n".join(
             shared.declaration(replace(record, aliases=())) for record in _definition_order(additions.values())
         )
-        existing_edit = next((edit for edit in edits if edit.path == path), None)
         if existing_edit is not None:
             edits.remove(existing_edit)
-            before_header = existing_edit.after
         # Forward typedefs must precede existing definitions too: an extended
         # aggregate may now use one of the newly promoted types.
         header_parser, parsed_header = context.parse(forward + shared.append(before_header, new_declarations))

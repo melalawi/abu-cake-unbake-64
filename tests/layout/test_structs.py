@@ -281,6 +281,33 @@ class FoldTests(unittest.TestCase):
                 [("a", 0), ("b", 4), ("tail", 8)],
             )
 
+    def test_existing_generated_home_imports_scalar_dependencies_for_new_struct(self) -> None:
+        from pycparser import c_parser
+
+        from tests.preprocessor import expand
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "types.h").write_text(
+                "#ifndef TYPES_H\n#define TYPES_H\ntypedef int s32; typedef signed char s8;\n#endif\n"
+            )
+            header = root / "code.h"
+            before = "#ifndef CODE_H\n#define CODE_H\nextern int callee(void);\n#endif\n"
+            header.write_text(before)
+            project = SimpleNamespace(include=(root,), versions=("us",))
+            records = layouts("typedef int s32; typedef signed char s8; struct Allocated { s32 handle; s8 active; };")
+            edits = fold(records, project, destination=header)
+            self.assertEqual(header.read_text(), before)
+            after = next(edit.after for edit in edits if edit.path == header)
+            self.assertIn('#include "types.h"', after)
+            header.write_text(after)
+            consumer = root / "consumer.c"
+            consumer.write_text('#include "code.h"\n#include "types.h"\nstruct Allocated state;\n')
+            expanded = expand(consumer.read_text(), roots=(root,), cwd=root)
+            c_parser.CParser().parse(expanded)
+            self.assertEqual(layouts(expanded)[0].size, 8)
+            self.assertEqual(fold(records, project, destination=header), [])
+
     def test_guarded_scalar_home_and_comma_edits_compile_as_c89(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

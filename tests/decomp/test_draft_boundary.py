@@ -30,6 +30,12 @@ class DraftBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "requires addressable value"):
             lower("float alpha(void) { return M2C_BITWISE(float, missing()); }", "")
 
+    def test_null_constants_require_no_context_macro_and_preserve_literals(self) -> None:
+        source = 'void *alpha(void *p) { /* NULL */ char *text = "NULL"; return p == NULL ? NULL : p; }'
+        result = lower(source, "")
+        self.assertIn("p == 0 ? 0 : p", result)
+        self.assertIn('/* NULL */ char *text = "NULL";', result)
+
     def test_saved_return_and_measured_local_targets(self) -> None:
         text = "glabel alpha\naddu $s2, $ra, $zero\njal callee\nnop\njr $s2\nnop\n"
         self.assertIn("jr $ra", saved_returns(text))

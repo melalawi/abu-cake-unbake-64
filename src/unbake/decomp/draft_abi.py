@@ -1,5 +1,6 @@
 """Own callee declarations and measured stack operands for C drafts."""
 
+import hashlib
 import re
 from typing import Any
 
@@ -34,8 +35,29 @@ def declarations(
         )
         if not carrier.get("prototype"):
             continue
-        reason = "; ".join(carrier["reasons"]).replace("*/", "* /")
         declaration = carrier["prototype"]
+        reasons = list(carrier["reasons"])
+        abi = record.get("abi") or {}
+        registers = abi.get("registers", [])
+        words = [f"r{4 + slot}" if slot < 4 else f"stack{slot * 4}" for slot in range(len(registers))]
+        # An old-style C declaration does not tell m2c about stack operands.
+        # Specialize only a complete, contiguous, proven O32 word contract;
+        # this draft-local transport signature does not settle semantic types.
+        if (
+            abi.get("arity_known")
+            and registers
+            and registers == words
+            and not abi.get("missing")
+            and not abi.get("conflicts")
+            and re.search(r"\b" + re.escape(name) + r"\s*\(\s*\)", declaration)
+        ):
+            declaration = re.sub(
+                r"(\b" + re.escape(name) + r"\s*)\(\s*\)",
+                r"\g<1>(" + ", ".join("int" for _ in words) + ")",
+                declaration,
+            )
+            reasons.append("types.abi.draft_words: complete O32 argument slots, including caller stack operands")
+        reason = "; ".join(reasons).replace("*/", "* /")
         if not declaration.startswith(("extern ", "static ")):
             declaration = "extern " + declaration
         result.extend((f"/* {name}: {reason} */", declaration))
@@ -103,6 +125,21 @@ def declarations(
         if returned is not None and all(value is not None for value in types):
             result.append(f"{returned} {name}({', '.join(value for value in types if value is not None) or 'void'});")
     return "\n".join(result)
+
+
+def mapped_body(project: Project, function: str, version: str) -> dict[str, Any] | None:
+    """Use a draft snapshot only when its selected caller bytes are unchanged."""
+    from unbake.typemap.mapping import load_map
+
+    mapped = load_map(project, allow_stale=True)
+    item = next((item for name, item in mapped["functions"].items() if function in (name, *item["aliases"])), None)
+    if item is None or version not in item["versions"]:
+        return None
+    body: dict[str, Any] = item["versions"][version]
+    rows = [row for row in split.functions(project, version) if function in row.aliases]
+    if len(rows) != 1 or hashlib.sha256(split.words(project, rows[0])).hexdigest() != body.get("target_sha256"):
+        raise Held("m2c", f"{function}: types.abi.target_stale: caller bytes changed; run unbake solve")
+    return body
 
 
 def stack_arguments(source: str, context: str, function: str, body: dict[str, Any]) -> str:

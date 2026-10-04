@@ -232,12 +232,9 @@ def _draft(
         raise Held("m2c", f"policy.m2c {executable_path} produced no draft for {function}")
     source = work / (function + ".c")
     if type_context and use_type_db and "Unable to find stack arg" in output:
-        from unbake.typemap.mapping import load_map
-
-        mapped = load_map(original_project)
-        item = next((item for name, item in mapped["functions"].items() if function in (name, *item["aliases"])), None)
-        if item is not None:
-            output = draft_abi.stack_arguments(output, context.read_text(), function, item["versions"][v])
+        mapped = draft_abi.mapped_body(original_project, function, v)
+        if mapped is not None:
+            output = draft_abi.stack_arguments(output, context.read_text(), function, mapped)
     output, stack_header = measured_storage.prepare(project, function, output, assembly.read_text())
     if stack_header is not None:
         headers.append((stack_header, stack_header.relative_to(project.include[0]).as_posix()))
