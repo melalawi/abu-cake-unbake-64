@@ -138,7 +138,7 @@ def mapped_body(project: Project, function: str, version: str) -> dict[str, Any]
     body: dict[str, Any] = item["versions"][version]
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1 or hashlib.sha256(split.words(project, rows[0])).hexdigest() != body.get("target_sha256"):
-        raise Held("m2c", f"{function}: types.abi.target_stale: caller bytes changed; run unbake solve")
+        raise Held("m2c", f"{function}: types.abi.target_stale: caller bytes changed; run unbake recompute types")
     return body
 
 

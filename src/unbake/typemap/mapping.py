@@ -263,16 +263,16 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
 def _read_map(project: Project) -> dict[str, Any]:
     path = project.build / "map/facts.json"
     if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
-        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
+        raise Held("solve", "map.facts: compact sharded map required; run unbake recompute rom-facts")
     result = storage.read(path, "map.facts")
     if result.get("format") != "sqlite-zlib-v1":
-        raise Held("solve", "map.facts: compact sharded map required; run unbake map")
+        raise Held("solve", "map.facts: compact sharded map required; run unbake recompute rom-facts")
     shard = result.get("shard", "")
     if not isinstance(shard, str) or Path(shard).name != shard:
         raise Held("solve", "map.shards: invalid shard name")
     shard_path = path.parent / shard
     if not shard_path.is_file() or inputs.digest(shard_path) != result.get("shard_sha256"):
-        raise Held("solve", "map.shards: missing or changed facts; run unbake map")
+        raise Held("solve", "map.shards: missing or changed facts; run unbake recompute rom-facts")
     storage.validate_identity(project, result, "map.facts")
     return result
 
@@ -281,7 +281,7 @@ def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
     """Read verified shards; snapshot consumers must separately pin selected targets."""
     result = _read_map(project)
     if not allow_stale and result.get("inputs_sha256") != storage.map_inputs(project):
-        raise Held("solve", "map.inputs_stale: run unbake solve to refresh affected map facts")
+        raise Held("solve", "map.inputs_stale: run unbake recompute rom-facts")
     result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
     return result
 

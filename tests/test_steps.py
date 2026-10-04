@@ -35,3 +35,20 @@ class StepRecordTests(TempCase):
     def test_tool_fingerprint_is_a_stable_digest(self) -> None:
         self.assertRegex(steps.tool_fingerprint(), re.compile(r"^[0-9a-f]{64}$"))
         self.assertEqual(steps.tool_fingerprint(), steps.tool_fingerprint())
+
+
+class StepOrderTests(TempCase):
+    def test_needed_steps_come_first_once(self) -> None:
+        for names, expected in [
+            (["types"], ["extract", "rom-facts", "types"]),
+            (["extract", "types", "headers", "buildfiles"], ["extract", "rom-facts", "types", "headers", "buildfiles"]),
+            (["buildfiles"], ["buildfiles"]),
+            (["headers", "extract"], ["extract", "rom-facts", "types", "headers"]),
+        ]:
+            with self.subTest(names=names):
+                self.assertEqual(steps.order(names), expected)
+
+    def test_unknown_step_is_refused_by_name(self) -> None:
+        with self.assertRaises(Held) as raised:
+            steps.order(["map"])
+        self.assertIn("steps.map", str(raised.exception))

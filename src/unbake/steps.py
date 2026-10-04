@@ -1,5 +1,6 @@
 """Internal steps. Each runs only when the input it names changed, then records that input's key.
 
+A step runs the steps it needs first (Step.needs), so asking for `types` also builds the map it reads.
 Steps write project state, so only a writer (the cycle coordinator, publish, check, setup, recompute)
 runs them. Read-only commands use whatever the last run produced.
 """
@@ -82,6 +83,7 @@ class Step:
     trigger: str
     key: Callable[[Project, Host], str]
     run: Callable[[Project, Host], None]
+    needs: tuple[str, ...] = ()
 
 
 def _rom_facts_key(project: Project, host: Host) -> str:
@@ -187,9 +189,9 @@ STEPS: dict[str, Step] = {
     step.name: step
     for step in (
         Step("extract", "ROM sha1 or split rows changed", _extract_key, _extract),
-        Step("rom-facts", "interval or symbol rows changed", _rom_facts_key, _rom_facts),
-        Step("types", "a published source's facts changed", _types_key, _types),
-        Step("headers", "layout.toml or the type solution changed", _headers_key, _headers),
+        Step("rom-facts", "interval or symbol rows changed", _rom_facts_key, _rom_facts, ("extract",)),
+        Step("types", "a published source's facts changed", _types_key, _types, ("rom-facts",)),
+        Step("headers", "layout.toml or the type solution changed", _headers_key, _headers, ("types",)),
         Step("buildfiles", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
         Step("progress", "a land or a boundary edit", _progress_key, _progress),
         Step("merge-units", "a land made a run of matched members", _merge_units_key, _merge_units),
@@ -199,16 +201,33 @@ STEPS: dict[str, Step] = {
 NAMES: tuple[str, ...] = tuple(STEPS)
 
 
-def ensure(project: Project, host: Host, names: Iterable[str], *, force: bool = False) -> list[StepResult]:
-    """Run each named step whose input key changed (all of them when forced), in the given order."""
-    results = []
-    for name in names:
+def order(names: Iterable[str]) -> list[str]:
+    """The named steps with every step they need placed before them, each once, in request order."""
+    result: list[str] = []
+
+    def visit(name: str) -> None:
         if name not in STEPS:
             raise Held("steps", f"steps.{name}: unknown step; expected one of {', '.join(NAMES)}")
+        if name in result:
+            return
+        for needed in STEPS[name].needs:
+            visit(needed)
+        result.append(name)
+
+    for name in names:
+        visit(name)
+    return result
+
+
+def ensure(project: Project, host: Host, names: Iterable[str], *, force: bool = False) -> list[StepResult]:
+    """Run each named step (and the steps it needs) whose input key changed; forcing reruns only the named."""
+    requested = set(names := list(names))
+    results = []
+    for name in order(names):
         step = STEPS[name]
         started = time.monotonic()
         current = step.key(project, host)
-        if not force and recorded(project, name) == current:
+        if not (force and name in requested) and recorded(project, name) == current:
             results.append(StepResult(name, step.trigger, False, 0.0))
             continue
         step.run(project, host)
