@@ -34,29 +34,20 @@ Their hashes are recorded in `@PINS@`.
 ## Next command
 
 ```sh
-unbake map
-unbake solve
 unbake next
+unbake cycle --pick 5 --stop idle:900
 unbake draft FUNCTION
-unbake try FILE
-unbake submit FILE
+unbake compare FILE
+unbake publish FILE
 ```
 
-Map reads the whole program across every version.
-Solve builds shared types from the measured facts.
-Use the item suggested by `next`.
-Use the file printed by `draft`.
-Draft states which containing version it uses.
-It uses the shared type context.
-Edit that file and run `try` again.
-Submit the tried file after it matches every holding version or passes the owner fuzzy bar.
-The fuzzy bar requires at least 90% exact words in every containing version.
-It accepts register and order differences or relocations.
+`next` prints the next step to run.
+`cycle` picks functions, writes drafts and compares each draft every time you save it.
+`draft` writes `build/work/FUNCTION/FUNCTION.c` with the shared type context.
+`compare` compiles the file and compares it with every version that holds the function.
+A function exact in every version lands with a ROM proof, a commit and a push.
+`publish` lands an exact file by hand.
 Source must pass the checks.
-Passing drafts publish under `NON_MATCHING` while their assembly rows remain.
-Submit proves the ROMs before it publishes the C.
-Exact matches feed proven facts back into solve.
-Affected neighbours are marked for another draft.
 
 Every command ends with the next command to run.
 `unbake next` prints it again.

@@ -28,13 +28,8 @@ Run `unbake setup --names-from VERSION`.
 ## Next command
 
 ```sh
-unbake map
-unbake solve
 unbake next
 ```
 
-Run map and solve after setup succeeds.
-Map reads every version.
-Solve builds shared types from the measured facts.
 Every command ends with the next command to run.
 `unbake next` prints it again.
