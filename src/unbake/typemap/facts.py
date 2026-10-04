@@ -50,19 +50,46 @@ def _includes(path: Path, stamp: tuple[int, int, int, int, int]) -> tuple[tuple[
     return tuple((match[1], match[2]) for match in _INCLUDE.finditer(path.read_text(errors="replace")))
 
 
-def closure(project: Project, roots: list[Path]) -> list[Path]:
-    """Every file the roots can include, ignoring conditionals (a superset is safe)."""
-    seen: dict[Path, None] = {}
-    pending = list(roots)
-    while pending:
-        path = pending.pop()
-        for quote, name in _includes(path, inputs.signature(path)):
-            places = ([path.parent] if quote == '"' else []) + list(project.include)
-            found = next((place / name for place in places if (place / name).is_file()), None)
-            if found is not None and found not in seen:
-                seen[found] = None
-                pending.append(found)
-    return sorted(seen)
+class Snapshot:
+    """Include edges, closures and digests read once per key computation; files do not change during one."""
+
+    def __init__(self, project: Project) -> None:
+        self.project = project
+        self._edges: dict[Path, tuple[Path, ...]] = {}
+        self._closures: dict[tuple[Path, ...], tuple[Path, ...]] = {}
+        self._digests: dict[Path, str] = {}
+
+    def edges(self, path: Path) -> tuple[Path, ...]:
+        found = self._edges.get(path)
+        if found is None:
+            resolved = []
+            for quote, name in _includes(path, inputs.signature(path)):
+                places = ([path.parent] if quote == '"' else []) + list(self.project.include)
+                target = next((place / name for place in places if (place / name).is_file()), None)
+                if target is not None:
+                    resolved.append(target)
+            found = self._edges[path] = tuple(resolved)
+        return found
+
+    def closure(self, roots: tuple[Path, ...]) -> tuple[Path, ...]:
+        """Every file the roots can include, ignoring conditionals (a superset is safe)."""
+        found = self._closures.get(roots)
+        if found is None:
+            seen: dict[Path, None] = {}
+            pending = list(roots)
+            while pending:
+                for target in self.edges(pending.pop()):
+                    if target not in seen:
+                        seen[target] = None
+                        pending.append(target)
+            found = self._closures[roots] = tuple(sorted(seen))
+        return found
+
+    def digest(self, path: Path) -> str:
+        found = self._digests.get(path)
+        if found is None:
+            found = self._digests[path] = inputs.digest(path)
+        return found
 
 
 def _forced(project: Project, command: list[str]) -> list[Path]:
@@ -77,15 +104,15 @@ def _command(project: Project, policy: Host | None, version: str) -> list[str]:
     return [part.replace(str(project.root), ".") for part in command]
 
 
-def source_key(project: Project, policy: Host | None, task: Task) -> str:
+def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snapshot) -> str:
     function, source, version = task
     command = _command(project, policy, version)
-    roots = [source, *_forced(project, command)]
+    roots = (source, *_forced(project, command))
     parts: list[str | bytes] = [fingerprint(), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
-    for path in closure(project, roots):
-        parts.extend((storage.relative(project, path), inputs.digest(path)))
+    for path in snapshot.closure(roots):
+        parts.extend((storage.relative(project, path), snapshot.digest(path)))
     return key(*parts)
 
 
@@ -228,7 +255,8 @@ def compute(project: Project, host: Host | None, output: Store, misses: list[tup
 
 
 def published_keys(project: Project, policy: Host | None) -> list[str]:
-    return [source_key(project, policy, task) for task in declarations.published_sources(project)]
+    snapshot = Snapshot(project)
+    return [source_key(project, policy, task, snapshot) for task in declarations.published_sources(project)]
 
 
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
@@ -251,8 +279,9 @@ def refresh(project: Project, policy: Host, tasks: list[Task]) -> dict[str, str]
     """Extract facts for these sources now and return the refusal reason of each failing function."""
     output = store(policy)
     refused: dict[str, str] = {}
+    snapshot = Snapshot(project)
     for task in tasks:
-        content_key = source_key(project, policy, task)
+        content_key = source_key(project, policy, task, snapshot)
         if task[0] in refused or output.has(content_key):
             continue
         try:

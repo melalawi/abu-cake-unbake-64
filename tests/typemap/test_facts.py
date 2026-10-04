@@ -30,7 +30,7 @@ class SourceKeyTests(TempCase):
         self.host = Host.from_values(host_values(self.root), "compare")
 
     def key(self, version: str = "us") -> str:
-        return facts.source_key(self.project, self.host, ("alpha", self.source, version))
+        return facts.source_key(self.project, self.host, ("alpha", self.source, version), facts.Snapshot(self.project))
 
     def test_key_changes_with_its_inputs_only(self) -> None:
         include = self.root / "include"
