@@ -353,7 +353,7 @@ def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -
 def _tree(source: str, scope: dict[str, bool]) -> Any:
     """A parse is pure in its text and seeded typedef scope; consumers copy before they change a node."""
     key = (source, tuple(sorted(scope.items())))
-    return memo("decl.tree", key, lambda: cdecl.parser(scope).parse(source), keep=UNIT_MEMO)
+    return memo("decl.tree", key, lambda: cdecl.resumable_parse(source, scope), keep=UNIT_MEMO)
 
 
 def extract(

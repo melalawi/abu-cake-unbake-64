@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -666,6 +667,71 @@ class SeededParser(c_parser.CParser):  # type: ignore[misc]
     def _parse_translation_unit_or_empty(self) -> Any:
         self._scope_stack = [self.scope.copy()]
         return super()._parse_translation_unit_or_empty()
+
+
+_TOP_LEVEL = re.compile(r"[{}();]")
+# Translation units that share a long header expansion parse it once: (scope, prefix) -> (nodes, scope after it).
+_PREFIXES: OrderedDict[tuple[tuple[tuple[str, bool], ...], str], tuple[tuple[Any, ...], dict[str, bool]]] = (
+    OrderedDict()
+)
+PREFIXES_KEPT = 4
+_previous: list[tuple[tuple[tuple[str, bool], ...], str]] = []
+
+
+def _common_length(left: str, right: str) -> int:
+    low, high = 0, min(len(left), len(right))
+    while low < high:
+        middle = (low + high + 1) // 2
+        if left[:middle] == right[:middle]:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def _boundary(text: str, limit: int) -> int:
+    """The end of the last top-level declaration that finishes within text[:limit] (0 if none)."""
+    depth = found = 0
+    for match in _TOP_LEVEL.finditer(text, 0, limit):
+        token = match[0]
+        if token in "{(":
+            depth += 1
+        elif token in "})":
+            depth -= 1
+        elif depth == 0:
+            found = match.end()
+    return found
+
+
+def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
+    """parser(scope).parse(text), reusing the parse of a long prefix shared with an earlier unit.
+
+    pycparser's only state between top-level declarations is the file scope, so a unit split after a
+    top-level ';' parses as the prefix's nodes followed by the rest seeded with the prefix's scope.
+    """
+    key = tuple(sorted(scope.items()))
+    known = [prefix for (scope_key, prefix) in _PREFIXES if scope_key == key and text.startswith(prefix)]
+    if not known and _previous and _previous[0][0] == key:
+        end = _boundary(text, _common_length(text, _previous[0][1]))
+        if end * 2 > len(text):
+            head = parser(scope)
+            try:
+                nodes = tuple(head.parse(text[:end]).ext)
+            except Exception:
+                nodes = None
+            if nodes is not None:
+                _PREFIXES[key, text[:end]] = nodes, head._scope_stack[0].copy()
+                while len(_PREFIXES) > PREFIXES_KEPT:
+                    _PREFIXES.popitem(last=False)
+                known = [text[:end]]
+    _previous[:] = [(key, text)]
+    if not known:
+        return parser(scope).parse(text)
+    prefix = max(known, key=len)
+    _PREFIXES.move_to_end((key, prefix))
+    nodes, after = _PREFIXES[key, prefix]
+    rest = parser(after).parse(text[len(prefix) :])
+    return c_ast.FileAST([*nodes, *rest.ext])
 
 
 class GnuParser(c_parser.CParser):  # type: ignore[misc]
