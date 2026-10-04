@@ -670,8 +670,17 @@ def canonical(type_: str, aliases: dict[str, str]) -> str:
     return {
         "signed": "int",
         "signed int": "int",
+        "signed short": "short",
+        "signed short int": "short",
+        "signed long": "long",
+        "signed long int": "long",
+        "signed long long": "long long",
+        "signed long long int": "long long",
         "unsigned": "unsigned int",
         "short int": "short",
+        "unsigned short int": "unsigned short",
+        "long long int": "long long",
+        "unsigned long long int": "unsigned long long",
         "long int": "long",
         "unsigned long int": "unsigned long",
     }.get(type_, type_)

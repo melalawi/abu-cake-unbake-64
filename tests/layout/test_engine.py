@@ -178,6 +178,29 @@ class HeaderTests(unittest.TestCase):
         for home in homes:
             self.assertIn('#include "' + home + '"', rewritten)
 
+    def test_source_type_dependency_is_retained_without_a_shared_prototype(self):
+        authored = self.root / "types.h"
+        result = self.render(
+            {"types.h": "typedef int Scalar;"},
+            {"first": "Scalar first(void) { return 1; }"},
+            authored={authored},
+        )
+        self.assertIn(b'#include "../types.h"', result.headers[self.root / "span/one.h"])
+
+    def test_builtin_aliases_compare_equal_inside_derived_declarators(self):
+        mapping = redeclarations.aliases(
+            ["typedef signed int s32; typedef signed short s16; typedef signed long long s64;"]
+        )
+        for left, right in (
+            ("extern s32 data[];", "extern int data[];"),
+            ("extern s16 *data;", "extern short *data;"),
+            ("extern s64 data[];", "extern long long data[];"),
+            ("extern signed int data[];", "extern int data[];"),
+            ("extern s32 func(s32 *p);", "extern int func(int *p);"),
+        ):
+            with self.subTest(left=left):
+                self.assertTrue(redeclarations.equivalent(left, right, mapping))
+
     def test_authored_root_include_cannot_resolve_to_segment_types(self):
         authored = self.root / "types.h"
         result = self.render(
@@ -270,7 +293,7 @@ class ApplyTests(unittest.TestCase):
         include, src = root / "include", root / "src"
         include.mkdir()
         src.mkdir()
-        self.project = SimpleNamespace(root=root, include=(include,), src=src, build=root / "build")
+        self.project = SimpleNamespace(root=root, include=(include,), src=src, build=root / "build", versions=())
         self.ownership = map.Map(
             2, (map.Group("one", "span", "default", ("first",)), map.Group("two", "span", "default", ("second",)))
         )

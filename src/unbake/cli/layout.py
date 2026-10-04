@@ -15,5 +15,5 @@ def register(phases: Subparsers) -> None:
 
 
 def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
-    count = apply.run(project, policy, dry_run=args.dry_run) + apply.units(project, dry_run=args.dry_run)
+    count = apply.run(project, policy, dry_run=args.dry_run)
     return receipt("layout", [f"{'would write' if args.dry_run else 'wrote'} {count} files"])

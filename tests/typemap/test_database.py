@@ -33,6 +33,86 @@ class DatabaseTests(unittest.TestCase):
         self.assertIn("main/alpha.h", context(self.project))
         self.assertNotIn("typedef", (self.project.include[0] / "common/types.h").read_text())
 
+    def test_source_local_contract_is_not_replaced_by_inferred_shared_declaration(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        source = self.project.src / "caller.c"
+        source.write_text("extern void alpha(unsigned int arg0);\nvoid caller(void) { alpha(1); }\n")
+        value["functions"]["alpha"].update(state="known", prototype="int alpha(int arg0);")
+        self.assertIn("src/caller.c", storage.inputs(self.project, headers=True))
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertNotIn(b"extern int alpha(int arg0);", headers)
+        self.assertEqual(source.read_text(), "extern void alpha(unsigned int arg0);\nvoid caller(void) { alpha(1); }\n")
+
+    def test_definition_contract_is_not_replaced_by_inferred_owner_prototype(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        source = self.project.src / "alpha.c"
+        source.write_text("void alpha(unsigned int arg0) { (void)arg0; }\n")
+        value["functions"]["alpha"].update(state="known", prototype="int alpha(int arg0);")
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertNotIn(b"extern int alpha(int arg0);", headers)
+
+    def test_required_complete_installed_layout_survives_inference_loss(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        header = self.project.include[0] / "common/types.h"
+        storage.write(header, b"struct Retained { int value; };\n")
+        lookup = layout_index.load(self.project)
+        lookup["headers"]["common/types.h"] = storage.file_digest(header)
+        storage.write(layout_index.path(self.project), layout_index.encoded(lookup))
+        (self.project.src / "alpha.c").write_text(
+            "struct Owner { struct Retained item; };\nint alpha(void) { return 1; }\n"
+        )
+        (self.project.src / "caller.c").write_text("struct Retained { int other; };\n")
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertIn(b"struct Retained { int value; };", headers)
+        self.assertTrue(value["declaration_evidence"])
+
+    def test_version_conditional_local_contracts_are_not_merged_as_shared_conflicts(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        source = self.project.src / "caller.c"
+        source.write_text(
+            "#if defined(VERSION_EU)\nextern void alpha(unsigned int arg0);\n"
+            "#else\nextern int alpha(int arg0);\n#endif\nvoid caller(void) { alpha(1); }\n"
+        )
+        value["functions"]["alpha"].update(state="known", prototype="int alpha(int arg0);")
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertNotIn(b"extern int alpha(int arg0);", headers)
+
+    def test_shared_typedef_spelling_does_not_hide_an_equivalent_contract(self) -> None:
+        from unbake.typemap import database
+
+        shared = self.project.include[0] / "shared/typemap.h"
+        shared.write_text("typedef int signed_word;\n")
+        map_program(self.project)
+        value = solve(self.project)
+        (self.project.src / "caller.c").write_text(
+            '#include "shared/typemap.h"\nextern signed_word alpha(signed_word arg0);\n'
+        )
+        value["functions"]["alpha"].update(state="known", prototype="int alpha(int arg0);")
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        headers = b"\n".join(data for path, data in outputs.items() if path.suffix == ".h" and isinstance(data, bytes))
+        self.assertIn(b"extern int alpha(int arg0);", headers)
+
     def test_disassembled_data_never_enters_function_map_or_actionable_pool(self) -> None:
         for version in self.project.versions:
             path = self.project.asm / version / "nonmatchings/alpha.s"
@@ -65,6 +145,34 @@ class DatabaseTests(unittest.TestCase):
             path = self.project.asm / version / "nonmatchings/alpha.s"
             path.write_text(path.read_text().replace("glabel", "dlabel"))
         self.assertNotIn("alpha", map_program(self.project)["functions"])
+
+    def test_solve_repins_header_membership_after_render_and_keeps_summary_current(self) -> None:
+        import json
+
+        from unbake.typemap import database
+
+        authored = self.project.include[0] / "provider.h"
+        authored.write_text("extern int provided;\n")
+        map_program(self.project)
+        render = database._render
+
+        def regroup(*args, **kwargs):
+            outputs = render(*args, **kwargs)
+            outputs[authored] = authored.read_bytes()
+            lookup = json.loads(outputs[layout_index.path(self.project)])
+            lookup["headers"]["provider.h"] = storage.file_digest(authored)
+            outputs[layout_index.path(self.project)] = layout_index.encoded(lookup)
+            return outputs
+
+        with patch.object(database, "_render", side_effect=regroup):
+            result = solve(self.project)
+        self.assertNotIn("include/provider.h", result["inputs_sha256"])
+        self.assertEqual(result["inputs_sha256"], storage.inputs(self.project, headers=True))
+        self.assertIsNotNone(load(self.project))
+        summary = storage.read(self.project.build / "types/summary.json", "types.summary")
+        self.assertEqual(summary["database_sha256"], storage.file_digest(self.project.build / "types/database.json"))
+        solve(self.project)
+        self.assertIsNotNone(load(self.project))
 
     def test_changed_header_and_map_refuse_stale_database(self) -> None:
         map_program(self.project)
@@ -526,6 +634,9 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(solved_once.call_count, 1)
         proven = storage.read(self.project.build / "types/proven.json", "types.feedback")
         self.assertEqual(set(proven["records"]), {"alpha", "beta"})
+        for row in proven["records"].values():
+            retained = self.project.build / "types/sources" / (row["source_sha256"] + ".c")
+            self.assertEqual(retained.read_bytes(), (self.project.root / row["source"]).read_bytes())
         for function in ("alpha", "beta"):
             self.assertEqual(result["functions"][function]["state"], "known")
             self.assertEqual(result["functions"][function]["provenance"][0]["kind"], "proven")

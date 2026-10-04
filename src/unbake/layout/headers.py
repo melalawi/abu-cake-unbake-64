@@ -146,12 +146,14 @@ class Layout:
         for segment in set((symbol_segments or {}).values()):
             by_group.setdefault(f"{segment}/types.h", Group("types", segment, "default", ()))
         users = {path: set[str]() for path in contents}
+        source_providers: dict[Path, set[Path]] = {}
         for source, text in sources.items():
             owner = owners.get(source.stem)
             if owner is None:
                 raise Held("layout", f"layout.member.{source.stem}: source has no group")
             for provider in required_providers(text, self.providers, self.tags, self.aliases):
                 users[provider].add(owner.header)
+                source_providers.setdefault(root / owner.header, set()).add(provider)
         for name, text in (declarations_by_name or {}).items():
             owner = owners.get(name)
             declaration_segment = (symbol_segments or {}).get(name)
@@ -238,6 +240,12 @@ class Layout:
             self.symbols[name] = destination.relative_to(root).as_posix()
             deps = {self.homes[p] for p in required_providers(text, self.providers, self.tags, self.aliases)}
             edges.setdefault(destination, set()).update(deps - {destination})
+        # A source can rely on a transitive authored type import even when no
+        # synthesized prototype uses it. Its group retains that dependency.
+        for destination, providers in source_providers.items():
+            edges.setdefault(destination, set()).update(
+                self.homes[provider] for provider in providers if self.homes[provider] != destination
+            )
         # A declaration can force a wider home (e.g. data uses a private type).
         # Refuse a downward edge instead of manufacturing a cyclic include.
         validate_edges(root, edges, authored)

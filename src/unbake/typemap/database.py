@@ -121,6 +121,7 @@ def _semantic(value: Any) -> Any:
 def _render(
     project: Project, value: dict[str, Any], policy: Policy | None, session: regeneration.Session
 ) -> dict[Path, bytes | Path]:
+    from unbake.decomp.header_declarations import declaration_source
     from unbake.decomp.header_declarations import declarations as header_declarations
     from unbake.typemap.declarations import declarator
 
@@ -134,6 +135,37 @@ def _render(
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
+    # Keep a complete installed layout required by an authored by-value member
+    # when current machine inference no longer reconstructs that aggregate.
+    # Retain it as declared context, never as a matched-function proof.
+    from unbake.layout import index as layout_index
+    from unbake.layout import redeclarations
+    from unbake.typemap import split
+    from unbake.typemap.declaration_evidence import _body
+
+    needed = set()
+    for text in session.sources.values():
+        by_value = {
+            match[1]
+            for match in re.finditer(r"\b(?:struct|union)\s+(\w+)\s+\w+\s*(?=[;=,\[)])", declaration_source(text))
+        }
+        needed.update(by_value - redeclarations.local_tags(text))
+    defined = set().union(*(redeclarations.local_tags(text) for text in components.values()))
+    defined.update(
+        name
+        for name, record in value["structs"].items()
+        if record.get("state") == "known" and record.get("declaration")
+    )
+    for path in sorted(layout_index.headers(project)):
+        for statement in split.statements(_body(path.read_text())):
+            names = redeclarations.local_tags(statement)
+            if names & (needed - defined):
+                digest = storage.digest(statement.encode())
+                name = ".evidence_" + digest + ".h"
+                body = f"/* unbake declaration evidence: evidence_{digest} */\n" + statement
+                components[root / name] = body
+                value.setdefault("declaration_evidence", {})[name] = body
+                defined.update(names)
     authored_aliases = {alias for text in components.values() for alias in header_declarations(text).typedefs}
     authored_tags = {tag for text in components.values() for tag in header_declarations(text).tags}
     authored_declarations: dict[str, set[Path]] = defaultdict(set)
@@ -287,6 +319,32 @@ def _render(
     for name, record in sorted(value["arrays"].items()):
         if record["state"] == "known" and record.get("partial") and ":" not in name:
             declarations_by_name[name] = session.rewrite(f"extern {record['type']} {name}[];", replacements, reserved)
+    # Source-local declarations own their C scope. A machine-derived shared
+    # declaration must not replace a different authored call/storage contract.
+    # Equal declarations may still be shared and stripped by layout apply.
+    from unbake.layout import redeclarations
+
+    signature = re.compile(
+        r"(?P<prototype>^[ \t]*(?:[A-Za-z_]\w*[\s*]+)+(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*)\{",
+        re.M,
+    )
+    for source_path, text in session.sources.items():
+        local: dict[str, list[str]] = {}
+        for start, end in redeclarations.spans(text):
+            for variant in redeclarations.variants(text[start:end]):
+                for name in header_declarations(variant).declared | header_declarations(variant).typedefs:
+                    local.setdefault(name, []).append(variant)
+        definitions = set()
+        for match in signature.finditer(declaration_source(text)):
+            definitions.add(match["name"])
+            local.setdefault(match["name"], []).append(match["prototype"].strip() + ";")
+        local_aliases = {**value.get("typedefs", {}), **replacements, **redeclarations.aliases([text])}
+        for name in local.keys() & declarations_by_name.keys():
+            if (name != source_path.stem or name in definitions) and any(
+                not redeclarations.equivalent(variant, declarations_by_name[name], local_aliases)
+                for variant in local[name]
+            ):
+                declarations_by_name.pop(name)
     # An authored provider is already imported through the graph.
     for name in authored_declarations:
         declarations_by_name.pop(name, None)
@@ -440,7 +498,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     }
     backups: dict[Path, Path | None] = {}
     try:
-        for path in set(outputs) | obsolete:
+        metadata = {database, project.build / "types/summary.json", project.build / "types/redraft.json"}
+        for path in set(outputs) | obsolete | metadata:
             if path.is_file():
                 descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
                 os.close(descriptor)
@@ -456,6 +515,20 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 storage.write(path, content)
         for path in obsolete:
             path.unlink()
+        # Rendering can replace authored providers and regroup the generated
+        # header set. Pin the installed inputs, including retained evidence,
+        # rather than patching only paths that happened to exist before render.
+        value["inputs_sha256"] = storage.inputs(project, headers=True)
+        staged, digest = storage.database_json(database, value)
+        if staged is not None:
+            storage.install(database, staged)
+        summary["database_sha256"] = digest
+        storage.write(project.build / "types/summary.json", storage.encoded(summary))
+        for mark in marks.values():
+            mark.update(revision=value["revision"], type_db_sha256=digest)
+        storage.write(
+            project.build / "types/redraft.json", storage.encoded({**storage.identity(project), "functions": marks})
+        )
     except BaseException:
         for path, backup in backups.items():
             if backup is None:
@@ -538,6 +611,13 @@ def feedback_many(
     path = project.build / "types/proven.json"
     previous = storage.read(path, "types.feedback") if path.is_file() else {**storage.identity(project), "records": {}}
     storage.validate_identity(project, previous, "types.feedback")
+    for _, source, digest, _, _ in checked:
+        content = source.read_bytes()
+        if storage.digest(content) != digest:
+            raise Held("submit", f"types.feedback.source_sha256: published source changed: {source}")
+        retained = project.build / "types/sources" / (digest + ".c")
+        if not retained.is_file() or storage.file_digest(retained) != digest:
+            storage.write(retained, content)
     previous["records"].update(records)
     storage.write(path, storage.encoded(previous))
     if not regenerate:

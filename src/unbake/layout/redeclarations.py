@@ -47,6 +47,16 @@ def normalized(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _primitive_types(tree: c_ast.Node) -> None:
+    """Normalize builtin synonyms before constructing derived declarator types."""
+
+    class Types(c_ast.NodeVisitor):  # type: ignore[misc]
+        def visit_IdentifierType(self, node: object) -> None:
+            node.names = canonical(" ".join(node.names), {}).split()  # type: ignore[attr-defined]
+
+    Types().visit(tree)
+
+
 @lru_cache(maxsize=8192)
 def _aliases(text: str) -> dict[str, str]:
     rows = [text[start:end] for start, end in spans(text) if re.match(r"typedef\b", text[start:end])]
@@ -70,6 +80,7 @@ def _aliases(text: str) -> dict[str, str]:
             tree = _SeededParser(dict.fromkeys(names, True)).parse(declaration_source(row))
         except Exception:
             continue
+        _primitive_types(tree)
         for node in tree.ext:
             if isinstance(node, c_ast.Typedef):
                 result[node.name] = _type(node.type)
@@ -93,6 +104,7 @@ def _signature(text: str, items: tuple[tuple[str, str], ...]) -> str:
     except Exception:
         # Unsupported compiler syntax is equal only when its bytes agree.
         return normalized(text)
+    _primitive_types(tree)
     result = []
     for node in tree.ext:
         if isinstance(node, (c_ast.Decl, c_ast.Typedef)):

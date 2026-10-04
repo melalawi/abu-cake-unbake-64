@@ -111,6 +111,8 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     paths.update(path for version in project.versions for path in (project.asm / version).rglob("*.s"))
     paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
     if headers:
+        # Rendering consults source-local declaration contracts as well as receipts.
+        paths.update(project.src.rglob("*.c"))
         ownership = project.root / "layout.toml"
         if ownership.is_file():
             paths.add(ownership)
