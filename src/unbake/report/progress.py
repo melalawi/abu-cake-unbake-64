@@ -313,12 +313,11 @@ def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
     from unbake.work import attempts
 
     rows = report_units.functions(project.version(version))
-    best = {}
-    for function in attempts.functions(project):
-        found = attempts.read(project, function)
-        scores = [row.versions[version]["percent"] for row in found if version in row.versions]
-        if scores:
-            best[function] = max(scores)
+    best = {
+        function: summary.best[version]
+        for function, summary in attempts.summaries(project).items()
+        if version in summary.best
+    }
     units = [_unit(row, best.get(row.name)) for row in rows]
     total = sum(row.end - row.start for row in rows)
     matched_rows = [row for row in rows if row.kind == "c"]
@@ -400,6 +399,9 @@ def readme_descriptions(project: Project) -> dict[str, str]:
 
 
 def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
+    """versions/*/report.json, the README progress block and attempts.json, the history they are measured from."""
+    from unbake.work import attempts
+
     if not project.versions:
         raise Held("report", "project.versions is missing")
     descriptions = readme_descriptions(project)
@@ -432,6 +434,8 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
             written.append(destination)
         files.write(readme, rendered.encode("utf-8", errors="surrogateescape"))
         written.append(readme)
+        rows = {row.name for version in project.versions for row in report_units.functions(project.version(version))}
+        written.append(attempts.write_summary(project, rows))
     except OSError as error:
         raise Held("report", f"report file/tool: {error}") from error
     return written

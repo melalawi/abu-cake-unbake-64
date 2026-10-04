@@ -53,6 +53,39 @@ def _git(project: Project, *args: str, env: dict[str, str] | None = None) -> str
     return result.stdout
 
 
+def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
+    _git(project, "add", "--", *(str(path.relative_to(project.root)) for path in paths))
+    author = f"{host.publish_author_name} <{host.publish_author_email}>"
+    _git(
+        project,
+        "-c",
+        f"user.name={host.publish_author_name}",
+        "-c",
+        f"user.email={host.publish_author_email}",
+        "commit",
+        "-q",
+        "-m",
+        message,
+        "--author",
+        author,
+    )
+
+
+def record(project: Project, host: Host) -> str | None:
+    """Cycle end: fold the attempt logs into attempts.json and commit it with the reports it moves.
+
+    Return the "Record attempts" commit, or None when no derived file changed.
+    """
+    from unbake.report import progress
+
+    paths = progress.write(project, host)
+    relative = [str(path.relative_to(project.root)) for path in paths]
+    if not _git(project, "status", "--porcelain", "--", *relative).strip():
+        return None
+    _commit(project, host, paths, "Record attempts")
+    return _git(project, "rev-parse", "HEAD").strip()
+
+
 def chosen_compiler(project: Project, function: str) -> str:
     """The compiler of the newest exact attempt; compare records it (compilers.candidates)."""
     exact = [row for row in attempts.read(project, function) if row.exact]
@@ -169,22 +202,7 @@ def land(project: Project, host: Host, file: Path) -> str:
         generated = buildfiles.write(updated, host)
         steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
         generated += progress.write(updated, host)
-        paths = sorted({*written, *generated})
-        _git(project, "add", "--", *(str(path.relative_to(project.root)) for path in paths))
-        author = f"{host.publish_author_name} <{host.publish_author_email}>"
-        _git(
-            project,
-            "-c",
-            f"user.name={host.publish_author_name}",
-            "-c",
-            f"user.email={host.publish_author_email}",
-            "commit",
-            "-q",
-            "-m",
-            f"Match {function}",
-            "--author",
-            author,
-        )
+        _commit(project, host, sorted({*written, *generated}), f"Match {function}")
     except BaseException:
         for path, previous in written.items():
             if previous is None:

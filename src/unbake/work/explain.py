@@ -48,15 +48,15 @@ def subject_of(project: Project, subject: str) -> tuple[str, Path | None]:
 def _status(project: Project, function: str, file: Path | None) -> dict[str, Any]:
     versions = split.holding_versions(project, function)
     rows = {version: compare.row_of(project, function, version) for version in versions}
-    found = attempts.read(project, function)
+    summary = attempts.summaries(project).get(function)
     return {
         "versions": ", ".join(versions),
         "bytes": {version: row.end - row.start for version, row in rows.items()},
         "kind": {version: row.kind for version, row in rows.items()},
         "draft": str(file) if file else "none",
-        "attempts": len(found),
-        "best_percent": max((row.best_percent for row in found), default=None),
-        "exact": any(row.exact for row in found),
+        "attempts": summary.attempts if summary else 0,
+        "best_percent": summary.best_percent if summary else None,
+        "exact": summary.exact if summary else False,
     }
 
 

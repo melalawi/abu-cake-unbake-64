@@ -1,6 +1,9 @@
-"""Attempt history of one function: build/work/FUNC/attempts.jsonl, one JSON line per compare.
+"""Attempt history: build/work/FUNC/attempts.jsonl per function, and the committed summary attempts.json.
 
-Only the process that ran a compare appends its line, with a single O_APPEND write.
+Only the process that ran a compare appends its line, with a single O_APPEND write. The local logs live under
+build/ and are never committed, so the progress report folds them into attempts.json at the project root
+(write_summary). summaries() is the one reader of the folded history: the committed file merged with every
+local log, so fuzzy progress and the ranker's history survive a fresh tree.
 """
 
 from __future__ import annotations
@@ -12,7 +15,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake.config import Held, Project
+
+SUMMARY = "attempts.json"
 
 
 @dataclass(frozen=True)
@@ -107,3 +113,110 @@ def minutes(rows: list[Attempt]) -> float:
     stop = next((row for row in rows if row.exact), rows[-1])
     spent = (datetime.fromisoformat(stop.t) - first).total_seconds() + stop.seconds
     return max(spent / 60.0, 1.0 / 60.0)
+
+
+@dataclass(frozen=True)
+class Summary:
+    """Folded history of one function: rounded so rewriting the same history gives the same bytes."""
+
+    bytes: int
+    best: dict[str, float]
+    exact: bool
+    minutes: float
+    attempts: int
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "attempts": self.attempts,
+            "best": dict(sorted(self.best.items())),
+            "bytes": self.bytes,
+            "exact": self.exact,
+            "minutes": self.minutes,
+        }
+
+    @property
+    def best_percent(self) -> float | None:
+        return max(self.best.values(), default=None)
+
+
+def summarize(rows: list[Attempt]) -> Summary:
+    best: dict[str, float] = {}
+    for row in rows:
+        for version, result in row.versions.items():
+            best[version] = max(best.get(version, 0.0), round(float(result["percent"]), 2))
+    return Summary(rows[-1].bytes, best, any(row.exact for row in rows), round(minutes(rows), 2), len(rows))
+
+
+def merge(committed: Summary | None, local: Summary | None) -> Summary:
+    """Per version the higher best, exact if either is; size from the local log; effort never shrinks."""
+    if committed is None or local is None:
+        found = committed or local
+        assert found is not None
+        return found
+    best = dict(committed.best)
+    for version, percent in local.best.items():
+        best[version] = max(best.get(version, 0.0), percent)
+    return Summary(
+        local.bytes,
+        best,
+        committed.exact or local.exact,
+        max(committed.minutes, local.minutes),
+        max(committed.attempts, local.attempts),
+    )
+
+
+def summary_path(project: Project) -> Path:
+    return project.root / SUMMARY
+
+
+def _committed(project: Project) -> dict[str, Summary]:
+    target = summary_path(project)
+    if not target.is_file():
+        return {}
+    try:
+        document = json.loads(target.read_bytes())
+        if document["v"] != 1:
+            raise ValueError(f"v must be 1, not {document['v']!r}")
+        return {
+            str(name): Summary(
+                int(value["bytes"]),
+                {str(version): float(percent) for version, percent in value["best"].items()},
+                bool(value["exact"]),
+                float(value["minutes"]),
+                int(value["attempts"]),
+            )
+            for name, value in document["functions"].items()
+        }
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        raise Held("work", f"{SUMMARY}: {target}: {error}") from error
+
+
+def _logged(project: Project) -> list[str]:
+    if not project.work.is_dir():
+        return []
+    return sorted(entry.name for entry in project.work.iterdir() if (entry / "attempts.jsonl").is_file())
+
+
+def summaries(project: Project) -> dict[str, Summary]:
+    """The committed attempts.json merged with every local attempts.jsonl. Every history reader uses this."""
+    table = _committed(project)
+    for function in _logged(project):
+        rows = read(project, function)
+        if rows:
+            table[function] = merge(table.get(function), summarize(rows))
+    return dict(sorted(table.items()))
+
+
+def encode(table: dict[str, Summary]) -> bytes:
+    functions = {name: table[name].document() for name in sorted(table)}
+    return (json.dumps({"functions": functions, "v": 1}, indent=2, sort_keys=True) + "\n").encode()
+
+
+def write_summary(project: Project, rows: set[str]) -> Path:
+    """Fold the local logs into attempts.json, keeping only functions that are still rows of some version."""
+    table = {name: summary for name, summary in summaries(project).items() if name in rows}
+    target = summary_path(project)
+    content = encode(table)
+    if not target.is_file() or target.read_bytes() != content:
+        atomic_files.write(target, content)
+    return target

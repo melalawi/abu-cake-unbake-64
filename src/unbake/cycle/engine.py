@@ -454,6 +454,12 @@ def run(
             watcher_stop.set()
             if board is not None:
                 board.close()
+    from unbake import config
+
+    recorded = land.record(config.load(project.root), host)
+    if recorded is not None:
+        emitter.emit("fn.committed", function="", commit=recorded, message="Record attempts")
+        unpushed.append(recorded)
     if pusher is not None:
         pusher.wait()
         if unpushed:

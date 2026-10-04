@@ -23,7 +23,8 @@ def candidates(project: Project) -> list[rank.Candidate]:
     """Unmatched functions m2c can draft: complete bodies, one name in every version, not excluded."""
     excluded = exclusions.load(project)
     _, functions, bodies = inventory.inventory(project)
-    carry = set(attempts.functions(project))
+    carry = {name for name in attempts.functions(project) if attempts.path(project, name).is_file()}
+    history = attempts.summaries(project)
     result = []
     for items in inventory.groups(functions, bodies):
         if all(item.kind == "c" for item in items):
@@ -38,28 +39,24 @@ def candidates(project: Project) -> list[rank.Candidate]:
             continue
         if project.compiler_for(canonical.name).kind not in M2C_KINDS:
             continue
-        rows = attempts.read(project, canonical.name) if canonical.name in carry else []
+        summary = history.get(canonical.name)
         result.append(
             rank.Candidate(
                 canonical.name,
                 canonical.end - canonical.start,
                 tuple(item.version for item in items),
-                bool(rows),
-                max((row.best_percent for row in rows), default=None),
+                canonical.name in carry,
+                summary.best_percent if summary else None,
             )
         )
     return result
 
 
 def history(project: Project) -> list[rank.History]:
-    rows = []
-    for function in attempts.functions(project):
-        found = attempts.read(project, function)
-        if found:
-            rows.append(
-                rank.History(function, found[-1].bytes, any(row.exact for row in found), attempts.minutes(found))
-            )
-    return rows
+    return [
+        rank.History(function, summary.bytes, summary.exact, summary.minutes)
+        for function, summary in attempts.summaries(project).items()
+    ]
 
 
 def ranked(project: Project, host: Host) -> list[rank.Candidate]:
