@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from unbake.decomp.work import digest
+from unbake.typemap.storage import digest
 from unbake.config import Held, Project
 
 

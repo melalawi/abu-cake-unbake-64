@@ -277,7 +277,6 @@ def choose(
 
 def prove(project_scratch: Project, region: Region, candidates: Sequence[CompilerSpec], policy: Host) -> Decision:
     from unbake.decomp import m2c
-    from unbake.decomp.trial_compile import executable
     from unbake.project import build, toolchain
     from unbake.project.rom import load
 
@@ -286,7 +285,7 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
     if type(getattr(policy, "probe_count", None)) is not int or policy.probe_count <= 0:
         raise Held("setup", "policy.probe_count: required positive integer")
     project = project_scratch
-    executable(getattr(policy, "m2c", None), "m2c", "init")
+    policy.m2c
     compilers = dict(project.compilers)
     for candidate in candidates:
         if candidate.id not in compilers:

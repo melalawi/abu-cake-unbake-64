@@ -109,9 +109,6 @@ class Layout:
     def tools(self) -> Path:
         return self.root / "tools"
 
-    @property
-    def asm(self) -> Path:
-        return self.root / "asm"
 
 
 @dataclass(frozen=True)
@@ -132,6 +129,7 @@ class Project:
     sn64_asflags: tuple[str, ...]
     resident_mappings: dict[str, tuple[ResidentMapping, ...]] = field(default_factory=dict)
     unit_flags: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    work_include: tuple[Path, ...] = ()
 
     @property
     def roms(self) -> Path:
@@ -151,15 +149,12 @@ class Project:
 
     @property
     def include(self) -> tuple[Path, ...]:
-        return Layout(self.root).include
+        """A draft's own header directory comes first, then the project's include/."""
+        return (*self.work_include, *Layout(self.root).include)
 
     @property
     def tools(self) -> Path:
         return Layout(self.root).tools
-
-    @property
-    def asm(self) -> Path:
-        return Layout(self.root).asm
 
     def compiler_reference(self, unit: str | Path) -> str:
         """An exception unit names its compiler; every other unit uses the default."""
@@ -510,8 +505,6 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "n64link": "exe",
         "splat": "exe",
         "m2c": "exe",
-        "objdiff": "exe",
-        "objdiff_sha256": "hex64",
         "permuter_archive": "path",
         "permuter_sha256": "hex64",
     },
@@ -537,7 +530,7 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
 _RESOURCES = ("resources.cores", "resources.workers", *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")))
 _CACHE = ("cache.root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_bytes")
 _BINUTILS = ("tools.cpp", "tools.mips_as", "tools.mips_ld", "tools.mips_objcopy", "tools.n64link")
-_COMPARE = (*_RESOURCES, *_CACHE, *_BINUTILS, "tools.objdiff", "tools.objdiff_sha256")
+_COMPARE = (*_RESOURCES, *_CACHE, *_BINUTILS)
 _PUBLISH = ("publish.remote", "publish.branch", "publish.author_name", "publish.author_email", "publish.credential")
 _SETUP = (
     *_RESOURCES,
@@ -749,8 +742,6 @@ class Host:
     n64link = property(lambda self: self.get("tools.n64link"))
     splat = property(lambda self: self.get("tools.splat"))
     m2c = property(lambda self: self.get("tools.m2c"))
-    objdiff = property(lambda self: self.get("tools.objdiff"))
-    objdiff_sha256 = property(lambda self: self.get("tools.objdiff_sha256"))
     permuter_archive = property(lambda self: self.get("tools.permuter_archive"))
     permuter_sha256 = property(lambda self: self.get("tools.permuter_sha256"))
     setup_version_jobs = property(lambda self: self.get("setup.version_jobs"))
@@ -774,3 +765,10 @@ class Host:
 class SymbolPolicy:
     similarity_threshold: float
     similarity_margin: float
+
+
+def draft_view(project: Project, function: str) -> Project:
+    """The project as one function's draft sees it: its own build/work/FUNC/include/ before include/."""
+    from dataclasses import replace
+
+    return replace(project, work_include=(project.work / function / "include",))

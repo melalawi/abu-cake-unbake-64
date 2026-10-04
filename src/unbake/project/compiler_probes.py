@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from unbake.decomp.trial_compile import run_tool
+from unbake.process import run_tool
 from unbake.project import compiler_profiles, toolchain
 from unbake.config import Held, PendingProject, Host
 from unbake.project_tools import atomic as atomic_files

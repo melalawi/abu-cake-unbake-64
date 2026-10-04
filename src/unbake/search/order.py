@@ -9,7 +9,7 @@ from copy import deepcopy
 from itertools import pairwise
 from typing import Any, cast
 
-from unbake.decomp.trial import Trial
+from unbake.work.compare import Compared
 from unbake.config import Held
 from unbake.search.core import Context, Mutation
 from unbake.search.loops import variants as loop_variants
@@ -337,7 +337,7 @@ def _replace(root: Any, wanted: Any, change: Callable[[Any], Any]) -> None:
                 return
 
 
-def propose(source: str, trial: Trial, ctx: Context) -> Iterator[Mutation]:
+def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     """Yield unique structural alternatives; optional context.focus_lines ranks edits."""
     if not isinstance(source, str) or not source.strip():
         raise Held("order", "source is required as C text")

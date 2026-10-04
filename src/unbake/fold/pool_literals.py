@@ -12,7 +12,7 @@ import re
 import struct
 
 from unbake.layout import split
-from unbake.match import reporting
+from unbake.fold import notes as reporting
 from unbake.config import Project
 
 _TYPES = {"f32": (">f", "f"), "float": (">f", "f"), "f64": (">d", ""), "double": (">d", "")}

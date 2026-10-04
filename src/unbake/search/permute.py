@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from unbake.decomp.trial import Trial
+from unbake.work.compare import Compared
 from unbake.project import makefile, toolchain
 from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
@@ -160,7 +160,7 @@ class Permuter:
     budget_seconds: float
     ran: bool = field(default=False, init=False)
 
-    def propose(self, source: str, trial: Trial, ctx: Context) -> Iterator[Mutation]:
+    def propose(self, source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
         """Yield external improvements for the common search loop to confirm."""
 
         project = cast(Project, _required(ctx, "project", "context"))

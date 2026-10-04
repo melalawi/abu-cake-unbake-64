@@ -13,11 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from unbake.decomp import explain, trial
+from unbake.decomp import explain
 from unbake.decomp.candidate_ranking import measured_candidate_rank
-from unbake.decomp.trial_compile import read_text, scratch_directory
+from unbake.process import read_text
 from unbake.project import makefile
 from unbake.config import Held, Host, Project
+from unbake.work.compare import Compared, measure
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -29,7 +30,7 @@ class Mutation:
 
 
 class Generator(Protocol):
-    def propose(self, source: str, trial: trial.Trial, ctx: Context) -> Iterable[Mutation]: ...
+    def propose(self, source: str, trial: Compared, ctx: Context) -> Iterable[Mutation]: ...
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class Context:
 @dataclass(frozen=True)
 class SearchResult:
     source: Path
-    trial: trial.Trial
+    trial: Compared
     score: int
     fuzzy: float
     trials: int
@@ -57,7 +58,7 @@ class SearchResult:
 class _Candidate:
     source: str
     path: Path
-    trial: trial.Trial
+    trial: Compared
     score: int
     fuzzy: float
 
@@ -71,22 +72,6 @@ def _positive(policy: Host, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise Held("search", f"policy.{name}: positive integer required")
     return value
-
-
-def _retain(project: Project, policy: Host, source: Path, result: trial.Trial) -> float:
-    from unbake.decomp.trial import store_trial
-
-    store_trial(project, policy, source, result)
-    from unbake.decomp.drafts import Store
-
-    rows = Store(policy, project).rows(result.function)
-    matching = [row for row in rows if row["source_sha256"] == result.source_sha256]
-    if not matching:
-        raise Held("search", f"draft store {result.source_sha256}: missing row")
-    scores = matching[-1]["score"]
-    if not scores or set(scores) != set(result.compares):
-        raise Held("search", "fuzzy scores: missing VERSION")
-    return min(scores.values())
 
 
 def preprocess(project: Project, policy: Host, source: Path, version: str, deadline: float) -> str:
@@ -155,7 +140,7 @@ def run(
             raise Held("search", f"generator {generator}: propose missing")
     source = Path(source).resolve()
     text = read_text(source, "search")
-    out = scratch_directory(project, out, "search")
+    out.mkdir(parents=True, exist_ok=True)
     steps = out / "steps.jsonl"
     cache: dict[str, _Candidate | None] = {}
     evaluated = 0
@@ -179,13 +164,8 @@ def run(
             directory.mkdir(exist_ok=True)
             path = directory / source.name
             atomic_files.text(path, content, encoding="utf-8")
-            scratch = directory / "trial"
             try:
-                result = (
-                    trial.try_draft(project, policy, path, scratch)
-                    if version is None
-                    else trial.try_draft(project, policy, path, scratch, versions=[version])
-                )
+                result = measure(project, policy, path) if version is None else measure(project, policy, path, versions=(version,))
             except Held as failure:
                 error = failure.reason
                 cache[digest] = None
@@ -202,7 +182,7 @@ def run(
                     if version is not None:
                         confirmation_started = time.monotonic()
                         try:
-                            result = trial.try_draft(project, policy, path, directory / "confirmation")
+                            result = measure(project, policy, path)
                         except Held as failure:
                             error = failure.reason
                         else:
@@ -211,7 +191,7 @@ def run(
                     else:
                         confirmed = True
                     if confirmed:
-                        fuzzy = _retain(project, policy, path, result)
+                        fuzzy = result.best_percent
                         cache[digest] = _Candidate(
                             content, path, result, min(c.identical for c in result.compares.values()), fuzzy
                         )

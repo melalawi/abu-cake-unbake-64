@@ -35,7 +35,7 @@ from unbake.match import (
     reporting,
     staging,
 )
-from unbake.match.common import atomic, held
+from unbake.fold.common import atomic, held
 from unbake.match.publication import swap
 from unbake import config
 from unbake.project import build, compiler_choice, makefile, setup, workspace

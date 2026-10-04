@@ -1,4 +1,4 @@
-"""Discover include declarations with the same precedence as overlay compilation."""
+"""List the headers a unit can include, with a draft's private copies shadowing include/."""
 
 import os
 from collections.abc import Callable
@@ -7,8 +7,9 @@ from typing import Any
 
 
 def include_headers(project: Any, *, exclude: Callable[[Path], bool] | None = None) -> list[tuple[Path, str]]:
-    overlays = getattr(project, "overlay_roots", ())
-    fallbacks = dict(zip(project.include[len(overlays) :], overlays, strict=False)) if overlays else {}
+    """(path, relative name) of every header; a file in a work include root hides the same name below it."""
+    work_roots = tuple(getattr(project, "work_include", ()))
+    seen_names: set[str] = set()
     seen: set[Path] = set()
     headers = []
     for root in project.include:
@@ -23,12 +24,12 @@ def include_headers(project: Any, *, exclude: Callable[[Path], bool] | None = No
                 paths.extend(parent / name for name in files if name.endswith(".h") and not exclude(parent / name))
             paths.sort()
         for path in paths:
-            relative = path.relative_to(root)
-            overlay = fallbacks.get(root)
-            if overlay is not None and (overlay / relative).is_file():
+            relative = path.relative_to(root).as_posix()
+            if root not in work_roots and relative in seen_names:
                 continue
             resolved = path.resolve()
             if resolved not in seen:
                 seen.add(resolved)
-                headers.append((resolved, relative.as_posix()))
+                seen_names.add(relative)
+                headers.append((resolved, relative))
     return headers

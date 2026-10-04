@@ -8,7 +8,6 @@ import tempfile
 from pathlib import Path
 
 from unbake.decomp import draft_abi, gbi, measured_storage, similar
-from unbake.decomp import work as draft_work
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
 from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
@@ -28,7 +27,7 @@ from unbake.decomp.draft_layouts import normalize
 from unbake.decomp.draft_macros import lower
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
-from unbake.decomp.trial_compile import executable, read_text, run_tool, scratch_directory
+from unbake.process import read_text, run_tool
 from unbake.config import Held, Host, Project
 from unbake.project.headers import include_headers
 from unbake.project_tools import atomic as atomic_files
@@ -101,24 +100,20 @@ def _context(headers: list[tuple[Path, str]], selected: set[Path]) -> str:
 def _draft(
     project: Project,
     policy: Host,
-    function: str | None,
-    v: str | None,
-    scratch: Path,
+    function: str,
+    v: str,
+    work: Path,
+    extracted: Path,
     *,
-    generation: Path | None = None,
-    type_context: str = "",
-    announce: bool = True,
-    use_type_db: bool = True,
-) -> Path:
-    if not isinstance(function, str) or not re.fullmatch(r"[A-Za-z_]\w*", function):
+    type_context: str,
+    use_type_db: bool,
+) -> str:
+    """Draft text for one function. project is the draft view (its own include dir first)."""
+    if not re.fullmatch(r"[A-Za-z_]\w*", function):
         raise Held("m2c", "function is required and must be a C identifier")
-    v = version_for(project, v, "m2c")
-    if not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", v):
-        raise Held("m2c", f"version {v!r} cannot name a scratch directory")
     project.version(v)
-    directory = scratch_directory(project, scratch, "m2c")
-    assembly_path, address = assembly_source(project, v, function)
-    executable_path = executable(getattr(policy, "m2c", None), "m2c", "m2c")
+    assembly_text, address = assembly_source(project, v, function, extracted)
+    executable_path = str(policy.m2c)
     targets = {"sn64": "mips-gcc-c", "ido": "mips-ido-c"}
     compiler = project.compiler_for(project.src / (function + ".c"))
     if compiler.kind not in targets:
@@ -126,15 +121,14 @@ def _draft(
             "m2c", f"compiler.kind {project.compiler_for(project.src / (function + '.c')).kind!r} has no m2c target"
         )
     original_project = project
-    work = Path(tempfile.mkdtemp(prefix=function + ".m2c.", dir=directory))
-    project = draft_work.overlay(project, work)
+    work.mkdir(parents=True, exist_ok=True)
     headers = _headers(project)
     if not use_type_db:
         from unbake.typemap.storage import generated
 
         headers = [(path, name) for path, name in headers if not generated(project, path)]
     context = work / "context.c"
-    examples = similar.retrieve(project, function, v)
+    examples = similar.retrieve(project, function, v, extracted)
     examples_context = similar.context(examples)
     atomic_files.text(work / "similar-context.txt", examples_context, encoding="utf-8")
     # Shared headers own the types. Similar units' private declarations can
@@ -155,7 +149,7 @@ def _draft(
     )
     assembly = work / (function + ".s")
     body = whole_body(
-        canonical_entry(project, v, function, address, read_text(assembly_path, "m2c"), generation=generation), function
+        canonical_entry(project, v, function, address, assembly_text, generation=extracted), function
     )
     registers = [
         "zero",
@@ -195,9 +189,9 @@ def _draft(
         r"\$(\d+)\b", lambda match: "$" + registers[int(match[1])] if int(match[1]) < len(registers) else match[0], body
     )
     body = private_constants(
-        project, v, function, jump_tables(project, v, function, saved_returns(body)), generation=generation
+        project, v, function, jump_tables(project, v, function, saved_returns(body)), generation=extracted
     )
-    body = canonical_aliases(project, v, body, generation)
+    body = canonical_aliases(project, v, body, extracted)
     body = delay_slots(local_targets(body), function)
     database = None
     if type_context and use_type_db:
@@ -230,7 +224,6 @@ def _draft(
     )
     if not output.strip():
         raise Held("m2c", f"policy.m2c {executable_path} produced no draft for {function}")
-    source = work / (function + ".c")
     if type_context and use_type_db and "Unable to find stack arg" in output:
         mapped = draft_abi.mapped_body(original_project, function, v)
         if mapped is not None:
@@ -287,63 +280,38 @@ def _draft(
         f"{includes.rstrip()}\n\n{signatures}\n\n{output.rstrip()}\n"
     )
     candidate = work / "compile-proof" / (function + ".c")
-    candidate.parent.mkdir()
+    candidate.parent.mkdir(parents=True, exist_ok=True)
     atomic_files.text(candidate, content, encoding="utf-8")
     try:
         prove(project, policy, function, v, candidate)
     except Held as error:
         raise Held(
             error.phase,
-            f"m2c/type compile proof failed: {error.reason}\ndraft_path: {candidate}\n"
+            f"m2c/type compile proof failed: {error.reason}; draft kept at {candidate}. "
             "Repair the shared header types identified above and redraft.",
-            next_action=shlex.join(["unbake", "draft", function, "--scratch", str(directory)]),
         ) from error
-    atomic_files.text(source, content, encoding="utf-8")
-    draft_work.save_overlay(original_project, work)
-    if announce:
-        print(f"draft_path: {source}")
-        print(f"source filename: {function}.c (try identifies the function from the filename)")
-    return source
+    return content
 
 
 def draft(
     project: Project,
     policy: Host,
-    function: str | None,
-    v: str | None,
-    scratch: Path,
+    function: str,
+    version: str,
+    work: Path,
+    extracted: Path,
     *,
-    generation: Path | None = None,
-    type_context: str = "",
-    announce: bool = True,
+    type_context: str,
     use_type_db: bool = True,
-) -> Path:
+) -> str:
     """Name the selected function on every refusal from the draft boundary."""
     try:
         return _draft(
-            project,
-            policy,
-            function,
-            v,
-            scratch,
-            generation=generation,
-            type_context=type_context,
-            announce=announce,
-            use_type_db=use_type_db,
+            project, policy, function, version, work, extracted, type_context=type_context, use_type_db=use_type_db
         )
     except Held as error:
-        if function and not error.reason.startswith(function + ":"):
-            raise Held(
-                error.phase,
-                f"{function}: {error.reason}",
-                next_action=error.next_action or shlex.join(["unbake", "draft", function, "--scratch", str(scratch)]),
-            ) from error
-        if function and error.next_action is None:
-            error.next_action = shlex.join(["unbake", "draft", function, "--scratch", str(scratch)])
+        if not error.reason.startswith(function + ":"):
+            raise Held(error.phase, f"{function}: {error.reason}", next_action=error.next_action) from error
         raise
     except (OSError, UnicodeError) as error:
-        raise Held(
-            "m2c",
-            f"{function}: draft input/output: {error}",
-            next_action=shlex.join(["unbake", "draft", function, "--scratch", str(scratch)]) if function else None,
-        ) from error
+        raise Held("m2c", f"{function}: draft input/output: {error}") from error

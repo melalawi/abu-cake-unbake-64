@@ -7,8 +7,8 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.decomp.drafts import is_partial
-from unbake.decomp.trial_compare import fields
+from unbake.fold.drafts import is_partial
+from unbake.work.score import fields
 from unbake.layout import split
 from unbake.config import Held, Project
 
@@ -70,7 +70,9 @@ def overlap(left: tuple[int, ...], right: tuple[int, ...]) -> float:
     return len(a & b) / len(a | b)
 
 
-def retrieve(project: Project, function: str, version: str, *, top_k: int = 5, bound: int = 512) -> list[Similar]:
+def retrieve(
+    project: Project, function: str, version: str, extracted: Path, *, top_k: int = 5, bound: int = 512
+) -> list[Similar]:
     """Rank matched rows in one VERSION; skip absent and partial sources.
 
     Distances are exact for returned rows. Candidates beyond the edit bound
@@ -119,7 +121,7 @@ def retrieve(project: Project, function: str, version: str, *, top_k: int = 5, b
         del ranked[top_k:]
     results = []
     for distance, negative_overlap, name, edits, source, c, item in ranked[:top_k]:
-        paths = sorted((project.asm / version).rglob(Path(item.path).name + ".s"))
+        paths = sorted((extracted / "asm").rglob(Path(item.path).name + ".s"))
         if len(paths) == 1:
             asm = paths[0].read_text()
         else:

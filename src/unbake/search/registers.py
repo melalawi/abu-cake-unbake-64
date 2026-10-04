@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from unbake.decomp.explain import Allocation, leverage
-from unbake.decomp.trial import Trial
+from unbake.work.compare import Compared
 from unbake.config import Held
 from unbake.search.core import Context, Mutation
 
@@ -81,7 +81,7 @@ def _definitions(local: Local, code: str) -> list[int]:
     return definitions
 
 
-def propose(source: str, trial: Trial, ctx: Context) -> Iterator[Mutation]:
+def propose(source: str, trial: Compared, ctx: Context) -> Iterator[Mutation]:
     """Yield reorder, split, recycle, merge and scope mutations for one C body.
 
     ctx.allocation must describe this trial. Transformations that recycle or

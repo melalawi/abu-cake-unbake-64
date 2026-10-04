@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import inputs
-from unbake.decomp import plan
+from unbake.work import inventory as plan
 from unbake.decomp.indexed import indexed_references
 from unbake.layout import split
 from unbake.config import Held, Project

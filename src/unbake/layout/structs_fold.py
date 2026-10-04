@@ -700,7 +700,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
     Both matching and NON_MATCHING source branches are checked in every VERSION.
     """
     from unbake.decomp.explain import _absolute_includes
-    from unbake.decomp.trial_compile import run_tool
+    from unbake.process import run_tool
     from unbake.project import makefile, toolchain
     from unbake.project_tools.sn64_cc import partition_flags
 

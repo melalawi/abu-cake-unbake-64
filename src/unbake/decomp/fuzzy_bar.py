@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from unbake.decomp.trial_compare import TYPES
+from unbake.work.score import TYPES
 
 
 @dataclass(frozen=True)

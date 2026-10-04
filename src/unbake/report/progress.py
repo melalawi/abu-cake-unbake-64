@@ -1,4 +1,4 @@
-"""Native objdiff reports and README progress derived only from those reports."""
+"""Progress reports (objdiff report schema v2) and the README progress block derived from them."""
 
 from __future__ import annotations
 
@@ -14,57 +14,9 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
-from unbake.decomp.score import objdiff_cli
-from unbake.project import build, makefile
 from unbake.config import Held, Host, Project
 from unbake.report import files, readme_layout
 from unbake.report import units as report_units
-
-
-def target_object(function: str, code: bytes) -> bytes:
-    """Wrap a cartridge function in a big-endian MIPS ELF32 relocatable object."""
-    if not isinstance(function, str) or not function or "\x00" in function:
-        raise Held("report", "target_object.function is missing or invalid")
-    if not code or len(code) % 4:
-        raise Held("report", f"target_object.code for {function} must contain whole MIPS words")
-    strings = b"\x00" + function.encode("utf-8") + b"\x00"
-    section_names = b"\x00.text\x00.symtab\x00.strtab\x00.shstrtab\x00"
-    symbols = bytes(16) + struct.pack(">IIIBBH", 0, 0, 0, 3, 0, 1) + struct.pack(">IIIBBH", 1, 0, len(code), 18, 0, 1)
-    content = bytearray(bytes(52))
-    headers = [bytes(40)]
-    for name, kind, flags, data, link, info, alignment, entry_size in (
-        (".text", 1, 6, code, 0, 0, 4, 0),
-        (".symtab", 2, 0, symbols, 3, 2, 4, 16),
-        (".strtab", 3, 0, strings, 0, 0, 1, 0),
-        (".shstrtab", 3, 0, section_names, 0, 0, 1, 0),
-    ):
-        content.extend(bytes(-len(content) % alignment))
-        offset = len(content)
-        content.extend(data)
-        headers.append(
-            struct.pack(
-                ">IIIIIIIIII",
-                section_names.index(name.encode() + b"\x00"),
-                kind,
-                flags,
-                0,
-                offset,
-                len(data),
-                link,
-                info,
-                alignment,
-                entry_size,
-            )
-        )
-    content.extend(bytes(-len(content) % 4))
-    section_offset = len(content)
-    content.extend(b"".join(headers))
-    content[:52] = (
-        b"\x7fELF\x01\x02\x01"
-        + bytes(9)
-        + struct.pack(">HHIIIIIHHHHHH", 1, 8, 1, 0, 0, section_offset, 536875009, 52, 0, 0, 40, 5, 4)
-    )
-    return bytes(content)
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -311,71 +263,77 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     return before + block + after
 
 
-def measure(project: Project, policy: Host, version: str, *, generation: Path | None = None) -> dict[str, Any]:
-    """Generate native totals from the current split and build without publishing them."""
-    if generation is None:
-        with ExitStack() as holds:
-            with build.lock(project):
-                generation = holds.enter_context(build.pin(build.current_generation(project, version)))
-            return measure(project, policy, version, generation=generation)
-    tool = objdiff_cli(policy, "report")
-    try:
-        reports = generation / "report"
-        reports.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=reports, prefix="generate-") as temporary:
-            workspace = Path(temporary)
-            units = report_units.units(project, policy, version, generation, workspace)
-            for unit in units:
-                for field in ("base_path", "target_path"):
-                    if field not in unit:
-                        continue
-                    path = Path(os.path.abspath(generation / unit[field]))
-                    if path.is_relative_to(workspace):
-                        content = path.read_bytes()
-                        durable = reports / "objects" / (hashlib.sha256(content).hexdigest() + ".o")
-                        files.write(durable, content)
-                        unit[field] = str(durable.relative_to(generation))
-            configuration = {"build_base": False, "build_target": False, "units": units}
-            files.write(generation / "objdiff.json", (json.dumps(configuration, indent=2) + "\n").encode())
-            # Each invocation scores its own configuration, even if another
-            # report atomically replaces the public objdiff.json meanwhile.
-            private_units = [
-                {
-                    k: os.path.abspath(generation / v) if k in ("base_path", "target_path") else v
-                    for k, v in unit.items()
-                }
-                for unit in units
-            ]
-            files.write(workspace / "objdiff.json", json.dumps({**configuration, "units": private_units}).encode())
-            output = workspace / "report.json"
-            result = subprocess.run(
-                [
-                    str(tool),
-                    "report",
-                    "generate",
-                    "--project",
-                    str(workspace),
-                    "--output",
-                    str(output),
-                    "--format",
-                    "json",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode:
-                raise Held("report", f"objdiff report generate VERSION {version}: {result.stderr.strip()}")
-            document = _json(output)
-            _native_counts(document, output)
-            reported_units = document.get("units")
-            if not isinstance(reported_units, list) or [unit.get("name") for unit in reported_units] != [
-                unit["name"] for unit in units
-            ]:
-                raise Held("report", f"objdiff report {output}.units differ from objdiff.json")
-            return document
-    except OSError as error:
-        raise Held("report", f"VERSION {version} report file/tool: {error}") from error
+def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
+    size = row.end - row.start
+    matched = row.kind == "c"
+    measures: dict[str, Any] = {
+        "total_code": str(size),
+        "matched_data_percent": 100.0,
+        "total_functions": 1,
+        "complete_data_percent": 100.0,
+        "total_units": 1,
+    }
+    function: dict[str, Any] = {"name": row.name, "size": str(size), "metadata": {}, "address": "0"}
+    section: dict[str, Any] = {"name": ".text", "size": str(size), "metadata": {}}
+    fuzzy = 100.0 if matched else best
+    if fuzzy is not None:
+        measures["fuzzy_match_percent"] = fuzzy
+        function["fuzzy_match_percent"] = fuzzy
+        section["fuzzy_match_percent"] = fuzzy
+    if matched:
+        measures.update(
+            matched_code=str(size),
+            matched_code_percent=100.0,
+            matched_functions=1,
+            matched_functions_percent=100.0,
+            complete_code=str(size),
+            complete_code_percent=100.0,
+            complete_units=1,
+        )
+    metadata: dict[str, Any] = {"complete": matched}
+    if matched:
+        metadata["source_path"] = f"src/{row.path}.c"
+    return {"name": row.name, "measures": measures, "sections": [section], "functions": [function], "metadata": metadata}
+
+
+def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
+    """Progress of one version from its split rows and the best attempt of each unmatched function."""
+    from unbake.work import attempts
+
+    rows = report_units.functions(project.version(version))
+    best = {}
+    for function in attempts.functions(project):
+        found = attempts.read(project, function)
+        scores = [row.versions[version]["percent"] for row in found if version in row.versions]
+        if scores:
+            best[function] = max(scores)
+    units = [_unit(row, best.get(row.name)) for row in rows]
+    total = sum(row.end - row.start for row in rows)
+    matched_rows = [row for row in rows if row.kind == "c"]
+    matched = sum(row.end - row.start for row in matched_rows)
+    fuzzy_bytes = sum(
+        (row.end - row.start) * (100.0 if row.kind == "c" else best.get(row.name, 0.0)) / 100.0 for row in rows
+    )
+
+    def share(part: float, whole: float) -> float:
+        return 100.0 * part / whole if whole else 0.0
+
+    measures = {
+        "fuzzy_match_percent": share(fuzzy_bytes, total),
+        "total_code": str(total),
+        "matched_code": str(matched),
+        "matched_code_percent": share(matched, total),
+        "matched_data_percent": 100.0,
+        "total_functions": len(rows),
+        "matched_functions": len(matched_rows),
+        "matched_functions_percent": share(len(matched_rows), len(rows)),
+        "complete_code": str(matched),
+        "complete_code_percent": share(matched, total),
+        "complete_data_percent": 100.0,
+        "total_units": len(rows),
+        "complete_units": len(matched_rows),
+    }
+    return {"measures": measures, "units": units, "version": 2}
 
 
 def findings(project: Project, policy: Host) -> list[str]:
@@ -398,7 +356,7 @@ def findings(project: Project, policy: Host) -> list[str]:
             if current_units != saved_units or any(
                 actual.get(field, 0) != expected.get(field, 0) for field in actual.keys() | expected.keys()
             ):
-                lines.append(f"HELD(check): stale report VERSION {version}: run unbake report")
+                lines.append(f"HELD(check): stale report VERSION {version}: run unbake check")
         except Held as error:
             lines.append(f"HELD(check): report VERSION {version}: {error.reason}")
     return lines
@@ -433,17 +391,7 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
         raise Held("report", "project.versions is missing")
     descriptions = readme_descriptions(project)
     if reports is None:
-        with ExitStack() as holds:
-            with build.lock(project):
-                generations = {
-                    v: holds.enter_context(build.pin(build.current_generation(project, v))) for v in project.versions
-                }
-            reports = {v: measure(project, policy, v, generation=g) for v, g in generations.items()}
-            with build.lock(project):
-                for version, generation in generations.items():
-                    if build.current_generation(project, version) != generation:
-                        raise Held("report", f"VERSION {version}: generation changed during report; retry")
-                return write(project, policy, reports=reports)
+        reports = {v: measure(project, policy, v) for v in project.versions}
     readme = project.root / "README.md"
     if set(reports) != set(project.versions):
         raise Held("report", "reports: expected every configured VERSION exactly once")
@@ -458,13 +406,13 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
         if readme.exists():
             original = readme.read_bytes().decode("utf-8", errors="surrogateescape")
         else:
-            original = (makefile.TEMPLATES / "README.ready.md").read_text().replace("@TITLE@", project.title)
+            original = (Path(__file__).parents[1] / "templates" / "README.ready.md").read_text().replace("@TITLE@", project.title)
         rendered = render(original, reports, descriptions=descriptions)
         written: list[Path] = []
         for version, document in reports.items():
             destination = project.root / "versions" / version / "report.json"
             files.write(destination, (json.dumps(document, indent=2) + "\n").encode())
-            written.extend((project.build_link(version) / "objdiff.json", destination))
+            written.append(destination)
         files.write(readme, rendered.encode("utf-8", errors="surrogateescape"))
         written.append(readme)
     except OSError as error:

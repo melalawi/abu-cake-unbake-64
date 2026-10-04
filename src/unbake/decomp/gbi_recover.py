@@ -390,7 +390,7 @@ def lower(source: str, catalogue: list[Pattern]) -> str:
 
 def catalogue(project: Project, policy: Host, unit: Path, version: str, source: str) -> list[Pattern]:
     """Read active SDK definitions under the unit's configured preprocessor flags."""
-    from unbake.decomp.trial_compile import run_tool
+    from unbake.process import run_tool
     from unbake.project import makefile
 
     recipe = makefile.recipe(project)
@@ -457,13 +457,15 @@ def proven(
     """Keep a private rewrite only if every owning VERSION and mode is identical."""
     if not any(f.rule in RULES for f in checks.run(source)):
         return source
-    from unbake.decomp import gbi_proof, work
+    from dataclasses import replace as replaced
+
+    from unbake.decomp import gbi_proof
     from unbake.layout import split as layout_split
 
     before = import_aliases(project, source, headers, sdk_aliases=False)
     # Provider resolution may have added the installed SDK before a missing
     # legacy include. Restore the authored SDK choice for the raw comparison.
-    from unbake.match.imports import _INCLUDE, _without_comments
+    from unbake.fold.imports import _INCLUDE, _without_comments
 
     requested = set(_INCLUDE.findall(_without_comments(authored if authored is not None else source)))
     installed = {
@@ -476,7 +478,7 @@ def proven(
     legacy = any(
         (old / name).is_file() and re.search(r"^\s*#\s*define\s+g(?:s)?[DS]P\w+\(", (old / name).read_text(), re.M)
         for name in requested - installed
-        for old in getattr(project, "declaration_evidence", ())
+        for old in ()
     )
     if legacy and not requested & installed:
         before = _INCLUDE.sub(lambda match: "" if match[1] in installed else match[0], before)
@@ -484,9 +486,10 @@ def proven(
 
     with tempfile.TemporaryDirectory(prefix="gbi-recovery-") as temporary:
         root = Path(temporary)
-        staged = work.overlay(project, root)
+        staged = replaced(project, work_include=(root / "include", *project.work_include))
         for path, text in headers.items():
-            destination = root / "overlay" / path.relative_to(project.root)
+            home = next(include for include in project.include if path.is_relative_to(include))
+            destination = root / "include" / path.relative_to(home)
             destination.parent.mkdir(parents=True, exist_ok=True)
             atomic_files.text(destination, text)
         versions = layout_split.holding_versions(project, unit.stem)
@@ -494,7 +497,7 @@ def proven(
         if not recovered or any(text != recovered[0] for text in recovered):
             raise Held("gbi", f"{unit.stem}: SDK macro recovery differs between owning VERSIONs")
         from unbake.layout.header_context import Headers
-        from unbake.match import imports
+        from unbake.fold import imports
 
         after = imports.resolve(staged, Headers.read(staged), recovered[0], unit.stem)
         # The raw form sees its actual legacy SDK macros, not the replacement
@@ -544,7 +547,7 @@ def import_aliases(
     """
     if not any(f.rule in rules for f in checks.run(source)):
         return source
-    from unbake.match.imports import _INCLUDE, _without_comments
+    from unbake.fold.imports import _INCLUDE, _without_comments
 
     scalar_decl = re.compile(r"\btypedef\s+((?:(?:unsigned|signed|char|short|int|long|float|double)\s+)+)(\w+)\s*;")
 

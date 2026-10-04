@@ -10,15 +10,16 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
-from unbake.decomp import drafts, gbi_recover, needs, volatile_rewrite
+from unbake.decomp import gbi_recover, needs
+from unbake.fold import drafts
 from unbake.layout import entries, shared, split, structs
 from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
-from unbake.match import imports, pool_literals, reporting, rewrite_view, source_views, type_rewrite
-from unbake.match.common import held
+from unbake.fold import imports, pool_literals, notes as reporting, rewrite_view, source_views, type_rewrite
+from unbake.fold.common import held
 from unbake.config import Held, Host, Project
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
 
@@ -219,11 +220,6 @@ def fold_source(
         text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
     text = imports.resolve(project, headers, text, function)
     text = pool_literals.lower(project, function, text, versions)
-    text, has_evidence = volatile_rewrite.proven(
-        project, policy, project.src / f"{function}.c", text, headers, versions
-    )
-    if has_evidence:
-        evidence_end = evidence_end or 1
     parsers = source_views.parsers(project, policy, text, versions, headers)
     text, tag_only = _layout_names(
         project,
@@ -355,7 +351,7 @@ def _layout_names(
             if context_project is None:
                 temporary = cleanup.enter_context(tempfile.TemporaryDirectory(prefix="match-types-"))
                 roots = source_views.header_includes(project, headers, Path(temporary))
-                context_project = replace(project, include=roots, overlay_roots=roots)
+                context_project = replace(project, work_include=tuple(roots))
             return context_project
 
         def typed_context(version: str) -> str:

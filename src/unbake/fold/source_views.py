@@ -13,7 +13,7 @@ from typing import Any
 
 from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
-from unbake.match.common import held
+from unbake.fold.common import held
 from unbake.config import Host, Project
 from unbake.project_tools import atomic as atomic_files
 
@@ -81,7 +81,7 @@ def typed_context(
             local = context_project
             if local is None:
                 roots = header_includes(project, headers, Path(temporary))
-                local = replace(project, include=roots, overlay_roots=roots)
+                local = replace(project, work_include=tuple(roots))
             if source_context:
                 # Source context includes promoted components excluded from header-only evidence.
                 source = Path(temporary) / "rewrite-context.c"

@@ -1,0 +1,249 @@
+"""The extract step: splat per version into the shared cache, for drafting, explaining and symbol tables.
+
+The build never uses this output (unmatched code is copied from the ROM). Splat runs with every
+C row turned back into assembly, so landing a function never changes the extraction key.
+The unpacked directory holds asm/, include/, splat_symbols.csv and symbol-addresses.txt.
+"""
+
+from __future__ import annotations
+
+import ast
+import csv
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
+from pathlib import Path
+
+from unbake import inputs
+from unbake.cache import Cache, key
+from unbake.config import Held, Host, Project
+from unbake.project_tools import atomic as atomic_files
+
+_FINGERPRINT_PARTS = ("extract.py",)
+_C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)c(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)
+_ALIGN = re.compile(
+    r"^(\s*-\s*\[\s*(?:0x[\da-fA-F]+|\d+)\s*,\s*(?:asm|c)\s*,\s*[^,\]\n]+)"
+    r",\s*\{\s*align:\s*(?:0x[\da-fA-F]+|\d+)\s*\}(\s*\]\s*)$",
+    re.M,
+)
+
+
+def scalar(text: str) -> str:
+    text = text.split(" #", 1)[0].strip()
+    return str(ast.literal_eval(text)) if text[:1] in {"'", '"'} else text
+
+
+def assembly_rows(text: str) -> str:
+    """The split with every C row as assembly and no alignment annotations (splat's own syntax)."""
+    text = _ALIGN.sub(lambda match: match[1] + match[2], text)
+    return _C_ROW.sub(lambda match: match[1] + "asm" + match[2] + match[3] + match[4], text)
+
+
+def _version_key(project: Project, host: Host, version: str) -> str:
+    configured = project.version(version)
+    return key(
+        Path(__file__),
+        "extract-v1",
+        configured.baserom_sha1,
+        assembly_rows(configured.split.read_text()),
+        configured.symbols,
+        inputs.digest(host.splat),
+        "SN64" if project.compilers[project.default_compiler].kind == "sn64" else "IDO",
+    )
+
+
+def input_key(project: Project, host: Host) -> str:
+    return key(*(_version_key(project, host, version) for version in project.versions))
+
+
+def _options(project: Project, version: str, staging: Path, symbols: Path) -> dict[str, object]:
+    configured = project.version(version)
+    sn64 = project.compilers[project.default_compiler].kind == "sn64"
+    return {
+        "base_path": str(staging),
+        "target_path": str(configured.baserom.resolve()),
+        "asm_path": str(staging / "asm"),
+        "src_path": str(staging / "src"),
+        "asset_path": str(staging / "assets"),
+        "build_path": str(staging / "build"),
+        "ld_script_path": str(staging / "layout.ld"),
+        "cache_path": str(staging / "cache"),
+        "symbol_addrs_path": str(symbols),
+        "undefined_funcs_auto_path": str(staging / "undefined_funcs_auto.txt"),
+        "undefined_syms_auto_path": str(staging / "undefined_syms_auto.txt"),
+        "generated_asm_macros_directory": str(staging / "include"),
+        "ld_legacy_generation": True,
+        "create_asm_dependencies": False,
+        "dump_symbols": True,
+        "extensions_path": str(project.tools / "splat_ext"),
+        "compiler": "SN64" if sn64 else "IDO",
+    }
+
+
+def _make_archive(project: Project, host: Host, version: str, destination: Path) -> None:
+    configured = project.version(version)
+    with tempfile.TemporaryDirectory(prefix="extract-", dir=destination.parent) as temporary:
+        staging = Path(temporary)
+        config = staging / "input.yaml"
+        overlay = staging / "outputs.yaml"
+        atomic_files.text(config, assembly_rows(configured.split.read_text()))
+        options = _options(project, version, staging, configured.symbols.resolve())
+        atomic_files.text(
+            overlay, "options:\n" + "".join(f"  {name}: {json.dumps(value)}\n" for name, value in options.items())
+        )
+        result = subprocess.run(
+            [str(host.splat), "split", str(config), str(overlay)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=project.root,
+        )
+        if result.returncode:
+            tail = result.stdout.decode(errors="replace").strip().splitlines()[-5:]
+            raise Held("extract", f"extract.splat.{version}: splat exited {result.returncode}: " + " | ".join(tail))
+        dump = staging / ".splat" / "splat_symbols.csv"
+        if not dump.is_file():
+            raise Held("extract", f"extract.splat.{version}: splat wrote no symbol dump")
+        shutil.copyfile(dump, staging / "splat_symbols.csv")
+        committed = instruction_symbols(
+            staging / "asm", discovered_symbols(dump, symbols_from([configured.symbols]))
+        )
+        units = unit_addresses(configured.split.read_text())
+        for name, address in units.items():
+            if name in committed and committed[name] != address:
+                raise Held("extract", f"extract.symbols.{version}: split and symbols disagree for {name}")
+            committed[name] = address
+        atomic_files.text(
+            staging / "symbol-addresses.txt",
+            "".join(
+                f"{name} 0x{value:08X}{' unit' if name in units else ''}\n" for name, value in sorted(committed.items())
+            ),
+        )
+        with tarfile.open(destination, "w") as archive:
+            for name in ("asm", "include", "assets", "splat_symbols.csv", "symbol-addresses.txt", "layout.ld"):
+                if (staging / name).exists():
+                    archive.add(staging / name, arcname=name)
+
+
+def directory(project: Project, host: Host, version: str) -> Path:
+    """The unpacked extraction of one version, computed once per content key."""
+    content_key = _version_key(project, host, version)
+    store = Cache(host.cache_root)
+    archive = store.produce("extract", content_key, lambda path: _make_archive(project, host, version, path))
+    unpacked = archive.with_name(archive.name + ".d")
+    if unpacked.is_dir():
+        return unpacked
+    with (archive.parent / ".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not unpacked.is_dir():
+            pending = Path(tempfile.mkdtemp(prefix=".unpack-", dir=archive.parent))
+            with tarfile.open(archive) as bundle:
+                bundle.extractall(pending, filter="tar")
+            os.replace(pending, unpacked)
+    return unpacked
+
+
+def segments(project: Project, host: Host, version: str) -> Path:
+    return directory(project, host, version)
+
+
+def function_asm(project: Project, host: Host, version: str, row_path: str) -> str:
+    """Assembly text of one split row (its asm file, written by splat from the row's path)."""
+    path = directory(project, host, version) / "asm" / (row_path + ".s")
+    if not path.is_file():
+        raise Held("extract", f"extract.asm.{version}: no assembly for row {row_path}")
+    return path.read_text()
+
+
+def symbol_table(project: Project, host: Host, version: str) -> dict[str, int]:
+    """Every named address of one version: symbol_addrs, splat discoveries, instruction pairs and units."""
+    path = directory(project, host, version) / "symbol-addresses.txt"
+    result = {}
+    for line in path.read_text().splitlines():
+        name, value, *_ = line.split()
+        result[name] = int(value, 16)
+    return result
+
+
+def symbols_from(paths: list[Path]) -> dict[str, int]:
+    found: dict[str, int] = {}
+    for path in paths:
+        for name, value in re.findall(r"([A-Za-z_.$][\w.$]*)\s*=\s*(0[xX][0-9A-Fa-f]+)\s*;", path.read_text()):
+            address = int(value, 16)
+            if name in found and found[name] != address:
+                raise Held("extract", f"extract.symbols: conflicting symbol {name} in {path}")
+            found[name] = address
+    return found
+
+
+def discovered_symbols(path: Path, committed: dict[str, int]) -> dict[str, int]:
+    """Splat's explicit addresses, including labels compiled C never names."""
+    found = dict(committed)
+    with path.open(newline="") as stream:
+        for row in csv.DictReader(stream):
+            name = row["name"]
+            if not re.fullmatch(r"[A-Za-z_.$][\w.$]*", name):
+                raise Held("extract", f"extract.symbols: invalid discovered symbol {name}")
+            address = int(row["vram_start"], 16)
+            if name in found and found[name] != address:
+                raise Held("extract", f"extract.symbols: conflicting discovered symbol {name}")
+            found[name] = address
+    return found
+
+
+def instruction_symbols(directory: Path, committed: dict[str, int]) -> dict[str, int]:
+    """Addresses proved by original HI16/LO16 words, for labels absent from splat's symbol dump."""
+    found = dict(committed)
+    pattern = re.compile(
+        r"/\*\s*[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([0-9A-Fa-f]{8})\s*\*/[^\n]*?%(hi|lo)\(([A-Za-z_.$][\w.$]*)\)"
+    )
+    for path in directory.rglob("*.s"):
+        pending: dict[str, list[int]] = {}
+        for raw, kind, name in pattern.findall(path.read_text()):
+            word = int(raw, 16)
+            if kind == "hi" and word >> 26 == 15:
+                pending.setdefault(name, []).append((word & 65535) << 16)
+            elif kind == "lo":
+                low = word & 65535
+                low = low - 65536 if low & 32768 else low
+                for high in pending.pop(name, []):
+                    address = (high + low) & 0xFFFFFFFF
+                    if name in found and found[name] != address:
+                        raise Held("extract", f"extract.symbols: conflicting address for {name} in {path.name}")
+                    found[name] = address
+    return found
+
+
+def unit_addresses(text: str) -> dict[str, int]:
+    """Explicit code row placements from the split."""
+    found: dict[str, int] = {}
+    start = vram = None
+    in_code = False
+    for line in text.splitlines():
+        if re.match(r"^  - ", line):
+            start = vram = None
+            in_code = False
+        match = re.match(r"^    (type|start|vram):\s*(\S+)", line)
+        if match:
+            field, value = match.groups()
+            if field == "type":
+                in_code = value == "code"
+            elif field == "start":
+                start = int(value, 0)
+            else:
+                vram = int(value, 0)
+        row = re.match(r"^      - \[\s*(0x[0-9A-Fa-f]+|\d+)\s*,\s*(asm|c)\s*,\s*([^\],]+)", line)
+        if row:
+            if not in_code or start is None or vram is None:
+                raise Held("extract", "extract.split: code segment requires type, start, vram before subsegments")
+            rom, _, name = row.groups()
+            name = Path(scalar(name)).name
+            address = vram + int(rom, 0) - start
+            if name in found and found[name] != address:
+                raise Held("extract", f"extract.split: conflicting split unit symbol {name}")
+            found[name] = address
+    return found

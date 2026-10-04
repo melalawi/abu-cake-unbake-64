@@ -357,7 +357,7 @@ def source_names(
     """
     import json
 
-    from unbake.match.source_views import _preprocessed_lines, _version_lines
+    from unbake.fold.source_views import _preprocessed_lines, _version_lines
     from unbake.cache import Cache, key
     from unbake.typemap.declarations import clean
     from unbake.typemap.storage import generated

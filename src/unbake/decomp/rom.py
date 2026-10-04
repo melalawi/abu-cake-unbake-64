@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from unbake.decomp.trial_compile import read_text
+from unbake.process import read_text
 from unbake.layout import split
 from unbake.config import Held, Project, Version
 

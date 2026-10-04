@@ -8,19 +8,11 @@ from pathlib import Path
 
 # These streams contain no generated project data and need stable lock inodes.
 _LOCKS = {
-    "project_tools/compile_identity.py": {'(path.parent / ".identity.lock").open("a")'},
+    "cache.py": {'(path.parent / ".lock").open("a")'},
+    "extract.py": {'(archive.parent / ".lock").open("a")'},
     "project/toolchain.py": {'(cache / f".{spec.id}.lock").open("a")'},
-    "project/workspace.py": {'(Path(name) / ".inuse").open("a+b")'},
-    "project/build.py": {'(generation / ".inuse").open("a+b")', 'path.open("a+b")'},
-    "match/publication.py": {
-        '(path / ".inuse").open("a+b")',
-        '(generation / ".inuse").open("a+b")',
-    },
 }
-# External policy state, serialized by flock on the ledger itself; never cloned.
-_STATE = {
-    "decomp/drafts.py": {'(self.root / "trials.jsonl").open("a+", encoding="utf-8")'},
-}
+_STATE: dict[str, set[str]] = {}
 
 
 def violations(path: Path, content: str) -> list[str]:

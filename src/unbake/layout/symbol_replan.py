@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tempfile
+
 import csv
 import hashlib
 import json
@@ -16,7 +18,7 @@ import toml  # type: ignore[import-untyped]
 from unbake.cli.common import suggest
 from unbake.layout import planner, port, split, symbol_identity, symbol_proof
 from unbake.layout.symbol_identity import similarity_distribution
-from unbake.project import setup, workspace
+from unbake.project import setup
 from unbake.config import Held, Project, Host, SymbolPolicy
 from unbake.project.flow import FunctionRecord, LayoutManifest
 from unbake.project.rom import Rom, load
@@ -282,7 +284,7 @@ def publish(
         data["units"] = dict(sorted(units.items()))
     # Data identities rebind addresses per version, which only the full proof covers.
     fast = symbol_proof.available(project, replacements) and not binding_data.get("renames")
-    with workspace.temporary(project, prefix="symbol-proof-", directory=directory) as temporary:
+    with tempfile.TemporaryDirectory(prefix="symbol-proof-", dir=directory) as temporary:
         tree = Path(temporary) / "tree"
         setup._copy_inputs(project, tree, inputs)
         for v in project.versions:

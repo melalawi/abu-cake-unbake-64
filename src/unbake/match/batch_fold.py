@@ -25,7 +25,7 @@ from unbake.layout.structs import Layout
 from unbake.layout.structs_identity import Index, identity
 from unbake.layout.structs_types import Aggregate
 from unbake.match import declarations, forked, reporting, source_views, type_rewrite
-from unbake.match.common import held
+from unbake.fold.common import held
 from unbake.config import Held, Host, Project
 
 _WORD = re.compile(r"[A-Za-z_]\w*")

@@ -12,28 +12,19 @@ from pathlib import Path
 
 from unbake.layout import split
 from unbake.config import Held, Project
-from unbake.project_tools.extract import discovered_symbols
+from unbake.extract import discovered_symbols
 
 
-def assembly_source(project: Project, version: str, function: str) -> tuple[Path, int]:
-    """Select the current split unit, excluding stale nonmatching copies."""
+def assembly_source(project: Project, version: str, function: str, extracted: Path) -> tuple[str, int]:
+    """The function's split row assembly from the extraction, and its address."""
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1:
         raise Held("m2c", f"{function}: expected one function row in VERSION {version}, found {len(rows)}")
     row = rows[0]
-    root = project.asm / version
-    if row.kind == "asm":
-        path = root / (row.path + ".s")
-    else:
-        directory = root / "nonmatchings" / row.path
-        paths = sorted(directory.rglob(function + ".s"))
-        if len(paths) != 1:
-            raise Held("m2c", f"{directory}: expected one current assembly file {function}.s, found {len(paths)}")
-        path = paths[0]
+    path = extracted / "asm" / (row.path + ".s")
     if not path.is_file():
-        command = shlex.join(["make", "-C", str(project.root), f"VERSION={version}", "extract"])
-        raise Held("m2c", f"{path}: current assembly source is missing; generate: {command}")
-    return path, row.address
+        raise Held("m2c", f"{function}: extraction has no assembly for row {row.path} in VERSION {version}")
+    return path.read_text(), row.address
 
 
 def canonical_entry(
@@ -43,7 +34,9 @@ def canonical_entry(
     labels = re.findall(r"^\s*glabel\s+(\S+)\s*$", assembly, re.M)
     if function in labels or re.search(rf"^\s*{re.escape(function)}:\s*$", assembly, re.M):
         return assembly
-    dump = (project.build_link(version) if generation is None else generation) / "splat_symbols.csv"
+    if generation is None:
+        raise Held("m2c", f"{function}: extraction directory required")
+    dump = generation / "splat_symbols.csv"
     try:
         values = discovered_symbols(dump, {})
     except (OSError, ValueError, KeyError) as error:
@@ -154,7 +147,9 @@ def private_constants(
         from unbake.decomp.rom import symbol_values
 
         values = symbol_values(configured.symbols)
-        build = project.build_link(version) if generation is None else generation
+        if generation is None:
+            raise Held("m2c", f"{function}: extraction directory required")
+        build = generation
         symbols = build / "splat_symbols.csv"
         if symbols.is_file():
             discovered = discovered_symbols(symbols, {})
@@ -267,7 +262,9 @@ def canonical_aliases(project: Project, version: str, assembly: str, generation:
     from unbake.decomp.rom import symbol_values
 
     values = symbol_values(project.version(version).symbols)
-    build = project.build_link(version) if generation is None else generation
+    if generation is None:
+        raise Held("m2c", "canonical aliases: extraction directory required")
+    build = generation
     dump = build / "splat_symbols.csv"
     if dump.is_file():
         for name, value in discovered_symbols(dump, {}).items():

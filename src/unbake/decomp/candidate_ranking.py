@@ -2,8 +2,8 @@
 
 from collections.abc import Mapping
 
-from unbake.decomp.score import weakest
-from unbake.decomp.trial_compare import Compare
+from unbake.work.score import weakest
+from unbake.work.score import Compare
 
 
 def candidate_rank(

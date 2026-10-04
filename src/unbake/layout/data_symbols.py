@@ -60,7 +60,7 @@ def counterparts(project: Project, name: str) -> dict[str, str]:
 def addresses(project: Project, name: str) -> dict[str, int]:
     """Carry a data address through aligned references in corresponding code."""
     from unbake.decomp.symbols import references
-    from unbake.decomp.trial_compare import align_words, words
+    from unbake.work.score import align_words, words
     from unbake.layout import xver
     from unbake.project.rom import normalise
 

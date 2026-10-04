@@ -98,7 +98,7 @@ def required_headers(contents: dict[Path, str], output: str) -> set[Path]:
 def preprocess_context(source: Path, project: Project, policy: Host, version: str, function: str) -> str:
     """Use the selected source unit's make recipe for context preprocessing."""
     from unbake.decomp.explain import _absolute_includes
-    from unbake.decomp.trial_compile import run_tool
+    from unbake.process import run_tool
     from unbake.project import makefile
     from unbake.project_tools.sn64_cc import partition_flags
 

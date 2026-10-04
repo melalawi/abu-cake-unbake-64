@@ -584,7 +584,7 @@ def validate_headers(
     from dataclasses import replace
 
     from unbake.decomp.draft_context import preprocess_context
-    from unbake.decomp.trial_compile import run_tool
+    from unbake.process import run_tool
     from unbake.cache import Cache, key, memo
     from unbake.typemap import declarations
 

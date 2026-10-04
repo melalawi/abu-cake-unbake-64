@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from unbake.decomp.trial_compare import Compare
+from unbake.work.score import Compare
 from unbake.families.gcc.schedule import Schedule
 from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
@@ -179,7 +179,8 @@ def _flips(difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list
 
 def allocation(project: Project, policy: Host, source: Path, version: str) -> Allocation:
     """Compile private diagnostic streams and explain the normal compiler trial."""
-    from unbake.decomp import trial, trial_compile
+    from unbake.process import run_tool
+    from unbake.work import compare
     from unbake.families import family_for
     from unbake.project import makefile, toolchain
 
@@ -192,20 +193,20 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
     if spec.family not in ("gcc", "ido"):
         raise Held("explain", f"compiler.{compiler.id}.family: unsupported {spec.family}")
     family = family_for(compiler.id)
-    root = _state_root(policy) / "explain"
-    trial_compile.scratch_directory(project, root, "explain")
+    root = project.work / "_explain"
+    root.mkdir(parents=True, exist_ok=True)
     flags = list(makefile.flags(project, version, source))
     # The pinned native cc1 writes the allocator dumps itself; diagnostics use the exact build compiler.
     selected = compiler
     toolchain.verify(project.tools / selected.id, toolchain.specification(selected.id))
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:
         work = Path(temporary)
-        comparison = trial.try_draft(project, policy, source, work, versions=[version]).compares[version]
+        comparison = compare.measure(project, policy, source, versions=(version,)).compares[version]
         if spec.family == "gcc":
             expanded, codeflags = gcc_input(project, policy, source, version, work, preserve_lines=False)
             input_path = work / "source.i"
             atomic_files.text(input_path, expanded)
-            trial_compile.run_tool(
+            run_tool(
                 [
                     str(selected.cc),
                     *codeflags,
@@ -229,7 +230,7 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
             result = annotate(result, dumps["lreg"], source.read_text(), expanded)
         else:
             flags = _absolute_includes(project, flags)
-            trial_compile.run_tool(
+            run_tool(
                 [str(selected.cc), *flags, *family.dump_flags(), str(source), "-o", str(work / "source.s")],
                 work,
                 "explain",
@@ -255,18 +256,11 @@ def _absolute_includes(project: Project, flags: list[str] | tuple[str, ...]) -> 
     return values
 
 
-def _state_root(policy: Host) -> Path:
-    root = getattr(policy, "state_root", None)
-    if root is None:
-        raise Held("explain", "policy.state_root: missing value")
-    return Path(root)
-
-
 def gcc_input(
     project: Project, policy: Host, source: Path, version: str, work: Path, *, preserve_lines: bool
 ) -> tuple[str, list[str]]:
     """Prepare the exact GCC input with optional source line directives."""
-    from unbake.decomp import trial_compile
+    from unbake.process import run_tool
     from unbake.project import makefile
     from unbake.project_tools.sn64_cc import partition_flags
 
@@ -289,7 +283,7 @@ def gcc_input(
     else:
         codeflags = [flag for flag in flags if flag != "-c"]
         command = [str(compiler.cc), *codeflags, "-DNON_MATCHING=1", "-E", str(source)]
-    expanded = trial_compile.run_tool(command, work, "explain")
+    expanded = run_tool(command, work, "explain")
     if not preserve_lines:
         expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
     return expanded, codeflags
@@ -297,8 +291,8 @@ def gcc_input(
 
 def order(project: Project, policy: Host, source: Path, version: str) -> Schedule:
     """Read family scheduling evidence for one selected unit and VERSION."""
-    from unbake.decomp import trial_compile
     from unbake.families import family_for
+    from unbake.process import run_tool
     from unbake.project import toolchain
 
     source = Path(source).resolve()
@@ -311,13 +305,14 @@ def order(project: Project, policy: Host, source: Path, version: str) -> Schedul
     if spec.family == "ido":
         return family.schedule(None)
     toolchain.verify(project.tools / compiler.id, spec)
-    root = trial_compile.scratch_directory(project, _state_root(policy) / "explain", "explain")
+    root = project.work / "_explain"
+    root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=source.stem + ".", dir=root) as temporary:
         work = Path(temporary)
         expanded, flags = gcc_input(project, policy, source, version, work, preserve_lines=False)
         input_path = work / "source.i"
         atomic_files.text(input_path, expanded, encoding="utf-8")
-        trial_compile.run_tool(
+        run_tool(
             [str(compiler.cc), *flags, *family.dump_flags(), str(input_path), "-o", str(work / "source.s")],
             work,
             "explain",
