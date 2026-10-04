@@ -433,9 +433,10 @@ class _PublishedHeaders:
                 if changed.intersection(guards) == context and guards.intersection(macros) == defined:
                     return None if cached_effects is None else set(cached_effects), set(guards)
             if path not in self.batch_headers:
-                self.batch_headers[path] = path.read_text()
-                self.batch_guards[path] = _outer_guard(self.batch_headers[path])
-                self.batch_directives[path] = directives(self.batch_headers[path])
+                text = path.read_text()
+                self.batch_guards[path] = _outer_guard(text)
+                self.batch_directives[path] = directives(text)
+                self.batch_headers[path] = text
             guard = self.batch_guards[path]
             observed = {guard} if guard is not None else set()
             if guard is not None and guard in macros and guard not in changed:

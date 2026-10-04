@@ -204,6 +204,27 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                             self.assertIn(f"{expected} {path.stem}", text)
             self.assertTrue(all(len(entries) <= 4 for entries in batch.batch_effects.values()))
 
+    def test_concurrent_header_analysis_publishes_complete_cache_entries(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = self.fixture(root)
+            (root / "include/mutate.h").write_text("#ifndef GUARD\n#define GUARD\n#define VALUE double\n#endif\n")
+            source = root / "alpha.c"
+            source.write_text('#include "mutate.h"\nVALUE alpha(void) {}\n')
+            guard = declarations._outer_guard
+            barrier = Barrier(2)
+
+            def simultaneous(text):
+                barrier.wait(timeout=2)
+                return guard(text)
+
+            with patch.object(declarations, "_outer_guard", side_effect=simultaneous), ThreadPoolExecutor(2) as pool:
+                results = list(pool.map(lambda version: batch._batch_input(version, source), ["us", "eu"]))
+            self.assertTrue(all(row is not None and "VALUE" in row[1] for row in results))
+
     def test_receipt_order_and_bounded_preprocessor_groups(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
