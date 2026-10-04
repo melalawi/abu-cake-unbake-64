@@ -250,6 +250,8 @@ def compute(project: Project, host: Host | None, output: Store, misses: list[tup
         return
     from unbake import pool
 
+    # One version's sources in a row share their header expansion, which cdecl.resumable_parse parses once.
+    misses = sorted(misses, key=lambda miss: (miss[1][2], str(miss[1][1]), miss[1][0]))
     chunks = [(project, host, misses[start : start + _CHUNK]) for start in range(0, len(misses), _CHUNK)]
     pool.run(host, _chunk, chunks)
 
