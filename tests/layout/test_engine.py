@@ -161,6 +161,35 @@ class HeaderTests(unittest.TestCase):
         sources = {Path("/project/src") / (name + ".c"): text for name, text in sources.items()}
         return headers.Layout(contents, contents, self.root, ownership=self.ownership, sources=sources, **kwargs)
 
+    def test_published_global_stays_visible_at_its_original_data_home(self):
+        published = self.root / ".published_cell.h"
+        result = self.render(
+            {".published_cell.h": "extern void *cell;"},
+            {
+                "first": '#include "span/data.h"\nvoid first(void *p) { cell = p; }',
+                "second": "extern void *cell[4]; void second(void) { cell[0] = 0; }",
+            },
+            fixed_homes={published: {self.root / "span/data.h"}},
+        )
+        self.assertIn(b"extern void *cell;", result.headers[self.root / "span/data.h"])
+        for home in ("span/one.h", "span/two.h", "span/types.h", "common/types.h"):
+            self.assertNotIn(b"extern void *cell;", result.headers[self.root / home])
+        self.assertEqual(result.index["symbols"]["cell"], "span/data.h")
+
+    def test_published_type_can_widen_without_losing_original_include_homes(self):
+        published = self.root / ".published_record.h"
+        for homes in ({self.root / "span/one.h"}, {self.root / "span/one.h", self.root / "span/data.h"}):
+            result = self.render(
+                {".published_record.h": "struct Record { int word; };"},
+                {"first": '#include "span/one.h"\nstruct Record *first(void);'},
+                fixed_homes={published: homes},
+                declarations_by_name={"cell": "extern struct Record cell;"},
+                symbol_segments={"cell": "span"},
+            )
+            self.assertIn(b"struct Record { int word; };", result.headers[self.root / "span/types.h"])
+            for home in homes:
+                self.assertIn(b'#include "span/types.h"', result.headers[home])
+
     def test_source_imports_complete_tag_home_as_well_as_alias_home(self):
         result = self.render(
             {"alias.h": "typedef struct Record Record;", "body.h": "struct Record {int value;};"},

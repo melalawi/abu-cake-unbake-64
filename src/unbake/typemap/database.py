@@ -360,10 +360,14 @@ def _render(
         # source-local or defined contract. Conflicting local views stay local;
         # inference already records their disagreement as declaration evidence.
         for path, names in retained_contracts.items():
-            if path in components and any(
-                not redeclarations.equivalent(variant, components[path], local_aliases)
-                for name in local.keys() & names
-                for variant in local[name]
+            if (
+                path in components
+                and path.relative_to(root).as_posix() not in value.get("published_homes", {})
+                and any(
+                    not redeclarations.equivalent(variant, components[path], local_aliases)
+                    for name in local.keys() & names
+                    for variant in local[name]
+                )
             ):
                 components.pop(path)
                 rendered.pop(path, None)
@@ -384,7 +388,14 @@ def _render(
         declarations_by_name.pop(name, None)
     ownership = map.load(project)
     segments = symbol_segments(project)
-    layout = session.layout(components, rendered, root, alias_targets, ownership, declarations_by_name, segments)
+    fixed_homes = {
+        root / path: {root / home for home in homes}
+        for path, homes in value.get("published_homes", {}).items()
+        if root / path in components
+    }
+    layout = session.layout(
+        components, rendered, root, alias_targets, ownership, declarations_by_name, segments, fixed_homes
+    )
     session.consumer_names = consumer_names
     outputs: dict[Path, bytes | Path] = dict(layout.headers)
     outputs[index.path(project)] = index.encoded(layout.index)

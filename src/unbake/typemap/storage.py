@@ -95,6 +95,7 @@ def submit_command(project: Project, source: Path) -> str:
 
 def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     paths = {project.root / "config.toml"}
+    symbol_inputs: dict[str, str] = {}
     for version in project.versions:
         configured = project.version(version)
         if not configured.baserom.is_file():
@@ -103,12 +104,16 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
         for filename in ("splat_symbols.csv", "symbol-addresses.txt"):
             generated_symbols = project.build_link(version) / filename
             if generated_symbols.is_file():
-                paths.add(generated_symbols)
+                # Splat rewrites extraction details such as size/defined flags
+                # after a build. Mapping consumes only names and addresses.
+                symbol_inputs[str(generated_symbols.relative_to(project.root))] = symbol_digest(generated_symbols)
         for key, path in (("split", configured.split), ("symbols", configured.symbols)):
             if not path.is_file():
                 raise Held("map", f"map.{key}.{version}: missing {path}")
             paths.add(path)
-    paths.update(path for version in project.versions for path in (project.asm / version).rglob("*.s"))
+    # Instruction facts come directly from the pinned ROM and split intervals.
+    # Extracted assembly is a disposable rendering: make prunes obsolete C-unit
+    # assembly and rewrites other extraction outputs without changing the ROM.
     paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
     if headers:
         # Rendering consults source-local declaration contracts as well as receipts.
@@ -131,6 +136,7 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
                 source = project.root / row["source"]
                 paths.add(source)
     result = {str(path.relative_to(project.root)): file_digest(path) for path in sorted(paths)}
+    result.update(symbol_inputs)
     if headers:
         from unbake.typemap import declaration_evidence
 
@@ -143,6 +149,26 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
                 for path, text in declaration_evidence.feedback_components(project).items()
             }
         )
+    return result
+
+
+_symbol_digests: dict[Path, tuple[str, str]] = {}
+
+
+def symbol_digest(path: Path) -> str:
+    """Pin exactly the extraction symbol facts consumed by map_program."""
+    from unbake.project_tools.extract import discovered_symbols, symbols_from
+
+    content = file_digest(path)
+    cached = _symbol_digests.get(path)
+    if cached is not None and cached[0] == content:
+        return cached[1]
+    try:
+        symbols = discovered_symbols(path, {}) if path.name == "splat_symbols.csv" else symbols_from([path])
+    except (OSError, ValueError, KeyError) as error:
+        raise Held("map", f"map.symbols: {path}: {error}") from error
+    result = digest(encoded(symbols))
+    _symbol_digests[path] = content, result
     return result
 
 

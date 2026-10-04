@@ -170,6 +170,7 @@ class Session:
         ownership: layout_map.Map,
         declarations_by_name: dict[str, str],
         symbol_segments: dict[str, str],
+        fixed_homes: dict[Path, set[Path]],
     ) -> headers.Layout:
         return headers.Layout(
             contents,
@@ -182,6 +183,7 @@ class Session:
             declarations_by_name=declarations_by_name,
             symbol_segments=symbol_segments,
             authored=set(self.authored),
+            fixed_homes=fixed_homes,
         )
 
     def render(
@@ -210,6 +212,7 @@ class Session:
         projection["typedefs"] = value.get("typedefs", {})
         projection["declaration_evidence"] = value.get("declaration_evidence", {})
         projection["published_declarations"] = value.get("published_declarations", {})
+        projection["published_homes"] = value.get("published_homes", {})
         content_key = key(self.inputs, storage.encoded(projection))
         state = self.cache.path("typemap-render-state", self.inputs)
 

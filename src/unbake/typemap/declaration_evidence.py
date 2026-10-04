@@ -304,6 +304,10 @@ def promote(project: Project, headers: Headers, final: str, prefix_end: int) -> 
 
 
 def published_components(project: Project) -> dict[Path, str]:
+    return published_snapshot(project)[0]
+
+
+def published_snapshot(project: Project) -> tuple[dict[Path, str], dict[Path, set[Path]]]:
     """Keep installed declaration dependencies used by published C bodies.
 
     Generated does not mean disposable: a matched body proves the declaration
@@ -327,6 +331,7 @@ def published_components(project: Project) -> dict[Path, str]:
         local_tags.update(redeclarations.local_tags(source.read_text()))
         pending.update(set(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(source.read_text()))) - {function})
     selected: dict[Path, str] = {}
+    homes: dict[Path, set[Path]] = {}
     seen = set()
     while pending:
         name = pending.pop()
@@ -338,11 +343,11 @@ def published_components(project: Project) -> dict[Path, str]:
                 continue
             digest = hashlib.sha256(unit.text.encode()).hexdigest()[:24]
             label = "published_" + digest
-            selected[project.include[0] / ("." + label + ".h")] = (
-                f"/* unbake published declaration: {label} */\n" + unit.text
-            )
+            virtual = project.include[0] / ("." + label + ".h")
+            homes.setdefault(virtual, set()).add(unit.path)
+            selected[virtual] = f"/* unbake published declaration: {label} */\n" + unit.text
             pending.update(unit.uses - seen)
-    return selected
+    return selected, homes
 
 
 def feedback_components(project: Project) -> dict[Path, str]:

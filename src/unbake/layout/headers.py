@@ -64,6 +64,7 @@ class Layout:
         declarations_by_name: dict[str, str] | None = None,
         symbol_segments: dict[str, str] | None = None,
         authored: set[Path] | None = None,
+        fixed_homes: dict[Path, set[Path]] | None = None,
     ):
         self.aliases = {name: target for text in contents.values() for name, target in alias_types(text).items()}
         self.aliases.update(aliases or {})
@@ -151,15 +152,28 @@ class Layout:
         by_group["common/types.h"] = Group("types", "common", "default", ())
         for segment in set((symbol_segments or {}).values()):
             by_group.setdefault(f"{segment}/types.h", Group("types", segment, "default", ()))
-        users = {path: set[str]() for path in contents}
+        for paths in (fixed_homes or {}).values():
+            for path in paths:
+                relative = path.relative_to(root)
+                by_group.setdefault(
+                    relative.as_posix(), Group(relative.stem, relative.parent.as_posix(), "default", ())
+                )
+        users = {
+            path: {home.relative_to(root).as_posix() for home in (fixed_homes or {}).get(path, set())}
+            for path in contents
+        }
         source_providers: dict[Path, set[Path]] = {}
         for source, text in sources.items():
             owner = owners.get(source.stem)
             if owner is None:
                 raise Held("layout", f"layout.member.{source.stem}: source has no group")
-            for provider in required_providers(text, self.providers, self.tags, self.aliases):
-                users[provider].add(owner.header)
-                source_providers.setdefault(root / owner.header, set()).add(provider)
+            from unbake.layout import redeclarations
+
+            local = set().union(*(declarations(text[start:end]).declared for start, end in redeclarations.spans(text)))
+            for provider in required_providers(text, self.providers, self.tags, self.aliases, local):
+                if provider not in (fixed_homes or {}):
+                    users[provider].add(owner.header)
+                    source_providers.setdefault(root / owner.header, set()).add(provider)
         for name, text in (declarations_by_name or {}).items():
             owner = owners.get(name)
             declaration_segment = (symbol_segments or {}).get(name)
@@ -191,6 +205,8 @@ class Layout:
         authored = authored or set()
         for cluster in self.groups:
             used = set().union(*(users[p] for p in cluster))
+            pinned = set().union(*((fixed_homes or {}).get(path, set()) for path in cluster))
+            used.update(path.relative_to(root).as_posix() for path in pinned)
             live_authored = cluster & authored
             if live_authored:
                 if len(cluster) != 1:
@@ -219,6 +235,10 @@ class Layout:
                 continue
             dependencies = {self.homes[dep] for path in cluster for dep in self.dependencies[path]} - {destination}
             edges.setdefault(destination, set()).update(dependencies)
+            for path in cluster:
+                for home in (fixed_homes or {}).get(path, set()) - {destination}:
+                    bodies.setdefault(home, [])
+                    edges.setdefault(home, set()).add(destination)
             tags = {
                 m[0]
                 for path in cluster

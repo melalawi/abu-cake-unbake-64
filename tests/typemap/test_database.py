@@ -23,6 +23,42 @@ class DatabaseTests(unittest.TestCase):
         shared.mkdir(exist_ok=True)
         (shared / "typemap.h").write_text("")
 
+    def test_build_extraction_details_do_not_stale_type_inputs(self) -> None:
+        build = self.project.build_link("us")
+        build.mkdir(parents=True, exist_ok=True)
+        table = build / "splat_symbols.csv"
+        table.write_text("name,vram_start,size,subsegment_type\ncell,80004000,4,asm\n")
+        before = storage.inputs(self.project, headers=True)
+        table.write_text("name,vram_start,size,subsegment_type\ncell,80004000,8,c\n")
+        self.assertEqual(storage.inputs(self.project, headers=True), before)
+        table.write_text("name,vram_start,size,subsegment_type\ncell,80004004,8,c\n")
+        self.assertNotEqual(storage.inputs(self.project, headers=True), before)
+        table.write_text("name,vram_start,size,subsegment_type\nother,80004000,8,c\n")
+        self.assertNotEqual(storage.inputs(self.project, headers=True), before)
+
+    def test_extraction_can_prune_assembly_without_staling_rom_facts(self) -> None:
+        before = storage.inputs(self.project, headers=True)
+        assembly = self.project.asm / "us" / "obsolete.s"
+        assembly.write_text("glabel obsolete\n.word 0x03E00008\n.word 0\n")
+        self.assertEqual(storage.inputs(self.project, headers=True), before)
+        assembly.unlink()
+        self.assertEqual(storage.inputs(self.project, headers=True), before)
+        rom = self.project.version("us").baserom
+        rom.write_bytes(rom.read_bytes() + b"changed")
+        self.assertNotEqual(storage.inputs(self.project, headers=True), before)
+
+    def test_sibling_local_array_view_does_not_erase_published_extern(self) -> None:
+        from unbake.typemap import database
+
+        map_program(self.project)
+        value = solve(self.project)
+        (self.project.src / "alpha.c").write_text("extern void *cell[4]; int alpha(void) { return 1; }")
+        value["published_declarations"] = {".published_cell.h": "extern void *cell;"}
+        value["published_homes"] = {".published_cell.h": ["main/data.h"]}
+        session = database.regeneration.Session(self.project, None)
+        outputs = database._render(self.project, value, None, session)
+        self.assertIn(b"extern void *cell;", outputs[self.project.include[0] / "main/data.h"])
+
     def test_map_keeps_all_versions_and_visible_unknown_types(self) -> None:
         mapped = map_program(self.project)
         self.assertEqual(set(mapped["functions"]["alpha"]["versions"]), {"us", "eu"})

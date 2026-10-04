@@ -86,7 +86,8 @@ class PublishedContractsTests(unittest.TestCase):
                 patch("unbake.layout.index.headers", return_value=[header]),
             ):
                 self.assertEqual(len(declarations.published_sources(project)), 2)
-                components = declaration_evidence.published_components(project)
+                components, homes = declaration_evidence.published_snapshot(project)
+                self.assertTrue(all(paths == {header} for paths in homes.values()))
             retained = "".join(components.values())
             for contract in (
                 "dispatch[]",
@@ -99,6 +100,26 @@ class PublishedContractsTests(unittest.TestCase):
                 self.assertIn(contract, retained)
             self.assertNotIn("unused", retained)
             self.assertNotIn("struct Private", retained)
+
+    def test_published_global_storage_survives_conflicting_value_flow(self):
+        mapped = facts({"setter": (0x80001000, [0x3C088000, 0xAD044000, 0x03E00008, 0])})
+        mapped["globals"] = {"cell": {"versions": {"us": {"address": 0x80004000}}}}
+        mapped["functions"]["setter"]["versions"]["us"]["memory"][0]["symbols"] = ["cell"]
+        seed = declarations.extract("extern int cell; void setter(unsigned int value);", {"kind": "published"})
+        result = infer(SimpleNamespace(), mapped, [seed])
+        self.assertEqual(result["globals"]["cell"]["state"], "known")
+        self.assertEqual(result["globals"]["cell"]["type"], "int")
+        self.assertEqual(result["globals"]["cell"]["declaration"], "extern int cell;")
+        self.assertTrue(result["conflicts"])
+
+    def test_published_array_contract_wins_over_ordinary_pointer_guess(self):
+        declared = declarations.extract("extern void *table;", {"kind": "declared"})
+        published = declarations.extract("extern void *table[4];", {"kind": "published"})
+        for seeds in ([declared, published], [published, declared]):
+            result = infer(SimpleNamespace(), facts({}), seeds)
+            self.assertEqual(result["globals"]["table"]["state"], "known")
+            self.assertEqual(result["globals"]["table"]["declaration"], "extern void *table[4];")
+            self.assertEqual(result["arrays"]["table"]["extent"], "4")
 
     def test_all_callers_prevent_truncation_to_first_declared_signature(self):
         mapped = facts(

@@ -813,6 +813,16 @@ def infer(
         }
         for name in sorted(set(facts["globals"]) | set(globals_))
     }
+    # A flow component can merge a published cell with a published pointer or
+    # array view of its address. That disagreement belongs to the constraints;
+    # it cannot remove the cell's own C storage contract from generated headers.
+    for name, record in globals_.items():
+        if record["provenance"].get("kind") in ("published", "proven"):
+            output_globals[name].update(
+                state="conflict" if record.get("declaration_conflict") else "known",
+                type=declarations.canonical(record["type"], aliases),
+                declaration=record["declaration"],
+            )
     output_structs = dict(inferred_structs)
     unknown.extend(
         f"struct:{name}: {row.get('reason', 'overlapping or misaligned observed fields')}"
@@ -987,9 +997,15 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
             str(path.relative_to(project.include[0])): text
             for path, text in declaration_evidence.feedback_components(project).items()
         }
+        published, homes = declaration_evidence.published_snapshot(project)
         result["published_declarations"] = {
-            str(path.relative_to(project.include[0])): text
-            for path, text in declaration_evidence.published_components(project).items()
+            str(path.relative_to(project.include[0])): text for path, text in published.items()
+        }
+        result["published_homes"] = {
+            str(path.relative_to(project.include[0])): sorted(
+                str(home.relative_to(project.include[0])) for home in paths
+            )
+            for path, paths in homes.items()
         }
         result["constraints"] = [log.finish(project.root), *result["constraints"]]
     finally:
