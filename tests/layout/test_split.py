@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from unbake.layout import split, split_analysis, split_apply, split_create, split_edits, split_partition
-from unbake.project import build
 from unbake.project.config import Held, Policy, Project
 from unbake.project.fingerprint import Counts, Region
 

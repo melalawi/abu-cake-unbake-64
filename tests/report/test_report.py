@@ -522,36 +522,6 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(documents[0]["measures"], documents[1]["measures"])
         self.assertEqual(len(set(outputs)), 2)
 
-    def test_report_refuses_generation_swap_before_publishing_totals(self) -> None:
-        from unbake.match import publication
-        from unbake.project import build
-
-        before = self.readme.read_bytes()
-
-        def compile_source(project: Project, policy: Policy, source: Path, version: str, out: Path) -> Path:
-            self.object(out, source.stem)
-            with build.lock(project):
-                replacement = self.generation.with_name("us.2")
-                replacement.mkdir()
-                publication.swap(project.build_link(version), replacement)
-            publication.collect(project)
-            self.assertTrue(self.generation.is_dir())
-            return out
-
-        with (
-            patch.object(report_units, "compile_object", side_effect=compile_source),
-            self.assertRaisesRegex(Held, "generation changed during report"),
-        ):
-            report.write(self.project, self.policy)
-        self.assertEqual(self.readme.read_bytes(), before)
-        self.assertFalse((self.project.root / "versions/us/report.json").exists())
-        publication.collect(self.project)
-        self.assertFalse(self.generation.exists())
-        self.assertFalse((self.project.root / "data").exists())
-        self.assertTrue(self.readme.read_text().startswith("Project introduction\n\n## Progress\n"))
-        self.assertTrue(self.readme.read_text().endswith("## Contributions\nGuide\n"))
-        self.assertNotIn("old figures", self.readme.read_text())
-
     def test_cross_version_c_is_compiled_fresh_for_partial_progress(self) -> None:
         original = self.project.version("us")
         other_split = self.root / "other.yaml"

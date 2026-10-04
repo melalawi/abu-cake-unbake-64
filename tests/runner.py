@@ -147,14 +147,11 @@ class Runner:
 def main():
     # Keep fixture roots canonical when the caller supplies a symlinked TMPDIR.
     tempfile.tempdir = str(Path(tempfile.gettempdir()).resolve())
-    from tests.process_fakes import Pool
-    from unbake.match import forked
 
     sys.addaudithook(audit)
     with (
         patch.object(subprocess, "Popen", side_effect=forbidden),
         patch.object(os, "fsync"),
-        patch.object(forked, "ProcessPoolExecutor", Pool),
     ):
         # Unit fixtures verify writes and publication; disk durability is an OS service.
         unittest.main(module=None, defaultTest="discover", testRunner=Runner)
