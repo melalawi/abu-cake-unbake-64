@@ -131,40 +131,42 @@ def link_script(project: Project, version: str) -> str:
 def slices_mk(project: Project, version: str) -> str:
     """Units, raw slices between them, constant windows and the piece order of the ROM.
 
+    Every name carries the version prefix (`<v>.U.<unit>`), so the Makefile includes every version at once.
     Slice offsets and sizes are decimal: GNU dd reads skip= and count= as decimal (0x is a multiplier)."""
     rom_size = project.version(version).baserom.stat().st_size
+    build = f"build/{version}"
     lines = [HEADER]
-    lines.append(f"BASEROM := {relative(project, project.version(version).baserom)}\n")
-    lines.append(f"VERSION_DEFINES := {words(['-D' + macro for macro in project.version(version).macros])}\n")
-    lines.append("MAP := " + " ".join(f"0x{v:X}:0x{r:X}:0x{s:X}" for v, r, s in windows(project, version)) + "\n")
+    lines.append(f"{version}.BASEROM := {relative(project, project.version(version).baserom)}\n")
+    lines.append(f"{version}.DEFINES := {words(['-D' + macro for macro in project.version(version).macros])}\n")
+    windows_ = " ".join(f"0x{v:X}:0x{r:X}:0x{s:X}" for v, r, s in windows(project, version))
+    lines.append(f"{version}.MAP := {windows_}\n")
     pieces = []
     cursor = 0
     for unit in units(project, version):
         if unit.start < cursor:
             raise Held("buildfiles", f"buildfiles.overlap: {version} {unit.name} starts inside the previous row")
         if unit.start > cursor:
-            lines.append(f"S_{cursor:08X} := {cursor} {unit.start - cursor}\n")
-            pieces.append(f"$(B)/slices/{cursor:08X}.bin")
-        lines.append(f"U_{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
-        lines.append(f"A_{unit.name} := 0x{unit.address:X}\n")
-        pieces.append(f"$(B)/units/{unit.name}.bin")
+            lines.append(f"{version}.S.{cursor:08X} := {cursor} {unit.start - cursor}\n")
+            pieces.append(f"{build}/slices/{cursor:08X}.bin")
+        lines.append(f"{version}.U.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
+        pieces.append(f"{build}/units/{unit.name}.bin")
         cursor = unit.start + unit.size
     if cursor > rom_size:
         raise Held("buildfiles", f"buildfiles.rom_size: {version} rows end past the ROM")
     if cursor < rom_size:
-        lines.append(f"S_{cursor:08X} := {cursor} {rom_size - cursor}\n")
-        pieces.append(f"$(B)/slices/{cursor:08X}.bin")
-    lines.append("PIECES := \\\n" + " \\\n".join(f"  {piece}" for piece in pieces) + "\n")
+        lines.append(f"{version}.S.{cursor:08X} := {cursor} {rom_size - cursor}\n")
+        pieces.append(f"{build}/slices/{cursor:08X}.bin")
+    lines.append(f"{version}.PIECES := \\\n" + " \\\n".join(f"  {piece}" for piece in pieces) + "\n")
     return "".join(lines)
 
 
 def units_mk(project: Project) -> str:
-    """Target-specific values for units that differ from the default compiler or carry their own flags."""
+    """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
     lines = [HEADER]
     default = project.compilers[project.default_compiler]
     names = sorted({path.stem for path in project.src.glob("*.c")})
     for name in names:
-        targets = f"$(B)/src/{name}.o $(B)/units/{name}.bin"
+        targets = f"build/%/src/{name}.key build/%/units/{name}.bin"
         compiler = project.compiler_for(name)
         if compiler.id != default.id:
             c_includes, c_codegen, c_defines = drivers.compiler_parts(project, compiler.id)
@@ -191,22 +193,84 @@ def _recipe(template: tuple[str, ...]) -> str:
     return " ".join(drivers.render(template, MAKE_VALUES))
 
 
-def _canned(kind: str) -> str:
+def _kind_recipes(kind: str) -> str:
+    """PREPROCESS_<kind> writes UNIT.i and UNIT.d; COMPILE_<kind> turns UNIT.i into UNIT.o inside the unit's directory.
+
+    A cpp preprocess writes the dependency file in the same pass; a compiler driver's -E needs its own cpp -MM."""
     template = drivers.TEMPLATES[kind]
     preprocess = template["preprocess"]
     compile_ = template["compile"]
     assert preprocess is not None and compile_ is not None
-    # A cpp preprocess writes the dependency file in the same pass; a compiler driver's -E needs its own cpp -MM.
+    output = "> $(@D)/$(*F).i"
+    depend = "-MP -MT $@ -MF $(@D)/$(*F).d"
     if preprocess[0] == "{cpp}":
-        lines = [f"define COMPILE_{kind}", f"\t{_recipe(preprocess)} -MMD -MT $@ -MF $(@D)/$(*F).d > $(@D)/$(*F).i"]
+        prep = f"{_recipe(preprocess)} -MMD {depend} {output}"
     else:
-        lines = [f"define COMPILE_{kind}", f"\t{_recipe(drivers.DEPEND)} -MT $@ -MF $(@D)/$(*F).d"]
-        lines.append(f"\t{_recipe(preprocess)} > $(@D)/$(*F).i")
-    lines.append(f"\tcd $(@D) && {_recipe(compile_)}")
+        prep = f"{_recipe(drivers.DEPEND)} {depend} && {_recipe(preprocess)} {output}"
+    commands = [_recipe(compile_)]
     if template["assemble"] is not None:
-        lines.append(f"\tcd $(@D) && {_recipe(template['assemble'])}")
-    lines.append("endef")
-    return "\n".join(lines) + "\n"
+        commands.append(_recipe(template["assemble"]))
+    return f"PREPROCESS_{kind} = {prep}\nCOMPILE_{kind} = {' && '.join(commands)}\n"
+
+
+# One shell per unit and version: preprocess, key the object by content, compile only when build/cas lacks the key.
+# The key is sha1(toolchain pin digest + compile commands) then sha1(UNIT.i). mv -f into build/cas is atomic,
+# and two versions racing on one key write identical bytes. Place and link read the shared object and never write it.
+UNIT_RECIPES = r"""VER = $(word 2,$(subst /, ,$@))
+VERSION_DEFINES = $($(VER).DEFINES)
+TOOLCHAIN := $(firstword $(shell cat tools/compilers.sha256 tools/n64link.version | sha1sum))
+UNIT_KEY = printf '%s\n' '$(VER) $(*F)'; \
+  $(PREPROCESS_$(KIND)) && \
+  set -- $$(printf '%s\n' '$(TOOLCHAIN) $(COMPILE_$(KIND))' | sha1sum - $(@D)/$(*F).i) && [ -n "$$3" ] && \
+  { [ -f build/cas/$$1$$3.o ] || { (cd $(@D) && $(COMPILE_$(KIND))) && mv -f $(@D)/$(*F).o build/cas/$$1$$3.o; }; } && \
+  printf '%s\n' $$1$$3 > $@
+UNIT_BIN = read key < $< && \
+  $(N64LINK) place build/cas/$$key.o -o $(@D)/$(*F).placed.o --rom $($(VER).BASEROM) --text $($(VER).U.$(*F)) \
+  $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld $(TRIM) && \
+  $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
+  --oformat binary -o $@ $(@D)/$(*F).placed.o
+SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none \
+  skip=$(word 1,$($(VER).S.$(*F))) count=$(word 2,$($(VER).S.$(*F)))
+"""
+
+# Every version's units, slices and ROM are targets of one make, so -jN spreads over all of them.
+VERSION_RULES = r"""define VERSION_RULES
+build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas
+	$$(Q)$$(UNIT_KEY)
+build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/units
+	$$(Q)$$(UNIT_BIN)
+build/$1/slices/%.bin: $$($1.BASEROM) | build/$1/slices
+	$$(Q)$$(SLICE)
+build/$1/$$(NAME).z64: $$($1.PIECES)
+	$$(Q)printf '%s\n' '$1 rom'; cat $$($1.PIECES) > $$@
+build/$1/src build/$1/units build/$1/slices:
+	$$(Q)mkdir -p $$@
+endef
+$(foreach v,$(VERSIONS),$(eval $(call VERSION_RULES,$v)))
+build/cas:
+	$(Q)mkdir -p $@
+"""
+
+# Without -j on the command line, run one job per core (nproc, coreutils); make 4.4 honours -j set here.
+JOBS = """ifeq ($(filter -j%,$(MAKEFLAGS)),)
+JOBS := $(shell nproc)
+$(if $(JOBS),,$(error nproc printed no core count; run make -jN))
+MAKEFLAGS += -j$(JOBS)
+endif
+"""
+
+# make V=1 echoes every command; otherwise a unit prints one line and errors print in full.
+QUIET = "Q = $(if $(filter 1,$(V)),,@)\n"
+
+# rom builds one version; VERSION must name a configured one.
+ROM = """ifdef VERSION
+ifeq ($(filter $(VERSION),$(VERSIONS)),)
+$(error VERSION=$(VERSION) is not one of $(VERSIONS))
+endif
+endif
+rom: $(if $(VERSION),build/$(VERSION)/$(NAME).z64)
+	@$(if $(VERSION),,$(error make rom needs VERSION=<one of $(VERSIONS)>))sha1sum -c versions/$(VERSION)/$(NAME).sha1
+"""
 
 
 def setup_recipe(project: Project) -> list[str]:
@@ -244,17 +308,22 @@ def makefile(project: Project, host: Host) -> str:
     kinds = sorted({compiler.kind for compiler in project.compilers.values()})
     text = [
         HEADER,
-        "# make check            build every version and compare it with the original ROM (sha1)\n",
+        "# make check            build every version in one parallel graph and compare each ROM with the original\n",
         "# make VERSION=<v> rom  build one version\n",
         "# make setup            fetch and verify the compilers into tools/\n",
         "# make verify           check the compilers, n64link and the original ROMs\n",
+        "# make V=1 ...          echo every command\n",
+        "# Without -jN make runs one job per core. Identical compiler inputs compile once (build/cas).\n",
         "# Tools come from PATH (make, cpp, mips binutils, n64link, coreutils, curl, tar) or as\n",
-        "# make CPP=... AS=... LD=... OBJCOPY=... N64LINK=... on the command line.\n",
-        # .SECONDARY: objects, placed objects and slices are intermediates of chained rules; keep them.
+        "# make CPP=... AS=... LD=... N64LINK=... on the command line.\n",
+        # .SECONDARY: keys, placed objects and slices are intermediates of chained rules; keep them.
         "SHELL := /bin/sh\n.SUFFIXES:\n.DELETE_ON_ERROR:\n.SECONDARY:\n",
+        JOBS,
+        QUIET,
         f"NAME := {project.name}\n",
         f"VERSIONS := {' '.join(project.versions)}\n",
-        "CPP := cpp\nAS := mips-linux-gnu-as\nLD := mips-linux-gnu-ld\nOBJCOPY := mips-linux-gnu-objcopy\n",
+        "ROMS := $(foreach v,$(VERSIONS),build/$v/$(NAME).z64)\n",
+        "CPP := cpp\nAS := mips-linux-gnu-as\nLD := mips-linux-gnu-ld\n",
         "N64LINK := n64link\n",
         f"INCLUDES := {words(includes)}\n",
         f"CPPFLAGS := {words(list(project.cppflags))}\n",
@@ -266,41 +335,26 @@ def makefile(project: Project, host: Host) -> str:
         f"COMPILER_DEFINES := {words(c_defines)}\n",
         f"TRIM := {'' if default.kind in drivers.UNTRIMMED else '--trim'}\n",
         "UNIT_INCLUDES :=\nUNIT_CODEGEN :=\nUNIT_DEFINES :=\nCONSUMER :=\n",
-        "\n.PHONY: all check verify setup clean rom $(addprefix rom-,$(VERSIONS))\nall: check\n\n",
-        "# One sub-make per version under the shared jobserver, so make -jN check spreads N jobs over every version.\n",
-        "check: $(addprefix rom-,$(VERSIONS))\n\n",
-        "$(addprefix rom-,$(VERSIONS)): rom-%: verify\n",
-        "\t@$(MAKE) --no-print-directory VERSION=$* rom\n\n",
-        "verify:\n",
+        "\n.PHONY: all check verify setup clean rom\nall: check\n\n",
+        "check: verify $(ROMS)\n",
+        "\t@sha1sum -c $(foreach v,$(VERSIONS),versions/$v/$(NAME).sha1)\n\n",
+        ROM,
+        "\nverify:\n",
         "\t@sha256sum --quiet -c tools/compilers.sha256\n",
         '\t@test "$$($(N64LINK) --version)" = "$$(cat tools/n64link.version)" '
         "|| { echo 'n64link: expected' \"$$(cat tools/n64link.version)\"; exit 1; }\n",
-        "\t@for v in $(VERSIONS); do sha1sum --quiet -c versions/$$v/baserom.sha1 || exit 1; done\n\n",
+        "\t@sha1sum --quiet -c $(foreach v,$(VERSIONS),versions/$v/baserom.sha1)\n\n",
         "setup:\n",
         *(line + "\n" for line in setup_recipe(project)),
         "\t@sha256sum --quiet -c tools/compilers.sha256\n\n",
-        "clean:\n\trm -rf build/*/src build/*/units build/*/slices\n\n",
-        "ifdef VERSION\n",
-        "B := build/$(VERSION)\n",
-        "include versions/$(VERSION)/slices.mk\n",
+        "clean:\n\trm -rf build/cas $(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/slices)\n\n",
+        "include $(foreach v,$(VERSIONS),versions/$v/slices.mk)\n",
         "include units.mk\n\n",
-        *(_canned(kind) + "\n" for kind in kinds),
-        "rom: $(B)/$(NAME).z64\n\tsha1sum --quiet -c versions/$(VERSION)/$(NAME).sha1\n\n",
-        "$(B)/$(NAME).z64: $(PIECES)\n\tcat $(PIECES) > $@\n\n",
-        "$(B)/slices/%.bin: $(BASEROM)\n\t@mkdir -p $(@D)\n",
-        "\tdd if=$(BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none "
-        "skip=$(word 1,$(S_$*)) count=$(word 2,$(S_$*))\n\n",
-        "$(B)/src/%.o: src/%.c Makefile units.mk\n\t@mkdir -p $(@D)\n",
-        "\t$(COMPILE_$(KIND))\n\n",
-        "$(B)/units/%.bin: $(B)/src/%.o versions/$(VERSION)/symbols.ld versions/$(VERSION)/$(NAME).ld\n",
-        "\t@mkdir -p $(@D)\n",
-        "\t$(N64LINK) place $< -o $(@D)/$*.placed.o --rom $(BASEROM) --text $(U_$*) "
-        "$(addprefix --map ,$(MAP)) --symbols versions/$(VERSION)/symbols.ld $(TRIM)\n",
-        "\t$(LD) -EB -T versions/$(VERSION)/$(NAME).ld --section-start=.text=$(A_$*)"
-        " -o $(@D)/$*.elf $(@D)/$*.placed.o\n",
-        "\t$(OBJCOPY) -O binary -j .text $(@D)/$*.elf $@\n\n",
-        "-include $(wildcard $(B)/src/*.d)\n",
-        "endif\n",
+        *(_kind_recipes(kind) for kind in kinds),
+        UNIT_RECIPES,
+        "\n",
+        VERSION_RULES,
+        "\n-include $(wildcard build/*/src/*.d)\n",
     ]
     return "".join(text)
 

@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from unittest import mock
 
+from tests import project_fixture
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config
 
@@ -22,7 +23,7 @@ class BuildfileTests(ProjectCase):
 
     def slices(self, version: str) -> set[tuple[int, int]]:
         text = buildfiles.slices_mk(config.load(self.project.root), version)
-        return {(int(a), int(b)) for a, b in re.findall(r"^S_\w+ := (\d+) (\d+)$", text, re.M)}
+        return {(int(a), int(b)) for a, b in re.findall(rf"^{version}\.S\.\w+ := (\d+) (\d+)$", text, re.M)}
 
     def test_slices_cover_exactly_the_bytes_no_unit_covers(self) -> None:
         cases = [
@@ -50,8 +51,52 @@ class BuildfileTests(ProjectCase):
         plain = buildfiles.units_mk(config.load(self.project.root))
         self.assertNotIn("alpha", plain)
         flagged = buildfiles.units_mk(replace(config.load(self.project.root), unit_flags={"alpha": ("-O1",)}))
-        self.assertIn("$(B)/src/alpha.o $(B)/units/alpha.bin: UNIT_CODEGEN := -O1", flagged)
+        self.assertIn("build/%/src/alpha.key build/%/units/alpha.bin: UNIT_CODEGEN := -O1", flagged)
         self.assertNotIn("beta", flagged)
+
+    def test_makefile_builds_every_version_in_one_graph(self) -> None:
+        for versions in (("us",), ("us", "eu", "eu-x", "de", "us-rev1")):
+            with self.subTest(versions=len(versions)):
+                project, host = project_fixture.make(self.root / str(len(versions)), versions=versions)
+                text = buildfiles.makefile(project, host)
+                self.assertIn(f"VERSIONS := {' '.join(versions)}\n", text)
+                self.assertIn("$(foreach v,$(VERSIONS),$(eval $(call VERSION_RULES,$v)))\n", text)
+                self.assertIn("include $(foreach v,$(VERSIONS),versions/$v/slices.mk)\n", text)
+                self.assertIn("check: verify $(ROMS)\n", text)
+                self.assertNotIn("$(MAKE)", text)
+                self.assertNotIn("OBJCOPY", text)
+                for version in versions:
+                    slices = buildfiles.slices_mk(project, version)
+                    self.assertIn(f"\n{version}.BASEROM := roms/baserom.{version}.z64\n", slices)
+                    names = [line.split(" := ")[0] for line in slices.splitlines() if " := " in line]
+                    self.assertTrue(names and all(name.startswith(f"{version}.") for name in names), names)
+
+    def test_unit_recipe_compiles_once_per_content_key(self) -> None:
+        text = buildfiles.makefile(self.project, self.host)
+        key = text[text.index("UNIT_KEY =") : text.index("UNIT_BIN =")]
+        for step in (
+            "$(PREPROCESS_$(KIND)) &&",
+            "| sha1sum - $(@D)/$(*F).i)",
+            "[ -f build/cas/$$1$$3.o ] ||",
+            "(cd $(@D) && $(COMPILE_$(KIND))) && mv -f $(@D)/$(*F).o build/cas/$$1$$3.o",
+            "printf '%s\\n' $$1$$3 > $@",
+        ):
+            self.assertIn(step, key)
+        self.assertIn("'$(TOOLCHAIN) $(COMPILE_$(KIND))'", key)
+        link = text[text.index("UNIT_BIN =") : text.index("SLICE =")]
+        self.assertIn("read key < $< && $(N64LINK) place build/cas/$$key.o", link.replace("\\\n  ", ""))
+        self.assertIn("--oformat binary -o $@", link)
+        self.assertIn("build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas\n", text)
+
+    def test_preprocess_writes_dependencies_in_one_cpp_pass(self) -> None:
+        for kind, depend_pass in (("sn64", False), ("ido", True)):
+            with self.subTest(kind=kind):
+                recipe = buildfiles._kind_recipes(kind)
+                preprocess = recipe.splitlines()[0]
+                self.assertEqual("-MMD" in preprocess, not depend_pass)
+                self.assertEqual("-MM -MG" in preprocess, depend_pass)
+                self.assertIn("-MP -MT $@ -MF $(@D)/$(*F).d", preprocess)
+                self.assertTrue(preprocess.endswith("> $(@D)/$(*F).i"))
 
     def test_flags_with_shell_characters_are_refused(self) -> None:
         with self.assertRaisesRegex(config.Held, "buildfiles.flag"):

@@ -1,7 +1,7 @@
 """Run the generated build's commands for one unit: compile (content-keyed), place, link alone, extract .text.
 
 The argv come from compilers.drivers (the same templates the Makefile renders). Published units write their
-objects where make expects them (build/<v>/src/UNIT.o); drafts write under build/work/FUNC/<v>/.
+objects to build/<v>/src/UNIT.o (make keys its own under build/cas); drafts write under build/work/FUNC/<v>/.
 """
 
 from __future__ import annotations

@@ -75,7 +75,6 @@ def make_command(host: Host, target: str) -> list[str]:
         f"CPP={host.cpp}",
         f"AS={host.mips_as}",
         f"LD={host.mips_ld}",
-        f"OBJCOPY={host.mips_objcopy}",
         f"N64LINK={host.n64link}",
     ]
 

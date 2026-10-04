@@ -1,7 +1,7 @@
 """A tiny fixture project with fake tool scripts, a real git repo and a local bare remote.
 
 The fake tools stand in for the cross toolchain: cpp passes text through, the compiler emits the three
-instruction words of `return N;`, as/n64link/objcopy copy bytes and ld concatenates its inputs in
+instruction words of `return N;`, as/n64link/objcopy copy bytes and ld (any --oformat) concatenates its inputs in
 command-line order. Make and git are the real ones.
 """
 
@@ -47,7 +47,7 @@ printf "\\044\\002\\000\\\\$(printf %03o "$n")\\003\\340\\000\\010\\000\\000\\00
 LD = """#!/bin/sh
 while [ $# -gt 0 ]; do case "$1" in
   -o) out="$2"; shift 2 ;;
-  -T|-Map|--defsym) shift 2 ;;
+  -T|-Map|--defsym|--oformat) shift 2 ;;
   -*) shift ;;
   *) files="$files $1"; shift ;;
 esac; done
