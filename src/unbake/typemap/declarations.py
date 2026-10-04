@@ -14,6 +14,7 @@ from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
 from unbake import cdecl
+from unbake.cache import memo
 from unbake.cdecl import LayoutParser, attribute_source, declaration_source
 from unbake.cdecl import declarations as header_declarations
 from unbake.config import Held, Host, Project
@@ -342,6 +343,16 @@ def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -
     return result
 
 
+# One source's facts parse the same unit up to four times (scoped then full, contracts then definition).
+UNIT_MEMO = 2
+
+
+def _tree(source: str, scope: dict[str, bool]) -> Any:
+    """A parse is pure in its text and seeded typedef scope; consumers copy before they change a node."""
+    key = (source, tuple(sorted(scope.items())))
+    return memo("decl.tree", key, lambda: cdecl.parser(scope).parse(source), keep=UNIT_MEMO)
+
+
 def extract(
     source: str,
     provenance: dict[str, Any],
@@ -358,8 +369,7 @@ def extract(
     source = clean(source, line_markers=owned_source is not None or authored_headers is not None)
     source = _declaration_unit(source)
     try:
-        parser = _parser or cdecl.parser(_scope or {})
-        tree = parser.parse(source)
+        tree = _parser.parse(source) if _parser is not None else _tree(source, _scope or {})
     except Exception as error:
         raise Held("solve", f"types.declaration: {provenance}: {error}") from error
     incoming = {node.name: _type(node.type) for node in tree.ext if isinstance(node, c_ast.Typedef)}
@@ -526,7 +536,7 @@ def _layout_records(
     unknown = []
     layout_source = clean(source)
     try:
-        for layout in LayoutParser(layout_source).parse():
+        for layout in memo("decl.layouts", layout_source, lambda: LayoutParser(layout_source).parse(), keep=UNIT_MEMO):
             if not layout.fields:
                 continue
             declaration = layout_source[layout.start : layout.end] + ";"
