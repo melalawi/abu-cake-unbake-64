@@ -29,6 +29,7 @@ class FeedbackPreprocessingTests(unittest.TestCase):
         batch.batch_effects = {}
         batch.batch_directives = {}
         batch.batch_includes = {}
+        batch.batch_resolved = {}
         batch.batch_macro_names = {}
         batch.batch_safe = {}
         batch.prepared = {v: ("", ["mock-cpp", "-P", "-x", v, "-"]) for v in ("us", "eu")}
@@ -210,6 +211,21 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                             expected = "double" if path == altered or version == "eu" else "int"
                             self.assertIn(f"{expected} {path.stem}", text)
             self.assertTrue(all(len(entries) <= 4 for entries in batch.batch_effects.values()))
+
+    def test_shared_include_paths_resolve_once_across_source_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batch = self.fixture(root)
+            (root / "include/shared.h").write_text("#define SHARED int\n")
+            sources = [root / "alpha.c", root / "nested/beta.c"]
+            sources[1].parent.mkdir()
+            for source in sources:
+                source.write_text('#include "shared.h"\nSHARED value;\n')
+            resolve = Path.resolve
+            with patch.object(Path, "resolve", autospec=True, side_effect=lambda path: resolve(path)) as resolved:
+                for source in sources:
+                    self.assertIsNotNone(batch._batch_input("us", source))
+                self.assertEqual(resolved.call_count, 1)
 
     def test_batch_streams_units_without_per_source_temporary_files(self):
         with tempfile.TemporaryDirectory() as tmp:

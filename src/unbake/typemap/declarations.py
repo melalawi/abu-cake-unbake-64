@@ -270,6 +270,7 @@ class _PublishedHeaders:
         ] = {}
         self.batch_directives: dict[Path, list[tuple[str, str]] | None] = {}
         self.batch_includes: dict[tuple[Path, str], Path | None] = {}
+        self.batch_resolved: dict[Path, Path] = {}
         self.batch_macro_names: dict[str, frozenset[str]] = {}
         self.batch_safe: dict[str, bool] = {}
 
@@ -436,7 +437,14 @@ class _PublishedHeaders:
                     if key not in self.batch_includes:
                         roots = ([path.parent] if argument.startswith('"') else []) + list(self.project.include)
                         found = next((root / include[1] for root in roots if (root / include[1]).is_file()), None)
-                        self.batch_includes[key] = None if found is None else found.resolve()
+                        if found is None:
+                            self.batch_includes[key] = None
+                        else:
+                            canonical = self.batch_resolved.get(found)
+                            if canonical is None:
+                                canonical = found.resolve()
+                                self.batch_resolved[found] = canonical
+                            self.batch_includes[key] = canonical
                     resolved = self.batch_includes[key]
                     if resolved is None:
                         return None, observed
