@@ -66,3 +66,26 @@ class RunTests(ProjectCase):
         self.assertEqual((loaded["g"].members, loaded["g"].evidence), (("alpha",), "proven"))
         self.assertNotIn("beta]", split_path.read_text())
         self.assertFalse((self.project.src / "beta.c").exists())
+
+
+class SecondRunTests(ProjectCase):
+    versions = ("us",)
+
+    def test_a_later_run_in_the_same_group_keeps_earlier_merges(self) -> None:
+        layout = self.project.root / "layout.toml"
+        g = Group("g", "main", "default", ("alpha", "beta", "gamma"))
+        layout.write_bytes(layout_map.encoded(layout_map.Map(2, (g,))))
+        split_path = self.project.version("us").split
+        for name in ("alpha", "beta", "gamma"):
+            (self.project.src / f"{name}.c").write_text(f"int {name}(void) {{ return 0; }}\n")
+            split_path.write_text(split_path.read_text().replace(f"asm, {name}]", f"c, {name}]"))
+        project = config.load(self.project.root)
+        with (
+            mock.patch.object(merge_units, "runs", return_value=[(g, ("alpha", "beta")), (g, ("gamma",))]),
+            mock.patch.object(merge_units, "prove", return_value=True),
+            mock.patch.object(merge_units, "_commit"),
+            mock.patch("unbake.buildfiles.write", return_value=[]),
+        ):
+            merge_units.run(project, self.host)
+        loaded = layout_map.load(config.load(self.project.root)).groups
+        self.assertEqual(loaded[0].members, ("alpha", "gamma"))

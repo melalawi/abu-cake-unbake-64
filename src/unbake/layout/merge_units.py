@@ -155,7 +155,13 @@ def run(project: Project, host: Host) -> list[str]:
     from unbake import config as project_config
 
     lines = []
-    for group, members in runs(project):
+    for stale, members in runs(project):
+        # An earlier merge in this pass may have rewritten the group; update from what layout.toml holds now.
+        group = next(
+            found
+            for found in layout_map.load(project).groups
+            if (found.name, found.segment) == (stale.name, stale.segment)
+        )
         source = merged_source(project, members)
         if not prove(project, host, members, source):
             cuts = tuple(dict.fromkeys((*group.split, *members[1:])))
