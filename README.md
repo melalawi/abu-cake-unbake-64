@@ -42,7 +42,7 @@ unbake reads machine facts from `--config FILE`, `$UNBAKE_CONFIG` or `~/.config/
 ## Start
 
 ```sh
-unbake init NAME
+unbake init NAME --functions-per-header 32
 unbake setup                      # prints a proposal and its digest
 unbake setup --confirm <SHA256>   # proves every ROM
 ```
