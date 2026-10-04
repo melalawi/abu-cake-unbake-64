@@ -1,6 +1,7 @@
 """Setup proves isolated inputs and rolls back every publication mutation."""
 
 import hashlib
+import io
 import os
 import shutil
 import sys
@@ -8,6 +9,7 @@ import sysconfig
 import tempfile
 import tomllib
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -16,7 +18,8 @@ import toml
 from tests.project.makefile_fixture import WORK, fixture
 from tests.project.test_bootstrap import cartridge
 from tests.project.test_config import write_policy
-from unbake.project import config, fingerprint, init, setup, setup_proof
+from unbake.cli.main import main
+from unbake.project import config, fingerprint, init, setup, setup_config, setup_proof
 from unbake.project.census import Census
 from unbake.report import readme_layout
 
@@ -110,6 +113,57 @@ class SetupTransactionTests(unittest.TestCase):
         (project.asm / "generated.s").write_bytes(b".text\n")
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text("check: OK\n")
+
+    def test_public_helper_refresh_strips_workspace_once(self) -> None:
+        path = self.root / "config.toml"
+        original = path.read_text() + '\n[workspace]\nid = "retired-checkout"\n'
+        path.write_text(original)
+        identity = self.project.workspace_id
+        with redirect_stdout(io.StringIO()) as output, patch("unbake.layout.map.ensure"):
+            code = main(["--project", str(self.root), "setup", "--refresh-helpers"])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertIn("OK(setup)", output.getvalue())
+        self.assertEqual(path.read_text(), setup_config.strip_workspace(original))
+        self.assertEqual(config.load(self.root).workspace_id, identity)
+        stamp = path.stat().st_mtime_ns
+        with redirect_stdout(io.StringIO()), patch("unbake.layout.map.ensure"):
+            self.assertEqual(main(["--project", str(self.root), "setup", "--refresh-helpers"]), 0)
+        self.assertEqual(path.stat().st_mtime_ns, stamp)
+
+    def test_public_plain_setup_strips_workspace(self) -> None:
+        path = self.root / "config.toml"
+        path.write_text(path.read_text() + '\n[workspace]\nid = "retired-checkout"\n')
+        identity = self.project.workspace_id
+        with (
+            redirect_stdout(io.StringIO()) as output,
+            patch("unbake.layout.map.ensure"),
+            patch.object(setup_proof, "proof", side_effect=self.proof),
+        ):
+            code = main(["--project", str(self.root), "setup"])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertIn("every cartridge byte proved", output.getvalue())
+        self.assertNotIn("workspace", tomllib.loads(path.read_text()))
+        self.assertEqual(config.load(self.root).workspace_id, identity)
+
+    def test_helper_refresh_failure_restores_retired_config(self) -> None:
+        path = self.root / "config.toml"
+        original = path.read_bytes() + b'\n[workspace]\nid = "retired-checkout"\n'
+        path.write_bytes(original)
+        path.chmod(0o640)
+        publish = setup.publish_files
+
+        def fail_after_publication(project, files):
+            publish(project, files)
+            self.assertNotIn("workspace", tomllib.loads(path.read_text()))
+            raise OSError("publication failed")
+
+        with (
+            patch.object(setup, "publish_files", side_effect=fail_after_publication),
+            self.assertRaisesRegex(OSError, "publication failed"),
+        ):
+            setup.refresh_helpers(self.project)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o640)
 
     def test_refresh_proves_staged_inputs_preserving_human_files(self) -> None:
         before = setup._inputs(self.project)

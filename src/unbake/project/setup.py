@@ -196,6 +196,11 @@ def refresh_helpers(project: Project) -> None:
             raise Held("setup", f"helper recipe provenance {recipe}: {error}") from error
         files = makefile.helper_sources(project) | makefile.scoped_settings(project, data)
         files["Makefile"] = makefile.render(project, data=data)["Makefile"]
+        config_path = project.root / "config.toml"
+        config_text = config_path.read_text()
+        stripped = setup_config.strip_workspace(config_text)
+        if stripped != config_text:
+            files["config.toml"] = stripped
         paths = {project.root / relative for relative in files}
         manifest = project.tools / "compiler.sha256"
         paths.add(manifest)
