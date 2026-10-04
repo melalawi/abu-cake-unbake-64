@@ -57,7 +57,6 @@ class Steps:
     preprocess: tuple[str, ...]
     compile: tuple[str, ...]
     assemble: tuple[str, ...] | None
-    depend: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -228,7 +227,6 @@ def steps(project: Project, version: str, unit: str, source: str, tools: Tools, 
         render(template["preprocess"] or (), values),
         render(template["compile"] or (), values),
         render(assemble, values) if assemble is not None else None,
-        render(DEPEND, values),
     )
 
 

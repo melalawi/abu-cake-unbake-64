@@ -196,11 +196,13 @@ def _canned(kind: str) -> str:
     preprocess = template["preprocess"]
     compile_ = template["compile"]
     assert preprocess is not None and compile_ is not None
-    lines = [
-        f"define COMPILE_{kind}",
-        f"\t{_recipe(preprocess)} > $(@D)/$(*F).i",
-        f"\tcd $(@D) && {_recipe(compile_)}",
-    ]
+    # A cpp preprocess writes the dependency file in the same pass; a compiler driver's -E needs its own cpp -MM.
+    if preprocess[0] == "{cpp}":
+        lines = [f"define COMPILE_{kind}", f"\t{_recipe(preprocess)} -MMD -MT $@ -MF $(@D)/$(*F).d > $(@D)/$(*F).i"]
+    else:
+        lines = [f"define COMPILE_{kind}", f"\t{_recipe(drivers.DEPEND)} -MT $@ -MF $(@D)/$(*F).d"]
+        lines.append(f"\t{_recipe(preprocess)} > $(@D)/$(*F).i")
+    lines.append(f"\tcd $(@D) && {_recipe(compile_)}")
     if template["assemble"] is not None:
         lines.append(f"\tcd $(@D) && {_recipe(template['assemble'])}")
     lines.append("endef")
@@ -239,7 +241,6 @@ def makefile(project: Project, host: Host) -> str:
     default = project.compilers[project.default_compiler]
     c_includes, c_codegen, c_defines = drivers.compiler_parts(project, default.id)
     includes = [f"-I{relative(project, path)}" for path in project.include]
-    depend = " ".join(drivers.render(drivers.DEPEND, MAKE_VALUES))
     kinds = sorted({compiler.kind for compiler in project.compilers.values()})
     text = [
         HEADER,
@@ -265,9 +266,11 @@ def makefile(project: Project, host: Host) -> str:
         f"COMPILER_DEFINES := {words(c_defines)}\n",
         f"TRIM := {'' if default.kind in drivers.UNTRIMMED else '--trim'}\n",
         "UNIT_INCLUDES :=\nUNIT_CODEGEN :=\nUNIT_DEFINES :=\nCONSUMER :=\n",
-        "\n.PHONY: all check verify setup clean rom\nall: check\n\n",
-        "check: verify\n",
-        "\t@for v in $(VERSIONS); do $(MAKE) --no-print-directory VERSION=$$v rom || exit 1; done\n\n",
+        "\n.PHONY: all check verify setup clean rom $(addprefix rom-,$(VERSIONS))\nall: check\n\n",
+        "# One sub-make per version under the shared jobserver, so make -jN check spreads N jobs over every version.\n",
+        "check: $(addprefix rom-,$(VERSIONS))\n\n",
+        "$(addprefix rom-,$(VERSIONS)): rom-%: verify\n",
+        "\t@$(MAKE) --no-print-directory VERSION=$* rom\n\n",
         "verify:\n",
         "\t@sha256sum --quiet -c tools/compilers.sha256\n",
         '\t@test "$$($(N64LINK) --version)" = "$$(cat tools/n64link.version)" '
@@ -288,7 +291,6 @@ def makefile(project: Project, host: Host) -> str:
         "\tdd if=$(BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none "
         "skip=$(word 1,$(S_$*)) count=$(word 2,$(S_$*))\n\n",
         "$(B)/src/%.o: src/%.c Makefile units.mk\n\t@mkdir -p $(@D)\n",
-        f"\t{depend} -MT $@ -MF $(@D)/$(*F).d\n",
         "\t$(COMPILE_$(KIND))\n\n",
         "$(B)/units/%.bin: $(B)/src/%.o versions/$(VERSION)/symbols.ld versions/$(VERSION)/$(NAME).ld\n",
         "\t@mkdir -p $(@D)\n",
