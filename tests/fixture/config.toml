@@ -10,19 +10,6 @@ names_from = "us"
 versions = ["us", "us-rev1"]
 default_compiler = "ido-7.1"
 
-[workspace]
-id = "00000000-0000-4000-8000-000000000002"
-
-[paths]
-roms = "roms"
-build = "build"
-work = "build/work"
-drafts = "build/drafts"
-src = "src"
-include = ["include"]
-asm = "asm"
-tools = "tools"
-
 [version.us]
 baserom = "roms/baserom.us.z64"
 baserom_sha1 = "21758de98b69907bcac48b82f833f14833a5f7cc"
@@ -43,11 +30,6 @@ cflags = ["-O2", "-G0", "-mips2"]
 [units]
 
 [build]
-as = "mips-linux-gnu-as"
-ld = "mips-linux-gnu-ld"
-objcopy = "mips-linux-gnu-objcopy"
-splat = "splat"
 asflags = ["-EB", "-mips2", "-G0"]
-cpp = "cpp"
 cppflags = []
 sn64_asflags = []
