@@ -326,6 +326,7 @@ def publish(
                 if not path.is_file():
                     continue
                 metadata = storage.read(path, "types.publication")
+                storage.validate_identity(project, metadata, "types.publication")
                 if path == summary:
                     metadata["database_sha256"] = digest
                 else:

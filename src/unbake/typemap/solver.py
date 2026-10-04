@@ -979,16 +979,16 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
     if database.is_file():
         if summary.is_file():
             previous = storage.read(summary, "types.summary")
-            storage.validate_identity(project, previous, "types.summary", allow_workspace=True)
+            recovered = storage.validate_identity(project, previous, "types.summary")
             if previous.get("database_sha256") != storage.file_digest(database):
-                if previous.get("workspace_id") == project.workspace_id:
+                if not recovered:
                     raise Held("solve", "types.summary: database changed independently of its semantic index")
                 # Foreign checkout evidence can have a stale semantic index.
                 # Rebuild from pinned map/source facts; reuse neither old file.
                 previous = {}
         elif database.stat().st_size <= 64 * 1024 * 1024:
             previous = storage.read(database, "types.database")
-            storage.validate_identity(project, previous, "types.database", allow_workspace=True)
+            storage.validate_identity(project, previous, "types.database")
         else:
             raise Held("solve", "types.summary: missing bounded semantic index for existing database")
     facts = refine(project, refresh_map(project) if facts is None else facts)

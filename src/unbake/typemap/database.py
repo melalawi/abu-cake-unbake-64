@@ -85,12 +85,12 @@ def context(project: Project, *, function: str | None = None, allow_stale: bool 
     return "\n".join(lines) + "\n"
 
 
-def redrafts(project: Project, *, allow_workspace: bool = False) -> dict[str, Any]:
+def redrafts(project: Project) -> dict[str, Any]:
     path = project.build / "types/redraft.json"
     if not path.is_file():
         return {}
     value = storage.read(path, "types.redraft")
-    storage.validate_identity(project, value, "types.redraft", allow_workspace=allow_workspace)
+    storage.validate_identity(project, value, "types.redraft")
     return dict(value.get("functions", {}))
 
 
@@ -498,7 +498,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             new_digest = summary[kind].get(name, {}).get("semantic_sha256")
             if old_digest != new_digest:
                 changed.add(f"{kind}:{name}")
-    marks = redrafts(project, allow_workspace=True)
+    marks = redrafts(project)
     if previous:
         dependants: dict[str, set[str]] = defaultdict(set)
         for function, neighbours in value["dependencies"].items():
@@ -655,7 +655,7 @@ def feedback_many(
         }
     path = project.build / "types/proven.json"
     previous = storage.read(path, "types.feedback") if path.is_file() else {**storage.identity(project), "records": {}}
-    storage.validate_identity(project, previous, "types.feedback", allow_workspace=True)
+    storage.validate_identity(project, previous, "types.feedback")
     for _, source, digest, _, _ in checked:
         content = source.read_bytes()
         if storage.digest(content) != digest:

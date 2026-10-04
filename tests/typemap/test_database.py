@@ -49,8 +49,9 @@ class DatabaseTests(unittest.TestCase):
         map_program(self.project)
         first = solve(self.project)
         rebound = replace(self.project, workspace_id="00000000-0000-4000-8000-000000000099")
-        with self.assertRaisesRegex(Held, "identity changed"):
-            load(rebound)
+        original = (rebound.build / "types/database.json").read_bytes()
+        self.assertEqual(load(rebound)["workspace_id"], rebound.workspace_id)
+        self.assertEqual((rebound.build / "types/database.json").read_bytes(), original)
         result = solve(rebound)
         self.assertEqual(result["workspace_id"], rebound.workspace_id)
         self.assertEqual(result["revision"], first["revision"] + 1)
@@ -87,6 +88,37 @@ class DatabaseTests(unittest.TestCase):
                     solve(replace(self.project, workspace_id="another-workspace"))
                 summary[field] = original
                 storage.write(path, storage.encoded(summary))
+
+    def test_identity_boundary_rebinds_once_and_preserves_payload(self) -> None:
+        from dataclasses import replace
+
+        rebound = replace(self.project, workspace_id="another-workspace")
+        value = {**storage.identity(self.project), "payload": {"sha256": "pinned"}}
+        self.assertTrue(storage.validate_identity(rebound, value, "evidence"))
+        self.assertEqual(value, {**storage.identity(rebound), "payload": {"sha256": "pinned"}})
+        self.assertFalse(storage.validate_identity(rebound, value, "evidence"))
+
+    def test_consumers_refuse_project_rom_and_schema_before_rebinding(self) -> None:
+        from dataclasses import replace
+
+        from unbake.typemap.mapping import load_map
+
+        map_program(self.project)
+        solve(self.project)
+        rebound = replace(self.project, workspace_id="another-workspace")
+        for relative, consumer in (("types/database.json", load), ("map/facts.json", load_map)):
+            path = self.project.build / relative
+            original = path.read_bytes()
+            for field in ("schema", "project_id", "rom_sha1"):
+                with self.subTest(relative=relative, field=field):
+                    value = storage.read(path, "evidence")
+                    value[field] = "different"
+                    storage.write(path, storage.encoded(value))
+                    before = path.read_bytes()
+                    with self.assertRaises(Held):
+                        consumer(rebound)
+                    self.assertEqual(path.read_bytes(), before)
+                    storage.write(path, original)
 
     def test_build_extraction_details_do_not_stale_type_inputs(self) -> None:
         build = self.project.build_link("us")

@@ -32,7 +32,7 @@ def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
             raise Held("solve", "map.abi.path: invalid ABI supplement name")
         path = index.parent / filename
         storage.verify_file(path, pointer["sha256"], "map.abi")
-        storage.validate_identity(project, pointer, "map.abi", allow_workspace=True)
+        storage.validate_identity(project, pointer, "map.abi")
         if pointer.get("map_shard_sha256") != facts["shard_sha256"]:
             raise Held("solve", "map.abi.shard: ABI supplement belongs to another map shard")
     else:

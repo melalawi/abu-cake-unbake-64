@@ -417,7 +417,9 @@ class DeclarationReuseTests(unittest.TestCase):
                         ),
                     )
                 with (
-                    patch.object(storage, "identity", return_value={"schema": 1, "project_id": "same"}),
+                    patch.object(
+                        storage, "identity", return_value={"schema": 1, "project_id": "same", "workspace_id": "local"}
+                    ),
                     patch.object(declarations, "collect") as collect,
                     patch.object(solver, "infer") as infer,
                     patch("unbake.typemap.abi_facts.refine") as refine,

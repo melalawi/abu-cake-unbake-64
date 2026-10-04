@@ -70,13 +70,17 @@ def identity(project: Project) -> dict[str, Any]:
     }
 
 
-def validate_identity(project: Project, value: dict[str, Any], key: str, *, allow_workspace: bool = False) -> None:
-    if any(
-        value.get(field) != expected
-        for field, expected in identity(project).items()
-        if field != "workspace_id" or not allow_workspace
-    ):
+def validate_identity(project: Project, value: dict[str, Any], key: str) -> bool:
+    """Validate portable evidence and rebind its in-memory checkout identity.
+
+    Return whether recovery occurred. Persist only through normal publication,
+    keeping content digests and transactional rollback guards intact.
+    """
+    if any(value.get(field) != expected for field, expected in identity(project).items() if field != "workspace_id"):
         raise Held("solve", f"{key}: project/workspace/ROM identity changed")
+    recovered = value.get("workspace_id") != project.workspace_id
+    value["workspace_id"] = project.workspace_id
+    return recovered
 
 
 def changed_source(project: Project) -> Path | None:
@@ -85,7 +89,7 @@ def changed_source(project: Project) -> Path | None:
     if not proven.is_file():
         return None
     value = read(proven, "types.feedback")
-    validate_identity(project, value, "types.feedback", allow_workspace=True)
+    validate_identity(project, value, "types.feedback")
     for row in value.get("records", {}).values():
         source: Path = project.root / row["source"]
         if not source.is_file() or file_digest(source) != row["source_sha256"]:

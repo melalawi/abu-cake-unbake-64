@@ -259,7 +259,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
     return result
 
 
-def _read_map(project: Project, *, allow_workspace: bool = False) -> dict[str, Any]:
+def _read_map(project: Project) -> tuple[dict[str, Any], bool]:
     path = project.build / "map/facts.json"
     if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
         raise Held("solve", "map.facts: compact sharded map required; run unbake map")
@@ -272,13 +272,13 @@ def _read_map(project: Project, *, allow_workspace: bool = False) -> dict[str, A
     shard_path = path.parent / shard
     if not shard_path.is_file() or storage.file_digest(shard_path) != result.get("shard_sha256"):
         raise Held("solve", "map.shards: missing or changed facts; run unbake map")
-    storage.validate_identity(project, result, "map.facts", allow_workspace=allow_workspace)
-    return result
+    recovered = storage.validate_identity(project, result, "map.facts")
+    return result, recovered
 
 
 def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
     """Read verified shards; snapshot consumers must separately pin selected targets."""
-    result = _read_map(project)
+    result, _ = _read_map(project)
     if not allow_stale and result.get("inputs_sha256") != storage.inputs(project):
         raise Held("solve", "map.inputs_stale: run unbake solve to refresh affected map facts")
     result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
@@ -287,14 +287,14 @@ def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
 
 def refresh_map(project: Project) -> dict[str, Any]:
     """Refresh symbol and boundary dependencies, retaining unaffected instruction facts."""
-    result = _read_map(project, allow_workspace=True)
+    result, recovered = _read_map(project)
     pinned = storage.inputs(project)
     old_inputs = result["inputs_sha256"]
     for version in project.versions:
         relative = str(project.version(version).baserom.relative_to(project.root))
         if pinned.get(relative) != old_inputs.get(relative):
             raise Held("solve", f"map.rom_sha1.{version}: ROM changed; bootstrap map required")
-    if pinned == old_inputs and result["workspace_id"] == project.workspace_id:
+    if pinned == old_inputs and not recovered:
         result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
         return result
     return _map(project, result)
