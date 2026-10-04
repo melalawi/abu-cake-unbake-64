@@ -252,10 +252,16 @@ def run(project: Project, policy: SetupPolicy, confirm: str | None, *, retain_na
     return result
 
 
+def publication_data(report: dict[str, Any]) -> dict[str, Any]:
+    """A retained-name review writes metadata without replaying data bindings."""
+    return {} if report.get("retain_symbol_names") else report.get("data_symbols", {})
+
+
 def publish(
     project: Project, policy: SetupPolicy, replacements: dict[str, str], report: dict[str, Any], inputs: dict[str, str]
 ) -> list[str]:
     """Prove one simultaneous symbol transaction and publish its layout evidence."""
+    binding_data = publication_data(report)
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
     data = toml.loads((project.root / "config.toml").read_text())
@@ -273,7 +279,7 @@ def publish(
     if units:
         data["units"] = dict(sorted(units.items()))
     # Data identities rebind addresses per version, which only the full proof covers.
-    fast = symbol_proof.available(project, replacements) and not report.get("data_symbols", {}).get("renames")
+    fast = symbol_proof.available(project, replacements) and not binding_data.get("renames")
     with workspace.temporary(project, prefix="symbol-proof-", directory=directory) as temporary:
         tree = Path(temporary) / "tree"
         setup._copy_inputs(project, tree, inputs)
@@ -281,8 +287,8 @@ def publish(
             target = tree / project.version(v).split.relative_to(project.root)
             target.write_text(rewrite_layout(target.read_text(), replacements))
             target = tree / project.version(v).symbols.relative_to(project.root)
-            target.write_text(data_symbols_text(target.read_text(), v, replacements, report.get("data_symbols", {})))
-        header_names = {**replacements, **shared_data_renames(report.get("data_symbols", {}))}
+            target.write_text(data_symbols_text(target.read_text(), v, replacements, binding_data))
+        header_names = {**replacements, **shared_data_renames(binding_data)}
         for header in (tree / path.relative_to(project.root) for path in project.include):
             for path in header.rglob("*.h"):
                 path.write_text(rewrite(path.read_text(), header_names))
@@ -301,7 +307,7 @@ def publish(
                 version["evidence"]["split_yaml"] = rewrite_layout(version["evidence"]["split_yaml"], replacements)
             if "symbols_text" in version["evidence"]:
                 version["evidence"]["symbols_text"] = data_symbols_text(
-                    version["evidence"]["symbols_text"], v, replacements, report.get("data_symbols", {})
+                    version["evidence"]["symbols_text"], v, replacements, binding_data
                 )
             for provider in version["providers"]:
                 provider["name"] = path_name(provider["name"], replacements)

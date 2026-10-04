@@ -124,3 +124,13 @@ class RetainedAssertionTests(unittest.TestCase):
         self.assertEqual(reviewed["renames"], {})
         self.assertEqual(reviewed["rename_count"], 0)
         self.assertEqual(original, before)
+
+    def test_retained_name_publication_never_replays_historical_object_bindings(self):
+        data = {"objects": [{"name": "old", "placements": [{"version": "one", "address": 123}]}]}
+        for retain in (False, True):
+            with self.subTest(retain=retain):
+                self.assertEqual(
+                    symbol_replan.publication_data({"retain_symbol_names": retain, "data_symbols": data}),
+                    {} if retain else data,
+                )
+        self.assertEqual(data["objects"][0]["name"], "old")
