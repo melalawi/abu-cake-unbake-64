@@ -163,7 +163,9 @@ class MakefileTests(unittest.TestCase):
             stream.write('\n[build.unit_cflags]\nmiddle = ["-O1"]\n')
         self.assertEqual(makefile.flags(project, "us", "src/middle.c")[-1], "-O1")
         self.assertEqual(makefile.flags(project, "us", project.src / "middle.c")[-1], "-O1")
-        self.assertEqual(makefile.description(project)["unit_cflags"]["middle"], ("-O1",))
+        description = makefile.description(project)
+        self.assertEqual(description["unit_cflags"]["middle"], ["-O1"])
+        self.assertEqual(description, json.loads(json.dumps(description)))
 
 
 class HostExecutableTests(unittest.TestCase):

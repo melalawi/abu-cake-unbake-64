@@ -5,7 +5,15 @@ from pathlib import Path
 
 
 def expand(
-    source, roots=(), macros=None, *, markers=False, origin="<stdin>", directives_only=False, preserve_columns=False
+    source,
+    roots=(),
+    macros=None,
+    *,
+    markers=False,
+    origin="<stdin>",
+    directives_only=False,
+    preserve_columns=False,
+    cwd=None,
 ):
     macros = dict(macros or {})
 
@@ -56,7 +64,7 @@ def expand(
                     macros.pop(value, None)
                 elif active[-1] and kind == "include":
                     relative = value.strip('"<>')
-                    candidates = [Path(relative), home / relative, *(Path(root) / relative for root in roots)]
+                    candidates = [home / relative, *(Path(root) / relative for root in roots)]
                     path = next((path for path in candidates if path.is_file()), None)
                     if path is None:
                         raise ValueError(f"{relative}: missing fixture include")
@@ -75,7 +83,7 @@ def expand(
                 result.append(line)
         return "\n".join(result) + "\n"
 
-    return read(source, Path.cwd(), origin)
+    return read(source, Path.cwd() if cwd is None else Path(cwd), origin)
 
 
 def output(command, **kwargs):
@@ -88,7 +96,7 @@ def output(command, **kwargs):
     )
     source = kwargs.get("input")
     if source is None:
-        source = Path(command[-1]).read_text()
+        source = (cwd / command[-1]).read_text()
     for index, flag in enumerate(command):
         if flag == "-include":
             source = (cwd / command[index + 1]).read_text() + "\n" + source
@@ -100,6 +108,7 @@ def output(command, **kwargs):
         origin=command[-1] if "input" not in kwargs else "<stdin>",
         directives_only="-fdirectives-only" in command,
         preserve_columns="-fdebug-cpp" in command,
+        cwd=cwd,
     )
     if "-fdebug-cpp" in command:
         from unbake.match.rewrite_view import _TOKEN

@@ -57,6 +57,16 @@ class AtomicTests(unittest.TestCase):
         self.assertEqual(missing.read_bytes(), b"")
         self.assertFalse(list(self.root.glob(".publish-*")))
 
+    def test_scratch_receipt_copy_is_private_without_syncing_each_timestamp(self):
+        path = self.root / "old.built"
+        path.write_bytes(b"receipt")
+        target = self.root / "new.built"
+        with patch.object(atomic.os, "fsync", side_effect=AssertionError("timestamp sync")):
+            atomic.copy2(path, target, durable=False)
+            atomic.receipt(target)
+        self.assertNotEqual(path.stat().st_ino, target.stat().st_ino)
+        self.assertEqual(path.read_bytes(), target.read_bytes())
+
     def test_write_and_rename_failures_preserve_destination_and_cleanup(self):
         path = self.root / "object.o"
         original = self.shared(path)

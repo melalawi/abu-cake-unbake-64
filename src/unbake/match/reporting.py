@@ -103,4 +103,7 @@ def phase(name: str, **evidence: object) -> Iterator[None]:
     try:
         yield
     finally:
-        record("phase_finished", phase=name, seconds=round(monotonic() - start, 3), **evidence)
+        seconds = round(monotonic() - start, 3)
+        record("phase_finished", phase=name, seconds=seconds, **evidence)
+        if sink := _sink.get():
+            sink(f"OK(submit): phase {name}: {seconds:.3f} s")

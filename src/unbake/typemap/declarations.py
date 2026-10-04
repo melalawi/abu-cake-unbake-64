@@ -490,13 +490,6 @@ class _PublishedHeaders:
         text = self.batch_headers[source]
         if effects is None:
             return None
-        from unbake.typemap.split import consumer_macro
-
-        macro = consumer_macro(source.stem)
-        if (self.project.include[0] / "shared/consumers" / (source.stem + ".h")).is_file():
-            effects.add(macro)
-            definition = macros.get(macro, f"#define {macro} 1\n")
-            text = f"#undef {macro}\n" + definition + f'#line 1 "{source}"\n' + text
         return text, effects
 
     def batch(self, version: str, sources: list[Path]) -> list[str | tuple[str, str] | Held]:

@@ -176,20 +176,21 @@ def _publish(project: Project, policy: Policy, sources: list[Path]) -> list[str]
             if not candidates:
                 return receipts
             _materialize(staged, base, candidates)
-            generations: dict[str, Path] = {}
-            versions = list(project.versions)
-            for version in versions:
-                generations[version] = staging.generation(
-                    project,
-                    version,
-                    current[version],
-                    holds,
-                    retained=True,
-                    borrowed=all(candidate.compiled for candidate in candidates),
-                )
-                for candidate in candidates:
-                    if candidate.republication and not candidate.compiled and version in candidate.versions:
-                        (generations[version] / "obj/src" / f"{candidate.function}.built").unlink(missing_ok=True)
+            with reporting.phase("retain_generations"):
+                generations: dict[str, Path] = {}
+                versions = list(project.versions)
+                for version in versions:
+                    generations[version] = staging.generation(
+                        project,
+                        version,
+                        current[version],
+                        holds,
+                        retained=True,
+                        borrowed=all(candidate.compiled for candidate in candidates),
+                    )
+                    for candidate in candidates:
+                        if candidate.republication and not candidate.compiled and version in candidate.versions:
+                            (generations[version] / "obj/src" / f"{candidate.function}.built").unlink(missing_ok=True)
             with reporting.phase("proof", sources=len(candidates)):
                 extracted = {v: staged.version(v).split.read_text() for v in versions}
                 faults = incremental.prepare(
@@ -1010,6 +1011,7 @@ def _commit(
             if published_generations is generations:
                 for generation in generations.values():
                     staging.independent_objects(generation)
+                staging.publication_dependencies(project, staged, generations)
             for version, generation in published_generations.items():
                 swap(project.build_link(version), generation)
                 swapped.append(version)

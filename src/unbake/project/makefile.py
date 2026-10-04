@@ -188,7 +188,7 @@ def description(project: Project) -> dict[str, Any]:
         "as": host_tool(project, build.as_, "mips_as") if build.as_ else None,
         "cpp": host_tool(project, build.cpp, "cpp") if build.cpp else None,
         "cppflags": list(build.cppflags),
-        "unit_cflags": build.unit_cflags,
+        "unit_cflags": {name: list(flags) for name, flags in build.unit_cflags.items()},
         "resident_mappings": build.resident_mappings,
     }
 

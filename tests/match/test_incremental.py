@@ -59,6 +59,16 @@ class RetargetTests(unittest.TestCase):
             self.assertNotIn("obj/src/alpha.o", script)
             self.assertEqual(json.loads((generation / "unit-ranges.json").read_text()), {})
 
+    def test_unchanged_split_with_stale_published_inventory_refuses_before_rebuild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, generation, before = self._retained(Path(directory))
+            after = before.replace("asm, nonmatchings/alpha", "c, alpha")
+            project.version("us").split.write_text(after)
+            with patch.object(incremental, "advance") as advance, self.assertRaises(config.Held) as refusal:
+                incremental._prepare_version((project, project, {"us": generation}, {"us": after}), "us")
+            advance.assert_not_called()
+            self.assertIn("retained extraction omits published C: alpha", refusal.exception.reason)
+
     def test_changed_placement_refuses_without_writing_retained_files(self):
         with tempfile.TemporaryDirectory() as directory:
             project, generation, before = self._retained(Path(directory))

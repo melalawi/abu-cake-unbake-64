@@ -173,21 +173,17 @@ class FeedbackPreprocessingTests(unittest.TestCase):
                     self.assertEqual(batch.batch("us", [source]), [("", "int alpha(void) {}")])
                     individual.assert_called_once_with("us", source)
 
-    def test_consumer_macro_and_transitive_header_macros_are_restored(self):
-        from unbake.typemap.split import consumer_macro
-
+    def test_source_macro_and_transitive_header_macros_are_restored(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             batch = self.fixture(root)
-            consumer = root / "include/shared/consumers"
-            consumer.mkdir(parents=True)
-            (consumer / "alpha.h").write_text("")
-            macro = consumer_macro("alpha")
+            macro = "ALPHA_CONTEXT"
             (root / "include/outer.h").write_text('#include "inner.h"\n')
             (root / "include/inner.h").write_text(f"#ifdef {macro}\n#define VALUE double\n#endif\n")
             sources = [root / "alpha.c", root / "beta.c"]
             for path in sources:
                 path.write_text(f'#include "outer.h"\nVALUE {path.stem}(void) {{ return 0; }}\n')
+            sources[0].write_text(f"#define {macro} 1\n" + sources[0].read_text())
             with patch.object(declarations, "_preprocess", side_effect=self.cpp(batch, [])):
                 actual = batch.batch("us", sources)
             self.assertIn("double alpha", actual[0][1])

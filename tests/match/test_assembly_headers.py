@@ -82,3 +82,33 @@ class AssemblyHeaderTests(unittest.TestCase):
                     self.assertEqual((tree / source.relative_to(root)).read_bytes(), b"assembly")
                     copied.write_bytes(b"private edit")
                     self.assertEqual(header.read_bytes(), b"changed macro" if changed else b"macro")
+
+
+class PublicationDependenciesTests(unittest.TestCase):
+    def test_staged_dependencies_publish_locally_without_mutating_retained_inodes(self):
+        import json
+        import os
+        from types import SimpleNamespace
+
+        from unbake.match import staging
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tree = root / "build/submit-proof/tree"
+            generation = root / "build/us.new"
+            obj = generation / "obj/src/unit.o"
+            obj.parent.mkdir(parents=True)
+            obj.write_bytes(b"proved")
+            (generation / ".split.mk").write_text("C_OBJECTS := $(BUILD)/obj/src/unit.o\n")
+            dependency = obj.with_suffix(".d")
+            dependency.write_text(f"$(BUILD)/obj/src/unit.built: {tree}/src/unit.c {tree}/asm/us/include/macro.inc\n")
+            previous = root / "old.d"
+            os.link(dependency, previous)
+            evidence = obj.with_suffix(".inputs.json")
+            evidence.write_text(json.dumps({str(tree / "src/unit.c"): "digest"}))
+            staging.publication_dependencies(SimpleNamespace(root=root), SimpleNamespace(root=tree), {"us": generation})
+            self.assertEqual(
+                dependency.read_text(), "$(BUILD)/obj/src/unit.built: src/unit.c asm/us/include/macro.inc\n"
+            )
+            self.assertIn("submit-proof/tree", previous.read_text())
+            self.assertEqual(json.loads(evidence.read_text()), {"src/unit.c": "digest"})

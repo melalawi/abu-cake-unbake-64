@@ -26,6 +26,7 @@ from unbake.typemap.storage import file_digest
 
 def _miss(reason: str) -> bool:
     reporting.record("incremental_fallback", reason=reason)
+    reporting.learn("OK(submit): incremental fallback: " + reason)
     return False
 
 
@@ -183,7 +184,18 @@ def _prepare_version(
     retained: dict[str, Any] | None = (
         {"raw": raw.read_text(), "placed": placed.read_text()} if raw.is_file() and placed.is_file() else None
     )
-    if not advance(staged, version, generation, splits[version], staged.version(version).split.read_text()):
+    after = staged.version(version).split.read_text()
+    ranges = generation / "unit-ranges.json"
+    if after == splits[version] and ranges.is_file():
+        certified = json.loads(ranges.read_text())
+        missing = extract.unit_ranges(after).keys() - certified.keys()
+        if missing:
+            held(
+                f"submit.baseline_inputs: VERSION {version}: retained extraction omits published C: "
+                + ", ".join(sorted(missing))
+                + "; refresh the project build before submitting an unchanged split"
+            )
+    if not advance(staged, version, generation, splits[version], after):
         return None
     changed = changed_sources(original, staged, generation, version)
     if changed and (generation / "obj").is_symlink():
@@ -208,6 +220,10 @@ def prepare(
     recipe = json.loads((original.tools / "build.json").read_text())
     current = makefile.description(staged)
     if {k: v for k, v in recipe.items() if k != "units"} != {k: v for k, v in current.items() if k != "units"}:
+        _miss(
+            "build recipe fields changed: "
+            + ", ".join(k for k in recipe if k != "units" and recipe[k] != current.get(k))
+        )
         return None
     changed = {}
     shared = original, staged, generations, splits

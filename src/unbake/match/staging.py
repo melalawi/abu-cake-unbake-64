@@ -208,7 +208,7 @@ def _retain_object(source: Path, target: Path) -> None:
         old, new = source.with_suffix(suffix), target.with_suffix(suffix)
         if old.is_file():
             if suffix == ".built":
-                atomic_files.copy2(old, new)
+                atomic_files.copy2(old, new, durable=False)
             else:
                 os.link(old, new, follow_symlinks=True)
 
@@ -456,6 +456,33 @@ def independent_objects(generation: Path) -> None:
             for obj in object_paths(generation):
                 if obj.parts[1] == name:
                     _retain_object(source / obj.relative_to(Path("obj") / name), generation / obj)
+
+
+def publication_dependencies(project: Project, staged: Project, generations: dict[str, Path]) -> None:
+    """Publish dependency evidence in project coordinates, never scratch coordinates."""
+    prefixes = [str(staged.root) + "/", str(project.root) + "/"]
+    if staged.root.is_relative_to(project.root):
+        prefixes.insert(0, staged.root.relative_to(project.root).as_posix() + "/")
+
+    def local(text: str) -> str:
+        for prefix in prefixes:
+            text = text.replace(prefix, "")
+        return text
+
+    for generation in generations.values():
+        for obj in object_paths(generation):
+            dependency = (generation / obj).with_suffix(".d")
+            if dependency.is_file():
+                before = dependency.read_text()
+                after = local(before)
+                if after != before:
+                    atomic_files.text(dependency, after)
+            evidence = (generation / obj).with_suffix(".inputs.json")
+            if evidence.is_file():
+                saved = json.loads(evidence.read_text())
+                rebound = {local(name): digest for name, digest in saved.items()}
+                if rebound != saved:
+                    atomic_files.text(evidence, json.dumps(rebound, sort_keys=True))
 
 
 def publication_stamps(project: Project, generations: dict[str, Path]) -> None:
