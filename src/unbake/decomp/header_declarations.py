@@ -30,6 +30,8 @@ def declaration_source(source: str) -> str:
 
 def attribute_source(source: str) -> str:
     """Hide balanced GCC attribute clauses while preserving all source offsets."""
+    if "__attribute" not in source:
+        return source
     tokens = list(re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', source))
     edits = []
     index = 0
@@ -226,7 +228,7 @@ def declarations(source: str) -> Declarations:
     # A version fold reads the same installed declarations through several
     # private include trees. Text, rather than their temporary paths, identifies
     # this analysis. Keep caller-owned sets outside the shared cache.
-    parsed = remembered("headers.declarations", source, lambda: Parser(source).parse(), keep=2048)
+    parsed = remembered("headers.declarations", source, lambda: Parser(source).parse(), keep=32768)
     return Declarations(
         set(parsed.typedefs),
         set(parsed.uses),

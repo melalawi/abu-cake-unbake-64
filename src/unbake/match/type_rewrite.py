@@ -211,6 +211,59 @@ def edits(
     if expanded is not None:
         view = expanded.text
     view = _gnu_blank(view, blank)
+    from unbake.project.cache import remembered
+
+    selection = (
+        parser.source,
+        prefix,
+        view,
+        expanded,
+        tuple(sorted(records.items())),
+        tuple(sorted(resolution.items())),
+        frozenset(bare_tags),
+        cache_root,
+        tuple(sorted((typedef_renames or {}).items())),
+        source_path,
+        source_line_offset,
+        source_text,
+    )
+    return dict(
+        remembered(
+            "rewrite.plans",
+            selection,
+            lambda: _plan(
+                parser,
+                prefix,
+                view,
+                expanded,
+                records,
+                resolution,
+                bare_tags,
+                cache_root,
+                typedef_renames,
+                source_path,
+                source_line_offset,
+                source_text,
+            ),
+            keep=1,
+        )
+    )
+
+
+def _plan(
+    parser: Parser,
+    prefix: str,
+    view: str,
+    expanded: View | None,
+    records: dict[str, Layout],
+    resolution: dict[str, tuple[str, Layout]],
+    bare_tags: set[str],
+    cache_root: Path | None,
+    typedef_renames: dict[str, str] | None,
+    source_path: Path | None,
+    source_line_offset: int,
+    source_text: str | None,
+) -> dict[tuple[int, int], str]:
     try:
         tree = _parse(prefix, view, cache_root)
     except c_parser.ParseError as error:

@@ -207,7 +207,7 @@ class DeclarationTests(MatchFixture):
         parsers = [headers.parse(source)[0] for _ in self.versions]
         trees = []
 
-        def typed(project, policy, version, *, extra=None):
+        def typed(project, policy, version, *, extra=None, contents=None):
             self.assertIsNotNone(extra)
             self.assertEqual(extra.read_text(), "")
             trees.append(project.include)

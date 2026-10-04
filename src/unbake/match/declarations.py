@@ -352,7 +352,12 @@ def _layout_names(
 
         def expanded_context(parser: Parser, version: str) -> rewrite_view.View:
             return rewrite_view.prepare(
-                effective_project(), policy, text, version, source_path or project.src / f"{function}.c"
+                effective_project(),
+                policy,
+                text,
+                version,
+                source_path or project.src / f"{function}.c",
+                contents=source_views.authored_contents(project, headers, effective_project()),
             )
 
         for index, parser in enumerate(parsers):

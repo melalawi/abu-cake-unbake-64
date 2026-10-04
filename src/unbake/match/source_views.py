@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -60,7 +62,7 @@ def typed_context(
 ) -> str:
     """Reuse preprocessing for an effective header set and selected version."""
     from unbake.project.cache import remembered
-    from unbake.typemap.declarations import headers as typed_headers
+    from unbake.typemap import declarations as typed_declarations
 
     selection = (
         project.root,
@@ -83,8 +85,12 @@ def typed_context(
                 # Source context includes promoted components excluded from header-only evidence.
                 source = Path(temporary) / "rewrite-context.c"
                 source.write_text("")
-                return typed_headers(local, policy, version, extra=source)
-            return typed_headers(local, policy, version)
+                return typed_declarations.headers(
+                    local, policy, version, extra=source, contents=authored_contents(project, headers, local)
+                )
+            return typed_declarations.headers(
+                local, policy, version, contents=authored_contents(project, headers, local)
+            )
 
     cached: dict[tuple[Any, ...], str] = headers.__dict__.setdefault("_typed_contexts", {})
     if selection not in cached:
@@ -94,18 +100,51 @@ def typed_context(
     return cached[selection]
 
 
+@contextmanager
+def shared_includes(project: Project, headers: Headers) -> Iterator[None]:
+    """Own an incrementally materialized include snapshot for serial folding."""
+    with tempfile.TemporaryDirectory(prefix="match-includes-") as temporary:
+        headers.__dict__["_shared_includes"] = (project.root, Path(temporary), {})
+        try:
+            yield
+        finally:
+            del headers.__dict__["_shared_includes"]
+
+
+def authored_contents(project: Project, headers: Headers, local: Project) -> dict[Path, str]:
+    from unbake.typemap import storage
+
+    return {
+        staged / path.relative_to(root): text
+        for root, staged in zip(project.include, local.include, strict=True)
+        for path, text in headers.texts.items()
+        if path.is_relative_to(root) and not storage.generated(project, path)
+    }
+
+
 def header_includes(project: Project, headers: Headers, directory: Path) -> tuple[Path, ...]:
     """Materialize the fold's effective include tree for every declaration preprocessor."""
+    shared = headers.__dict__.get("_shared_includes")
+    before = {}
+    if shared is not None and shared[0] == project.root:
+        _, directory, before = shared
     roots = []
     for index, root in enumerate(project.include):
         staged = directory / "include" / str(index)
-        staged.mkdir(parents=True)
+        staged.mkdir(parents=True, exist_ok=True)
         for path, content in headers.texts.items():
-            if path.is_relative_to(root):
+            if path.is_relative_to(root) and before.get(path) != content:
                 destination = staged / path.relative_to(root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(content)
         roots.append(staged)
+    if shared is not None and shared[0] == project.root:
+        for path in before.keys() - headers.texts.keys():
+            for root, staged in zip(project.include, roots, strict=True):
+                if path.is_relative_to(root):
+                    (staged / path.relative_to(root)).unlink(missing_ok=True)
+        before.clear()
+        before.update(headers.texts)
     return tuple(roots)
 
 

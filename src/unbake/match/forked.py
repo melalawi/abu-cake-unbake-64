@@ -131,14 +131,45 @@ def _bounded(pool: Executor, work: Callable[[T], R], items: Sequence[T], workers
         wait(running)
 
 
-def release() -> None:
+def release(*, shared: bool = False) -> None:
     """Drop disposable parse state at a candidate boundary; disk artifacts survive."""
     from unbake.match import type_rewrite
     from unbake.project import cache
 
-    cache._parsed.clear()
-    cache._remembered.clear()
-    type_rewrite._context.cache_clear()
+    if shared:
+        for key in list(cache._parsed):
+            if key[0] not in {"split.layout", "split.symbols"}:
+                del cache._parsed[key]
+        while len(cache._parsed) > 16:
+            del cache._parsed[next(iter(cache._parsed))]
+    else:
+        cache._parsed.clear()
+    if shared:
+        # Header analyses are content keyed and small per file. Larger graphs
+        # retain only the current context, never a history of candidate parses.
+        reusable = {
+            "headers.declarations",
+            "headers.aliases",
+            "headers.context",
+            "imports.providers",
+            "rewrite.namespaces",
+            "rewrite.plans",
+            "declaration.evidence",
+            "parsed.split.functions",
+            "split.aliases",
+        }
+        for kind in list(cache._remembered):
+            if kind not in reusable:
+                del cache._remembered[kind]
+            elif kind not in {"headers.declarations", "headers.aliases"}:
+                values = cache._remembered[kind]
+                while len(values) > (8 if kind in {"parsed.split.functions", "split.aliases"} else 1):
+                    values.popitem(last=False)
+    else:
+        for kind in list(cache._remembered):
+            if kind not in {"headers.declarations", "headers.aliases"}:
+                del cache._remembered[kind]
+        type_rewrite._context.cache_clear()
     gc.collect()
 
 
@@ -152,4 +183,4 @@ def _run(work: Callable[[S, T], R], shared: S, item: T) -> tuple[list[str], R]:
         with reporting.captured() as lines:
             return lines, work(shared, item)
     finally:
-        release()
+        release(shared=True)

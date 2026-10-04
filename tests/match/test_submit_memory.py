@@ -62,7 +62,7 @@ class PendingTests(unittest.TestCase):
                         forked._run(work, 2, 3)
                 else:
                     self.assertEqual(forked._run(work, 2, 3), ([], 5))
-                release.assert_called_once_with()
+                release.assert_called_once_with(shared=True)
 
     def test_release_keeps_disk_artifacts_and_clears_memory(self):
         with patch.object(cache, "_parsed", {"source": object()}), patch.object(cache, "_remembered", {"context": {}}):

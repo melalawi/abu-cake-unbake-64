@@ -87,6 +87,7 @@ def prepare(
     source_path: Path,
     *,
     preprocess: Callable[[Project, list[str], str], str] | None = None,
+    contents: dict[Path, str] | None = None,
 ) -> View:
     """Expand the fold's effective headers, compiler defines and source macros."""
     from unbake.decomp.draft_context import ordered_headers
@@ -94,7 +95,12 @@ def prepare(
     from unbake.typemap import declarations, storage
     from unbake.typemap.split import consumer_macro
 
-    contents = {path: path.read_text() for path, _ in include_headers(project) if not storage.generated(project, path)}
+    if contents is None:
+        contents = {
+            path: path.read_text()
+            for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
+            if not storage.generated(project, path)
+        }
     prelude = "".join(f"#include {json.dumps(str(path))}\n" for path in ordered_headers(contents))
     prelude += "".join(f"#include {json.dumps(str(path))}\n" for path in declarations._generated_context(project))
     if (project.include[0] / "shared/consumers" / (source_path.stem + ".h")).is_file():

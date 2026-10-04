@@ -455,7 +455,7 @@ class SharedHeaderContextTests(unittest.TestCase):
             project = ContextProject(root, (header.parent,), "cc", {"cc": SimpleNamespace(cflags=("-O2",))}, macros)
             policy = SimpleNamespace(cpp=Path("cpp"), cppflags=("-P",))
 
-            def preprocess(local, policy, version):
+            def preprocess(local, policy, version, **kwargs):
                 return (local.include[0] / "types.h").read_text() + str(macros[version])
 
             with patch("unbake.typemap.declarations.headers", side_effect=preprocess) as cpp:

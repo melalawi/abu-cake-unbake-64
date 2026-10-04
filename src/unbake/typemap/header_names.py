@@ -143,12 +143,17 @@ class _Declarations(Parser):
 
 
 def alias_types(source: str) -> dict[str, str]:
-    parser = _Declarations(source)
-    try:
-        parser.parse()
-    except Held as error:
-        raise Held("solve", f"types.header_parse: {error.reason}") from error
-    return parser.alias_types
+    from unbake.project.cache import remembered
+
+    def parse() -> dict[str, str]:
+        parser = _Declarations(source)
+        try:
+            parser.parse()
+        except Held as error:
+            raise Held("solve", f"types.header_parse: {error.reason}") from error
+        return parser.alias_types
+
+    return dict(remembered("headers.aliases", source, parse, keep=32768))
 
 
 def type_identity(type_: str, aliases: dict[str, str]) -> object:

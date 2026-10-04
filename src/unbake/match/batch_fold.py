@@ -95,6 +95,9 @@ def fold(
     staged: Project, policy: Policy, headers: Headers, candidates: list[Any], receipts: list[str]
 ) -> Iterator[tuple[Any, declarations.Folded]]:
     """Fold candidates in order into headers; returns each accepted source with its fold."""
+    if policy.cores < 2:
+        yield from _serial(staged, policy, headers, candidates, receipts)
+        return
     window = max(1, min(policy.cores, forked.MAX_WORKERS) * 2)
     reused = again = 0
     start = 0
@@ -126,10 +129,30 @@ def fold(
                     yield candidate, folded
                     del folded
                 del trial, before
-                forked.release()
+                forked.release(shared=True)
                 if changes.reloaded:
                     break
     reporting.record("fold", reused=reused, folded_in_order=again, window=window)
+
+
+def _serial(
+    staged: Project, policy: Policy, headers: Headers, candidates: list[Any], receipts: list[str]
+) -> Iterator[tuple[Any, declarations.Folded]]:
+    """A single worker needs no speculation, warmup, or replay."""
+    with source_views.shared_includes(staged, headers):
+        for candidate in candidates:
+            before = dict(headers.texts)
+            try:
+                folded = _fold_one(staged, policy, headers, candidate, Changes())
+            except Held as error:
+                headers._load(before)
+                receipts.append(f"HELD(submit): {candidate.function}: submit.fold: {error.reason}")
+            else:
+                yield candidate, folded
+                del folded
+            finally:
+                forked.release(shared=True)
+    reporting.record("fold", reused=0, folded_in_order=len(candidates), window=1)
 
 
 def _warm_contexts(staged: Project, policy: Policy, headers: Headers, members: list[Any]) -> None:

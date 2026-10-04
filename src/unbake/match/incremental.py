@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 from collections.abc import Set
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -19,6 +20,7 @@ from unbake.project.config import Policy, Project
 from unbake.project_tools import extract, layout
 from unbake.project_tools.codegen import dependency_paths
 from unbake.project_tools.elf import Object
+from unbake.typemap.storage import file_digest
 
 
 def _miss(reason: str) -> bool:
@@ -64,6 +66,18 @@ def changed_sources(original: Project, staged: Project, generation: Path, versio
     """Use each retained object's header dependencies instead of invalidating all units."""
     sources = []
     digests: dict[Path, str] = {}
+    statuses: dict[Path, tuple[bool, int]] = {}
+
+    def status(path: Path) -> tuple[bool, int]:
+        if path not in statuses:
+            try:
+                value = path.stat()
+            except OSError:
+                statuses[path] = False, 0
+            else:
+                statuses[path] = stat.S_ISREG(value.st_mode), value.st_mtime_ns
+        return statuses[path]
+
     for name in extract.unit_ranges(staged.version(version).split.read_text()):
         source = staged.src / f"{name}.c"
         previous = original.src / source.name
@@ -74,7 +88,7 @@ def changed_sources(original: Project, staged: Project, generation: Path, versio
             stamp = receipt.stat().st_mtime_ns
             evidence = obj.with_suffix(".inputs.json")
             saved = json.loads(evidence.read_text()) if evidence.is_file() else {}
-            dirty = not previous.is_file() or source.read_bytes() != previous.read_bytes()
+            dirty = not previous.is_file() or file_digest(source) != file_digest(previous)
             words = dependency_paths(dependencies.read_text())
             for word in words:
                 path = Path(word)
@@ -84,7 +98,8 @@ def changed_sources(original: Project, staged: Project, generation: Path, versio
                         break
                     path = path.relative_to(original.root)
                 local = staged.root / path
-                if not local.is_file():
+                exists, modified = status(local)
+                if not exists:
                     dirty = True
                     break
                 if str(path) in saved:
@@ -93,7 +108,7 @@ def changed_sources(original: Project, staged: Project, generation: Path, versio
                     if digests[local] != saved[str(path)]:
                         dirty = True
                         break
-                elif local.stat().st_mtime_ns > stamp:
+                elif modified > stamp:
                     dirty = True
                     break
             dirty |= original.compiler_for(previous).id != staged.compiler_for(source).id

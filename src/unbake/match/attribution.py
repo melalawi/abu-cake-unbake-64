@@ -124,6 +124,10 @@ def diagnose(
         )
         mappings = layout.resident_mappings(configured.get(version, []))
         targets = contribution_targets(project, version)
+        storage_targets: dict[str, list[tuple[str, tuple[int, int]]]] = {}
+        for (section_name, object_name), storage_span in targets.items():
+            if section_name != ".text":
+                storage_targets.setdefault(object_name, []).append((section_name, storage_span))
         strong: dict[str, list[str]] = {}
         for function, obj in objects.items():
             for table in obj.symbols.values():
@@ -213,9 +217,7 @@ def diagnose(
                 blame(function, f"{version}: undefined reference to {', '.join(unknown)}")
             # Allocated storage rows get their own object-relative proof too;
             # a failed compile elsewhere must not conceal data or BSS faults.
-            for (section_name, object_name), (start, end) in targets.items():
-                if object_name != f"obj/src/{function}.o" or section_name == ".text":
-                    continue
+            for section_name, (start, end) in storage_targets.get(f"obj/src/{function}.o", []):
                 section_index = obj.section(section_name)
                 if section_index is None:
                     continue

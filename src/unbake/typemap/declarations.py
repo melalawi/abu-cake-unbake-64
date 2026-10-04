@@ -82,9 +82,20 @@ def clean(source: str, *, line_markers: bool = False) -> str:
 
 
 def headers(
-    project: Project, policy: Policy | None, version: str, extra: Path | None = None, *, line_markers: bool = False
+    project: Project,
+    policy: Policy | None,
+    version: str,
+    extra: Path | None = None,
+    *,
+    line_markers: bool = False,
+    contents: dict[Path, str] | None = None,
 ) -> str:
-    contents = {path: path.read_text() for path, _ in include_headers(project) if not storage.generated(project, path)}
+    if contents is None:
+        contents = {
+            path: path.read_text()
+            for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
+            if not storage.generated(project, path)
+        }
     if extra is None:
         from unbake.project.cache import remembered
 
@@ -209,7 +220,9 @@ class _PublishedHeaders:
     def __init__(self, project: Project, policy: Policy | None, scratch: Path) -> None:
         self.project, self.policy, self.scratch = project, policy, scratch
         self.contents = {
-            path: path.read_text() for path, _ in include_headers(project) if not storage.generated(project, path)
+            path: path.read_text()
+            for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
+            if not storage.generated(project, path)
         }
         self.ordered = ordered_headers(self.contents)
         texts = list(self.contents.values())
