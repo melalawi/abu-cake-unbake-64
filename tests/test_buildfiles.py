@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import replace
+from unittest import mock
 
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config
@@ -55,3 +56,16 @@ class BuildfileTests(ProjectCase):
     def test_flags_with_shell_characters_are_refused(self) -> None:
         with self.assertRaisesRegex(config.Held, "buildfiles.flag"):
             buildfiles.words(["-DX=$(HOME)"])
+
+    def test_n64link_pin_is_the_release_the_host_prints(self) -> None:
+        host = self.host
+        for printed, refused in (
+            (buildfiles.N64LINK_RELEASE, False),
+            ("n64link 0.3.0 (SN ASN64 2.81 rules)\n", True),
+        ):
+            with self.subTest(printed=printed), mock.patch("unbake.process.run_tool", return_value=printed):
+                if refused:
+                    with self.assertRaisesRegex(config.Held, r"buildfiles.n64link: .* prints 'n64link 0.3.0"):
+                        buildfiles.n64link_pin(host)
+                else:
+                    self.assertEqual(buildfiles.n64link_pin(host), buildfiles.N64LINK_RELEASE)

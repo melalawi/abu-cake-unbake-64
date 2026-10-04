@@ -17,6 +17,7 @@ from pathlib import Path
 
 from tests.fixture import make_rom
 from tests.kit import host_values
+from unbake.buildfiles import N64LINK_RELEASE
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixture"
 SRC = Path(__file__).resolve().parents[2] / "src"
@@ -34,6 +35,9 @@ set -- $(for a in "$@"; do case "$a" in -*|asn64) ;; *) printf '%s ' "$a" ;; esa
 for a in "$@"; do prev="$last"; last="$a"; done
 cp "$prev" "$last"
 """
+N64LINK = (
+    f"#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s' '{N64LINK_RELEASE}'; exit 0; fi\n" + COPY.split("\n", 1)[1]
+)
 CC = """#!/bin/sh
 # emit `li v0, N; jr ra; nop` for the first `return N;` in the input
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) in="$1"; shift ;; esac; done
@@ -110,7 +114,7 @@ class FixtureCase(unittest.TestCase):
         scripts = {
             "cpp": CPP,
             "mips_as": COPY,
-            "n64link": COPY,
+            "n64link": N64LINK,
             "mips_ld": LD,
             "mips_objcopy": OBJCOPY,
             "splat": OBJDIFF,
@@ -131,7 +135,9 @@ class FixtureCase(unittest.TestCase):
         self.bin = bin_dir
 
     def write_host(self) -> None:
-        values = host_values(self.base)
+        # host_values writes stub tools into DIR/bin; keep them out of self.bin, which holds the fixture tools.
+        (self.base / "kit").mkdir()
+        values = host_values(self.base / "kit")
         tools = values["tools"]
         for key in (
             "cpp",

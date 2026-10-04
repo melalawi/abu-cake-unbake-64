@@ -352,11 +352,20 @@ def gitlab_progress(project: Project) -> str:
     return "".join(lines)
 
 
+# The n64link release these build files need: 0.3.1 relocates jump-table words before its ROM proof.
+N64LINK_RELEASE = "n64link 0.3.1 (SN ASN64 2.81 rules)\n"
+
+
 def n64link_pin(host: Host) -> str:
-    """The n64link release the build files expect; any build of that release passes make verify."""
+    """The n64link release the build files expect; the host's n64link must print exactly that release."""
     from unbake import process
 
-    return process.run_tool([str(host.n64link), "--version"], Path(host.n64link).parent, "buildfiles")
+    printed = process.run_tool([str(host.n64link), "--version"], Path(host.n64link).parent, "buildfiles")
+    if printed != N64LINK_RELEASE:
+        required = N64LINK_RELEASE.strip()
+        actual = printed.strip()
+        raise Held("buildfiles", f"buildfiles.n64link: {host.n64link} prints {actual!r}; {required!r} is required")
+    return N64LINK_RELEASE
 
 
 def generate(project: Project, host: Host) -> dict[Path, bytes]:
