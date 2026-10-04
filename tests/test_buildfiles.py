@@ -21,7 +21,7 @@ class BuildfileTests(ProjectCase):
 
     def slices(self, version: str) -> set[tuple[int, int]]:
         text = buildfiles.slices_mk(config.load(self.project.root), version)
-        return {(int(a, 16), int(b, 16)) for a, b in re.findall(r"^S_\w+ := 0x(\w+) 0x(\w+)$", text, re.M)}
+        return {(int(a), int(b)) for a, b in re.findall(r"^S_\w+ := (\d+) (\d+)$", text, re.M)}
 
     def test_slices_cover_exactly_the_bytes_no_unit_covers(self) -> None:
         cases = [

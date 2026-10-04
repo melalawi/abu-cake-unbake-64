@@ -52,10 +52,12 @@ class Result:
 
 def human(result: Result, stream: TextIO) -> None:
     """Receipts as OK(...) lines, the HELD/FAILED line, then the Next line."""
+    label = {"ok": "OK", "held": "HELD", "failed": "FAILED"}[result.status]
     for line in result.receipts:
-        print(line if _RENDERED.match(line) else f"OK({result.command}): {line}", file=stream)
+        print(line if _RENDERED.match(line) else f"{label}({result.command}): {line}", file=stream)
     if result.status == "held":
-        print(f"HELD({result.data['phase']}): {result.data['reason']}", file=stream)
+        phase, reason = result.data.get("phase", result.command), result.data.get("reason", result.key)
+        print(f"HELD({phase}): {reason}", file=stream)
     elif result.status == "failed":
         print(f"FAILED({result.command}): {result.data['error']}", file=stream)
     if result.next is not None:

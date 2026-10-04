@@ -10,6 +10,7 @@ from compilers.drivers, the same templates the runner fills, so make and unbake 
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,11 +90,31 @@ def windows(project: Project, version: str) -> list[tuple[int, int, int]]:
     return result
 
 
+_ADDRESS_NAMED = re.compile(r"\b(?:D|func)_([0-9A-F]{8})\b")
+
+
+def address_named(project: Project) -> dict[str, int]:
+    """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell."""
+    names: dict[str, int] = {}
+    for path in (*project.src.glob("*.c"), *(p for root in project.include for p in root.rglob("*.h"))):
+        for match in _ADDRESS_NAMED.finditer(path.read_text(errors="replace")):
+            names[match[0]] = int(match[1], 16)
+    return names
+
+
 def symbols_ld(project: Project, version: str) -> str:
-    """Every known symbol as PROVIDE, so a unit linked alone resolves its external references."""
+    """Every known symbol as PROVIDE, so a unit linked alone resolves its external references.
+
+    Data that stays a raw ROM slice has no label in any object. In the naming version a referenced
+    address-named symbol missing from the symbol file is provided at the address its name encodes;
+    a wrong address cannot pass, because make check compares the whole ROM.
+    """
     _, rows = split.symbols(project.version(version).symbols)
-    lines = [f"PROVIDE({name} = 0x{address:08X});\n" for name, (address, _, _) in sorted(rows.items())]
-    return "".join(lines)
+    provided = {name: address for name, (address, _, _) in rows.items()}
+    if version == project.names_from:
+        for name, address in address_named(project).items():
+            provided.setdefault(name, address)
+    return "".join(f"PROVIDE({name} = 0x{address:08X});\n" for name, address in sorted(provided.items()))
 
 
 def link_script(project: Project, version: str) -> str:
@@ -105,7 +126,9 @@ def link_script(project: Project, version: str) -> str:
 
 
 def slices_mk(project: Project, version: str) -> str:
-    """Units, raw slices between them, constant windows and the piece order of the ROM."""
+    """Units, raw slices between them, constant windows and the piece order of the ROM.
+
+    Slice offsets and sizes are decimal: GNU dd reads skip= and count= as decimal (0x is a multiplier)."""
     rom_size = project.version(version).baserom.stat().st_size
     lines = [HEADER]
     lines.append(f"BASEROM := {relative(project, project.version(version).baserom)}\n")
@@ -117,7 +140,7 @@ def slices_mk(project: Project, version: str) -> str:
         if unit.start < cursor:
             raise Held("buildfiles", f"buildfiles.overlap: {version} {unit.name} starts inside the previous row")
         if unit.start > cursor:
-            lines.append(f"S_{cursor:08X} := 0x{cursor:X} 0x{unit.start - cursor:X}\n")
+            lines.append(f"S_{cursor:08X} := {cursor} {unit.start - cursor}\n")
             pieces.append(f"$(B)/slices/{cursor:08X}.bin")
         lines.append(f"U_{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
         lines.append(f"A_{unit.name} := 0x{unit.address:X}\n")
@@ -126,7 +149,7 @@ def slices_mk(project: Project, version: str) -> str:
     if cursor > rom_size:
         raise Held("buildfiles", f"buildfiles.rom_size: {version} rows end past the ROM")
     if cursor < rom_size:
-        lines.append(f"S_{cursor:08X} := 0x{cursor:X} 0x{rom_size - cursor:X}\n")
+        lines.append(f"S_{cursor:08X} := {cursor} {rom_size - cursor}\n")
         pieces.append(f"$(B)/slices/{cursor:08X}.bin")
     lines.append("PIECES := \\\n" + " \\\n".join(f"  {piece}" for piece in pieces) + "\n")
     return "".join(lines)
@@ -223,7 +246,8 @@ def makefile(project: Project, host: Host) -> str:
         "# make verify           check the compilers, n64link and the original ROMs\n",
         "# Tools come from PATH (make, cpp, mips binutils, n64link, coreutils, curl, tar) or as\n",
         "# make CPP=... AS=... LD=... OBJCOPY=... N64LINK=... on the command line.\n",
-        "SHELL := /bin/sh\n.SUFFIXES:\n.DELETE_ON_ERROR:\n",
+        # .SECONDARY: objects, placed objects and slices are intermediates of chained rules; keep them.
+        "SHELL := /bin/sh\n.SUFFIXES:\n.DELETE_ON_ERROR:\n.SECONDARY:\n",
         f"NAME := {project.name}\n",
         f"VERSIONS := {' '.join(project.versions)}\n",
         "CPP := cpp\nAS := mips-linux-gnu-as\nLD := mips-linux-gnu-ld\nOBJCOPY := mips-linux-gnu-objcopy\n",
@@ -360,9 +384,10 @@ def input_key(project: Project, host: Host) -> str:
     for version in project.versions:
         meta = project.version(version)
         parts.extend([meta.split, meta.symbols, meta.baserom_sha1])
-    parts.extend(sorted(str(path.relative_to(project.root)) for path in project.src.glob("*.c")))
+    # Contents, not just names: symbols.ld provides the address-named symbols these files spell.
+    parts.extend(sorted(project.src.glob("*.c")))
     for include in project.include:
-        parts.extend(sorted(str(path) for path in (include / "shared" / "consumers").glob("*.h")))
+        parts.extend(sorted(include.rglob("*.h")))
     return cache.key(*parts)
 
 
