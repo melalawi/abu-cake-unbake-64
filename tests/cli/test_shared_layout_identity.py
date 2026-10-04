@@ -4,6 +4,7 @@ import json
 import unittest
 
 from tests.cli import test_publication_boundary as fixture
+from unbake.layout import index
 from unbake.layout.structs_parser import Parser
 
 
@@ -30,7 +31,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         output = self.cli("submit", "--batch", *self.sources)
         self.assertIn("rename Owner -> Owner_", output)
         self.assertIn("rename Other -> Owner_", output)
-        headers = sorted((self.root / "include/shared").glob("*.h"))
+        headers = sorted(index.headers(self.project))
         records = [record for path in headers for record in Parser(path.read_text()).parse() if record.fields]
         owners = [record for record in records if record.name == "Owner" or record.name.startswith("Owner_")]
         self.assertEqual(len(owners), 2)
@@ -58,7 +59,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn(": OK", self.make())
 
     def test_reused_by_value_type_uses_existing_shared_tag_without_adding_aliases(self):
-        shared = self.project.include[0] / "shared/established.h"
+        shared = self.project.include[0] / "established.h"
         shared.write_text("#ifndef ESTABLISHED_H\n#define ESTABLISHED_H\nstruct Established { int value; };\n#endif\n")
         source = self.sources[0]
         source.write_text(
@@ -71,14 +72,14 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn("rename Queue -> Established", output)
         self.assertIn("rename Queue.field -> Established.value", output)
         self.assertNotIn("typedef", shared.read_text())
-        generated = (self.project.include[0] / "shared/alpha.h").read_text()
-        self.assertIn('#include "shared/established.h"', generated)
+        generated = "\n".join(path.read_text() for path in index.headers(self.project))
+        self.assertIn('#include "established.h"', generated)
         self.assertIn("struct Established queue;", generated)
         self.assertNotIn("typedef", (self.project.src / source.name).read_text())
         self.assertIn(": OK", self.make())
 
     def test_cleanup_rewrites_collision_in_editable_source_and_staged_headers(self):
-        shared = self.project.include[0] / "shared/owner.h"
+        shared = self.project.include[0] / "owner.h"
         shared.write_text("#ifndef OWNER_H\n#define OWNER_H\ntypedef struct Owner {int value;} Owner;\n#endif\n")
         self.cli("solve")
         before = shared.read_bytes()
@@ -91,9 +92,9 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn("sizeof(Owner_", source.read_text())
         self.assertNotIn("typedef", source.read_text())
         self.assertEqual(shared.read_bytes(), before)
-        generated = self.project.include[0] / "shared/alpha.h"
-        self.assertFalse(generated.exists())
-        self.assertTrue((source.parent / "overlay/include/shared/alpha.h").is_file())
+        generated = self.project.include[0] / "main/alpha.h"
+        self.assertNotIn("short value", generated.read_text())
+        self.assertTrue((source.parent / "overlay/include/main/alpha.h").is_file())
         self.cli("try", source)
         self.cli("submit", source)
         self.assertTrue(generated.is_file())
@@ -110,7 +111,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.cli("try", source)
         output = self.cli("submit", source)
         self.assertIn("rename Second -> First", output)
-        header = (self.project.include[0] / "shared/alpha.h").read_text()
+        header = (self.project.include[0] / "main/alpha.h").read_text()
         self.assertEqual(len(Parser(header).parse()), 1)
         self.assertNotIn("Second", header)
         published = (self.project.src / source.name).read_text()
@@ -118,7 +119,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn(": OK", self.make())
 
     def test_generated_type_reuse_by_value_survives_the_submit_solve_refresh(self):
-        generated = self.project.include[0] / "shared/types/borrowed.h"
+        generated = self.project.include[0] / "common/borrowed.h"
         generated.parent.mkdir(exist_ok=True)
         generated.write_text("#ifndef BORROWED_H\n#define BORROWED_H\nstruct Borrowed {int value;};\n#endif\n")
         source = self.sources[0]
@@ -131,13 +132,13 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         output = self.cli("submit", source)
         self.assertNotIn("HELD(types)", output)
         self.assertIn("rename Queue -> Borrowed", output)
-        rendered = "\n".join(path.read_text() for path in (self.project.include[0] / "shared/types").glob("*.h"))
+        rendered = "\n".join(path.read_text() for path in (self.project.include[0] / "common").glob("*.h"))
         self.assertIn("struct Borrowed", rendered)
-        self.assertIn("struct Borrowed queue;", (self.project.include[0] / "shared/alpha.h").read_text())
+        self.assertIn("struct Borrowed queue;", (self.project.include[0] / "main/alpha.h").read_text())
         self.assertIn(": OK", self.make())
 
     def test_array_alias_reuses_the_equal_shared_array_layout(self):
-        shared = self.project.include[0] / "shared/bytes.h"
+        shared = self.project.include[0] / "bytes.h"
         shared.write_text("#ifndef BYTES_H\n#define BYTES_H\nstruct First {char data[4];};\n#endif\n")
         source = self.sources[0]
         source.write_text(
@@ -150,11 +151,11 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn("rename Other -> First", output)
         published = (self.project.src / source.name).read_text()
         self.assertIn("((struct First *)0)->data", published)
-        generated = (self.project.include[0] / "shared/alpha.h").read_text()
+        generated = "\n".join(path.read_text() for path in index.headers(self.project))
         self.assertIn("typedef char Bytes[4];", generated)
         self.assertEqual(Parser(generated).parse(), [])
-        self.assertIn('#include "shared/bytes.h"', published)
-        self.assertIn('#include "shared/alpha.h"', published)
+        self.assertIn('#include "bytes.h"', published)
+        self.assertIn('#include "main/alpha.h"', published)
         self.assertNotIn("typedef", published)
         self.assertEqual(
             shared.read_text(), "#ifndef BYTES_H\n#define BYTES_H\nstruct First {char data[4];};\n#endif\n"

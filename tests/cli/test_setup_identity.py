@@ -58,7 +58,7 @@ class SetupIdentityTests(unittest.TestCase):
                     check=False,
                 )
 
-            result = command("init", str(project))
+            result = command("init", str(project), "--layout-cap", "2")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for region, high, low, changed in (("E", 0x8001, 0x1234, 3), ("P", 0x8002, 0x2348, 4)):
                 code = bytearray(0x180)
@@ -126,7 +126,7 @@ class SetupIdentityTests(unittest.TestCase):
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
                 return result.stdout + result.stderr
 
-            command("init", str(project))
+            command("init", str(project), "--layout-cap", "2")
             # KMC O2: x+3 is two words; (x+3)&255 adds an andi word.
             # The caller uses exactly one C identifier for both body variants.
             for region, body in (("E", [0x03E00008, 0x24820003]), ("P", [0x24820003, 0x03E00008, 0x304200FF])):

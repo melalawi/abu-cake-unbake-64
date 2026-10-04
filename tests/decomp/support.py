@@ -186,4 +186,25 @@ def fixture(
     policy.__dataclass_fields__ = Policy.__dataclass_fields__
     source = directory / "alpha.c"
     source.write_text("/* NON_MATCHING: returns one. */\nint alpha(void) { return 1; }\n", encoding="utf-8")
+    from unittest.mock import patch
+
+    from unbake.layout import map as ownership
+
+    def synthetic_map(selected):
+        members = ownership.catalog(selected)
+        extra = {p.stem for p in selected.src.rglob("*.c")} | {"f", "g", "api"}
+        for offset, name in enumerate(sorted(extra - members.keys())):
+            members[name] = ownership.Member(name, "main", 0x90000000 + offset * 4, selected.versions)
+        return ownership.Map(
+            2, tuple(ownership.Group(m.name, m.segment, "default", (m.name,)) for m in members.values())
+        )
+
+    (project.root / "layout.toml").write_bytes(
+        ownership.encoded(
+            ownership.Map(2, tuple(ownership.Group(n, "main", "default", (n,)) for n in ("alpha", "beta", "gamma")))
+        )
+    )
+    mapping = patch.object(ownership, "load", side_effect=synthetic_map)
+    mapping.start()
+    case.addCleanup(mapping.stop)
     return project, policy, source

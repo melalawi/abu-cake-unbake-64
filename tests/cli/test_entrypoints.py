@@ -16,7 +16,7 @@ class EntrypointTests(MainCase):
             ("config", ["match"], "invalid choice: 'match'"),
             ("config", ["report", "--unexpected"], "--unexpected"),
             ("config", ["check", "--unexpected"], "--unexpected"),
-            ("config", ["init", "new", "--rompath", str(self.directory / "missing")], "--rompath"),
+            ("config", ["init", "new", "--layout-cap", "2", "--rompath", str(self.directory / "missing")], "--rompath"),
             ("config", ["--project", str(self.directory / "missing"), "setup"], "config.toml"),
             ("check", self.args("check"), "inline-asm"),
         )

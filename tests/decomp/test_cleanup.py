@@ -41,10 +41,10 @@ class CleanupTests(MatchFixture):
         self.source.write_text("struct Record { int value; };\nint alpha(void) { return 0; }\n")
         cleanup.prepare(self.project, self.policy, self.source)
         self.assertNotIn("struct Record {", self.source.read_text())
-        self.assertIn('#include "shared/alpha.h"', self.source.read_text())
-        self.assertFalse((self.project.include[0] / "shared/alpha.h").exists())
+        self.assertIn('#include "main/alpha.h"', self.source.read_text())
+        self.assertFalse((self.project.include[0] / "main/alpha.h").exists())
         edits = work.overlay_data(self.project, self.source)["edits"]
-        self.assertIn("include/shared/alpha.h", edits)
+        self.assertIn("include/main/alpha.h", edits)
         self.assert_untouched()
 
     def test_conflicting_type_or_unrepresentable_raw_packet_preserves_editable_bytes(self) -> None:

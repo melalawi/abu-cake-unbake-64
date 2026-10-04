@@ -58,7 +58,7 @@ class CutoverSurfaceTests(unittest.TestCase):
 
     def test_init_generates_staged_onboarding_without_policy_or_commit(self) -> None:
         project = self.root / "A name with spaces"
-        result = self.command("init", str(project))
+        result = self.command("init", str(project), "--layout-cap", "2")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.root / "missing-policy.toml").exists())
         self.assertFalse((project / "build").exists())
@@ -80,9 +80,9 @@ class CutoverSurfaceTests(unittest.TestCase):
 
     def test_retired_spellings_are_parse_refusals(self) -> None:
         for operands in (
-            ("init", "new", "--rom", "absent.z64"),
-            ("init", "new", "--rompath", "absent"),
-            ("init", "new", "--split", "files"),
+            ("init", "new", "--layout-cap", "2", "--rom", "absent.z64"),
+            ("init", "new", "--layout-cap", "2", "--rompath", "absent"),
+            ("init", "new", "--layout-cap", "2", "--split", "files"),
             ("setup", "--new", "absent.z64"),
             ("rodata", "migrate", "alpha"),
             ("decomp", "draft", "alpha"),

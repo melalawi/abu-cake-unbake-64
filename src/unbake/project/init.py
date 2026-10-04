@@ -16,7 +16,10 @@ def readme_text(target: Path) -> str:
     return template.read_text().replace("@TITLE@", target.name)
 
 
-def run(target: Path) -> list[str]:
+def run(target: Path, *, layout_cap: int) -> list[str]:
+    from unbake.layout.map import positive
+
+    positive(layout_cap, "project.layout_cap")
     target = Path(target).expanduser().absolute()
     if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
         raise Held("init", f"init.target: {target}: symlink")
@@ -41,11 +44,14 @@ def run(target: Path) -> list[str]:
         quote = json.dumps
         (target / "config.toml").write_text(
             f"schema = {SCHEMA_VERSION}\n\n[project]\n"
-            f'id = {quote(str(uuid4()))}\nstate = "awaiting-roms"\n\n'
+            f'id = {quote(str(uuid4()))}\nstate = "awaiting-roms"\nlayout_cap = {layout_cap}\n\n'
             f"[workspace]\nid = {quote(str(uuid4()))}\n\n"
             '[paths]\nroms = "roms"\nbuild = "build"\nwork = "build/work"\n'
             'drafts = "build/drafts"\nsrc = "src"\ninclude = ["include"]\nasm = "asm"\ntools = "tools"\n'
         )
+        from unbake.layout.map import Map, encoded
+
+        (target / "layout.toml").write_bytes(encoded(Map(layout_cap, ())))
         (target / ".gitignore").write_text(hygiene.base_ignore_text(target))
         (target / "roms").mkdir()
         (target / "README.md").write_text(readme_text(target))

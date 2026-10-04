@@ -245,11 +245,7 @@ def _draft(
     layouts = database["structs"] if database is not None else None
     output, shared = share(project, function, output, context.read_text(), layouts=layouts)
     selected = required_headers(
-        {
-            path: read_text(path, "m2c")
-            for path, name in headers
-            if name not in ("shared/typemap.h", "shared/prototypes.h")
-        },
+        {path: read_text(path, "m2c") for path, name in headers},
         output,
     )
     context.write_text(_context(headers, selected), encoding="utf-8")

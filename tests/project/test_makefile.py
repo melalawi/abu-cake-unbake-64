@@ -109,10 +109,6 @@ class MakefileTests(unittest.TestCase):
             makefile.flags(project, "us", "src/middle.c"),
             ("-Iinclude", "-O2", "-DVERSION_US=1"),
         )
-        consumer = project.include[0] / "shared/consumers/middle.h"
-        consumer.parent.mkdir(parents=True)
-        consumer.write_text("/* migrated layout */")
-        self.assertIn("-DUNBAKE_CONSUMER_A4888AF4E46C129C=1", makefile.flags(project, "us", "src/middle.c"))
         self.assertNotIn("unbake", rendered["Makefile"].replace(str(self.root), "PROJECT"))
         self.assertNotIn("toolkit", rendered["Makefile"])
         self.assertIn("BUILD ?= build/$(VERSION)", rendered["Makefile"])

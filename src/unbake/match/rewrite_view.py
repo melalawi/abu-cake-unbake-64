@@ -117,7 +117,6 @@ def prepare(
     from unbake.decomp.draft_context import ordered_headers
     from unbake.project.headers import include_headers
     from unbake.typemap import declarations, storage
-    from unbake.typemap.split import consumer_macro
 
     if contents is None:
         contents = {
@@ -127,8 +126,6 @@ def prepare(
         }
     prelude = "".join(f"#include {json.dumps(str(path))}\n" for path in ordered_headers(contents))
     prelude += "".join(f"#include {json.dumps(str(path))}\n" for path in declarations._generated_context(project))
-    if (project.include[0] / "shared/consumers" / (source_path.stem + ".h")).is_file():
-        prelude += f"#define {consumer_macro(source_path.stem)} 1\n"
     filename = str(source_path)
     unit = prelude + f"extern int {_BOUNDARY};\n#line 1 {json.dumps(filename)}\n" + source
     command = declarations._cpp_command(project, policy, version, extra=True, line_markers=False)

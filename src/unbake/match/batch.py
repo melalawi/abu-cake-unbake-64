@@ -412,9 +412,12 @@ def _fold(staged: Project, policy: Policy, candidates: list[Candidate], receipts
         accepted.add(candidate.function)
         candidate.final = folded.source
         candidate.removed_rows = folded.removed_rows
-    for path, text in headers.texts.items():
-        if base.get(path) != text:
-            split_apply.write(path, text)
+    changed_headers = {path: text for path, text in headers.texts.items() if base.get(path) != text}
+    for path, text in changed_headers.items():
+        split_apply.write(path, text)
+    from unbake.layout import index
+
+    index.update(staged, changed_headers)
     return [candidate for candidate in candidates if candidate.compiled or candidate.function in accepted]
 
 
@@ -947,7 +950,9 @@ def _commit(
     paths += [p for v in staged.versions for p in (staged.version(v).split, staged.version(v).symbols)]
     paths += [staged.tools / name.name for name in makefile.TEMPLATES.glob("*.py")] + [staged.tools / "cache.py"]
     paths += [staged.root / "unbake-exclusions.json"]
-    paths += [path for root in staged.include for path in root.rglob("*.h")]
+    from unbake.layout import index
+
+    paths += [index.path(staged), staged.root / "layout.toml", *index.headers(staged)]
     paths += [staged.src / f"{candidate.function}.c" for candidate in candidates]
     writes: dict[Path, bytes] = {}
     for path in paths:
@@ -975,9 +980,8 @@ def _commit(
         touched.update(
             project.build / "types" / name for name in ("proven.json", "database.json", "summary.json", "redraft.json")
         )
-        touched.update(project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
-        generated_directories = [project.include[0] / "shared" / name for name in ("types", "decls", "consumers")]
-        touched.update(path for root in project.include for path in root.rglob("*.h"))
+        touched.update(index.headers(project))
+        touched.add(index.path(project))
         before = {path: path.read_bytes() if path.exists() else None for path in touched}
         swapped = []
         try:
@@ -1019,10 +1023,8 @@ def _commit(
                 generations={version: str(generation) for version, generation in published_generations.items()},
             )
         except BaseException:
-            for directory in generated_directories:
-                for path in directory.rglob("*.h"):
-                    if path not in before:
-                        path.unlink()
+            for path in index.headers(project) - before.keys():
+                path.unlink(missing_ok=True)
             for version in swapped:
                 swap(project.build_link(version), current[version])
             for path, previous in before.items():

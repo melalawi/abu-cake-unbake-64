@@ -43,7 +43,7 @@ def reuse_shared(project: Project, source: str) -> str:
             (
                 path
                 for root in project.include
-                for path in sorted((root / "shared").glob("*.h"))
+                for path in sorted(root.glob("*.h"))
                 if (entry := typedefs(path.read_text()).get(name))
                 and (existing := re.search(r"\b(struct|union)\s*(?:\w+\s*)?\{([^{}]+)\}", entry[2]))
                 and existing[1] == shape[1]
@@ -53,7 +53,7 @@ def reuse_shared(project: Project, source: str) -> str:
         )
         if destination:
             edits.append((start, end))
-            includes.add(f'#include "shared/{destination.name}"')
+            includes.add(f'#include "{destination.name}"')
     for start, end in sorted(edits, reverse=True):
         source = source[:start] + source[end:]
     for include in sorted(includes, reverse=True):
@@ -79,7 +79,7 @@ def audio_callbacks(source: str) -> str:
         if match[1] in expected and normalized(match[0]) == normalized(expected[match[1]]):
             source = source[: match.start()] + source[match.end() :]
             changed = True
-    include = '#include "shared/audio_callbacks.h"'
+    include = '#include "audio_callbacks.h"'
     if changed and include not in source:
         source = include + "\n" + source
     return source
@@ -122,7 +122,7 @@ def sdk_views(project: Project, source: str) -> str:
                 (
                     (path, found[1])
                     for root in project.include
-                    for path in sorted((root / "shared").glob("*.h"))
+                    for path in sorted(root.glob("*.h"))
                     if (found := re.search(r"\btypedef\s+f32\s+(\w+)\s*\[4\]\s*\[4\]\s*;", path.read_text()))
                 ),
                 None,
@@ -134,7 +134,7 @@ def sdk_views(project: Project, source: str) -> str:
             path, name = match
             source = source[: matrix[0]] + source[matrix[1] :]
             source = re.sub(r"\bMtx\b", name, source)
-            source = f'#include "shared/{path.name}"\n' + source
+            source = f'#include "{path.name}"\n' + source
             # Reuse the vector declarations brought in by the matrix header's
             # dependencies, instead of introducing another local type collision.
             for local, (start, end, declaration) in sorted(
@@ -147,7 +147,7 @@ def sdk_views(project: Project, source: str) -> str:
                     (
                         header
                         for root in project.include
-                        for header in sorted((root / "shared").glob("*.h"))
+                        for header in sorted(root.glob("*.h"))
                         if (entry := typedefs(header.read_text()).get(local))
                         and (shape := re.search(r"\{([^{}]+)\}", entry[2]))
                         and tokens(shape[1]) == tokens(aggregate[1])
@@ -156,14 +156,14 @@ def sdk_views(project: Project, source: str) -> str:
                 )
                 if existing:
                     source = source[:start] + source[end:]
-                    include = f'#include "shared/{existing.name}"\n'
+                    include = f'#include "{existing.name}"\n'
                     if include.strip() not in source:
                         source = include + source
     return source
 
 
 def canonical(project: Project, source: str) -> str:
-    if '#include "shared/acmd.h"' in source or "Acmd" in typedefs(source):
+    if '#include "acmd.h"' in source or "Acmd" in typedefs(source):
         source = audio_callbacks(source)
     if gfx_typedefs(source):
         source = sdk_views(project, source)
@@ -247,7 +247,7 @@ def canonical(project: Project, source: str) -> str:
             and (indirect[1] == "Awords" or len(re.findall(r"\b" + indirect[1] + r"\b", source)) == 2)
         ):
             removals.append(words[:2])
-        includes.append('#include "shared/acmd.h"')
+        includes.append('#include "acmd.h"')
     for start, end in sorted(set(removals), reverse=True):
         source = source[:start] + source[end:]
     for pointer in gfx_pointers:

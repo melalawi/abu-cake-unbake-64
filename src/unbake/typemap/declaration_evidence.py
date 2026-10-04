@@ -280,10 +280,24 @@ def promote(project: Project, headers: Headers, final: str, prefix_end: int) -> 
         virtual = project.include[0] / "shared" / ("." + label + ".h")
         body = f"/* unbake declaration evidence: {label} */\n" + statement
         components[virtual] = imports.resolve(project, headers, body)
-    layout = split.Layout(components, components, project.include[0])
+    from unbake.layout import headers as mapped_headers
+    from unbake.layout import index, map
+
+    sources = {path: path.read_text() for path in project.src.rglob("*.c")}
+    function = next(
+        (name for name in map.load(project).owners if re.search(r"\b" + re.escape(name) + r"\s*\(", source)), None
+    )
+    if function is not None:
+        sources[project.src / (function + ".c")] = source
+    ownership = map.load(project)
+    known = set(index.headers(project)) | {project.include[0] / group.header for group in ownership.groups}
+    existing = {path: _body(headers.texts[path]) for path in known if path in headers.texts}
+    combined = {**existing, **components}
+    layout = mapped_headers.Layout(combined, combined, project.include[0], ownership=ownership, sources=sources)
     edits = [
         Edit(path, headers.texts.get(path, ""), body.decode(), tuple(project.versions))
         for path, body in layout.headers.items()
+        if headers.texts.get(path, "") != body.decode()
     ]
     source = imports.resolve(project, headers, source, edits=tuple(edits))
     return source, edits
@@ -291,22 +305,25 @@ def promote(project: Project, headers: Headers, final: str, prefix_end: int) -> 
 
 def feedback_components(project: Project) -> dict[Path, str]:
     """Retain ingested evidence through solve/feedback's ordinary split generator."""
+    from unbake.layout import index
+
     result = {}
-    for root in project.include:
-        for path in sorted((root / "shared/types").glob("evidence_*.h")):
-            text = path.read_text()
-            marker = _MARKER.search(text)
-            if marker:
-                virtual = root / "shared" / ("." + marker[1] + ".h")
-                body = re.sub(r"^\s*#\s*include[^\n]*\n?", "", _body(text), flags=re.M)
-                body = body[body.index(marker[0]) :].strip() + "\n"
-                retained = re.search(r"/\* unbake evidence input: ([A-Za-z0-9+/=]+) \*/", body)
-                if retained:
-                    try:
-                        body = base64.b64decode(retained[1], validate=True).decode()
-                    except (ValueError, UnicodeDecodeError) as error:
-                        raise Held("types", f"declaration_evidence: {path}: malformed retained input") from error
-                result[virtual] = body
+    root = project.include[0]
+    for path in sorted(index.headers(project)):
+        text = path.read_text()
+        body = re.sub(r"^\s*#\s*include[^\n]*\n?", "", _body(text), flags=re.M)
+        markers = list(_MARKER.finditer(body))
+        for position, marker in enumerate(markers):
+            stop = markers[position + 1].start() if position + 1 < len(markers) else len(body)
+            virtual = root / ("." + marker[1] + ".h")
+            unit = body[marker.start() : stop].strip() + "\n"
+            retained = re.search(r"/\* unbake evidence input: ([A-Za-z0-9+/=]+) \*/", unit)
+            if retained:
+                try:
+                    unit = base64.b64decode(retained[1], validate=True).decode()
+                except (ValueError, UnicodeDecodeError) as error:
+                    raise Held("types", f"declaration_evidence: {path}: malformed retained input") from error
+            result[virtual] = unit
     return result
 
 
@@ -359,6 +376,19 @@ def plan_many(project: Project, policy: Policy, sources: tuple[Path, ...]) -> tu
                 final = "".join(aliases) + final
             _, supplemental = promote(project, context, final, end)
             headers.apply([*folded.headers, *supplemental])
+            # Aggregate folding consumes the injected prefix. Retain its
+            # canonical declarations as declared evidence for the solve that
+            # follows, independently of any instruction proof.
+            for edit in [*folded.headers, *supplemental]:
+                body = _body(headers.texts[edit.path])
+                if not body.strip() or _MARKER.search(body):
+                    continue
+                label = "evidence_" + hashlib.sha256(body.encode()).hexdigest()[:24]
+                retained = base64.b64encode(body.encode()).decode()
+                text = headers.texts[edit.path]
+                end = text.rfind("#endif")
+                marker = f"/* unbake declaration evidence: {label} */\n/* unbake evidence input: {retained} */\n"
+                headers.texts[edit.path] = text[:end] + marker + text[end:]
             reports.append(
                 {"source": str(source), "status": "admitted", "reason": "authored declarations through shared fold"}
             )

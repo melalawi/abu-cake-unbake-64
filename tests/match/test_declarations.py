@@ -139,6 +139,9 @@ class DeclarationTests(MatchFixture):
                 self.assertIn('#include "alias.h"', folded.source)
                 self.assertIn('#include "layout.h"', folded.source)
                 self.assertIn("int alpha(Canon *p) {return p->value;}", folded.source)
+                for edit in folded.headers:
+                    edit.path.parent.mkdir(parents=True, exist_ok=True)
+                    edit.path.write_text(edit.after)
                 c_parser.CParser().parse(expand(folded.source, self.project.include))
                 (root / "alias.h").unlink()
                 (root / "layout.h").unlink()
@@ -165,6 +168,9 @@ class DeclarationTests(MatchFixture):
             prove_headers=False,
         )
         self.assertIn("int alpha(Canon *p) {return p->value;}", folded.source)
+        for edit in folded.headers:
+            edit.path.parent.mkdir(parents=True, exist_ok=True)
+            edit.path.write_text(edit.after)
         c_parser.CParser().parse(expand(folded.source, self.project.include))
 
     def test_standalone_shared_forward_alias_is_removed_without_local_layouts(self) -> None:
@@ -300,7 +306,7 @@ class DeclarationTests(MatchFixture):
         text = '#include "types.h"\nstruct Holder {Vec3f position;Callback handler;};\n'
         text += "int alpha(struct Holder *p) {return p->handler(p);}\n"
         edits = declarations.folded_edits(self.project, self.policy, "alpha", text, self.versions)
-        destination = self.root / "include" / "shared" / "alpha.h"
+        destination = self.root / "include" / "main" / "alpha.h"
         generated = next(edit.after for edit in edits if edit.path == destination)
         self.assertIn('#include "types.h"', generated)
         for edit in edits:
@@ -324,7 +330,7 @@ class DeclarationTests(MatchFixture):
             "int alpha(struct Holder *p) { Spare value = p->count; return value; }\n"
         )
         edits = declarations.folded_edits(self.project, self.policy, "alpha", text, self.versions)
-        destination = self.root / "include/shared/alpha.h"
+        destination = self.root / "include/main/alpha.h"
         generated = next(edit.after for edit in edits if edit.path == destination)
         parsed = Parser(generated)
         record = parsed.parse()[0]
@@ -341,7 +347,7 @@ class DeclarationTests(MatchFixture):
         text = "typedef struct Opaque_s Opaque;\nstruct Holder {Opaque *pointer;struct Opaque_s *other;};\n"
         text += "int alpha(struct Holder *p) {return p->pointer != 0;}\n"
         edits = declarations.folded_edits(self.project, self.policy, "alpha", text, self.versions)
-        destination = self.root / "include" / "shared" / "alpha.h"
+        destination = self.root / "include" / "main" / "alpha.h"
         generated = next(edit.after for edit in edits if edit.path == destination)
         self.assertIn("struct Opaque_s *pointer;", generated)
         for edit in edits:

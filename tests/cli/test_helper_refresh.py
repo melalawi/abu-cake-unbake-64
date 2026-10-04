@@ -33,6 +33,7 @@ class HelperRefreshTests(unittest.TestCase):
         with (
             patch.object(config, "load", return_value=project),
             patch.object(config, "load_policy", side_effect=AssertionError("full setup policy")),
+            patch("unbake.layout.map.ensure"),
             patch.object(setup, "refresh_helpers") as refresh,
             patch.object(setup, "refresh", side_effect=AssertionError("full setup proof")),
             patch.object(cli, "receipt", return_value=False),

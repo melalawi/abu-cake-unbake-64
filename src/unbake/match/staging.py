@@ -116,6 +116,13 @@ def copy_tree(
     shutil.copytree(
         source, destination, ignore=ignore, symlinks=True, copy_function=os.link if linked else shutil.copy2
     )
+    from unbake.layout import index
+
+    lookup = index.path(project)
+    if lookup.is_file():
+        target = destination / lookup.relative_to(project.root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(lookup, target)
 
 
 def fingerprint(project: Project, root: Path) -> dict[str, str]:

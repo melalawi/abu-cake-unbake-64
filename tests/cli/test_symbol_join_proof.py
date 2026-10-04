@@ -60,7 +60,7 @@ class SymbolJoinProofTests(unittest.TestCase):
                 self.assertNotIn("Traceback", result.stdout + result.stderr)
                 return result.stdout + result.stderr
 
-            command("init", str(project))
+            command("init", str(project), "--layout-cap", "2")
             for region, literal in (("E", 3), ("P", 5)):
                 code = bytearray(0x180)
                 boot = [0x3C088000, 0x25082180, 0x3C098000, 0x25292200, 0x25080004, 0x0109082B, 0x1420FFFD, 0xAD00FFFC]

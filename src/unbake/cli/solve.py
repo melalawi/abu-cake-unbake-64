@@ -26,8 +26,9 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
     needed = tuple(getattr(args, "declarations_needed", None) or ())
     reports: list[dict[str, str]] = []
     edits: list[Edit] = []
+    index_before = None
     if needed:
-        from unbake.layout import split_apply
+        from unbake.layout import index, split_apply
         from unbake.typemap import declaration_evidence
 
         edits, reports = declaration_evidence.plan_many(project, policy, needed)
@@ -35,7 +36,10 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             project.build / "types/declaration-admission.json",
             storage.encoded({"schema": 1, "state": "planned", "records": reports}),
         )
+        index_file = index.path(project)
+        index_before = index_file.read_bytes() if index_file.is_file() else b""
         split_apply._write_staging(project, edits)
+        index.update(project, {edit.path: edit.after for edit in edits})
     try:
         value = solve(project, policy)
     except BaseException as error:
@@ -49,6 +53,11 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
                 storage.write(edit.path, edit.before.encode())
             else:
                 edit.path.unlink(missing_ok=True)
+        if index_before is not None:
+            if index_before:
+                storage.write(index_file, index_before)
+            else:
+                index_file.unlink(missing_ok=True)
         raise
     if reports:
         storage.write(

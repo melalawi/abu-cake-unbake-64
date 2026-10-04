@@ -14,10 +14,10 @@ class HeaderContextTests(unittest.TestCase):
         for root in (Path("/original"), Path("/copied")):
             for existing in (False, True):
                 with self.subTest(root=root, existing=existing):
-                    destination = root / "include/shared/alpha.h"
+                    destination = root / "include/main/alpha.h"
                     texts = (
                         {
-                            root / "include/shared/decls/alpha.h": (
+                            root / "include/main/alpha.h": (
                                 "#ifndef UNBAKE_ALPHA_H\n#define UNBAKE_ALPHA_H\nextern int alpha(void);\n#endif\n"
                             )
                         }
@@ -40,14 +40,10 @@ class HeaderContextTests(unittest.TestCase):
                     self.assertIn("Owner", headers.index.names)
                     if existing:
                         original = Headers(
-                            {
-                                Path("/original/include/shared/decls/alpha.h"): texts[
-                                    root / "include/shared/decls/alpha.h"
-                                ]
-                            },
+                            {Path("/original/include/main/alpha.h"): texts[root / "include/main/alpha.h"]},
                             root=Path("/original"),
                         )
-                        self.assertEqual(guard, header_guard(original, Path("/original/include/shared/alpha.h")))
+                        self.assertEqual(guard, header_guard(original, Path("/original/include/main/alpha.h")))
 
     def test_guarded_wrappers_and_nested_generated_copies_share_one_provider(self):
         for kind in ("struct", "union"):

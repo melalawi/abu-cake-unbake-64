@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake.project.config import Held, Policy, Project
-from unbake.typemap import header_names, regeneration, split, storage
+from unbake.typemap import header_names, regeneration, storage
 
 _decoded: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
@@ -66,18 +66,12 @@ def load(project: Project, *, required: bool = True, allow_stale: bool = False) 
 def context(project: Project, *, function: str | None = None, allow_stale: bool = False) -> str:
     value = load(project, allow_stale=allow_stale)
     assert value is not None
-    homes = value.get("declaration_headers", {})
-    selected = [homes[function]] if function in homes else sorted(homes.values())
+    from unbake.layout import index
+
+    lookup = index.load(project)
+    homes = lookup["symbols"]
+    selected = [homes[function]] if function in homes else sorted(set(homes.values()))
     lines = [f'#include "{path}"' for path in selected]
-    if not homes:
-        root = project.include[0]
-        if (root / "shared/typemap.h").is_file():
-            lines = ['#include "shared/typemap.h"', '#include "shared/prototypes.h"']
-        else:
-            lines = [
-                f'#include "{path.relative_to(root).as_posix()}"'
-                for path in sorted((root / "shared/types").glob("*.h"))
-            ]
     lines.extend("/* unknown: " + row.replace("*/", "* /") + " */" for row in value["unknown"])
     lines.extend("/* conflict: " + row["key"].replace("*/", "* /") + " */" for row in value["conflicts"])
     for name, record in sorted(value["functions"].items()):
@@ -127,7 +121,6 @@ def _semantic(value: Any) -> Any:
 def _render(
     project: Project, value: dict[str, Any], policy: Policy | None, session: regeneration.Session
 ) -> dict[Path, bytes | Path]:
-    from unbake.decomp.header_declarations import declaration_source
     from unbake.decomp.header_declarations import declarations as header_declarations
     from unbake.typemap.declarations import declarator
 
@@ -231,17 +224,10 @@ def _render(
         if record["state"] == "known"
         for alias in record.get("aliases", [])
     }
-    # Compatibility aliases can occur only in a consumer projection, outside
-    # the common declaration prefix. Keep their canonical layout provider when
-    # a later receipt omits that alias from its otherwise identical layout.
-    for text in session.consumer_aliases.values():
-        for alias, type_ in header_names.alias_types(text).items():
-            target = re.fullmatch(r"(?:struct|union) (\w+)", type_)
-            if target is not None:
-                record = value["structs"].get(target[1], {})
-                if record.get("state") == "known" and record.get("type") == type_:
-                    alias_targets.setdefault(alias, type_)
     prerequisites: dict[str, str] = dict(private)
+    for alias, type_ in {**value.get("typedefs", {}), **alias_targets}.items():
+        if alias not in provided and alias not in reserved and not header_names.placeholder(alias):
+            prerequisites[alias] = header_names.resolve(type_, concrete)
     for record in generated.values():
         for alias, type_ in record.get("typedefs", {}).items():
             if alias in provided or alias in reserved or header_names.placeholder(alias):
@@ -249,10 +235,9 @@ def _render(
             if alias in prerequisites and prerequisites[alias] != type_:
                 raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
             prerequisites[alias] = type_
-    originals = dict(components)
     for path in (*authored, *(root / name for name in value.get("declaration_evidence", {}))):
         components[path] = session.rewrite(components[path], replacements, reserved)
-    rendered = header_names.imports(project, originals, components)
+    rendered = dict(components)
     for name in value.get("declaration_evidence", {}):
         path = root / name
         import base64
@@ -284,37 +269,8 @@ def _render(
             rendered[path] = (
                 f"/* {name}: partial shape; common base {record.get('common_base')}; size unknown; {reason} */"
             )
-    # Source compatibility wrappers contain no declarations. They must not
-    # become providers (or drag their old umbrella into a type header).
-    wrappers = {
-        path: originals[path]
-        for path in authored
-        if re.search(r'#\s*include\s*"(?:(?:shared/)?typemap.h|shared/(?:types|consumers)/[^"]+)"', originals[path])
-    }
-    for path in wrappers:
-        if not header_declarations(components[path]).typedefs and not header_declarations(components[path]).exports:
-            components.pop(path)
-            rendered.pop(path)
-        else:
-            rendered[path] = split.narrow(components[path], "")
-    consumer_aliases = {}
-    for alias, type_ in {**value.get("typedefs", {}), **alias_targets}.items():
-        if header_names.placeholder(alias) or (alias in authored_aliases and alias not in reserved):
-            continue
-        if alias not in reserved and (alias in generated_aliases or alias in prerequisites):
-            continue
-        path = root / "shared" / (".consumer-alias-" + alias + ".h")
-        components[path] = rendered[path] = "typedef " + declarator(header_names.resolve(type_, concrete), alias) + ";"
-        if alias in reserved:
-            consumer_aliases[alias] = path
-    layout = session.layout(components, rendered, root, alias_targets)
-    session.consumer_names = consumer_names
-    outputs: dict[Path, bytes | Path] = dict(layout.headers)
-    umbrella_path = root / "shared/typemap.h"
-    legacy = umbrella_path.is_file() or bool(wrappers)
-    outputs[umbrella_path] = layout.umbrella(
-        root / "shared/typemap.h", excluded={layout.homes[path] for path in consumer_aliases.values()}
-    )
+    from unbake.layout import index, map
+
     declarations_by_name = {}
     for name, record in sorted(value["functions"].items()):
         if record["state"] == "known":
@@ -328,111 +284,38 @@ def _render(
     for name, record in sorted(value["arrays"].items()):
         if record["state"] == "known" and record.get("partial") and ":" not in name:
             declarations_by_name[name] = session.rewrite(f"extern {record['type']} {name}[];", replacements, reserved)
-    declaration_headers = []
-    for name, text in declarations_by_name.items():
-        path = root / "shared/decls" / (name + ".h")
-        source = project.src / (name + ".c")
-        record = value["functions"].get(name, {})
-        selection = record.get("prototype", text)
-        if source.is_file():
-            selection += "\n" + session.sources[source]
-        homes = layout.required(
-            selection, blocked=consumer_names.get(source, set()), blocked_tags=session.consumer_tags.get(source, set())
-        )
-        if name in authored_declarations:
-            # Import the existing declaration provider instead of emitting a second signature.
-            homes.update(layout.homes[provider] for provider in authored_declarations[name])
-            text = ""
-        outputs[path] = session.guarded(path, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
-        declaration_headers.append(layout.include(path))
-    outputs[root / "shared/prototypes.h"] = session.guarded(
-        root / "shared/prototypes.h", "\n".join(declaration_headers)
-    )
-    if not legacy:
-        outputs.pop(umbrella_path)
-        outputs.pop(root / "shared/prototypes.h")
-    source_context: dict[Path, str] = {}
-    source_imports: dict[str, list[Path]] = defaultdict(list)
-    for source, text in session.sources.items():
-        source_context[source] = text
-        for name in re.findall(r'^\s*#\s*include\s*"([^"\n]+)"', text, re.M):
-            source_imports[Path(name).name].append(source)
-    legacy_compat: dict[str, Path] = {}
-    if legacy:
-        for alias in ("M2C_UNK", "M2C_UNK8", "M2C_UNK16", "M2C_UNK32", "M2C_UNK64"):
-            if any(
-                alias in re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))
-                and alias not in consumer_names.get(source, set())
-                for source, text in source_context.items()
-            ):
-                destination = root / "shared/consumers" / ("compat_" + alias + ".h")
-                outputs[destination] = layout.consumer(
-                    destination, "typedef " + declarator(replacements[alias], alias) + ";"
-                )
-                legacy_compat[alias] = destination
-
-    def compatibility(source: Path, text: str) -> set[Path]:
-        names = set(re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))) - consumer_names.get(source, set())
-        return {path for alias, path in legacy_compat.items() if alias in names}
-
-    if legacy:
-        alias_homes = {layout.homes[path] for path in consumer_aliases.values()}
-        direct_branches: list[str] = []
-        for source, text in sorted(source_context.items()):
-            if not re.search(r'#\s*include\s*"shared/typemap.h"', text):
-                continue
-            selected = (
-                layout.required(
-                    text,
-                    blocked=consumer_names.get(source, set()),
-                    blocked_tags=session.consumer_tags.get(source, set()),
-                )
-                & alias_homes
-            ) | compatibility(source, text)
-            if not selected:
-                continue
-            destination = root / "shared/consumers" / (source.stem + ".h")
-            outputs[destination] = session.guarded(
-                destination, "\n".join(layout.include(home) for home in sorted(selected))
-            )
-            direct_branches.extend(
-                (f"#if defined({split.consumer_macro(source.stem)})", layout.include(destination), "#endif")
-            )
-        umbrella = outputs[umbrella_path]
-        assert isinstance(umbrella, bytes)
-        outputs[umbrella_path] = ("\n".join(direct_branches) + "\n").encode() + umbrella
-    for path, original in wrappers.items():
-        branches: list[str] = []
-        for source in sorted(set(source_imports[path.name])):
-            text = source_context[source]
-            homes = layout.required(
-                text + "\n" + split.narrow(components.get(path, ""), ""),
-                blocked=consumer_names.get(source, set()),
-                blocked_tags=session.consumer_tags.get(source, set()),
-            )
-            homes.update(compatibility(source, text))
-            destination = root / "shared/consumers" / (source.stem + ".h")
-            includes = "\n".join(layout.include(home) for home in sorted(homes))
-            # Several wrappers may contribute declarations to one consumer.
-            previous_text = outputs.get(destination, b"")
-            assert isinstance(previous_text, bytes)
-            if previous_text:
-                existing = re.findall(r'^#include "([^"]+)"', previous_text.decode(), re.M)
-                homes.update(root / name for name in existing)
-                includes = "\n".join(layout.include(home) for home in sorted(homes))
-            outputs[destination] = session.guarded(destination, includes)
-            directive = "#if" if not branches else "#elif"
-            branches.extend((f"{directive} defined({split.consumer_macro(source.stem)})", layout.include(destination)))
-        fallback = layout.required(split.narrow(components.get(path, ""), ""), blocked=reserved)
-        if branches:
-            branches.append("#else")
-        branches.extend(layout.include(home) for home in sorted(fallback))
-        if source_imports[path.name]:
-            branches.append("#endif")
-        outputs[path] = ("\n".join(branches) + "\n" + split.narrow(original, "")).encode()
-    value["declaration_headers"] = {name: f"shared/decls/{name}.h" for name in declarations_by_name}
+    # An authored provider is already imported through the graph.
+    for name in authored_declarations:
+        declarations_by_name.pop(name, None)
+    ownership = map.load(project)
+    segments = symbol_segments(project)
+    layout = session.layout(components, rendered, root, alias_targets, ownership, declarations_by_name, segments)
+    session.consumer_names = consumer_names
+    outputs: dict[Path, bytes | Path] = dict(layout.headers)
+    outputs[index.path(project)] = index.encoded(layout.index)
+    value["declaration_headers"] = dict(layout.index["symbols"])
     value["shared_aliases"] = replacements
     return outputs
+
+
+def symbol_segments(project: Project) -> dict[str, str]:
+    """Assign data declarations by the reference version's symbol intervals."""
+    from unbake.layout import split
+
+    version = project.version(project.names_from)
+    segments = split.layout(version.split)[2]
+    symbols = split.symbols(version.symbols)[1]
+    result = {}
+    for name, (address, _, _) in symbols.items():
+        for segment in segments:
+            if segment.fields.get("type") != "code" or segment.end is None:
+                continue
+            start = int(segment.fields["start"], 0)
+            base = int(segment.fields["vram"], 0)
+            if base <= address < base + segment.end - start:
+                result[name] = split.plain(segment.fields.get("name", f"span_{start:X}"))
+                break
+    return result
 
 
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Policy | None = None) -> None:
@@ -440,7 +323,6 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
 
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
-    root = project.include[0]
     session = regeneration.Session(project, policy)
     outputs = session.render(value, lambda: _render(project, value, policy, session))
     replacements = value["shared_aliases"]
@@ -540,12 +422,9 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     for mark in marks.values():
         mark.update(revision=value["revision"], type_db_sha256=digest)
     outputs[project.build / "types/redraft.json"] = storage.encoded({**storage.identity(project), "functions": marks})
-    obsolete = {
-        path
-        for directory in (root / "shared/types", root / "shared/decls", root / "shared/consumers")
-        for path in directory.rglob("*.h")
-        if path not in outputs
-    }
+    from unbake.layout import index
+
+    obsolete = index.headers(project) - outputs.keys()
     outputs = {
         path: content
         for path, content in outputs.items()
@@ -773,20 +652,13 @@ def validate_headers(
                         staged.write_bytes(contents[path])
             staged_project = replace(project, include=tuple(roots))
             source = scratch / "context.c"
-            # Stage dependencies without including authored prerequisites before
-            # their filtered guarded projections.
-            umbrella = project.include[0] / "shared/typemap.h"
-            prototypes = project.include[0] / "shared/prototypes.h"
-            if umbrella in selected and prototypes in selected:
-                entry_points = [umbrella, prototypes]
-            else:
-                generated = selected.intersection(outputs)
-                dependencies = {dep for path in generated for dep in closures[path] if dep != path}
-                entry_points = sorted(generated - dependencies)
-                if not entry_points:
-                    entry_points = sorted(generated)
-                covered = {dep for path in entry_points for dep in closures[path]}
-                entry_points.extend(sorted(selected - covered))
+            generated = selected.intersection(outputs)
+            dependencies = {dep for path in generated for dep in closures[path] if dep != path}
+            entry_points = sorted(generated - dependencies)
+            if not entry_points:
+                entry_points = sorted(generated)
+            covered = {dep for path in entry_points for dep in closures[path]}
+            entry_points.extend(sorted(selected - covered))
             source.write_text(
                 "".join(
                     f'#include "{str(path)[len(str(root)) + 1 :]}"\n'

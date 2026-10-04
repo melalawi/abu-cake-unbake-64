@@ -20,7 +20,7 @@ class InitSetupTests(MainCase):
     def test_init_bypasses_project_and_policy(self) -> None:
         target = self.directory / "unrelated name"
         with patch.object(config, "load") as load, patch.object(config, "load_policy") as policy:
-            code, out, error = self.run_main(["init", str(target)], load_project=False)
+            code, out, error = self.run_main(["init", str(target), "--layout-cap", "2"], load_project=False)
         self.assertEqual(code, 0, error)
         load.assert_not_called()
         policy.assert_not_called()
@@ -29,7 +29,7 @@ class InitSetupTests(MainCase):
 
     def test_empty_roms_refuses_setup_roms_before_policy(self) -> None:
         target = self.directory / "shell"
-        self.run_main(["init", str(target)], load_project=False)
+        self.run_main(["init", str(target), "--layout-cap", "2"], load_project=False)
         before = hashlib.sha256((target / "config.toml").read_bytes()).hexdigest()
         with patch.object(config, "load_policy") as policy:
             code, out, error = self.run_main(["--project", str(target), "setup"], load_project=False)
@@ -43,9 +43,9 @@ class InitSetupTests(MainCase):
 
     def test_retired_init_and_setup_routes_refuse(self) -> None:
         for args in (
-            ["init", "new", "--rom", "dump.z64"],
-            ["init", "new", "--split", "files"],
-            ["init", "new", "--compiler", "ido-7.1"],
+            ["init", "new", "--layout-cap", "2", "--rom", "dump.z64"],
+            ["init", "new", "--layout-cap", "2", "--split", "files"],
+            ["init", "new", "--layout-cap", "2", "--compiler", "ido-7.1"],
             ["setup", "--new", "dump.z64"],
         ):
             with self.subTest(args=args):
@@ -58,7 +58,7 @@ class InitSetupTests(MainCase):
         from unbake.project import init
 
         target = self.directory / "shell"
-        init.run(target)
+        init.run(target, layout_cap=2)
         run = Mock(return_value=False)
         with patch("unbake.cli.setup.run", run):
             code, _out, error = self.run_main(
@@ -81,7 +81,7 @@ class InitSetupTests(MainCase):
         from unbake.project.config import Unfinished
 
         target = self.directory / "unrelated name"
-        init.run(target)
+        init.run(target, layout_cap=2)
         (target / "roms/input").write_bytes(cartridge())
         ranges = (type("Range", (), {"start": 0x1000, "end": 0x1000 + len(CODE), "address": 0x80001000})(),)
         with (

@@ -100,7 +100,8 @@ class GateAdmissionTests(MatchFixture):
         self.assertEqual(code, 0, output)
         self.assertIn("published as NON_MATCHING", output)
         self.assertEqual(
-            (self.src / "alpha.c").read_bytes(), b"#ifdef NON_MATCHING\n" + source.read_bytes() + b"#endif\n"
+            (self.src / "alpha.c").read_bytes(),
+            b'#ifdef NON_MATCHING\n#include "main/alpha.h"\n' + source.read_bytes() + b"#endif\n",
         )
         self.assertEqual(splits, {v: self.project.version(v).split.read_bytes() for v in self.versions})
         self.assertEqual(self.matched(), [])

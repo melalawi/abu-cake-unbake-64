@@ -213,6 +213,14 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
     tree = directory / "tree"
     tree.mkdir(parents=True)
     shutil.copyfile(project.root / "config.toml", tree / "config.toml")
+    shutil.copyfile(project.root / "layout.toml", tree / "layout.toml")
+    from unbake.layout import index
+
+    lookup = index.path(project)
+    if lookup.is_file():
+        target = tree / lookup.relative_to(project.root)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(lookup, target)
     for root in (*project.include, project.root / "versions"):
         shutil.copytree(root, tree / root.relative_to(project.root))
     for root in (project.tools, project.roms):

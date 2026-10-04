@@ -68,7 +68,11 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
             or args.supply
         ):
             raise Held("setup", "setup.helper_refresh: refresh helpers separately from setup facts")
-        setup.refresh_helpers(config.load(project.root))
+        ready = config.load(project.root)
+        setup.refresh_helpers(ready)
+        from unbake.layout.map import ensure
+
+        ensure(ready)
         suggest(command(project.root, "next"))
         return receipt("setup", ["pinned helpers and scoped recipes refreshed"])
     if args.compilers:
@@ -124,7 +128,11 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
         if args.compiler or args.name or args.title or args.names_from or args.version_name or args.version_order:
             raise Held("setup", "setup.rom_set_changed: ready setup retains confirmed facts and human layout")
         policy = config.load_policy(args.policy, stage="setup")
-        return receipt("setup", setup.refresh(project, policy, supply=args.supply))
+        lines = setup.refresh(project, policy, supply=args.supply)
+        from unbake.layout.map import ensure
+
+        ensure(config.load(project.root))
+        return receipt("setup", lines)
     # Empty ROM refusal precedes policy requirements and template creation.
     census.candidates(project)
     print(f"OK(setup): ROM folder: {project.roms}")
@@ -158,4 +166,8 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
         project, result, layout, proposal, policy, confirm=args.confirm, supply=args.supply
     ) as prove:
         del result, layout, proposal
-        return receipt("setup", prove())
+        lines = prove()
+        from unbake.layout.map import ensure
+
+        ensure(config.load(project.root))
+        return receipt("setup", lines)

@@ -19,7 +19,7 @@ from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
 from unbake.match import imports, pool_literals, reporting, rewrite_view, source_views, type_rewrite
 from unbake.match.common import held
-from unbake.project.config import Policy, Project
+from unbake.project.config import Held, Policy, Project
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
 
 
@@ -98,7 +98,7 @@ def final_source(
             if len(retained) != len(members):
                 replacements.append((start, end, "\n".join("typedef " + member.declaration for member in retained)))
     if records:
-        added = {edit.path for edit in edits if edit.path not in headers.texts}
+        added = {edit.path for edit in edits}
         spans: list[tuple[int, int]] = []
         for record in records:
             home = headers.homes.get(f"{record.kind} {record.name}") or headers.homes.get(record.name)
@@ -241,7 +241,12 @@ def fold_source(
     parsers = source_views.parsers(project, policy, text, versions, headers)
     records = [record for parser in parsers for record in _records(parser)]
     records = [replace(record, aliases=()) if record.name in tag_only else record for record in records]
-    destination = project.include[0] / "shared" / f"{function.lower()}.h"
+    from unbake.layout import map
+
+    owner = map.load(project).owners.get(function)
+    if owner is None:
+        raise Held("layout", f"layout.member.{function}: source has no group")
+    destination = project.include[0] / owner.header
     context, promoted, moved_spans = _local_typedefs(project, headers, parsers, records, destination)
     edits = fold(records, project, destination=destination, prove_headers=prove_headers, context=context)
     if promoted:
@@ -279,6 +284,15 @@ def fold_source(
         _, lines, segments = split.layout(project.version(version).split)
         paths = {row.path for row in group[1:]}
         removed[version] = tuple(lines[row.line] for segment in segments for row in segment.rows if row.path in paths)
+    from unbake.layout import apply
+
+    if destination not in headers.texts and not any(edit.path == destination for edit in edits):
+        from unbake.typemap.split import guarded
+
+        edits.append(
+            Edit(destination, "", guarded(destination.relative_to(project.include[0]), "").decode(), tuple(versions))
+        )
+    final = apply.source(project, final, function, {edit.path: edit.after.encode() for edit in edits})
     return Folded(function, final, edits, removed)
 
 

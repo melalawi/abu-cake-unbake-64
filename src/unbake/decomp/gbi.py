@@ -782,9 +782,9 @@ def install_audio(project: Project) -> str:
     if not project.include:
         raise Held("gbi", "paths.include: required include directory")
     for template, name in (
-        (gbi_audio.HEADER, "shared/abi.h"),
-        (gbi_audio.TYPE_HEADER, "shared/acmd.h"),
-        (gbi_audio.HEADER.with_name("audio_callbacks.h"), "shared/audio_callbacks.h"),
+        (gbi_audio.HEADER, "abi.h"),
+        (gbi_audio.TYPE_HEADER, "acmd.h"),
+        (gbi_audio.HEADER.with_name("audio_callbacks.h"), "audio_callbacks.h"),
     ):
         destination = project.include[0] / name
         content = template.read_text()
@@ -793,7 +793,7 @@ def install_audio(project: Project) -> str:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
             destination.write_text(content)
-    return '#include "shared/abi.h"\n'
+    return '#include "abi.h"\n'
 
 
 def prepare(project: Project, source: str, variant: str | None, *, fold_pointers: bool = True) -> Lowered:
@@ -814,8 +814,8 @@ def prepare(project: Project, source: str, variant: str | None, *, fold_pointers
     shiftl = definitions.get("_SHIFTL")
     if shiftl and standard_shiftl(shiftl):
         result.source = result.source[: shiftl.start] + result.source[shiftl.end :]
-        result.headers.add("abi" if re.search(r"\bAcmd\b|shared/acmd.h", result.source) else "gbi")
-    if '#include "shared/acmd.h"' in result.source:
+        result.headers.add("abi" if re.search(r"\bAcmd\b|acmd.h", result.source) else "gbi")
+    if '#include "acmd.h"' in result.source:
         result.headers.add("abi")
     if '#include "n64sdk.h"' in result.source and any(
         item.reason.startswith("volatile packet requires volatile stores") for item in result.raw

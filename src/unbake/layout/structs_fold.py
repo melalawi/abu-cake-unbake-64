@@ -593,9 +593,13 @@ def fold(
         # Forward typedefs must precede existing definitions too: an extended
         # aggregate may now use one of the newly promoted types.
         header_parser, parsed_header = context.parse(forward + shared.append(before_header, new_declarations))
-        header_records = [
-            record for record in parsed_header if len(forward) <= record.start < len(forward) + len(before_header)
-        ]
+        # append() inserts before the closing guard. Newly appended records
+        # can therefore begin inside the old byte length; use the insertion
+        # boundary rather than mistaking them for existing definitions.
+        boundary = before_header.rfind("#endif")
+        if boundary < 0:
+            boundary = len(before_header)
+        header_records = [record for record in parsed_header if len(forward) <= record.start < len(forward) + boundary]
         position = min(
             (record.start - len(forward) for record in header_records), default=before_header.rfind("#endif")
         )

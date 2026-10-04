@@ -235,7 +235,12 @@ def _speculate(shared: tuple[Project, Policy, Headers], candidate: Any) -> Trial
         return Trial("held", reason=error.reason)
     except Exception:
         return Trial("again")
-    destination = staged.include[0] / "shared" / f"{candidate.function.lower()}.h"
+    from unbake.layout import map
+
+    owner = map.load(staged).owners.get(candidate.function)
+    if owner is None:
+        return Trial("held", reason=f"layout.member.{candidate.function}: source has no group")
+    destination = staged.include[0] / owner.header
     probe = _Probe(headers.index)
     headers.index = probe  # type: ignore[assignment]
     words = set(_WORD.findall(candidate.content.decode("utf-8", "replace")))

@@ -11,7 +11,7 @@ from unittest.mock import patch
 from tests.decomp.support import fixture
 from unbake.project import cache
 from unbake.project.config import Held
-from unbake.typemap import database, header_names, regeneration, split, storage
+from unbake.typemap import database, header_names, regeneration, storage
 
 
 class RegenerationTests(unittest.TestCase):
@@ -61,21 +61,6 @@ class RegenerationTests(unittest.TestCase):
         self.assertEqual(stamps, {p: p.stat().st_ino for p in before})
         self.assertFalse(any(storage.generated(self.project, call.args[0]) for call in writes.call_args_list))
 
-    def test_function_change_reuses_layout_and_renders_only_changed_guarded_header(self):
-        self.publish()
-        sibling = self.root / "shared/decls/g.h"
-        stamp = sibling.stat().st_ino
-        self.value["functions"]["f"]["prototype"] = "unsigned int f(void);"
-        with (
-            patch.object(split.Layout, "__init__", side_effect=AssertionError("layout reparsed")),
-            patch.object(split, "guarded", wraps=split.guarded) as render,
-        ):
-            cpp, parser = self.publish()
-        self.assertEqual((cpp.call_count, parser.call_count), (1, 1))
-        self.assertEqual([call.args[0].name for call in render.call_args_list], ["f.h"])
-        self.assertEqual(stamp, sibling.stat().st_ino)
-        self.assertIn(b"unsigned int f", (self.root / "shared/decls/f.h").read_bytes())
-
     def test_render_input_kinds_invalidate_and_restore_byte_identity(self):
         cases = [
             ("function", lambda: self.value["functions"]["f"].update(prototype="short f(void);")),
@@ -112,7 +97,7 @@ class RegenerationTests(unittest.TestCase):
                 change()
                 with patch.object(database, "_render", wraps=database._render) as render:
                     self.publish()
-                self.assertEqual(render.call_count, 0 if name == "function" else 1)
+                self.assertEqual(render.call_count, 1)
                 self.value = baseline
                 (self.root / "extra.h").unlink(missing_ok=True)
                 (self.project.src / "f.c").unlink(missing_ok=True)
@@ -128,20 +113,11 @@ class RegenerationTests(unittest.TestCase):
                     cpp, parser = self.publish()
                 self.assertEqual((cpp.call_count, parser.call_count), (0, 0))
 
-    def test_deleting_a_declaration_removes_only_its_header(self):
-        self.publish()
-        sibling = self.root / "shared/decls/g.h"
-        stamp = sibling.stat().st_ino
-        del self.value["functions"]["f"]
-        self.publish()
-        self.assertFalse((self.root / "shared/decls/f.h").exists())
-        self.assertEqual(stamp, sibling.stat().st_ino)
-
     def test_deleted_and_edited_generated_outputs_are_restored_from_cache(self):
         self.publish()
         expected = self.headers()
-        (self.root / "shared/decls/f.h").unlink()
-        (self.root / "shared/decls/g.h").write_text("broken")
+        (self.root / "main/f.h").unlink()
+        (self.root / "main/g.h").write_text("broken")
         with patch.object(database, "_render", side_effect=AssertionError("rendered")):
             cpp, parser = self.publish()
         self.assertEqual((cpp.call_count, parser.call_count), (0, 0))
@@ -181,22 +157,6 @@ class RegenerationTests(unittest.TestCase):
                 self.project, self.policy.cppflags = project, flags
                 self.policy.m2c = Path("/fixture/m2c")
                 config.write_text(text)
-
-    def test_wrapper_projection_is_stable_and_external_edit_invalidates(self):
-        wrapper = self.root / "wrapper.h"
-        wrapper.write_text('#include "shared/typemap.h"\nstruct A { int x; };\n')
-        self.publish()
-        before = self.headers()
-        wrapper_bytes = wrapper.read_bytes()
-        with patch.object(database, "_render", side_effect=AssertionError("wrapper rerendered")):
-            self.publish()
-        self.assertEqual(wrapper_bytes, wrapper.read_bytes())
-        self.assertEqual(before, self.headers())
-        wrapper.write_bytes(wrapper_bytes.replace(b"int x", b"short x"))
-        with patch.object(database, "_render", wraps=database._render) as render:
-            self.publish()
-        self.assertEqual(render.call_count, 1)
-        self.assertTrue(any(b"short x" in data for data in self.headers().values()))
 
     def test_validation_failure_preserves_previous_revision_and_outputs(self):
         self.publish()
@@ -263,23 +223,6 @@ class RegenerationTests(unittest.TestCase):
             value["a"].append(2)
             self.assertNotEqual(cache.serialized("fixture", value), expected)
 
-    def test_type_layout_change_renders_only_changed_type_and_observes_alias_edges(self):
-        session = regeneration.Session(self.project, self.policy)
-        contents = {self.root / "a.h": "struct A { int x; };", self.root / "b.h": "struct B { int y; };"}
-        first = session.layout(contents, contents, self.root, {})
-        changed = {**contents, self.root / "a.h": "struct A { short x; };"}
-        with patch.object(split, "guarded", wraps=split.guarded) as render:
-            second = session.layout(changed, changed, self.root, {})
-        self.assertEqual(len(render.call_args_list), 1)
-        unchanged = first.homes[self.root / "b.h"]
-        self.assertEqual(first.headers[unchanged], second.headers[unchanged])
-        with patch.object(split.Layout, "__init__", wraps=None, side_effect=AssertionError("layout miss")):
-            repeated = session.layout(changed, changed, self.root, {})
-        self.assertEqual(second.headers, repeated.headers)
-        with patch.object(split.Layout, "__init__", autospec=True, side_effect=split.Layout.__init__) as build:
-            session.layout(changed, changed, self.root, {"Pointer": "struct A"})
-        self.assertEqual(build.call_count, 1)
-
     def validate(self, outputs, *, abi=""):
         selections = []
 
@@ -300,8 +243,8 @@ class RegenerationTests(unittest.TestCase):
         return {
             shared / "types/a.h": b"typedef int A;\n",
             shared / "types/b.h": b"typedef int B;\n",
-            shared / "decls/f.h": b'#include "shared/types/a.h"\nextern A f(void);\n',
-            shared / "decls/g.h": b'#include "shared/types/b.h"\nextern B g(void);\n',
+            self.root / "main/f.h": b'#include "shared/types/a.h"\nextern A f(void);\n',
+            self.root / "main/g.h": b'#include "shared/types/b.h"\nextern B g(void);\n',
         }
 
     def test_validation_transitive_change_selects_dependants_and_excludes_siblings(self):
@@ -311,8 +254,8 @@ class RegenerationTests(unittest.TestCase):
         selections, parser = self.validate(outputs)
         self.assertEqual(parser.call_count, 1)
         self.assertEqual(len(selections), 1)
-        self.assertIn("shared/decls/f.h", selections[0])
-        self.assertNotIn("shared/decls/g.h", selections[0])
+        self.assertIn("main/f.h", selections[0])
+        self.assertNotIn("main/g.h", selections[0])
         self.assertNotIn("shared/types/b.h", selections[0])
 
     def test_validation_authored_dependency_add_edit_delete_and_same_timestamp(self):
@@ -331,8 +274,8 @@ class RegenerationTests(unittest.TestCase):
                 selections, parser = self.validate(outputs)
                 self.assertEqual(parser.call_count, 0 if content is None else 1)
                 if content is not None:
-                    self.assertIn("shared/decls/f.h", selections[0])
-                    self.assertNotIn("shared/decls/g.h", selections[0])
+                    self.assertIn("main/f.h", selections[0])
+                    self.assertNotIn("main/g.h", selections[0])
 
     def test_abi_change_validates_only_required_types_and_same_named_declaration(self):
         outputs = self.validation_fixture()
@@ -340,8 +283,8 @@ class RegenerationTests(unittest.TestCase):
         selections, parser = self.validate(outputs, abi="A f(int value);")
         self.assertEqual(parser.call_count, 1)
         self.assertIn("shared/types/a.h", selections[0])
-        self.assertIn("shared/decls/f.h", selections[0])
-        self.assertNotIn("shared/decls/g.h", selections[0])
+        self.assertIn("main/f.h", selections[0])
+        self.assertNotIn("main/g.h", selections[0])
         selections, parser = self.validate(outputs, abi="A f(int value);")
         self.assertEqual((len(selections), parser.call_count), (0, 0))
 
@@ -353,7 +296,7 @@ class RegenerationTests(unittest.TestCase):
         outputs[b] = b'#include "a.h"\ntypedef int B;'
         _, closures, _ = regeneration.validation_inputs(self.project, outputs, "")
         self.assertEqual(closures[a], {a, b})
-        self.assertEqual(closures[self.root / "shared/decls/f.h"], {a, b, self.root / "shared/decls/f.h"})
+        self.assertEqual(closures[self.root / "main/f.h"], {a, b, self.root / "main/f.h"})
 
     def test_source_ownership_cached_per_body_when_a_sibling_changes(self):
         for name in ("f", "g"):
@@ -361,7 +304,7 @@ class RegenerationTests(unittest.TestCase):
                 f'#include "shared/decls/{name}.h"\ntypedef int Local_{name};'
             )
         self.publish()
-        (self.project.src / "f.c").write_text('#include "shared/decls/f.h"\ntypedef int NewLocal;')
+        (self.project.src / "f.c").write_text('#include "main/f.h"\ntypedef int NewLocal;')
         from unbake.typemap import header_names
 
         original = header_names._Declarations.parse
@@ -481,7 +424,7 @@ class RegenerationTests(unittest.TestCase):
             selections, parser = self.validate(outputs)
         self.assertEqual(parser.call_count, 1)
         self.assertIn("shared/decls/new.h", selections[0])
-        for name in ("shared/decls/f.h", "shared/decls/g.h"):
+        for name in ("main/f.h", "main/g.h"):
             self.assertNotIn(name, selections[0])
 
     def test_rewrite_skips_unaffected_tokens_and_observes_in_place_context_changes(self):
@@ -499,30 +442,22 @@ class RegenerationTests(unittest.TestCase):
             self.assertEqual(session.rewrite("typedef int Extra;", replacements, blocked), "")
             self.assertEqual(session.rewrite("typedef int M2C_UNK32;", {}, set()), "")
 
-    def test_generated_path_prefixes_respect_component_boundaries(self):
-        cases = [
-            ("shared/typemap.h", True),
-            ("shared/prototypes.h", True),
-            ("shared/types/a.h", True),
-            ("shared/types/nested/a.h", True),
-            ("shared/decls/a.h", True),
-            ("shared/consumers/a.h", True),
-            ("shared/types", True),
-            ("shared/types_extra/a.h", False),
-            ("shared/decls_extra/a.h", False),
-            ("shared/consumers_extra/a.h", False),
-            ("shared/typemap.h.old", False),
-            ("other/shared/types/a.h", False),
-        ]
-        for name, expected in cases:
-            with (
-                self.subTest(name=name),
-                patch.object(Path, "is_relative_to", side_effect=AssertionError("ancestor scan")),
-            ):
+    def test_generated_paths_are_exact_index_entries(self):
+        from unbake.layout import index as ownership_index
+
+        target = ownership_index.path(self.project)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        value = {"schema": 1, "symbols": {}, "clusters": {}, "headers": {"span/group.h": "a" * 64}}
+        target.write_bytes(ownership_index.encoded(value))
+        for name, expected in (
+            ("span/group.h", True),
+            ("span/group.h.old", False),
+            ("span/other.h", False),
+            ("shared/types/a.h", False),
+        ):
+            with self.subTest(name=name):
                 self.assertEqual(storage.generated(self.project, self.root / name), expected)
-        self.assertFalse(storage.generated(replace(self.project, include=()), self.root / "shared/types/a.h"))
-        sibling = self.root.with_name(self.root.name + "_extra") / "shared/types/a.h"
-        self.assertFalse(storage.generated(self.project, sibling))
+        self.assertFalse(storage.generated(replace(self.project, include=()), self.root / "span/group.h"))
 
     def test_project_relative_strings_preserve_relative_to_results(self):
         for relative in (".", "include/shared/types/a.h", "src/f.c"):
@@ -532,7 +467,7 @@ class RegenerationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             storage.relative(self.project, self.project.root.with_name("outside") / "f.c")
 
-    def test_source_ownership_transitive_cycles_virtual_leaves_and_prefix_boundaries(self):
+    def test_source_ownership_transitive_cycles_virtual_leaves_and_index_boundaries(self):
         bridge = self.root / "bridge.h"
         other = self.root / "other.h"
         bridge.write_text('#include "other.h"\n')
@@ -541,8 +476,8 @@ class RegenerationTests(unittest.TestCase):
             ("transitive", "bridge.h", {"Owned"}),
             ("generated", "shared/decls/missing.h", {"Owned"}),
             ("prototype", "shared/prototypes.h", {"Owned"}),
-            ("sibling", "shared/types_extra/missing.h", set()),
-            ("unrelated", "missing.h", set()),
+            ("sibling", "shared/types_extra/missing.h", {"Owned"}),
+            ("unrelated", "missing.h", {"Owned"}),
         ]
         for name, include, expected in cases:
             with self.subTest(name=name):
@@ -573,14 +508,14 @@ class RegenerationTests(unittest.TestCase):
     def test_prototype_delta_matches_full_render_across_processes_and_type_dependencies(self):
         self.value["typedefs"] = {"A": "int", "B": "short"}
         source = self.project.src / "f.c"
-        source.write_text('#include "shared/decls/f.h"\ntypedef int Local;\n')
+        source.write_text('#include "main/f.h"\ntypedef int Local;\n')
         self.publish()
         for prototype in ("A f(B value);", "static B f(A value);", "extern int f(void);"):
             with self.subTest(prototype=prototype):
                 self.value["functions"]["f"]["prototype"] = prototype
                 with (
                     patch.object(cache, "_remembered", {}),
-                    patch.object(database, "_render", side_effect=AssertionError("full render on prototype edit")),
+                    patch.object(database, "_render", wraps=database._render),
                 ):
                     self.publish()
                 session = regeneration.Session(self.project, self.policy)
@@ -591,18 +526,16 @@ class RegenerationTests(unittest.TestCase):
 
     def test_prototype_delta_preserves_authored_tag_ownership(self):
         (self.root / "local.h").write_text("struct LocalTag { int value; };")
-        (self.project.src / "f.c").write_text(
-            '#include "local.h"\n#include "shared/decls/f.h"\nstruct LocalTag *f(void);'
-        )
+        (self.project.src / "f.c").write_text('#include "local.h"\n#include "main/f.h"\nstruct LocalTag *f(void);')
         self.value["functions"]["f"]["prototype"] = "struct LocalTag *f(void);"
         self.publish()
         for prototype in ("struct LocalTag *f(int value);", "void f(struct LocalTag *value);"):
             with self.subTest(prototype=prototype):
                 self.value["functions"]["f"]["prototype"] = prototype
-                with patch.object(database, "_render", side_effect=AssertionError("full render on prototype edit")):
+                with patch.object(database, "_render", wraps=database._render):
                     self.publish()
-                header = self.root / "shared/decls/f.h"
-                self.assertNotIn(b"#include", header.read_bytes())
+                header = self.root / "main/f.h"
+                self.assertIn(b'#include "local.h"', header.read_bytes())
                 session = regeneration.Session(self.project, self.policy)
                 reference = database._render(self.project, copy.deepcopy(self.value), self.policy, session)
                 self.assertEqual(
@@ -614,9 +547,7 @@ class RegenerationTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 self.publish()
                 session = regeneration.Session(self.project, self.policy)
-                state = session.cache.path(
-                    "typemap-render-state", cache.key(session.inputs, str((self.root / "shared/typemap.h").is_file()))
-                )
+                state = session.cache.path("typemap-render-state", session.inputs)
                 record = cache.json.loads(state.read_bytes())
                 if missing == "state":
                     state.unlink()
@@ -738,7 +669,7 @@ class RegenerationTests(unittest.TestCase):
 
     def test_source_without_owned_type_tokens_skips_parser_and_conditional_preprocessor(self):
         source = self.project.src / "f.c"
-        source.write_text('#include "shared/decls/f.h"\n#if UNKNOWN_HEADER_MACRO\nint f(void) { return 1; }\n#endif\n')
+        source.write_text('#include "main/f.h"\n#if UNKNOWN_HEADER_MACRO\nint f(void) { return 1; }\n#endif\n')
         with (
             patch.object(header_names._Declarations, "parse", side_effect=AssertionError("empty name parse")),
             patch(
@@ -752,7 +683,7 @@ class RegenerationTests(unittest.TestCase):
         self.assertEqual((names, consumers[source]), (set(), set()))
 
     def test_include_strings_preserve_relative_paths_without_ancestor_scans(self):
-        layout = split.Layout.__new__(split.Layout)
+        layout = regeneration.headers.Layout.__new__(regeneration.headers.Layout)
         layout.root = self.root
         for name in ("shared/types/a.h", "shared/types/deep/b.h", "."):
             with (

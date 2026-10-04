@@ -258,9 +258,7 @@ class CompileInputTests(unittest.TestCase):
                 ):
                     compile.compile_object(args, data)
                 self.assertEqual(len(commands), count)
-                from unbake.typemap.split import consumer_macro
-
-                self.assertNotIn("-D" + consumer_macro(source.stem) + "=1", commands[0])
+                self.assertTrue(all("CONSUMER" not in arg for arg in commands[0]))
                 self.assertEqual(args.depfile.read_text(), "custom-target: " + " ".join(expected_paths) + "\n")
                 self.assertEqual(
                     json.loads(args.output.with_suffix(".inputs.json").read_text()),

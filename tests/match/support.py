@@ -98,6 +98,24 @@ class MatchFixture(unittest.TestCase):
         for filename in ("cc", "as", "compiler.sha256"):
             (tools / filename).write_bytes(b"fixture compiler pins")
         compiler = Compiler("gcc-2.8.1-sn64", "sn64", tools / "cc", tools / "as", (), tools / "compiler.sha256")
+        from unbake.layout import map as ownership
+
+        def synthetic_map(selected):
+            members = ownership.catalog(selected)
+            for offset, name in enumerate(sorted({p.stem for p in selected.src.rglob("*.c")} - members.keys())):
+                members[name] = ownership.Member(name, "main", 0x90000000 + offset * 4, selected.versions)
+            return ownership.Map(
+                2, tuple(ownership.Group(m.name, m.segment, "default", (m.name,)) for m in members.values())
+            )
+
+        (self.root / "layout.toml").write_bytes(
+            ownership.encoded(
+                ownership.Map(2, tuple(ownership.Group(n, "main", "default", (n,)) for n in ("alpha", "beta", "gamma")))
+            )
+        )
+        mapping = patch.object(ownership, "load", side_effect=synthetic_map)
+        mapping.start()
+        self.addCleanup(mapping.stop)
         self.project = Project(
             root=self.root,
             name="fixture",

@@ -28,7 +28,7 @@ from unbake.project import (
 from unbake.project.config import Held, PendingProject, Policy, Project, SetupPolicy
 from unbake.project_tools.host import resolve_tool
 
-_AUDIO_CALLBACKS = "shared/audio_callbacks.h"
+_AUDIO_CALLBACKS = "audio_callbacks.h"
 
 if TYPE_CHECKING:
     from unbake.project.census import Census
@@ -372,7 +372,7 @@ def _sdk_headers(project: Project) -> None:
     from unbake.decomp.gbi_source import gfx_typedefs
 
     root = project.include[0]
-    shared_type = root / "shared/gfx.h"
+    shared_type = root / "gfx.h"
     for directory in project.include:
         if directory.is_dir():
             for path in directory.rglob("*.h"):
@@ -384,17 +384,17 @@ def _sdk_headers(project: Project) -> None:
                             "setup", f"setup.gfx_type: {path.relative_to(project.root)}:{line}: duplicate SDK Gfx"
                         )
     files = {
-        "shared/gfx.h": (
+        "gfx.h": (
             '#ifndef UNBAKE_SHARED_GFX_H\n#define UNBAKE_SHARED_GFX_H\n#include "types.h"\n\n'
             "typedef union Gfx {\n"
             "    struct { u32 w0; u32 w1; } words;\n"
             "    u64 force_structure_alignment;\n"
             "} Gfx;\n\n#endif\n"
         ),
-        "n64sdk.h": '#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n#include "shared/gfx.h"\n#endif\n',
+        "n64sdk.h": '#ifndef UNBAKE_N64SDK_H\n#define UNBAKE_N64SDK_H\n#include "gfx.h"\n#endif\n',
         "gbi.h": (makefile.TEMPLATES / "gbi.h").read_text(),
-        "shared/acmd.h": (makefile.TEMPLATES / "acmd.h").read_text(),
-        "shared/abi.h": (makefile.TEMPLATES / "abi.h").read_text(),
+        "acmd.h": (makefile.TEMPLATES / "acmd.h").read_text(),
+        "abi.h": (makefile.TEMPLATES / "abi.h").read_text(),
         _AUDIO_CALLBACKS: (makefile.TEMPLATES / "audio_callbacks.h").read_text(),
     }
     from unbake.decomp.gbi import PREVIOUS_HEADER_SHA256

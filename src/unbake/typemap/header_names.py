@@ -269,11 +269,9 @@ class IncludeClosure:
         self.edges: dict[str, set[str]] = {}
         self.frontiers: dict[str, set[str]] = {}
         self.roots = tuple(map(str, project.include))
-        shared = self.resolved(str(project.include[0] / "shared"))
-        self.special = {
-            os.path.join(shared, name) for name in ("typemap.h", "prototypes.h", "types", "decls", "consumers")
-        }
-        self.prefixes = tuple(os.path.join(shared, name) + os.sep for name in ("types", "decls", "consumers"))
+        from unbake.layout import index
+
+        self.special = {self.resolved(str(path)) for path in index.headers(project)}
 
     def resolved(self, path: str) -> str:
         if path not in self.canonical:
@@ -281,7 +279,7 @@ class IncludeClosure:
         return self.canonical[path]
 
     def generated(self, path: str) -> bool:
-        return path in self.special or path.startswith(self.prefixes)
+        return path in self.special
 
     def imports(self, path: str) -> set[str]:
         path = self.resolved(path)
@@ -378,8 +376,6 @@ def source_names(
     )
     for path in sorted(sources):
         included = closure.paths(path, authored_only=True)
-        if header not in included and not any(generated(project, dep) for dep in included):
-            continue
         text = closure.texts[closure.resolved(str(path))]
         # Preserve the no-owned-type fast path, but still collect authored
         # header ownership for sources with no local typedefs or tags.

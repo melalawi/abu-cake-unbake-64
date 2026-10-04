@@ -124,6 +124,12 @@ def authored_contents(project: Project, headers: Headers, local: Project) -> dic
 
 def header_includes(project: Project, headers: Headers, directory: Path) -> tuple[Path, ...]:
     """Materialize the fold's effective include tree for every declaration preprocessor."""
+    from unbake.layout import index as ownership_index
+
+    texts = dict(headers.texts)
+    for path in ownership_index.headers(project):
+        if path not in texts and path.is_file():
+            texts[path] = path.read_text()
     shared = headers.__dict__.get("_shared_includes")
     before = {}
     if shared is not None and shared[0] == project.root:
@@ -132,19 +138,19 @@ def header_includes(project: Project, headers: Headers, directory: Path) -> tupl
     for index, root in enumerate(project.include):
         staged = directory / "include" / str(index)
         staged.mkdir(parents=True, exist_ok=True)
-        for path, content in headers.texts.items():
+        for path, content in texts.items():
             if path.is_relative_to(root) and before.get(path) != content:
                 destination = staged / path.relative_to(root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(content)
         roots.append(staged)
     if shared is not None and shared[0] == project.root:
-        for path in before.keys() - headers.texts.keys():
+        for path in before.keys() - texts.keys():
             for root, staged in zip(project.include, roots, strict=True):
                 if path.is_relative_to(root):
                     (staged / path.relative_to(root)).unlink(missing_ok=True)
         before.clear()
-        before.update(headers.texts)
+        before.update(texts)
     return tuple(roots)
 
 

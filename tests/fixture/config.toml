@@ -1,6 +1,7 @@
 schema = 1
 
 [project]
+layout_cap = 2
 id = "00000000-0000-4000-8000-000000000001"
 state = "ready"
 name = "fixture"

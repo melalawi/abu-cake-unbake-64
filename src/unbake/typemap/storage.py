@@ -7,7 +7,6 @@ import json
 import os
 import shlex
 import tempfile
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +116,9 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     paths.update(path for version in project.versions for path in (project.asm / version).rglob("*.s"))
     paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
     if headers:
+        ownership = project.root / "layout.toml"
+        if ownership.is_file():
+            paths.add(ownership)
         paths.update(path for root in project.include for path in root.rglob("*.h") if not generated(project, path))
         proven = project.build / "types/proven.json"
         if proven.is_file():
@@ -147,20 +149,10 @@ def inputs(project: Project, *, headers: bool = False) -> dict[str, str]:
     return result
 
 
-@lru_cache(maxsize=32)
-def _generated_paths(root: Path) -> tuple[frozenset[str], tuple[str, ...]]:
-    shared = root / "shared"
-    directories = tuple(str(shared / name) for name in ("types", "decls", "consumers"))
-    exact = frozenset((str(shared / "typemap.h"), str(shared / "prototypes.h"), *directories))
-    return exact, tuple(name + os.sep for name in directories)
-
-
 def generated(project: Project, path: Path) -> bool:
-    if not project.include:
-        return False
-    exact, prefixes = _generated_paths(project.include[0])
-    name = str(path)
-    return name in exact or name.startswith(prefixes)
+    from unbake.layout import index
+
+    return path in index.headers(project)
 
 
 def relative(project: Project, path: Path) -> str:

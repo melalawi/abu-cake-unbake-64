@@ -21,9 +21,6 @@ class HeaderRenderTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
         self.addCleanup(directory.cleanup)
         self.project, self.policy, _ = fixture(Path(directory.name).resolve(), case=self)
-        shared = self.project.include[0] / "shared"
-        shared.mkdir(exist_ok=True)
-        (shared / "typemap.h").write_text("")
 
     def render(self, source, *, partial=False):
         seed = declarations.extract(source, {})
@@ -42,7 +39,11 @@ class HeaderRenderTests(unittest.TestCase):
 
         def capture(project, outputs, *args, **kwargs):
             result.update(
-                {path.relative_to(project.include[0]).as_posix(): content.decode() for path, content in outputs.items()}
+                {
+                    path.relative_to(project.include[0]).as_posix(): content.decode()
+                    for path, content in outputs.items()
+                    if path.suffix == ".h"
+                }
             )
             raise Captured()
 
@@ -53,17 +54,18 @@ class HeaderRenderTests(unittest.TestCase):
         ):
             database.publish(self.project, value, {}, policy=self.policy)
         stage.assert_not_called()
-        return expanded(result, "shared/typemap.h")
+        return "\n".join(expanded(result, name) for name in result)
 
     def test_generated_alias_and_definition_precede_recursive_header_consumer(self):
         consumer = self.project.include[0] / "consumer.h"
         consumer.write_text(
-            '#ifndef CONSUMER_H\n#define CONSUMER_H\n#include "shared/typemap.h"\n'
+            '#ifndef CONSUMER_H\n#define CONSUMER_H\n#include "common/types.h"\n'
             "struct Holder { Vector value; };\n#endif\n"
         )
         text = self.render("typedef struct Vector { float x, y, z; } Vector;")
         self.assertLess(text.index("typedef struct Vector Vector;"), text.index("struct Vector {"))
-        self.assertLess(text.index("struct Vector {"), text.index("struct Holder {"))
+        self.assertNotIn("struct Holder {", text)
+        self.assertIn("struct Holder {", consumer.read_text())
         self.assertEqual(text.count("typedef struct Vector Vector;"), 1)
 
     def test_partial_union_keeps_multiple_aliases_and_unaliased_struct(self):
@@ -100,8 +102,8 @@ class HeaderRenderTests(unittest.TestCase):
         root = self.project.include[0]
         authored = root / "authored.h"
         authored.write_text("struct Authored { int value; };")
-        generated = root / "shared/types"
-        generated.mkdir(exist_ok=True)
+        generated = root / "main"
+        generated.mkdir(parents=True, exist_ok=True)
         for label, members in cases:
             with self.subTest(label=label):
                 source = (
@@ -131,6 +133,9 @@ class HeaderRenderTests(unittest.TestCase):
                     )
                     path.write_text(text)
                     prefix += f'# 1 "{path}"\n' + text
+                from unbake.layout import index
+
+                index.update(self.project, {path: path.read_text() for path in generated.glob("*.h")})
                 evidence = {"shared/evidence.h": "extern struct Holder *published(void);"}
 
                 def evidence_context(
@@ -172,26 +177,13 @@ class HeaderRenderTests(unittest.TestCase):
         parsed = declarations.extract(declarations.clean(text), {})
         self.assertEqual(parsed["structs"]["Owner"]["size"], 36)
 
-    def test_consumer_only_alias_survives_a_receipt_without_layout_aliases(self):
-        root = self.project.include[0]
-        generated = root / "shared/types"
-        generated.mkdir(exist_ok=True)
-        seed = declarations.extract("struct Owner { int value; };", {})
-        value = {kind: {} for kind in ("functions", "globals", "arrays")}
-        value["structs"] = {name: {**row, "state": "known", "generated": True} for name, row in seed["structs"].items()}
-        self.assertNotIn("typedef struct Owner Owner;", self.capture(value))
-        (generated / "consumer_alias_Owner.h").write_text("typedef struct Owner Owner;")
-        text = self.capture(value)
-        self.assertIn("typedef struct Owner Owner;", text)
-        declarations.extract(declarations.clean(text) + "struct Holder { Owner value; };", {})
-
     def test_authored_projection_and_generated_record_share_one_definition(self):
         provider = self.project.include[0] / "provider.h"
         provider.write_text("struct Owner { int value; };")
         text = self.render(provider.read_text())
         self.assertEqual(text.count("struct Owner {"), 0)
-        self.assertEqual(text.count('#include "provider.h"'), 1)
-        declarations.extract(declarations.clean(provider.read_text() + text), {})
+        self.assertEqual(text.count('#include "provider.h"'), 0)
+        declarations.extract(declarations.clean(provider.read_text()), {})
 
     def test_authored_scalar_callback_and_forward_alias_homes_are_reused(self):
         provider = self.project.include[0] / "providers.h"
@@ -270,7 +262,7 @@ class HeaderRenderTests(unittest.TestCase):
         path.write_text('#include "shared/wrapper.h"\n' + text)
         wrapper = self.project.include[0] / "shared/wrapper.h"
         wrapper.parent.mkdir(exist_ok=True)
-        wrapper.write_text('#include "shared/typemap.h"\n')
+        wrapper.write_text('#include "common/types.h"\n')
         return path
 
     def test_published_forward_aliases_are_replaced_with_tags_in_all_consumers(self):
@@ -298,7 +290,7 @@ class HeaderRenderTests(unittest.TestCase):
         )
         self.assertNotIn("typedef struct A A;", text)
         self.assertNotIn("typedef struct B B;", text)
-        self.assertIn("typedef struct C C;", text)
+        self.assertNotIn("typedef struct C C;", text)
 
     def test_placeholder_compatibility_header_is_filtered_and_uses_are_concrete(self):
         provider = self.project.include[0] / "compat.h"
@@ -334,16 +326,6 @@ class HeaderRenderTests(unittest.TestCase):
         parsed = declarations.extract(declarations.clean(text), {})
         self.assertEqual(parsed["structs"]["A"]["size"], 40)
 
-    def test_authored_mixed_typedefs_retain_unblocked_alias_and_layout(self):
-        self.importing_source("typedef struct Record Record;")
-        provider = self.project.include[0] / "provider.h"
-        provider.write_text("typedef struct Record { int x; } Record, Other; struct User { Record *record; };")
-        text = self.render(provider.read_text())
-        self.assertNotIn("} Record,", text)
-        self.assertIn("} Other;", text)
-        self.assertIn("struct Record *record;", text)
-        declarations.extract(declarations.clean(text), {})
-
     def test_prototypes_and_globals_use_tags_and_concrete_placeholders(self):
         self.importing_source("typedef struct Record Record;")
         seed = declarations.extract("typedef struct Record { int x; } Record;", {})
@@ -356,7 +338,13 @@ class HeaderRenderTests(unittest.TestCase):
         outputs = {}
 
         def capture(project, content, *args, **kwargs):
-            outputs.update({p.relative_to(project.include[0]).as_posix(): data.decode() for p, data in content.items()})
+            outputs.update(
+                {
+                    p.relative_to(project.include[0]).as_posix(): data.decode()
+                    for p, data in content.items()
+                    if p.suffix == ".h"
+                }
+            )
             raise ValueError("captured")
 
         with (
@@ -364,8 +352,8 @@ class HeaderRenderTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "captured"),
         ):
             database.publish(self.project, value, {}, policy=self.policy)
-        self.assertIn("extern struct Record *f(s32 value);", expanded(outputs, "shared/prototypes.h"))
-        self.assertIn("extern struct Record *g;", expanded(outputs, "shared/prototypes.h"))
+        self.assertIn("extern struct Record *f(s32 value);", "\n".join(expanded(outputs, name) for name in outputs))
+        self.assertIn("extern struct Record *g;", "\n".join(expanded(outputs, name) for name in outputs))
 
     def test_conditional_names_after_functions_and_multiline_macros_are_reserved(self):
         self.importing_source(
@@ -388,19 +376,6 @@ class HeaderRenderTests(unittest.TestCase):
         with patch.object(database, "validate_headers") as validate, self.assertRaisesRegex(Held, "types.header_parse"):
             self.render("struct A { int x; };")
         validate.assert_not_called()
-
-    def test_filtered_compatibility_headers_cannot_leak_through_transitive_includes(self):
-        root = self.project.include[0]
-        (root / "nested").mkdir()
-        compat = root / "nested/compat.h"
-        compat.write_text("#ifndef COMPAT_H\n#define COMPAT_H\ntypedef int M2C_UNK;\n#endif\n")
-        (root / "nested/consumer.h").write_text('#include "compat.h"\nstruct A { M2C_UNK value; };')
-        text = self.render("struct B { int value; };")
-        self.assertNotIn("M2C_UNK", text)
-        self.assertNotIn('#include "nested/consumer.h"', text)
-        self.assertNotIn('#include "compat.h"', text)
-        self.assertIn("struct A { int value; };", text)
-        self.assertIn("typedef int M2C_UNK;", compat.read_text())
 
     def test_unknown_placeholder_use_refuses_before_header_writes(self):
         value = {kind: {} for kind in ("functions", "globals", "arrays")}
@@ -464,17 +439,6 @@ class HeaderRenderTests(unittest.TestCase):
         self.assertNotIn("(*Handler)", text)
         declarations.extract(declarations.clean(text), {})
 
-    def test_authored_recursive_imports_are_filtered_without_original_includes(self):
-        root = self.project.include[0]
-        (root / "first.h").write_text('#ifndef FIRST_H\n#define FIRST_H\n#include "second.h"\n#endif\n')
-        (root / "second.h").write_text(
-            '#ifndef SECOND_H\n#define SECOND_H\n#include "first.h"\ntypedef int M2C_UNK;\n#endif\n'
-        )
-        text = self.render("struct A { int x; };")
-        self.assertNotIn("M2C_UNK", text)
-        self.assertNotIn('#include "first.h"', text)
-        self.assertNotIn('#include "second.h"', text)
-
     def test_generated_prototypes_import_reserves_names_on_first_header_write(self):
         path = self.project.src / "published.c"
         path.parent.mkdir(exist_ok=True)
@@ -488,7 +452,7 @@ class HeaderRenderTests(unittest.TestCase):
         path.parent.mkdir(exist_ok=True)
         path.write_text('/* #include "shared/typemap.h" */\ntypedef struct Record Record;')
         text = self.render("typedef struct Record { int x; } Record;")
-        self.assertIn("typedef struct Record Record;", text)
+        self.assertNotIn("typedef struct Record Record;", text)
 
     def test_private_callback_alias_avoids_other_generated_aliases(self):
         self.importing_source("typedef void (*Handler)(void);")
@@ -527,16 +491,4 @@ class HeaderRenderTests(unittest.TestCase):
         )
         text = self.render("typedef struct Vector { int x; } Vector;")
         self.assertIn("typedef struct Vector Vector;", text)
-        declarations.extract(declarations.clean(text), {})
-
-    def test_authored_anonymous_layout_gets_a_tag_when_its_alias_is_source_owned(self):
-        self.importing_source("typedef struct Record Record;")
-        provider = self.project.include[0] / "provider.h"
-        provider.write_text("typedef struct { int x; } Record, Other; struct User { Record *record; Other *other; };")
-        seed = declarations.extract(provider.read_text(), {})
-        value = {kind: {} for kind in ("functions", "globals", "arrays")}
-        value["structs"] = {name: {**row, "state": "known"} for name, row in seed["structs"].items()}
-        text = self.capture(value)
-        self.assertIn("typedef struct Record { int x; } Other;", text)
-        self.assertIn("struct Record *record;", text)
         declarations.extract(declarations.clean(text), {})

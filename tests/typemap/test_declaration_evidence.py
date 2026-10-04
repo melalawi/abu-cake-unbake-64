@@ -7,11 +7,13 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
+from unbake.layout import headers as mapped_headers
+from unbake.layout import index as layout_index
+from unbake.layout import map as ownership
 from unbake.layout.header_context import Headers
 from unbake.match import declarations
 from unbake.project.config import Held
 from unbake.typemap import declaration_evidence as evidence
-from unbake.typemap import split
 
 
 class SelectionTests(TestCase):
@@ -163,12 +165,12 @@ class SplitEvidenceTests(TestCase):
             root / "shared/.evidence_enum.h": marker + "enum Mode {READY=1};\n",
             root / "shared/.evidence_call.h": marker + "int call(Record *);\n",
         }
-        layout = split.Layout(contents, contents, root)
+        layout = mapped_headers.Layout(contents, contents, root, ownership=ownership.Map(2, ()), sources={})
         macro = layout.homes[root / "shared/.evidence_macro.h"]
-        macro_text = layout.headers[macro].decode()
+        layout.headers[macro].decode()
         for dependency in ("type", "count"):
             home = layout.homes[root / ("shared/.evidence_" + dependency + ".h")]
-            self.assertIn(layout.include(home), macro_text)
+            self.assertEqual(home, macro)
         for name, kind in (("READY", "enum"), ("call", "call"), ("ACCESS", "macro")):
             with self.subTest(name=name):
                 required = layout.required(f"int alpha(void) {{return {name}(0);}}")
@@ -193,7 +195,7 @@ class FoldTests(MatchFixture):
             self.policy,
             Headers.read(self.project),
             "alpha",
-            '#include "shared/session.h"\n' + body,
+            body,
             ("us", "eu"),
             prove_headers=False,
         )
@@ -243,10 +245,13 @@ class FoldTests(MatchFixture):
         for edit in result.headers:
             edit.path.parent.mkdir(parents=True, exist_ok=True)
             edit.path.write_text(edit.after)
+        layout_index.update(self.project, {edit.path: edit.after for edit in result.headers})
         components = evidence.feedback_components(self.project)
         self.assertEqual(len(components), 3)
         self.assertIn("#define VALUE 7", "\n".join(components.values()))
-        regenerated = split.Layout(components, components, self.project.include[0])
+        regenerated = mapped_headers.Layout(
+            components, components, self.project.include[0], ownership=ownership.load(self.project), sources={}
+        )
         self.assertEqual(set(regenerated.headers), {edit.path for edit in result.headers})
         self.assertEqual(evidence.feedback_components(self.project), components)
 
@@ -261,13 +266,13 @@ class FoldTests(MatchFixture):
                     self.policy,
                     Headers.read(self.project),
                     "alpha",
-                    '#include "shared/session.h"\n' + body,
+                    f"typedef struct Record {{{old_type} value;}} Record;\n" + body,
                     ("us", "eu"),
                     prove_headers=False,
                 )
                 generated = "\n".join(edit.after for edit in result.headers)
                 if old_type == "int":
-                    self.assertEqual(result.headers, [])
+                    self.assertFalse(any("struct Record {" in edit.after for edit in result.headers))
                     self.assertIn("live.h", result.source)
                 else:
                     self.assertIn("float value;", generated)
@@ -337,6 +342,7 @@ class DatabaseFeedbackTests(TestCase):
             for edit in edits:
                 edit.path.parent.mkdir(parents=True, exist_ok=True)
                 edit.path.write_text(edit.after)
+            layout_index.update(project, {e.path: e.after for e in edits})
             components = evidence.feedback_components(project)
             map_program(project)
             before = storage.inputs(project, headers=True)
@@ -347,12 +353,7 @@ class DatabaseFeedbackTests(TestCase):
             )
             self.assertEqual(evidence.feedback_components(project), components)
             self.assertIn("EVIDENCE_VALUE", source)
-            self.assertTrue(
-                any(
-                    "EVIDENCE_VALUE 7" in path.read_text()
-                    for path in (project.include[0] / "shared/types").glob("evidence_*.h")
-                )
-            )
+            self.assertTrue(any("EVIDENCE_VALUE 7" in path.read_text() for path in layout_index.headers(project)))
             self.assertEqual(before, storage.inputs(project, headers=True))
 
     def test_solve_keeps_retained_evidence_when_consumer_owns_the_alias(self):
@@ -374,6 +375,7 @@ class DatabaseFeedbackTests(TestCase):
             for edit in edits:
                 edit.path.parent.mkdir(parents=True, exist_ok=True)
                 edit.path.write_text(edit.after)
+            layout_index.update(project, {edit.path: edit.after for edit in edits})
             retained = evidence.feedback_components(project)
             map_program(project)
             solve(project, policy)

@@ -91,7 +91,7 @@ class SolvedLayoutCliTests(unittest.TestCase):
             # Restore the fixture's fixed-return C receipt. Its included
             # generated declarations must not erase source bindings on solve.
             published = project.src / "gamma.c"
-            published.write_text('#include "shared/decls/gamma.h"\nint gamma(void) { return 3; }\n')
+            published.write_text('#include "main/gamma.h"\nint gamma(void) { return 3; }\n')
             cartridge.split.write_text(cartridge.split.read_text().replace(", asm, gamma]", ", c, gamma]"))
             cli("map")
             mapped = json.loads((project.build / "map/facts.json").read_text())
@@ -113,7 +113,9 @@ class SolvedLayoutCliTests(unittest.TestCase):
             self.assertEqual(repeated["common_base"], shape["common_base"])
             self.assertEqual(repeated["base_nodes"], shape["base_nodes"])
             self.assertIsNone(repeated["size"])
-            header = next((project.include[0] / "shared/types").glob("*.h"))
+            from unbake.layout import index
+
+            header = next(path for path in index.headers(project) if "field_4" in path.read_text())
             before = header.read_bytes()
             cli("draft", "alpha")
             draft = (Path(directory) / "draft-scratch/drafts/alpha/alpha.c").read_text()
@@ -131,7 +133,7 @@ class SolvedLayoutCliTests(unittest.TestCase):
             scalar.write_text(scalar.read_text() + "typedef unsigned int u32; typedef unsigned long long u64;\n")
             setup._sdk_headers(project)
             cli("solve")
-            callbacks = project.include[0] / "shared/audio_callbacks.h"
+            callbacks = project.include[0] / "audio_callbacks.h"
             self.assertEqual(callbacks.read_bytes(), (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes())
             protected = [project.build / "types" / path for path in ("database.json", "summary.json", "redraft.json")]
             protected.extend(path for path in (project.include[0] / "shared").rglob("*.h"))

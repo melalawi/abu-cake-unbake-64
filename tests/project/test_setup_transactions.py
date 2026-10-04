@@ -41,6 +41,7 @@ class SetupTransactionTests(unittest.TestCase):
                 "names_from": "us",
                 "versions": ["us"],
                 "default_compiler": "fixture",
+                "layout_cap": 2,
             },
             workspace={"id": self.project.workspace_id},
             paths={
@@ -184,7 +185,7 @@ class SetupTransactionTests(unittest.TestCase):
         self.assertEqual((self.root / "CONTRIBUTING.md").read_bytes(), contributing)
 
     def test_installed_refresh_restores_owned_callbacks_after_proving_template(self) -> None:
-        callback = self.project.include[0] / "shared/audio_callbacks.h"
+        callback = self.project.include[0] / "audio_callbacks.h"
         template = (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes()
         repaired = template.replace(
             b"void *, short *, int, int, Acmd *", b"void *driver, short *samples, int count, int stride, Acmd *commands"
@@ -245,13 +246,13 @@ class SetupTransactionTests(unittest.TestCase):
             self.assertEqual(after[name], inputs[name])
 
     def test_failed_refresh_preserves_repaired_callbacks(self) -> None:
-        callback = self.project.include[0] / "shared/audio_callbacks.h"
+        callback = self.project.include[0] / "audio_callbacks.h"
         repaired = callback.read_bytes().replace(b"void *, int, void *", b"void *driver, int param, void *value")
         callback.write_bytes(repaired)
 
         def refuse(project: config.Project, *args: object, **kwargs: object) -> None:
             self.assertEqual(
-                (project.include[0] / "shared/audio_callbacks.h").read_bytes(),
+                (project.include[0] / "audio_callbacks.h").read_bytes(),
                 (setup.makefile.TEMPLATES / "audio_callbacks.h").read_bytes(),
             )
             raise config.Held("setup", "setup.sha1.us: injected failure")
@@ -478,6 +479,7 @@ class SetupTransactionTests(unittest.TestCase):
             "layout_sha256": "a" * 64,
             "inputs_sha256": {},
             "default_compiler": "fixture",
+            "layout_cap": 2,
             "assignments": {"main": "fixture"},
             "cflags": {"fixture": []},
             "candidates": {},
@@ -577,11 +579,11 @@ class SetupTransactionTests(unittest.TestCase):
         root = self.project.include[0]
         self.assertEqual((root / "gbi.h").read_bytes(), (setup.makefile.TEMPLATES / "gbi.h").read_bytes())
         self.assertIn("MIT License", (root / "gbi.h").read_text())
-        self.assertIn('include "shared/gfx.h"', (root / "n64sdk.h").read_text())
+        self.assertIn('include "gfx.h"', (root / "n64sdk.h").read_text())
         from unbake.decomp.gbi_source import gfx_typedefs
 
         declarations = [path for path in root.rglob("*.h") if gfx_typedefs(path.read_text())]
-        self.assertEqual(declarations, [root / "shared/gfx.h"])
+        self.assertEqual(declarations, [root / "gfx.h"])
         before = {path: path.stat().st_mtime_ns for path in root.rglob("*.h")}
         setup._sdk_headers(self.project)
         self.assertEqual({path: path.stat().st_mtime_ns for path in before}, before)

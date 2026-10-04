@@ -35,7 +35,7 @@ class CensusTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve() / "unrelated"
-        init.run(self.root)
+        init.run(self.root, layout_cap=2)
         self.project = config.load_pending(self.root)
         table = patch.object(header, "RETAIL", BOOTCODES)
         table.start()

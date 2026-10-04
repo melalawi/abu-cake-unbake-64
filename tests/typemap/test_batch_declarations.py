@@ -227,6 +227,7 @@ int (*factory(void))(int) { return 0; }
             project = SimpleNamespace(
                 root=root,
                 include=(include,),
+                build=root / "build",
                 default_compiler="cc",
                 compilers={"cc": SimpleNamespace(cflags=())},
                 version=lambda v: SimpleNamespace(macros=("VERSION_US=1",)),
@@ -269,6 +270,7 @@ int (*factory(void))(int) { return 0; }
             project = SimpleNamespace(
                 root=root,
                 include=(root,),
+                build=root.parent / "build",
                 default_compiler="cc",
                 compilers={"cc": SimpleNamespace(cflags=())},
                 version=lambda v: SimpleNamespace(macros=()),

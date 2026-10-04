@@ -68,7 +68,7 @@ class GuidanceTests(MainCase):
 
     def test_discovery_uses_nearest_config_in_nested_directories(self) -> None:
         shell = self.directory / "cake"
-        init.run(shell)
+        init.run(shell, layout_cap=2)
         nested = shell / "sub/dir"
         nested.mkdir(parents=True)
         with patch.object(Path, "cwd", return_value=nested):
@@ -83,7 +83,7 @@ class GuidanceTests(MainCase):
 
     def test_next_is_read_only_and_command_quotes_an_external_project(self) -> None:
         shell = self.directory / "path with spaces"
-        init.run(shell)
+        init.run(shell, layout_cap=2)
         before = {path.relative_to(shell): path.read_bytes() for path in shell.rglob("*") if path.is_file()}
         code, out, error = self.run_main(["--project", str(shell), "next"], load_project=False)
         self.assertEqual(code, 0)

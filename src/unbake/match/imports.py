@@ -16,7 +16,6 @@ from unbake.typemap.split import required_providers
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"][^\n]*', re.M)
 _MACRO = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(?:\([^\n]*?\))?[ \t]*(.*)", re.M)
-_UMBRELLAS = {"typemap.h", "shared/typemap.h", "prototypes.h", "shared/prototypes.h"}
 
 
 def _without_comments(text: str) -> str:
@@ -37,8 +36,6 @@ class Providers:
         self.macros: dict[str, str] = {}
         for path, text in contents.items():
             text = _without_comments(text)
-            if path.name in ("typemap.h", "prototypes.h"):
-                continue
             row = declarations(text)
             macros = {m[1]: m[2] for m in _MACRO.finditer(text) if not m[1].startswith("UNBAKE_")}
             for name in row.typedefs | row.declared | macros.keys():
@@ -53,12 +50,6 @@ class Providers:
                         self.names.setdefault(name[1], set()).add(path)
             self.macros.update(alias_types(text))
             self.macros.update(macros)
-        for catalogue in (self.names, self.tags):
-            for name, paths in catalogue.items():
-                # Authored wrappers and their split components share guards. Use
-                # the narrow component rather than bringing the wrapper's other types.
-                split = {p for p in paths if p.parent.name in ("types", "decls")}
-                catalogue[name] = split or paths
 
 
 def resolve(project: Project, headers: Headers, text: str, function: str = "", *, edits: tuple[Edit, ...] = ()) -> str:
@@ -70,7 +61,9 @@ def resolve(project: Project, headers: Headers, text: str, function: str = "", *
         return next((root / name for root in project.include if root / name in contents), None)
 
     def obsolete(name: str) -> bool:
-        return name in _UMBRELLAS or (name.startswith("shared/") and find(name) is None)
+        from unbake.layout import index
+
+        return name in index.load(project)["headers"] and find(name) is None
 
     # Mask only include directives. Comments, local macros and every function
     # byte remain intact, including conditionally compiled bodies.

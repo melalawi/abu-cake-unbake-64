@@ -136,7 +136,7 @@ class BatchPublicationCliTests(unittest.TestCase):
     def test_feedback_header_writes_precede_receipt_refresh_for_new_and_edited_sources(self):
         events = []
         original = batch.staging.publication_stamps
-        header = next((self.project.include[0] / "shared/types").glob("*.h"))
+        header = next(self.project.include[0].rglob("*.h"))
 
         def feedback(project, policy, candidates, current, *, strict=False):
             events.append(("feedback", strict))
@@ -169,20 +169,23 @@ class BatchPublicationCliTests(unittest.TestCase):
         snapshots = {path: path.read_bytes() if path.is_file() else None for path in type_paths}
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
 
-        split_header = self.project.include[0] / "shared/types/old.h"
+        split_header = self.project.include[0] / "common/old.h"
         split_header.parent.mkdir(exist_ok=True)
         split_header.write_text("/* original split header */")
-        created = self.project.include[0] / "shared/decls/new.h"
-        authored = self.project.include[0] / "shared/compat.h"
+        created = self.project.include[0] / "common/new.h"
+        authored = self.project.include[0] / "compat.h"
         authored.write_text("/* original wrapper */")
+        from unbake.layout import index as ownership_index
+
+        ownership_index.update(self.project, {split_header: split_header.read_text()})
         before = fixture.PublicationBoundaryCliTests.inputs(self)
 
         def feedback(project, *args, **kwargs):
-            (project.include[0] / "shared/typemap.h").write_text("changed after feedback")
+            (project.include[0] / "common/types.h").write_text("changed after feedback")
             split_header.write_text("/* changed split header */")
             created.parent.mkdir(exist_ok=True)
-            created.write_text("new generated header")
-            authored.write_text("/* changed wrapper */")
+            created.write_text("/* new generated header */")
+            ownership_index.update(project, {created: created.read_text(), split_header: split_header.read_text()})
             for path in type_paths:
                 path.write_text("changed after feedback")
             return []
@@ -407,11 +410,14 @@ class BatchPublicationCliTests(unittest.TestCase):
                 self.assertTrue((self.project.src / source.name).is_file())
         self.assertIn(": OK", self.make())
 
-    def test_folded_port_and_next_batch_reuse_every_extraction(self):
+    def test_folded_member_and_next_batch_reuse_every_extraction(self):
         first = self.sources[0]
-        first.write_text(f"int {self.names[0]}(void) {{ return 1; }}\nint {self.names[1]}(void) {{ return 1; }}\n")
+        first.write_text(
+            "typedef struct Value { int value; } Value;\n"
+            f"int {self.names[0]}(void) {{ return sizeof(Value) / sizeof(Value); }}\n"
+        )
         self.cli("submit", first)
-        self.cli("submit", "--batch", *self.sources[2:])
+        self.cli("submit", "--batch", *self.sources[1:])
         rows = self.evidence()
         self.assertFalse([row for row in rows if row["event"] == "incremental_fallback"])
         relinks = [row for row in rows if row["event"] == "relink"]

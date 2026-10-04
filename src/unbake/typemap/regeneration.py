@@ -10,6 +10,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from unbake.layout import headers
+from unbake.layout import index as layout_index
+from unbake.layout import map as layout_map
 from unbake.project.cache import Cache, key, remembered
 from unbake.project.config import Policy, Project
 from unbake.typemap import header_names, split, storage
@@ -90,23 +93,14 @@ class Session:
             for path in sorted(root.rglob("*.h"))
             if not storage.generated(project, path)
         }
-        # A compatibility wrapper is both an authored input and a projected output.
-        # Retain its original input keyed by the exact installed projection, so our
-        # own narrowed imports do not trigger another render or accumulate whitespace.
-        for path, text in self.authored.items():
-            original = self.cache.get("typemap-authored", key(self.environment, str(path), text))
-            if original is not None:
-                self.authored[path] = original.read_text()
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
-        self.consumer_aliases = {
-            path: path.read_text() for path in sorted((project.include[0] / "shared/types").glob("consumer_alias_*.h"))
-        }
+        self.ownership = layout_map.load(project)
         self.inputs = key(
             self.environment,
+            layout_map.encoded(self.ownership),
             *(part for path, text in {**self.authored, **self.sources}.items() for part in (str(path), text)),
         )
         self.reserved: set[str] = set()
-        self.layout_value: dict[str, Any] | None = None
         self.consumer_names: dict[Path, set[str]] = {}
         self._rewrite_contexts: dict[tuple[int, int], tuple[dict[str, str], frozenset[str], str, frozenset[str]]] = {}
         self.consumer_tags: dict[Path, set[str]] = {}
@@ -115,7 +109,7 @@ class Session:
         def compute() -> Any:
             names = header_names.source_names(
                 self.project,
-                self.project.include[0] / "shared/typemap.h",
+                self.project.include[0] / "common/types.h",
                 self.policy,
                 consumers=consumers,
                 texts={**self.authored, **self.sources},
@@ -154,10 +148,10 @@ class Session:
         )
 
     def guarded(self, path: Path, text: str) -> bytes:
-        content_key = key(self.environment, path.name, text)
+        content_key = key(self.environment, path.relative_to(self.project.include[0]).as_posix(), text)
 
         def make(output: Path) -> None:
-            output.write_bytes(split.guarded(path, text))
+            output.write_bytes(split.guarded(path.relative_to(self.project.include[0]), text))
 
         return remembered(
             "typemap-guarded",
@@ -167,39 +161,27 @@ class Session:
         )
 
     def layout(
-        self, contents: dict[Path, str], rendered: dict[Path, str], root: Path, aliases: dict[str, str]
-    ) -> split.Layout:
-        content_key = key(
-            self.environment,
-            storage.encoded({str(p): t for p, t in contents.items()}),
-            storage.encoded({str(p): t for p, t in rendered.items()}),
-            storage.encoded(aliases),
+        self,
+        contents: dict[Path, str],
+        rendered: dict[Path, str],
+        root: Path,
+        aliases: dict[str, str],
+        ownership: layout_map.Map,
+        declarations_by_name: dict[str, str],
+        symbol_segments: dict[str, str],
+    ) -> headers.Layout:
+        return headers.Layout(
+            contents,
+            rendered,
+            root,
+            aliases=aliases,
+            render=self.guarded,
+            ownership=ownership,
+            sources=self.sources,
+            declarations_by_name=declarations_by_name,
+            symbol_segments=symbol_segments,
+            authored=set(self.authored),
         )
-
-        def compute() -> Any:
-            layout = split.Layout(contents, rendered, root, aliases=aliases, render=self.guarded)
-            return {
-                "aliases": layout.aliases,
-                "headers": {str(p): data.decode() for p, data in layout.headers.items()},
-                "homes": {str(p): str(home) for p, home in layout.homes.items()},
-                "providers": {name: sorted(map(str, paths)) for name, paths in layout.providers.items()},
-                "tags": {name: sorted(map(str, paths)) for name, paths in layout.tags.items()},
-            }
-
-        value = artifact(self.cache, "typemap-layout", content_key, compute)
-        self.layout_value = value
-        return self.restore_layout(value, root)
-
-    def restore_layout(self, value: dict[str, Any], root: Path) -> split.Layout:
-        layout = split.Layout.__new__(split.Layout)
-        layout.root = root
-        layout.render = self.guarded
-        layout.aliases = value["aliases"]
-        layout.headers = {Path(p): data.encode() for p, data in value["headers"].items()}
-        layout.homes = {Path(p): Path(home) for p, home in value["homes"].items()}
-        layout.providers = {name: set(map(Path, paths)) for name, paths in value["providers"].items()}
-        layout.tags = {name: set(map(Path, paths)) for name, paths in value["tags"].items()}
-        return layout
 
     def render(
         self, value: dict[str, Any], compute: Callable[[], dict[Path, bytes | Path]]
@@ -225,64 +207,25 @@ class Session:
             for kind, keys in fields.items()
         }
         projection["typedefs"] = value.get("typedefs", {})
-        provided_aliases = set(projection["typedefs"]) | {
-            alias for record in value["structs"].values() for alias in record.get("aliases", [])
-        }
-        projection["consumer_aliases"] = {
-            alias: type_
-            for text in self.consumer_aliases.values()
-            for alias, type_ in header_names.alias_types(text).items()
-            if alias not in provided_aliases
-        }
         projection["declaration_evidence"] = value.get("declaration_evidence", {})
-        # The legacy bridge is a render input; fresh projects do not acquire it.
-        legacy = (self.project.include[0] / "shared/typemap.h").is_file() or any(
-            re.search(r'#\s*include\s*"(?:(?:shared/)?typemap.h|shared/(?:types|consumers)/[^"]+)"', text)
-            for text in self.authored.values()
-        )
-        content_key = key(self.inputs, storage.encoded(projection), str(legacy))
-
-        state = self.cache.path("typemap-render-state", key(self.inputs, str(legacy)))
+        content_key = key(self.inputs, storage.encoded(projection))
+        state = self.cache.path("typemap-render-state", self.inputs)
 
         def delta() -> Any:
-            if not state.is_file():
+            # An index is the declaration lookup for cached views. Changing a
+            # prototype requires rendering its entire group, not a leaf file.
+            lookup = layout_index.load(self.project)
+            if not state.is_file() or not lookup["headers"]:
                 return None
             previous = json.loads(state.read_bytes())
-            before = previous["projection"]
-            if any(before.get(kind) != projection[kind] for kind in projection if kind != "functions"):
+            if previous["projection"] != projection:
                 return None
-            if before["functions"].keys() != projection["functions"].keys():
-                return None
-            changed = [name for name, row in projection["functions"].items() if before["functions"][name] != row]
-            if any(
-                before["functions"][name]["state"] != "known" or projection["functions"][name]["state"] != "known"
-                for name in changed
-            ):
-                return None
-            path = self.cache.get("typemap-render", previous["content_key"])
-            if path is None:
-                return None
-            result = json.loads(path.read_bytes())
-            if result.get("layout") is None:
-                return None
-            layout = self.restore_layout(result["layout"], self.project.include[0])
-            blocked = set(result["reserved"])
-            for name in changed:
-                record = value["functions"][name]
-                text = self.rewrite(record["prototype"], result["shared_aliases"], blocked)
-                if not text.startswith(("extern ", "static ")):
-                    text = "extern " + text
-                source = self.project.src / (name + ".c")
-                selection = record["prototype"] + ("\n" + self.sources[source] if source in self.sources else "")
-                homes = layout.required(
-                    selection,
-                    blocked=set(result["consumers"].get(str(source), [])),
-                    blocked_tags=set(result["consumer_tags"].get(str(source), [])),
-                )
-                output = self.project.include[0] / "shared/decls" / (name + ".h")
-                data = self.guarded(output, "\n".join(layout.include(home) for home in sorted(homes)) + "\n" + text)
-                result["outputs"][str(output)] = data.decode()
-            return result
+            for name, digest in lookup["headers"].items():
+                path = self.project.include[0] / name
+                if not path.is_file() or storage.file_digest(path) != digest:
+                    return None
+            cached = self.cache.get("typemap-render", previous["content_key"])
+            return json.loads(cached.read_bytes()) if cached is not None else None
 
         def make() -> Any:
             result = delta()
@@ -294,7 +237,6 @@ class Session:
                 "declaration_headers": value["declaration_headers"],
                 "shared_aliases": value["shared_aliases"],
                 "reserved": sorted(self.reserved),
-                "layout": self.layout_value,
                 "consumers": {str(p): sorted(names) for p, names in self.consumer_names.items()},
                 "consumer_tags": {str(p): sorted(tags) for p, tags in self.consumer_tags.items()},
             }
@@ -303,15 +245,6 @@ class Session:
         state_content = storage.encoded({"projection": projection, "content_key": content_key})
         if not state.is_file() or state.read_bytes() != state_content:
             storage.write(state, state_content)
-        for name, text in result["outputs"].items():
-            path = Path(name)
-            if path in self.authored:
-
-                def retain(output: Path, original: str = self.authored[path]) -> None:
-                    output.write_text(original)
-
-                self.cache.produce("typemap-authored", key(self.environment, name, text), retain)
-
         value.update({field: result[field] for field in ("declaration_headers", "shared_aliases")})
         self.reserved = set(result["reserved"])
         return {Path(p): data.encode() for p, data in result["outputs"].items()}
@@ -334,7 +267,7 @@ def validation_inputs(
             if not storage.generated(project, path)
         }
     )
-    contents.update({p: content for p, content in outputs.items() if isinstance(content, bytes)})
+    contents.update({p: content for p, content in outputs.items() if isinstance(content, bytes) and p.suffix == ".h"})
     graph_key = key(*(part for path, data in contents.items() for part in (str(path), data)))
 
     def graph() -> tuple[dict[Path, set[Path]], dict[str, set[Path]]]:

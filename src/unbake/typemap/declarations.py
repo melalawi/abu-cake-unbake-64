@@ -14,7 +14,7 @@ from typing import Any
 from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
 
 from unbake.decomp.draft_context import ordered_headers
-from unbake.decomp.header_declarations import attribute_source
+from unbake.decomp.header_declarations import attribute_source, declaration_source
 from unbake.decomp.header_declarations import declarations as header_declarations
 from unbake.layout.structs_parser import Parser
 from unbake.project.config import Held, Policy, Project
@@ -121,13 +121,9 @@ def headers(
 def _generated_context(project: Project) -> list[Path]:
     if not project.include:
         return []
-    shared = project.include[0] / "shared"
-    umbrella = shared / "typemap.h"
-    if umbrella.is_file():
-        return [umbrella]
-    # Analysis retains shared declarations even when no current source imports
-    # their spelling. Consumer collision aliases remain source-specific.
-    return sorted(path for path in (shared / "types").glob("*.h") if not path.name.startswith("consumer_alias_"))
+    from unbake.layout import index
+
+    return sorted(index.headers(project))
 
 
 def _headers(
@@ -166,10 +162,6 @@ def _headers(
             source += "".join(f'#include "{path}"\n' for path in _generated_context(project))
         if raw:
             source += _BOUNDARY + "\n"
-        from unbake.typemap.split import consumer_macro
-
-        if (project.include[0] / "shared/consumers" / (extra.stem + ".h")).is_file():
-            source += f"#define {consumer_macro(extra.stem)} 1\n"
         source += f'#include "{extra}"\n'
     command = _cpp_command(project, policy, version, extra=extra is not None, line_markers=line_markers)
     text = _preprocess(project, command, source)
@@ -313,10 +305,6 @@ class _PublishedHeaders:
                 include_generated=self.include_generated,
             )
         prefix, command = prepared
-        from unbake.typemap.split import consumer_macro
-
-        if (project.include[0] / "shared/consumers" / (source.stem + ".h")).is_file():
-            command = [*command[:-1], "-D" + consumer_macro(source.stem) + "=1", command[-1]]
         content = source.read_text()
         temporary = None
         if not re.search(r"^\s*#\s*(?:undef|define|include_next)\b", content, re.M):
@@ -867,7 +855,29 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
         # Generated layouts are part of the prefix, while extern evidence is
         # retained at declared confidence (never promoted to an exact C proof).
         extra = scratch / "declaration_evidence.c"
-        extra.write_text("\n".join(components.values()))
+        from unbake.layout import redeclarations
+        from unbake.typemap import split
+        from unbake.typemap.declaration_evidence import _body
+
+        provided_layouts = {}
+        for path in _generated_context(project):
+            for statement in split.statements(_body(path.read_text())):
+                for name in re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(statement)):
+                    provided_layouts[name] = statement
+        supplemental = []
+        for body in components.values():
+            for statement in split.statements(body):
+                definitions = set(re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(statement)))
+                duplicates = definitions & provided_layouts.keys()
+                for name in duplicates:
+                    if redeclarations.normalized(statement) != redeclarations.normalized(provided_layouts[name]):
+                        raise Held(
+                            "types",
+                            f"declaration_evidence.{name}: local:\n{statement}\nshared:\n{provided_layouts[name]}",
+                        )
+                if not duplicates:
+                    supplemental.append(statement)
+        extra.write_text("\n".join(supplemental))
         for version in project.versions:
             provenance = {
                 "kind": "declared",
@@ -883,6 +893,15 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
             )
             for kind in ("functions", "globals", "arrays"):
                 seed[kind] = {name: row for name, row in seed[kind].items() if name in exports}
+            # Explicit declaration evidence retains complete layouts even when
+            # no mapped instruction currently uses them. Their output homes
+            # are generated, but their confidence remains authored/declared.
+            declared_layouts = {
+                name
+                for text in components.values()
+                for name in re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(text))
+            }
+            seed["authored_structs"] = sorted(set(seed["authored_structs"]) | declared_layouts)
             seeds.append(seed)
     path = project.build / "types/proven.json"
     if path.is_file():

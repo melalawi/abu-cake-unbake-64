@@ -27,12 +27,16 @@ class ImportTests(TestCase):
             "shared/types/tag.h": "struct Canon {int value;};\n",
             "shared/types/alias.h": "typedef struct Canon Alias;\n",
             "shared/consumers/compat_Compat.h": "typedef int Compat;\n",
-            "shared/typemap.h": '#include "shared/record.h"\n',
-            "shared/prototypes.h": '#include "shared/decls/global.h"\n',
             "shared/consumers/other.h": '#include "shared/record.h"\n',
         }
         context = SimpleNamespace(texts={root / p: s for p, s in bodies.items()})
-        project = SimpleNamespace(include=(root,))
+        project = SimpleNamespace(include=(root,), build=Path("/project/build"))
+        old_lookup = {
+            "headers": {name: "a" * 64 for name in ("shared/old/session.h", "shared/typemap.h", "shared/old.h")}
+        }
+        mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
+        mock_index.start()
+        self.addCleanup(mock_index.stop)
         cases = (
             (
                 "missing old header",
@@ -108,7 +112,13 @@ class ImportTests(TestCase):
 
     def test_sdk_configuration_precedes_recovered_macros(self):
         root = Path("/project/include")
-        project = SimpleNamespace(include=(root,))
+        project = SimpleNamespace(include=(root,), build=Path("/project/build"))
+        old_lookup = {
+            "headers": {name: "a" * 64 for name in ("shared/old/session.h", "shared/typemap.h", "shared/old.h")}
+        }
+        mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
+        mock_index.start()
+        self.addCleanup(mock_index.stop)
         context = SimpleNamespace(texts={root / "gbi.h": "#define GBI_WRITE(p) ((p)->word = 1)\n"})
         for directive in ("#define F3DEX_GBI_2\n", "#define F3DEX_GBI_2 \\\n1\n"):
             with self.subTest(directive=directive):
@@ -122,7 +132,13 @@ class ImportTests(TestCase):
 
     def test_current_overlay_is_the_provider_and_cache_changes_with_edits(self):
         root = Path("/project/include")
-        project = SimpleNamespace(include=(root,))
+        project = SimpleNamespace(include=(root,), build=Path("/project/build"))
+        old_lookup = {
+            "headers": {name: "a" * 64 for name in ("shared/old/session.h", "shared/typemap.h", "shared/old.h")}
+        }
+        mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
+        mock_index.start()
+        self.addCleanup(mock_index.stop)
         header = root / "shared/types/current.h"
         for name in ("Before", "After"):
             with self.subTest(name=name):
@@ -138,6 +154,9 @@ class ImportFoldTests(MatchFixture):
         header = self.project.include[0] / "canonical.h"
         header.write_text("typedef struct Record {int value;} Record;\n")
         body = "int alpha(Record *p) {return p->value;}\n"
+        from unbake.layout import index
+
+        index.update(self.project, {self.project.include[0] / "shared/old_only.h": ""})
         source = '#include "shared/old_only.h"\n' + body
         with patch.object(imports, "resolve", wraps=imports.resolve) as resolver:
             result = declarations.fold_source(

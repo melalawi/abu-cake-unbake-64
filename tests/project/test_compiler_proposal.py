@@ -48,7 +48,7 @@ class ProposalTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name).resolve()
         with contextlib.redirect_stdout(io.StringIO()):
-            init.run(self.base / "game")
+            init.run(self.base / "game", layout_cap=2)
         self.project = config.load_pending(self.base / "game")
         self.policy = config.SetupPolicy(
             0.1,

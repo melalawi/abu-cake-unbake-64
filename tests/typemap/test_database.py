@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from tests.decomp.support import fixture
 from unbake.decomp import plan
+from unbake.layout import index as layout_index
 from unbake.layout import split
 from unbake.project.config import Held
 from unbake.typemap import clear_redraft, context, feedback, feedback_many, load, map_program, redrafts, solve, storage
@@ -29,8 +30,8 @@ class DatabaseTests(unittest.TestCase):
         database = solve(self.project)
         self.assertIsNotNone(load(self.project))
         self.assertEqual(database["functions"]["alpha"]["state"], "known")
-        self.assertIn("shared/decls/alpha.h", context(self.project))
-        self.assertNotIn("typedef", (self.project.include[0] / "shared/typemap.h").read_text())
+        self.assertIn("main/alpha.h", context(self.project))
+        self.assertNotIn("typedef", (self.project.include[0] / "common/types.h").read_text())
 
     def test_disassembled_data_never_enters_function_map_or_actionable_pool(self) -> None:
         for version in self.project.versions:
@@ -190,8 +191,8 @@ class DatabaseTests(unittest.TestCase):
         solve(self.project)
         paths = [
             self.project.build / "types/database.json",
-            self.project.include[0] / "shared/typemap.h",
-            self.project.include[0] / "shared/prototypes.h",
+            self.project.include[0] / "common/types.h",
+            self.project.include[0] / "main/alpha.h",
             self.project.build / "types/redraft.json",
             self.project.build / "types/summary.json",
         ]
@@ -230,7 +231,7 @@ class DatabaseTests(unittest.TestCase):
         map_program(self.project)
         solve(self.project)
         paths = [self.project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json")]
-        paths.extend(self.project.include[0] / "shared" / name for name in ("typemap.h", "prototypes.h"))
+        paths.extend(layout_index.headers(self.project))
         before = {path: path.read_bytes() for path in paths}
 
         def malformed(*args, **kwargs):
@@ -399,11 +400,7 @@ class DatabaseTests(unittest.TestCase):
         shapes = [name for name, row in first["structs"].items() if row["state"] == "known"]
         self.assertEqual(len(shapes), 1)
         shape = shapes[0]
-        type_header = next(
-            path
-            for path in (project.include[0] / "shared/types").glob("*.h")
-            if f"struct {shape} {{" in path.read_text()
-        )
+        type_header = next(path for path in layout_index.headers(project) if f"struct {shape} {{" in path.read_text())
         text = type_header.read_text().replace("int field_0;", "RetainedWord field_0;")
         type_header.write_text(
             text.replace(
@@ -434,7 +431,7 @@ class DatabaseTests(unittest.TestCase):
         repeated = solve(project, policy)
         self.assertEqual(repeated["structs"][shape]["base_nodes"], result["structs"][shape]["base_nodes"])
         self.assertIsNone(repeated["structs"][shape]["size"])
-        shared = "\n".join(path.read_text() for path in (project.include[0] / "shared/types").glob("*.h"))
+        shared = "\n".join(path.read_text() for path in layout_index.headers(project))
         self.assertIn(f"struct {shape} {{", shared)
         self.assertIn(f"typedef struct {shape} RetainedShape;", shared)
         self.assertIn("typedef int RetainedWord;", shared)

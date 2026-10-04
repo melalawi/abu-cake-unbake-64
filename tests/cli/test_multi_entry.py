@@ -181,6 +181,11 @@ class MultiEntryCliTests(unittest.TestCase):
         self.source.write_text(self.text)
 
     def run_try(self):
+        from unbake.layout import map
+        from unbake.project.config import load
+
+        project = load(self.root)
+        (self.root / "layout.toml").write_bytes(map.encoded(map.default(2, map.catalog(project), project.versions)))
         script = Path(sysconfig.get_path("scripts")) / "unbake"
         environment = dict(os.environ, PYTHONNOUSERSITE="1")
         environment.pop("PYTHONPATH", None)

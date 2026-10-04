@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
+from unittest.mock import patch
 
 import toml
 
@@ -67,6 +68,18 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             )
         (self.root / "config.toml").write_text(toml.dumps(data))
         self.project = config.load(self.root)
+        from unbake.layout import map as ownership
+
+        def synthetic_map(selected):
+            members = ownership.catalog(selected)
+            return ownership.Map(
+                2, tuple(ownership.Group(m.name, m.segment, "default", (m.name,)) for m in members.values())
+            )
+
+        mapping = patch.object(ownership, "load", side_effect=synthetic_map)
+        mapping.start()
+        self.addCleanup(mapping.stop)
+
         reports = {
             version: {
                 "version": 2,
@@ -92,6 +105,18 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.tools = Tools(self)
         setup.run(self.project, self.policy)
         self.project = config.load(self.root)
+        from unbake.layout import map as ownership
+
+        def synthetic_map(selected):
+            members = ownership.catalog(selected)
+            return ownership.Map(
+                2, tuple(ownership.Group(m.name, m.segment, "default", (m.name,)) for m in members.values())
+            )
+
+        mapping = patch.object(ownership, "load", side_effect=synthetic_map)
+        mapping.start()
+        self.addCleanup(mapping.stop)
+
         self.sources = []
         for name in names:
             source = self.project.drafts / name / (name + ".c")
@@ -304,7 +329,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.install_sdk()
         source = self.sources[0]
         source.write_text(
-            '#include "shared/audio_callbacks.h"\n'
+            '#include "audio_callbacks.h"\n'
             "struct Holder { Acmd command; ALCmdHandler callback; };\n"
             "int alpha(void) { return 1; }\n"
         )
@@ -313,11 +338,13 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.assertEqual(self.inputs(), before)
         output = self.cli("submit", source)
         self.assertIn("alpha matched on VERSION us, us-rev1", output)
-        header = self.project.include[0] / "shared/alpha.h"
+        from unbake.layout import index
+
+        header = next(path for path in index.headers(self.project) if "Acmd command;" in path.read_text())
         self.assertIn("Acmd command;", header.read_text())
-        self.assertIn('#include "shared/acmd.h"', header.read_text())
-        self.assertIn('#include "shared/audio_callbacks.h"', header.read_text())
-        for name in ("gbi.h", "shared/acmd.h", "shared/audio_callbacks.h"):
+        self.assertIn('#include "acmd.h"', header.read_text())
+        self.assertIn('#include "audio_callbacks.h"', header.read_text())
+        for name in ("gbi.h", "acmd.h", "audio_callbacks.h"):
             path = self.project.include[0] / name
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before["include/" + name])
         self.assertIn(": OK", self.make())
@@ -328,17 +355,19 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.install_sdk()
         for source in self.sources:
             work.overlay(self.project, source.parent)
-            header = source.parent / "overlay/include/shared/holder.h"
+            header = source.parent / "overlay/include/holder.h"
             header.write_text(
                 '#ifndef HOLDER_H\n#define HOLDER_H\n#include "acmd.h"\n'
                 "typedef struct { Acmd command; } Holder;\n#endif\n"
             )
-            source.write_text(f'#include "shared/holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
+            source.write_text(f'#include "holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
             self.cli("try", source)
         output = self.cli("submit", "--batch", *self.sources)
         for source in self.sources:
             self.assertIn(source.stem + " matched on VERSION us, us-rev1", output)
-        self.assertTrue((self.project.include[0] / "shared/holder.h").is_file())
+        from unbake.layout import index
+
+        self.assertTrue(any("Acmd command;" in path.read_text() for path in index.headers(self.project)))
         self.assertIn(": OK", self.make())
 
     def test_installed_try_reuses_a_header_already_published_from_another_overlay(self):
@@ -347,11 +376,11 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         self.install_sdk()
         for source in self.sources:
             work.overlay(self.project, source.parent)
-            (source.parent / "overlay/include/shared/holder.h").write_text(
+            (source.parent / "overlay/include/holder.h").write_text(
                 '#ifndef HOLDER_H\n#define HOLDER_H\n#include "acmd.h"\n'
                 "typedef struct { Acmd command; } Holder;\n#endif\n"
             )
-            source.write_text(f'#include "shared/holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
+            source.write_text(f'#include "holder.h"\nint {source.stem}(void) {{ return 1; }}\n')
         self.cli("try", self.sources[0])
         self.cli("submit", self.sources[0])
         self.cli("try", self.sources[1])
@@ -360,7 +389,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
 
     def test_installed_submit_names_missing_sdk_header_prerequisite_for_exact_source(self):
         self.install_sdk()
-        path = self.project.include[0] / "shared/missing_sdk.h"
+        path = self.project.include[0] / "missing_sdk.h"
         path.write_text("typedef struct { MissingSDK words; } MissingRecord;\n")
         source = self.sources[0]
         self.assertIn("exact words 2/2", self.cli("try", source))
@@ -378,7 +407,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, output)
             self.assertIn("headers.declaration: SDK/shared header prerequisite", output)
             self.assertIn("MissingSDK: missing type layout", output)
-            self.assertIn("include/shared/missing_sdk.h:1", output)
+            self.assertIn("include/missing_sdk.h:1", output)
             self.assertIn("Next: Repair the SDK/shared header prerequisite", output)
             self.assertNotIn("Supply alpha", output)
             self.assertEqual(self.inputs(), before)

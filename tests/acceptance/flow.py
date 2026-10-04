@@ -160,7 +160,7 @@ class Proof:
     ) -> None:
         require(roms, "accept.roms: supply VERSION=FILE inputs")
         require(not project.exists() or not any(project.iterdir()), "accept.project: expected empty directory")
-        self.cli("init", project)
+        self.cli("init", project, "--layout-cap", "2")
         config = read_config(project)
         require(config["project"]["state"] == "awaiting-roms", "init.state: expected shell")
         require("compilers" not in config and "units" not in config, "init.compilers: shell has assignments")
@@ -326,7 +326,7 @@ class Proof:
 
         def shell(name: str) -> Path:
             project = workspace / name
-            self.cli("init", project)
+            self.cli("init", project, "--layout-cap", "2")
             shutil.copyfile(source, project / "roms/input.z64")
             return project
 
@@ -340,14 +340,14 @@ class Proof:
         protected = workspace / "nonempty"
         protected.mkdir()
         (protected / "owner.txt").write_text("preserve this file\n")
-        output = self.cli("init", protected, status=1)
+        output = self.cli("init", protected, "--layout-cap", "2", status=1)
         require("init.target:" in output, "init.target: nonempty refusal missing")
         require((protected / "owner.txt").read_text() == "preserve this file\n", "init.target: owner file changed")
         target = workspace / "symlink-target"
         target.mkdir()
         link = workspace / "symlink"
         link.symlink_to(target, target_is_directory=True)
-        output = self.cli("init", link, status=1)
+        output = self.cli("init", link, "--layout-cap", "2", status=1)
         require("init.target:" in output and not any(target.iterdir()), "init.target: symlink input not protected")
         pending(shell("no-naming-version"), "project.names_from")
         duplicate = shell("duplicate")

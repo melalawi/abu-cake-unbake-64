@@ -40,6 +40,18 @@ class MainCase(unittest.TestCase):
         self.root = self.directory / "project"
         shutil.copytree(Path(__file__).parents[1] / "fixture", self.root)
         self.project = config.load(self.root)
+        from unbake.layout import map as ownership
+
+        def synthetic_map(selected):
+            members = ownership.catalog(selected)
+            return ownership.Map(
+                2, tuple(ownership.Group(m.name, m.segment, "default", (m.name,)) for m in members.values())
+            )
+
+        mapping = patch.object(ownership, "load", side_effect=synthetic_map)
+        mapping.start()
+        self.addCleanup(mapping.stop)
+
         self.project.roms.mkdir(exist_ok=True)
         self.policy = policy(self.directory)
         self.scratch = self.directory / "scratch"

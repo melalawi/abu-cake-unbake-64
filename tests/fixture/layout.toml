@@ -1,0 +1,17 @@
+schema = 1
+cap = 2
+[[group]]
+name = "alpha"
+segment = "main"
+evidence = "default"
+members = ["alpha"]
+[[group]]
+name = "beta"
+segment = "main"
+evidence = "default"
+members = ["beta"]
+[[group]]
+name = "gamma"
+segment = "main"
+evidence = "default"
+members = ["gamma"]

@@ -241,11 +241,11 @@ void f(void) {
     def test_audio_install_preserves_project_abi_and_refuses_owned_type(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project, _, _ = fixture(Path(directory).resolve(), case=self)
-            existing = project.include[0] / "abi.h"
+            existing = project.include[0] / "project_audio.h"
             existing.write_text("/* Project-owned audio declarations. */\n")
-            self.assertEqual(gbi.install_audio(project), '#include "shared/abi.h"\n')
+            self.assertEqual(gbi.install_audio(project), '#include "abi.h"\n')
             self.assertEqual(existing.read_text(), "/* Project-owned audio declarations. */\n")
-            (project.include[0] / "shared/acmd.h").write_text("/* Owned type */\n")
+            (project.include[0] / "acmd.h").write_text("/* Owned type */\n")
             with self.assertRaises(Held):
                 gbi.install_audio(project)
 
@@ -280,8 +280,8 @@ void f(void) {
                 "typedef int s32; typedef long long s64; typedef float f32;\n"
             )
             (root / "n64sdk.h").write_text("typedef union {struct {u32 w0,w1;} words;s64 alignment;} Gfx;\n")
-            (root / "shared").mkdir()
-            (root / "shared/gfx.h").write_text(
+
+            (root / "gfx.h").write_text(
                 "typedef struct Shared_Gfx Shared_Gfx;struct Shared_Gfx {u32 words_w0;u32 words_w1;};\n"
             )
             code = project.src / "alpha.c"
