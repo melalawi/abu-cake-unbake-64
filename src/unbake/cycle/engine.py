@@ -204,11 +204,14 @@ def run(
         atomic_files.text(state_path(project), json.dumps(state, sort_keys=True, default=list) + "\n")
 
     emitter.listeners.append(save_state)
-    for done_step in steps.ensure(project, host, ["extract", "types", "headers", "buildfiles"]):
-        if done_step.ran:
-            emitter.emit(
-                "step.run", step=done_step.step, trigger=done_step.trigger, seconds=round(done_step.seconds, 3)
-            )
+    steps.ensure(
+        project,
+        host,
+        ["extract", "types", "headers", "buildfiles"],
+        report=lambda done: emitter.emit(
+            "step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3)
+        ),
+    )
     emitter.emit(
         "cycle.start",
         project=str(project.root),

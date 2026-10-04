@@ -219,8 +219,17 @@ def order(names: Iterable[str]) -> list[str]:
     return result
 
 
-def ensure(project: Project, host: Host, names: Iterable[str], *, force: bool = False) -> list[StepResult]:
-    """Run each named step (and the steps it needs) whose input key changed; forcing reruns only the named."""
+def ensure(
+    project: Project,
+    host: Host,
+    names: Iterable[str],
+    *,
+    force: bool = False,
+    report: Callable[[StepResult], object] | None = None,
+) -> list[StepResult]:
+    """Run each named step (and the steps it needs) whose input key changed; forcing reruns only the named.
+
+    report hears each step that ran as soon as it finishes, so a long chain is not silent."""
     requested = set(names := list(names))
     results = []
     for name in order(names):
@@ -233,6 +242,8 @@ def ensure(project: Project, host: Host, names: Iterable[str], *, force: bool = 
         step.run(project, host)
         record(project, name, step.key(project, host) if name in ("headers", "buildfiles") else current)
         results.append(StepResult(name, step.trigger, True, time.monotonic() - started))
+        if report is not None:
+            report(results[-1])
     return results
 
 
