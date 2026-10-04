@@ -120,41 +120,28 @@ def source(
     return redeclarations.strip(text, bodies)
 
 
-def run(project: Project, policy: Host | None = None, *, dry_run: bool = False) -> int:
-    from unbake.typemap import database
+def render(project: Project, policy: Host) -> dict[Path, bytes]:
+    """Every generated header, the header index and each source's rewritten include lines, by path."""
+    import json
+
+    from unbake.typemap import database, regeneration
 
     map.load(project)
     value = copy.deepcopy(database.load(project, allow_stale=True))
-    assert value is not None
-    if not dry_run:
-        count = units(project)
-        return count + _run(project, policy, value)
-    return _run(project, policy, value, dry_run=dry_run) + units(project, dry_run=dry_run)
-
-
-def _run(
-    project: Project,
-    policy: Host | None,
-    value: dict[str, Any],
-    *,
-    previous: set[str] | None = None,
-    dry_run: bool = False,
-) -> int:
-    from unbake.typemap import database, regeneration
-
+    if value is None:
+        raise Held("headers", "headers.types: no type solution; the types step must run first")
     session = regeneration.Session(project, policy)
-    outputs = database._render(project, value, policy, session)
-    import json
-
-    lookup = json.loads(outputs[index.path(project)])  # type: ignore[arg-type]
-    previous = (previous or set()) | set(index.load(project)["headers"])
+    outputs = {
+        path: data.read_bytes() if isinstance(data, Path) else data
+        for path, data in database._render(project, value, policy, session).items()
+    }
+    lookup = json.loads(outputs[index.path(project)])
+    previous = set(index.load(project)["headers"])
     for path, text in session.sources.items():
         outputs[path] = source(
             project, text, path.stem, outputs, ownership=session.ownership, lookup=lookup, previous=previous
         ).encode()
-    if dry_run:
-        return install(project, outputs, dry_run=True)
-    return install(project, outputs)
+    return outputs
 
 
 def units(project: Project, *, dry_run: bool = False) -> int:

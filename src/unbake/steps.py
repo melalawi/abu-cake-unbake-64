@@ -112,15 +112,15 @@ def _types(project: Project, host: Host) -> None:
 
 
 def _headers_key(project: Project, host: Host) -> str:
-    from unbake.layout import headers
+    from unbake.layout import header_step
 
-    return headers.input_key(project)
+    return header_step.input_key(project)
 
 
 def _headers(project: Project, host: Host) -> None:
-    from unbake.layout import headers
+    from unbake.layout import header_step
 
-    headers.run(project, host)
+    header_step.run(project, host)
 
 
 def _buildfiles_key(project: Project, host: Host) -> str:
@@ -149,9 +149,7 @@ def _extract(project: Project, host: Host) -> None:
 
 
 def _progress_key(project: Project, host: Host) -> str:
-    from unbake.layout import map as layout_map
-
-    return key(tool_fingerprint(), layout_map.path(project), *sorted(str(p) for p in project.src.glob("*.c")))
+    return key(tool_fingerprint(), project.root / "layout.toml", *sorted(project.src.glob("*.c")))
 
 
 def _progress(project: Project, host: Host) -> None:
