@@ -134,19 +134,38 @@ def _compile_object(args: argparse.Namespace, data: Recipe | None = None) -> Non
     # Pin only files belonging to the selected compiler, never helper checksums.
     if compiler is not None:
         prepared.inputs.extend(Path(name) for name in sorted(selected) if Path(name) != Path(compiler["cc"]))
+    paths = tuple(prepared.inputs)
+    signatures = tuple(file_signature(path) for path in paths)
+    sn64 = compiler is not None and compiler["kind"] == "sn64"
     digest = key(
         prepared.content,
         prepared.source_name,
         json.dumps([prepared.generation, prepared.assembler_flags], sort_keys=True),
         tool_digest(
-            tuple(prepared.inputs),
+            paths,
             args.kind,
-            compiler is not None and compiler["kind"] == "sn64",
-            tuple(file_signature(path) for path in prepared.inputs),
+            sn64,
+            signatures,
         ),
         *prepared.assembler_inputs,
     )
-    cached = Cache(args.cache_root or cache_root()).produce(args.kind, digest, prepared.produce)
+    cache = Cache(args.cache_root or cache_root())
+    if cache.get(args.kind, digest) is None:
+        # The previous envelope bound all generator branches. It is stricter
+        # than the projected kind identity, and still fingerprints today's
+        # actual driver logic, binaries and preprocessed closure. Promotion
+        # requires an exact content key; no timestamp or historical SHA alias.
+        previous = key(
+            prepared.content,
+            prepared.source_name,
+            json.dumps([prepared.generation, prepared.assembler_flags], sort_keys=True),
+            tool_digest(paths, None, False, signatures),
+            *prepared.assembler_inputs,
+        )
+        artifact = cache.get(args.kind, previous)
+        if artifact is not None:
+            cache.put(args.kind, digest, artifact)
+    cached = cache.produce(args.kind, digest, prepared.produce)
     if not out.exists() or out.read_bytes() != cached.read_bytes():
         with staging(out) as pending:
             shutil.copyfile(cached, pending)

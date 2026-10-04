@@ -252,6 +252,45 @@ class IdentityStampTests(unittest.TestCase):
                 compile.compile_object(args, data)
                 self.assertEqual(len(produced), before + 1)
 
+    def test_previous_stricter_cache_envelope_promotes_without_compiling(self):
+        project, _ = fixture(self.root, case=self)
+        write_rendered(project)
+        recipe = project.tools / "build.json"
+        data = json.loads(recipe.read_text())
+        args = argparse.Namespace(
+            recipe=recipe,
+            output=self.root / "promoted.o",
+            kind="cc",
+            version="us",
+            unit="src/middle.c",
+            depfile=None,
+            cache_root=self.root / "cache",
+        )
+        inputs = [project.tools / "codegen.py", Path(data["compilers"][data["default_compiler"]]["cc"])]
+        prepared = SimpleNamespace(
+            content=b"preprocessed closure",
+            source_name="middle.i",
+            generation=["-O2"],
+            assembler_flags=[],
+            assembler_inputs=[],
+            inputs=inputs,
+            produce=lambda path: self.fail("promotion must reuse the cached object"),
+        )
+        previous = compile.key(
+            prepared.content,
+            prepared.source_name,
+            json.dumps([prepared.generation, prepared.assembler_flags], sort_keys=True),
+            compile.tool_digest(tuple(inputs), None, False, tuple(compile.file_signature(path) for path in inputs)),
+        )
+        artifact = self.root / "old-cached.o"
+        artifact.write_bytes(b"verified previous object")
+        cache = compile.Cache(args.cache_root)
+        cache.put("cc", previous, artifact)
+        with patch.object(compile, "prepare", return_value=prepared):
+            compile.compile_object(args, data)
+        self.assertEqual(args.output.read_bytes(), artifact.read_bytes())
+        self.assertEqual(sum(path.is_file() for path in args.cache_root.rglob("*")), 2)
+
     def test_refresh_migrates_old_graph_preserves_provenance_and_stamps(self):
         project, _ = fixture(self.root, case=self)
         write_rendered(project)
