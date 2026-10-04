@@ -60,9 +60,7 @@ cp "$1" "$2"
 """
 OBJDIFF = "#!/bin/sh\nexit 0\n"
 # What the generated Makefile runs besides the fixture tools; a [tools].path dir must not expose Python.
-HOST_COMMANDS = (
-    "sh cat cmp cp cut dd dirname env find grep head ls mkdir mv printf rm sed sha1sum sha256sum sort tail tr"
-).split()
+HOST_COMMANDS = ["sh", "cat", "cmp", "cp", "cut", "dd", "dirname", "env", "find", "grep", "head", "ls", "mkdir", "mv", "printf", "rm", "sed", "sha1sum", "sha256sum", "sort", "tail", "tr"]
 
 
 def run(command: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
