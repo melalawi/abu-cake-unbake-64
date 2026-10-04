@@ -9,17 +9,18 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from unbake.cdecl import LayoutParser, declaration_source
+from unbake.config import Held
 from unbake.decomp.draft_context import ordered_headers
-from unbake.decomp.header_declarations import declaration_source
 from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_identity import Index
-from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
-from unbake.config import Held
 from unbake.project.headers import include_headers
 
 
-def context(contents: dict[Path, str], *, root: Path | None = None) -> tuple[dict[Path, str], Parser, list[Layout]]:
+def context(
+    contents: dict[Path, str], *, root: Path | None = None
+) -> tuple[dict[Path, str], LayoutParser, list[Layout]]:
     """Reuse draft's declaration parser; retain raw spans for header edits.
 
     One parse per distinct header set in a process; the parser is shared and read-only.
@@ -95,14 +96,14 @@ def header_guard(headers: Headers, path: Path) -> str:
     return f"UNBAKE_{path.stem.upper()}_{digest}_H"
 
 
-def _parser(source: str) -> Parser:
-    parser = Parser(guarded_source(source))
+def _parser(source: str) -> LayoutParser:
+    parser = LayoutParser(guarded_source(source))
     # Tokens exclude inactive guard bodies; layouts/edits retain authored text.
     parser.source = source
     return parser
 
 
-def _context(contents: dict[Path, str], *, root: Path | None) -> tuple[dict[Path, str], Parser, list[Layout]]:
+def _context(contents: dict[Path, str], *, root: Path | None) -> tuple[dict[Path, str], LayoutParser, list[Layout]]:
     try:
         aliases = {
             alias: tag
@@ -150,7 +151,7 @@ def _shift_field(field: Field, delta: int) -> Field:
     )
 
 
-def _homes(texts: dict[Path, str], parser: Parser, records: list[Layout]) -> dict[str, Path]:
+def _homes(texts: dict[Path, str], parser: LayoutParser, records: list[Layout]) -> dict[str, Path]:
     """Map each aggregate tag, alias and typedef name to the header that declares it."""
     homes: dict[str, Path] = {}
     starts: list[int] = []
@@ -178,7 +179,7 @@ def _homes(texts: dict[Path, str], parser: Parser, records: list[Layout]) -> dic
             continue
         home = owner(declaration.start)
         if home is not None:
-            local = Parser(value)
+            local = LayoutParser(value)
             local.defines.update(parser.defines)
             local.take("typedef")
             for member in local.declaration(typedef=True):
@@ -209,7 +210,7 @@ def _scalar_header(text: str) -> tuple[bool, dict[str, str]] | None:
 
     if re.search(r"\b(?:struct|union)\b", re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)):
         return None
-    parser = Parser(text)
+    parser = LayoutParser(text)
     parser.parse()
     scalars = {
         name: parser.type_name(target[0], target[1])
@@ -266,16 +267,16 @@ class Headers:
         texts = {path: path.read_text() for path, _ in include_headers(project)}
         return cls(texts, root=getattr(project, "root", None), cache_root=cache_root)
 
-    def seeded(self, text: str) -> Parser:
+    def seeded(self, text: str) -> LayoutParser:
         """A parser for text that sees every type declared by these headers."""
-        parser = Parser(text)
+        parser = LayoutParser(text)
         local = set(re.findall(r"\b((?:struct|union)\s+\w+)\s*\{", text))
         parser.types.update({name: value for name, value in self.types.items() if name not in local})
         parser.cache.update(self.cache)
         parser.defines = {**self.defines, **parser.defines}
         return parser
 
-    def parse(self, text: str) -> tuple[Parser, list[Layout]]:
+    def parse(self, text: str) -> tuple[LayoutParser, list[Layout]]:
         """Parse text against these headers without growing shared alias lists."""
         parser = self.seeded(text)
         try:
@@ -363,9 +364,9 @@ class Headers:
         for name in (entry[1].name, *entry[1].aliases):
             self.locations.setdefault(name, []).append(entry)
 
-    def parser(self) -> Parser:
+    def parser(self) -> LayoutParser:
         """A read-only combined parser view for code written against context()."""
-        parser = Parser("")
+        parser = LayoutParser("")
         parser.source = self.source
         parser.types = self.types
         parser.cache = self.cache

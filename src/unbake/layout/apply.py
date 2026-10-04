@@ -7,8 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from unbake.layout import index, map, redeclarations
 from unbake.config import Held, Host, Project
+from unbake.layout import index, map, redeclarations
 from unbake.typemap import storage
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"][^\n]*(?:\n|$)', re.M)
@@ -22,7 +22,7 @@ def spelled(text: str) -> set[str]:
 
 
 def _local_names(text: str) -> set[str]:
-    from unbake.decomp.header_declarations import declarations
+    from unbake.cdecl import declarations
 
     return {
         name
@@ -102,7 +102,7 @@ def source(
         pending = outputs.get(index.path(project))
         lookup = json.loads(pending) if isinstance(pending, bytes) else index.load(project)
         if not isinstance(pending, bytes):
-            from unbake.decomp.header_declarations import declarations
+            from unbake.cdecl import declarations
 
             for path, data in outputs.items():
                 if path.suffix != ".h" or not isinstance(data, bytes):

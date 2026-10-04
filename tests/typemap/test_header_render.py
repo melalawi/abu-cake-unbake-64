@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from tests.decomp.support import fixture
 from tests.typemap.split_support import expanded
-from unbake.layout.header_context import Headers
-from unbake.layout.structs_parser import Parser
-from unbake.match import declarations as publication
+from unbake.cdecl import LayoutParser
 from unbake.config import Held
+from unbake.layout.header_context import Headers
+from unbake.match import declarations as publication
 from unbake.typemap import database, declaration_evidence, declarations, facts, solver
 from unbake.typemap.solver import Constraints, _merge_records
 
@@ -111,7 +111,7 @@ class HeaderRenderTests(unittest.TestCase):
                     "typedef struct Vec3f { float x, y, z; } Vec3f;"
                     f"struct Holder {{ {members} }};"
                 )
-                parser = Parser(source)
+                parser = LayoutParser(source)
                 records = parser.parse()
                 context = Headers({generated / "vector.h": canonical}, root=root)
                 resolution = context.index.resolve(records, "published")

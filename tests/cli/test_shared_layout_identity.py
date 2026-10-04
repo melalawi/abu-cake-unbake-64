@@ -4,8 +4,8 @@ import json
 import unittest
 
 from tests.cli import test_publication_boundary as fixture
+from unbake.cdecl import LayoutParser
 from unbake.layout import index
-from unbake.layout.structs_parser import Parser
 
 
 class SharedLayoutIdentityCliTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         self.assertIn("rename Owner -> Owner_", output)
         self.assertIn("rename Other -> Owner_", output)
         headers = sorted(index.headers(self.project))
-        records = [record for path in headers for record in Parser(path.read_text()).parse() if record.fields]
+        records = [record for path in headers for record in LayoutParser(path.read_text()).parse() if record.fields]
         owners = [record for record in records if record.name == "Owner" or record.name.startswith("Owner_")]
         self.assertEqual(len(owners), 2)
         renamed = next(record.name for record in owners if record.name != "Owner")
@@ -112,7 +112,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         output = self.cli("submit", source)
         self.assertIn("rename Second -> First", output)
         header = (self.project.include[0] / "main/alpha.h").read_text()
-        self.assertEqual(len(Parser(header).parse()), 1)
+        self.assertEqual(len(LayoutParser(header).parse()), 1)
         self.assertNotIn("Second", header)
         published = (self.project.src / source.name).read_text()
         self.assertIn("((First *)0)->value", published)
@@ -154,7 +154,7 @@ class SharedLayoutIdentityCliTests(unittest.TestCase):
         generated = "\n".join(path.read_text() for path in index.headers(self.project))
         # Publication replaced the alias use with the shared array member.
         self.assertNotIn("Bytes", published)
-        self.assertEqual(Parser(generated).parse(), [])
+        self.assertEqual(LayoutParser(generated).parse(), [])
         self.assertIn('#include "bytes.h"', published)
         self.assertIn('#include "main/alpha.h"', published)
         self.assertNotIn("typedef", published)

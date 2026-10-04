@@ -6,11 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from unbake.config import Held, Project
 from unbake.decomp import needs
 from unbake.layout import split_apply, structs
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
-from unbake.config import Held, Project
 
 
 class DeclarationTests(unittest.TestCase):
@@ -563,10 +563,10 @@ class DefinitionOrderTests(unittest.TestCase):
             self.addCleanup(mock.stop)
 
     def test_by_value_member_aggregate_is_defined_first(self):
+        from unbake.cdecl import LayoutParser
         from unbake.layout.structs_fold import _definition_order
-        from unbake.layout.structs_parser import Parser
 
-        parser = Parser(
+        parser = LayoutParser(
             "typedef struct Mid Mid;\n"
             "typedef union Zed { float v0; char v1; } Zed;\n"
             "typedef struct Alpha { char pad[4]; Zed value; struct Alpha *next; Mid *link; } Alpha;\n"

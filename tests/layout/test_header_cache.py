@@ -7,16 +7,16 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from unbake.cdecl import LayoutParser
+from unbake.config import Held
 from unbake.layout import header_cache, header_context
 from unbake.layout.header_context import Headers
-from unbake.layout.structs_parser import Parser
-from unbake.config import Held
 
 
 class HeaderCacheTests(unittest.TestCase):
     def test_large_shared_layout_source_is_serialized_once(self):
         source = "struct A {int value;};\n" + "/* padding */\n" * 10000
-        layout = Parser(source).parse()[0]
+        layout = LayoutParser(source).parse()[0]
         layouts = [replace(layout, name=f"A{index}") for index in range(200)]
         document = header_cache._encode(layouts)
         encoded = json.dumps(document)
@@ -62,7 +62,7 @@ class HeaderCacheTests(unittest.TestCase):
         with patch("unbake.cache._remembered", {}):
             restored._load(inputs)
         _, records = restored.parse("struct Later {Node nodes[COUNT]; Callback callback;};")
-        fresh = Parser("struct Later {Node nodes[COUNT]; Callback callback;};")
+        fresh = LayoutParser("struct Later {Node nodes[COUNT]; Callback callback;};")
         fresh.types.update(first[1].types)
         fresh.defines.update(first[1].defines)
         self.assertEqual(records, fresh.parse())

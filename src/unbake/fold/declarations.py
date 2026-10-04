@@ -10,17 +10,17 @@ from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
+from unbake.cdecl import LayoutParser
+from unbake.config import Held, Host, Project
 from unbake.decomp import gbi_recover, needs
-from unbake.fold import drafts
+from unbake.fold import drafts, imports, pool_literals, rewrite_view, source_views, type_rewrite
+from unbake.fold import notes as reporting
+from unbake.fold.common import held
 from unbake.layout import entries, shared, split, structs
 from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
-from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import Aggregate
-from unbake.fold import imports, pool_literals, notes as reporting, rewrite_view, source_views, type_rewrite
-from unbake.fold.common import held
-from unbake.config import Held, Host, Project
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
 
 
@@ -34,7 +34,7 @@ def preflight(project: Project, policy: Host, pending: list[needs.Need]) -> list
 
 
 def final_source(
-    project: Project, text: str, parsers: list[Parser], edits: list[Edit], headers: Headers, destination: Path
+    project: Project, text: str, parsers: list[LayoutParser], edits: list[Edit], headers: Headers, destination: Path
 ) -> str:
     """Move local aggregate definitions to their shared homes and remove draft markers."""
     records = [record for parser in parsers for record in _records(parser)]
@@ -56,7 +56,7 @@ def final_source(
         for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
             local_aliases.update(alias_types(parser.source[start:end]))
         for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
-            local = Parser(parser.source[start:end])
+            local = LayoutParser(parser.source[start:end])
             if local.peek() != "typedef":
                 continue
             local.take()
@@ -129,7 +129,7 @@ def final_source(
     return re.sub(r"^[ \t]*/\*\s*NON_MATCHING:\s*draft\b[^\n]*\*/[ \t]*\n?", "", text, flags=re.M)
 
 
-def _records(parser: Parser) -> list[structs.Layout]:
+def _records(parser: LayoutParser) -> list[structs.Layout]:
     """Layouts of an already parsed source view, without parsing it again."""
     return [parser.layout(item) for item in parser.aggregates if item.name]
 
@@ -145,7 +145,7 @@ class Folded:
 
 
 def _local_typedefs(
-    project: Project, headers: Headers, parsers: list[Parser], records: list[structs.Layout], destination: Path
+    project: Project, headers: Headers, parsers: list[LayoutParser], records: list[structs.Layout], destination: Path
 ) -> tuple[Headers, list[Edit], set[tuple[int, int]]]:
     """Move local scalar and callback aliases needed by promoted fields with them."""
     wanted = set(re.findall(r"\b\w+\b", " ".join(field.declaration for record in records for field in record.fields)))
@@ -158,7 +158,7 @@ def _local_typedefs(
     for parser in parsers:
         for item in parser.declarations:
             value = parser.source[item.start : item.end]
-            local = Parser(value)
+            local = LayoutParser(value)
             if local.peek() != "typedef":
                 continue
             local.take()
@@ -318,7 +318,7 @@ def _layout_names(
     policy: Host,
     function: str,
     text: str,
-    parsers: list[Parser],
+    parsers: list[LayoutParser],
     versions: tuple[str, ...],
     headers: Headers,
     *,
@@ -359,7 +359,7 @@ def _layout_names(
                 project, policy, headers, version, source_context=True, context_project=effective_project()
             )
 
-        def expanded_context(parser: Parser, version: str) -> rewrite_view.View:
+        def expanded_context(parser: LayoutParser, version: str) -> rewrite_view.View:
             return rewrite_view.prepare(
                 effective_project(),
                 policy,

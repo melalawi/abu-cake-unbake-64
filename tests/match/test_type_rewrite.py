@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from unbake.cdecl import LayoutParser
 from unbake.layout.structs import layouts
 from unbake.layout.structs_identity import identity
-from unbake.layout.structs_parser import Parser
 from unbake.match import type_rewrite
 
 
@@ -15,7 +15,7 @@ class TypeRewriteTests(unittest.TestCase):
     def test_persistent_context_restores_shared_nodes_and_identical_edits(self):
         context = "typedef struct Canon {int value; struct Canon *next;} Canon, Alias; extern Canon *global;"
         source = "typedef struct Old {int old; struct Old *tail;} Old; int alpha(void) {return global->value;}"
-        parser = Parser(source)
+        parser = LayoutParser(source)
         parser.parse()
         resolution = {"Old": ("Canon", layouts(context)[0])}
         expected = type_rewrite.edits(parser, context, resolution)
@@ -32,7 +32,7 @@ class TypeRewriteTests(unittest.TestCase):
             type_rewrite._context.cache_clear()
 
     def test_unchanged_layout_never_loads_typed_header_context(self):
-        parser = Parser("struct Canon {int value;}; int alpha(struct Canon *p) {return p->value;}")
+        parser = LayoutParser("struct Canon {int value;}; int alpha(struct Canon *p) {return p->value;}")
         record = parser.parse()[0]
         context = Mock(side_effect=AssertionError("unneeded shared header parse"))
         self.assertEqual(type_rewrite.edits(parser, context, {"Canon": ("Canon", record)}), {})
@@ -40,7 +40,7 @@ class TypeRewriteTests(unittest.TestCase):
 
     def test_renamed_layout_loads_context_once_and_preserves_namespace_edits(self):
         source = "struct Old {int old;}; int alpha(struct Old *p) {int Old=1; return p->old+Old;}"
-        parser = Parser(source)
+        parser = LayoutParser(source)
         parser.parse()
         context = "struct Canon {int value;};"
         record = layouts(context)[0]
@@ -50,7 +50,7 @@ class TypeRewriteTests(unittest.TestCase):
         load.assert_called_once_with()
 
     def rewrite(self, source, context):
-        parser = Parser(source)
+        parser = LayoutParser(source)
         records = parser.parse()
         canon = {layout.name: layout for layout in layouts(context)}
         known = {identity(layout, canon): layout for layout in canon.values()}
@@ -104,7 +104,7 @@ class TypeRewriteTests(unittest.TestCase):
             "static inline float decode(Old range) { return range.width + range.scale + range.base; }\n"
             "float alpha(Stream *p) { Local local; local.range = p->range; return decode(local.range); }\n"
         )
-        parser = Parser(source)
+        parser = LayoutParser(source)
         records = {record.name: record for record in parser.parse()}
         canonical = layouts(context)[0]
         resolution = {

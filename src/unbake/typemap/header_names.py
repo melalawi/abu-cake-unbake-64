@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake.cdecl import NAME_TOKEN, NameParser, attribute_source, declaration_source
 from unbake.config import Held, Host, Project
-from unbake.decomp.header_declarations import Parser, attribute_source, declaration_source
 
-_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\.\.\.|\S')
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
 _PLACEHOLDER = re.compile(r"M2C_UNK\d*\Z")
 
@@ -20,10 +19,10 @@ def placeholder(name: str) -> bool:
     return bool(_PLACEHOLDER.fullmatch(name))
 
 
-class _Declarations(Parser):
+class _Declarations(NameParser):
     def __init__(self, source: str, replacements: dict[str, str] | None = None, blocked: set[str] | None = None):
         super().__init__(source)
-        self.matches = list(_TOKEN.finditer(attribute_source(declaration_source(source))))
+        self.matches = list(NAME_TOKEN.finditer(attribute_source(declaration_source(source))))
         self.tokens = [match[0] for match in self.matches]
         self.source = source
         self.replacements = replacements or {}

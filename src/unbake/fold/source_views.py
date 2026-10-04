@@ -11,20 +11,20 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from unbake.layout.header_context import Headers
-from unbake.layout.structs_parser import Parser
-from unbake.fold.common import held
-from unbake.config import Host, Project
 from unbake import atomic as atomic_files
+from unbake.cdecl import LayoutParser
+from unbake.config import Host, Project
+from unbake.fold.common import held
+from unbake.layout.header_context import Headers
 
 
 def parsers(
     project: Project, policy: Host, text: str, versions: tuple[str, ...], headers: Headers | None = None
-) -> list[Parser]:
+) -> list[LayoutParser]:
     """Ask cpp to select branches without expanding tokens or changing edit spans."""
     context = headers if headers is not None else Headers.read(project)
 
-    def contextual(view: str) -> Parser:
+    def contextual(view: str) -> LayoutParser:
         # Preserve declaration offsets in the source while resolving imported
         # by-value types and callback aliases. Locally defined tags get their
         # own aggregates; imported aggregates retain their measured layouts.
@@ -36,7 +36,7 @@ def parsers(
     lines = text.splitlines(keepends=True)
     result = []
     # Versions selecting the same lines share one parse.
-    parsed: dict[frozenset[int], Parser] = {}
+    parsed: dict[frozenset[int], LayoutParser] = {}
     for version in versions:
         active = _version_lines(project, policy, text, version)
         if active is None:

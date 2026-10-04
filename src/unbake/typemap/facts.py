@@ -18,10 +18,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 from unbake.typemap import declarations, storage
 
 FACTS = "facts"
@@ -29,8 +29,7 @@ SHARED = "facts-shared"
 _PRODUCERS = (
     "typemap/declarations.py",
     "typemap/facts.py",
-    "layout/structs_parser.py",
-    "decomp/header_declarations.py",
+    "cdecl.py",
     "decomp/draft_context.py",
 )
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)

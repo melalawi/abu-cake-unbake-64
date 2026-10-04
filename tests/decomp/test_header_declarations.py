@@ -4,11 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from unbake.decomp.draft_context import ordered_headers, required_headers
-from unbake.decomp.header_declarations import attribute_source, declaration_source, declarations
-from unbake.layout.structs_parser import Parser
-from unbake.project import makefile
+from unbake.cdecl import LayoutParser, attribute_source, declaration_source, declarations
 from unbake.config import Held
+from unbake.decomp.draft_context import ordered_headers, required_headers
+from unbake.project import makefile
 
 
 class HeaderDeclarationsTests(unittest.TestCase):
@@ -53,7 +52,7 @@ class HeaderDeclarationsTests(unittest.TestCase):
         expected = declarations(source)
         with (
             patch("unbake.cache._remembered", {}),
-            patch("unbake.decomp.header_declarations.Parser.parse", return_value=expected) as parse,
+            patch("unbake.cdecl.Parser.parse", return_value=expected) as parse,
         ):
             first = declarations(source)
             first.typedefs.clear()
@@ -82,7 +81,7 @@ class HeaderDeclarationsTests(unittest.TestCase):
             [i for i, char in enumerate(clean) if char == "\n"], [i for i, char in enumerate(source) if char == "\n"]
         )
         self.assertEqual(declarations(source).typedefs, {"Awords", "Acmd"})
-        records = Parser(source).parse()
+        records = LayoutParser(source).parse()
         self.assertEqual([(record.name, record.size) for record in records], [("Awords", 8), ("Acmd", 8)])
         self.assertEqual(source[records[0].start : records[0].end], "struct { unsigned int w[COUNT]; }")
 
@@ -141,7 +140,7 @@ class HeaderDeclarationsTests(unittest.TestCase):
             provider: "struct Value { int number; struct Holder *owner; };",
         }
         self.assertEqual(ordered_headers(contents), [provider, consumer])
-        records = Parser("\n".join(contents[path] for path in ordered_headers(contents))).parse()
+        records = LayoutParser("\n".join(contents[path] for path in ordered_headers(contents))).parse()
         self.assertEqual([(record.name, record.size) for record in records], [("Value", 8), ("Holder", 20)])
         self.assertEqual(declarations(contents[consumer]).complete_uses, {"Value"})
         self.assertEqual(declarations(contents[provider]).complete_uses, set())

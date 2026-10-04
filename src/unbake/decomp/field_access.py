@@ -5,11 +5,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from unbake.decomp.draft_macros import calls
-from unbake.layout.structs_parser import Parser
-from unbake.layout.structs_types import SCALARS
-from unbake.config import Held, Project
 from unbake import atomic as atomic_files
+from unbake.cdecl import LayoutParser
+from unbake.config import Held, Project
+from unbake.decomp.draft_macros import calls
+from unbake.layout.structs_types import SCALARS
 
 
 def share(
@@ -25,7 +25,7 @@ def share(
     An offset and a local variable name never establish aggregate identity.
     Fallback views describe only the measured access, never aggregate identity.
     """
-    parser = Parser(context)
+    parser = LayoutParser(context)
     try:
         records = parser.parse()
     except Held:
@@ -89,7 +89,7 @@ def share(
         if not pointer.endswith("*") or not re.fullmatch(r"[+-]?(?:0[xX][\da-fA-F]+|\d+)", literal):
             raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
         offset = int(literal, 0)
-        scalar = Parser(pointer[:-1].strip() + " measured;")
+        scalar = LayoutParser(pointer[:-1].strip() + " measured;")
         scalar.types = parser.types.copy()
         try:
             member = scalar.declaration()[0]

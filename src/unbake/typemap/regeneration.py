@@ -10,13 +10,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import inputs
+from unbake.cache import Cache, key, memo
+from unbake.config import Host, Project
 from unbake.layout import headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
-from unbake.cache import Cache, key, memo
-from unbake.config import Host, Project
-from unbake import atomic as atomic_files
 from unbake.typemap import header_names, split, storage
 
 
@@ -261,7 +261,7 @@ def validation_inputs(
 ) -> tuple[dict[Path, bytes], dict[Path, set[Path]], list[tuple[str, set[Path]]]]:
     """Build one effective tree and select each header/ABI's include closure."""
 
-    from unbake.decomp.header_declarations import Declarations, declarations
+    from unbake.cdecl import Declarations, declarations
 
     contents = (
         {path: text.encode() for path, text in authored.items()}

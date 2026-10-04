@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from unbake.decomp.header_declarations import declarations
+from unbake.cdecl import declarations
 from unbake.config import Held, Host, Project
 
 

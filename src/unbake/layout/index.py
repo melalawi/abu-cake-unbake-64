@@ -126,7 +126,7 @@ def update(project: Project, changes: dict[Path, str]) -> None:
     """Register explicit fold outputs; never rediscover headers by scanning."""
     import hashlib
 
-    from unbake.decomp.header_declarations import declarations
+    from unbake.cdecl import declarations
     from unbake.typemap import storage
 
     value = load(project)

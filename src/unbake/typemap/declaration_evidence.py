@@ -9,15 +9,14 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake.cache import memo
+from unbake.cdecl import LayoutParser, declaration_source, declarations
+from unbake.config import Held, Host, Project, relative_text
 from unbake.decomp.draft_context import ordered_headers
-from unbake.decomp.header_declarations import declaration_source, declarations
+from unbake.fold import imports
 from unbake.layout import split as inventory
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
-from unbake.layout.structs_parser import Parser
-from unbake.fold import imports
-from unbake.cache import memo
-from unbake.config import Held, Host, Project, relative_text
 from unbake.typemap import split
 
 _MARKER = re.compile(r"/\* unbake declaration evidence: (evidence_[a-f0-9]+) \*/")
@@ -218,8 +217,8 @@ def inject(project: Project, headers: Headers, text: str, function: str, version
     validate_symbols(project, selected, versions)
     defines = dict(headers.defines)
     for unit in selected:
-        defines.update(Parser(unit.text).defines)
-    constants = Parser("")
+        defines.update(LayoutParser(unit.text).defines)
+    constants = LayoutParser("")
     constants.defines = defines
     contents = {}
     for i, unit in enumerate(selected):

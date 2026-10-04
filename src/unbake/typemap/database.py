@@ -9,10 +9,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 from unbake.typemap import header_names, regeneration, storage, types_db
+
 
 def load(project: Project, *, required: bool = True, allow_stale: bool = False) -> dict[str, Any] | None:
     """The whole solution from build/types.sqlite (the solver and the headers step need all of it)."""
@@ -110,8 +111,8 @@ def _semantic(value: Any) -> Any:
 def _render(
     project: Project, value: dict[str, Any], policy: Host | None, session: regeneration.Session
 ) -> dict[Path, bytes | Path]:
-    from unbake.decomp.header_declarations import declaration_source
-    from unbake.decomp.header_declarations import declarations as header_declarations
+    from unbake.cdecl import declaration_source
+    from unbake.cdecl import declarations as header_declarations
     from unbake.typemap.declarations import declarator
 
     if not project.include:
@@ -518,9 +519,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         for path, content in outputs.items()
         if not path.is_file()
         or (
-            inputs.digest(path) != inputs.digest(content)
-            if isinstance(content, Path)
-            else path.read_bytes() != content
+            inputs.digest(path) != inputs.digest(content) if isinstance(content, Path) else path.read_bytes() != content
         )
     }
     backups: dict[Path, Path | None] = {}
@@ -568,9 +567,9 @@ def validate_headers(
     """Parse the staged shared context before any revision or header is published."""
     from dataclasses import replace
 
+    from unbake.cache import Cache, key, memo
     from unbake.decomp.draft_context import preprocess_context
     from unbake.process import run_tool
-    from unbake.cache import Cache, key, memo
     from unbake.typemap import declarations
 
     def remembered_digest(data: bytes) -> str:

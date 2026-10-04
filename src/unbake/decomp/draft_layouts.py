@@ -2,12 +2,10 @@
 
 import re
 
-from unbake.decomp import opaque_pointers
-from unbake.layout.structs_parser import Parser
-from unbake.layout.structs_types import SCALARS
+from unbake.cdecl import SOURCE_TOKEN, LayoutParser
 from unbake.config import Held
-
-_TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', re.S)
+from unbake.decomp import opaque_pointers
+from unbake.layout.structs_types import SCALARS
 
 
 def normalize(source: str, context: str) -> str:
@@ -18,7 +16,7 @@ def normalize(source: str, context: str) -> str:
     Unknown type names without layout evidence are refused before any write.
     """
     source = opaque_pointers.normalize(source, context)
-    parser = Parser(context + "\n" + source)
+    parser = LayoutParser(context + "\n" + source)
     # Collect typedefs without evaluating aggregates: a member can itself be
     # the unknown that this pass is about to resolve.
     while parser.peek():
@@ -28,7 +26,7 @@ def normalize(source: str, context: str) -> str:
         else:
             parser.skip_external()
     replacements = []
-    for token in _TOKEN.finditer(source):
+    for token in SOURCE_TOKEN.finditer(source):
         name = token[0]
         if not re.fullmatch(r"M2C_UNK\d*", name):
             continue

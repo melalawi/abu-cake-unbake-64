@@ -11,15 +11,15 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
+from unbake.cdecl import LayoutParser
+from unbake.config import Held, Host, Project
 from unbake.layout import shared
 from unbake.layout.header_context import Headers, header_guard
 from unbake.layout.header_context import context as header_context
 from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
-from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS, Aggregate
-from unbake.config import Held, Host, Project
-from unbake import atomic as atomic_files
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -173,7 +173,7 @@ def _scalar_name(headers: Headers, spelling: str) -> bool:
     return spelling in SCALARS
 
 
-def scalar_edits(project: Any, parser: Parser, headers: Headers) -> tuple[set[str], list[tuple[int, int, str]]]:
+def scalar_edits(project: Any, parser: LayoutParser, headers: Headers) -> tuple[set[str], list[tuple[int, int, str]]]:
     """Plan matching scalar typedef removal and required project header includes."""
     homes: dict[str, tuple[str, Path]] = {}
     for _, scalars, path in sorted(_scalar_headers(headers), key=lambda item: (not item[0], -len(item[1]), item[2])):
@@ -186,7 +186,7 @@ def scalar_edits(project: Any, parser: Parser, headers: Headers) -> tuple[set[st
     includes = set()
     replacements = []
     for start, end in sorted({(item.start, item.end) for item in parser.declarations}):
-        local = Parser(parser.source[start:end])
+        local = LayoutParser(parser.source[start:end])
         if local.peek() != "typedef":
             continue
         local.take("typedef")
@@ -702,10 +702,10 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host) -> Non
     includes cannot be proved by this scan and are refused before any write.
     Both matching and NON_MATCHING source branches are checked in every VERSION.
     """
+    from unbake.compilers import drivers
+    from unbake.compilers import registry as toolchain
     from unbake.decomp.explain import _absolute_includes
     from unbake.process import run_tool
-    from unbake.compilers import registry as toolchain
-    from unbake.compilers import drivers
 
     changed = {edit.path.resolve() for edit in edits}
     graph: dict[Path, set[Path]] = {}

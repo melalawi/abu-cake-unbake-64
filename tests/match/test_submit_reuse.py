@@ -9,13 +9,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from unbake import cache
+from unbake.cdecl import LayoutParser
+from unbake.config import Held
 from unbake.decomp import header_declarations
 from unbake.layout.header_context import Headers
 from unbake.layout.structs import layouts
-from unbake.layout.structs_parser import Parser
 from unbake.match import batch_fold, declarations, forked, rewrite_view, source_views, type_rewrite
-from unbake import cache
-from unbake.config import Held
 from unbake.project.headers import include_headers
 from unbake.typemap import declarations as typed_declarations
 from unbake.typemap import header_names
@@ -258,7 +258,7 @@ class RewritePlanReuseTests(unittest.TestCase):
         )
         for changed in changes:
             with self.subTest(changed=tuple(changed)), patch.object(cache, "_remembered", {}):
-                parser = Parser(source)
+                parser = LayoutParser(source)
                 parser.parse()
                 args = dict(
                     context="typedef int Other;",

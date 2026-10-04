@@ -7,10 +7,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tests.match.support import MatchFixture
-from unbake.layout.structs import layouts
-from unbake.layout.structs_parser import Parser
-from unbake.match import rewrite_view, type_rewrite
+from unbake.cdecl import LayoutParser
 from unbake.config import Held
+from unbake.layout.structs import layouts
+from unbake.match import rewrite_view, type_rewrite
 
 
 def dump(tokens):
@@ -46,7 +46,7 @@ class RewriteViewTests(unittest.TestCase):
             "int alpha(void) {LOCAL_CALLBACK local; int Callback = 1; return Callback;}\n"
         )
         view = expanded(source, extras={"LOCAL_CALLBACK": [("Callback", "/source.c", 2, 24)]})
-        parser = Parser(source)
+        parser = LayoutParser(source)
         parser.parse()
         planned = type_rewrite.edits(
             parser,
@@ -107,7 +107,7 @@ class RewriteViewTests(unittest.TestCase):
             rewrite_view.decode("int f(void) {return 0;}", "", "/source.c")
 
     def rewrite(self, source, view, layout_source=None):
-        parser = Parser(source if layout_source is None else layout_source)
+        parser = LayoutParser(source if layout_source is None else layout_source)
         parser.parse()
         context = "typedef struct Canon {int value;} Canon;"
         replacements = type_rewrite.edits(
@@ -175,7 +175,7 @@ class RewriteViewTests(unittest.TestCase):
 
     def test_every_parse_message_reports_source_coordinates_without_header_prefix(self):
         source = "typedef struct Old {int old;} Old;\nint f(Old *p) {return p->old;}\n"
-        parser = Parser(source)
+        parser = LayoutParser(source)
         parser.parse()
         prefix = "\n" * 8200 + "typedef struct Canon {int value;} Canon;\n"
         record = layouts("typedef struct Canon {int value;} Canon;")[0]
@@ -203,7 +203,7 @@ class RewriteViewTests(unittest.TestCase):
 
     def test_expanded_parse_error_maps_to_argument_source_and_subtracts_evidence_prefix(self):
         source = "\n" * 7 + "typedef struct Old {int old;} Old;\nint f(Old *p) {return p->old;}\n"
-        parser = Parser(source)
+        parser = LayoutParser(source)
         parser.parse()
         view = expanded(source)
         index = next(i for i, loc in enumerate(view.locations) if loc.line == 9)

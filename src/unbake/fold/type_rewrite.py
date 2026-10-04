@@ -11,11 +11,12 @@ from typing import Any
 
 from pycparser import c_ast, c_lexer, c_parser  # type: ignore[import-untyped]
 
-from unbake.layout.structs import Field, Layout, held
-from unbake.layout.structs_parser import Parser
-from unbake.fold.rewrite_view import View
-from unbake.cache import Cache, key
 from unbake import atomic as atomic_files
+from unbake import cdecl
+from unbake.cache import Cache, key
+from unbake.cdecl import LayoutParser
+from unbake.fold.rewrite_view import View
+from unbake.layout.structs import Field, Layout, held
 
 
 def _gnu_blank(view: str, blank: Any) -> str:
@@ -120,37 +121,15 @@ def _decode(value: Any) -> Any:
 
 
 def _parse_context(prefix: str) -> tuple[list[Any], dict[str, bool]]:
-    parser = c_parser.CParser()
+    parser = cdecl.parser()
     tree = parser.parse(prefix)
     return list(tree.ext), dict(parser._scope_stack[0])
-
-
-class _SourceParser(c_parser.CParser):  # type: ignore[misc]
-    """Represent GNU statement expressions as scoped compound expression nodes."""
-
-    def _parse_assignment_expression(self) -> Any:
-        # pycparser's assignment-level GNU shortcut returns before consuming
-        # postfix operators. Parse compounds at the primary-expression boundary.
-        node = self._parse_conditional_expression()
-        if self._is_assignment_op():
-            operator = self._advance().value
-            right = self._parse_assignment_expression()
-            return c_ast.Assignment(operator, node, right, node.coord)
-        return node
-
-    def _parse_primary_expression(self) -> Any:
-        if self._peek_type() == "LPAREN" and self._peek_type(2) == "LBRACE":
-            self._advance()
-            node = self._parse_compound_statement()
-            self._expect("RPAREN")
-            return node
-        return super()._parse_primary_expression()
 
 
 def _parse(prefix: str, view: str, cache_root: Path | None = None) -> c_ast.FileAST:
     """Parse VIEW after PREFIX with source coordinates as if both were one text."""
     declarations, scope = _context(prefix, cache_root)
-    parser = _SourceParser()
+    parser = cdecl.GnuParser()
     parser._scope_stack = [dict(scope)]
     parser.clex.input("\n" * prefix.count("\n") + view, "")
     parser._tokens = c_parser._TokenStream(parser.clex)
@@ -173,7 +152,7 @@ def _parse(prefix: str, view: str, cache_root: Path | None = None) -> c_ast.File
 
 
 def edits(
-    parser: Parser,
+    parser: LayoutParser,
     context: str | Callable[[], str],
     resolution: dict[str, tuple[str, Layout]],
     tag_only: set[str] | None = None,
@@ -252,7 +231,7 @@ def edits(
 
 
 def _plan(
-    parser: Parser,
+    parser: LayoutParser,
     prefix: str,
     view: str,
     expanded: View | None,
@@ -291,11 +270,11 @@ def _plan(
     starts.extend(match.end() for match in re.finditer("\n", parser.source))
     # Macro replacement lists have editable spellings too, although the layout
     # parser deliberately excludes directives from its declaration token stream.
-    from unbake.layout.structs_parser import _TOKEN
+    from unbake.cdecl import LAYOUT_TOKEN
 
     tokens = {
         token.start(): token
-        for token in _TOKEN.finditer(source_text if source_text is not None else parser.source)
+        for token in LAYOUT_TOKEN.finditer(source_text if source_text is not None else parser.source)
         if not token[0].startswith(("/*", "//"))
     }
     replacements: dict[tuple[int, int], str] = {}

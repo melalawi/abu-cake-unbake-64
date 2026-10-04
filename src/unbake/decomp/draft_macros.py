@@ -9,12 +9,10 @@ from unbake import cdecl
 from unbake.config import Held
 from unbake.decomp.draft_context import _typedefs
 
-_TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', re.S)
-
 
 def calls(source: str, name: str, replace: Callable[[list[str]], str]) -> str:
     """Rewrite nested calls while leaving comments and string literals intact."""
-    tokens = list(_TOKEN.finditer(source))
+    tokens = list(cdecl.SOURCE_TOKEN.finditer(source))
     edits = []
     for index, token in enumerate(tokens):
         if token[0] != name or index + 1 == len(tokens) or tokens[index + 1][0] != "(":
@@ -54,7 +52,7 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
     """Use declared unknown scalar types and preserve lvalue bit reinterpretation."""
     # m2c spells null pointer constants as NULL even when the project has
     # no such macro. Integer zero needs no declaration in a C draft.
-    source = _TOKEN.sub(lambda token: "0" if token[0] == "NULL" else token[0], source)
+    source = cdecl.SOURCE_TOKEN.sub(lambda token: "0" if token[0] == "NULL" else token[0], source)
     incoming = re.search(r"\bsaved_reg_([A-Za-z0-9]+)\b", re.sub(r"/\*.*?\*/|//[^\n]*", " ", source, flags=re.S))
     if incoming:
         raise Held(
@@ -106,7 +104,7 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
         # A field placeholder is an lvalue only after share lowers it.
         source = calls(source, "M2C_BITWISE", bitwise)
     known = set(re.findall(r"\btypedef\b[^;]*\b(M2C_UNK\d*)\s*;", context + "\n" + source))
-    for token in _TOKEN.finditer(source):
+    for token in cdecl.SOURCE_TOKEN.finditer(source):
         if re.fullmatch(r"M2C_\w+", token[0]) and token[0] not in known:
             if allow_fields and token[0] in ("M2C_FIELD", "M2C_BITWISE"):
                 continue

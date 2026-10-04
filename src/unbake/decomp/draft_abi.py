@@ -4,11 +4,11 @@ import hashlib
 import re
 from typing import Any
 
+from unbake.cdecl import LayoutParser
+from unbake.config import Held, Host, Project
 from unbake.decomp.draft_context import preprocess_context
 from unbake.layout import split
-from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS
-from unbake.config import Held, Host, Project
 
 
 def declarations(
@@ -88,7 +88,7 @@ def declarations(
         matches = list(re.finditer(pattern, clean))
         if len(matches) != 1:
             continue
-        parser = Parser(clean[: matches[0].start()])
+        parser = LayoutParser(clean[: matches[0].start()])
         try:
             while parser.peek():
                 if parser.peek() == "typedef":
@@ -99,7 +99,7 @@ def declarations(
         except (Held, ValueError):
             continue
 
-        def abi_type(value: str, *, parameter: bool, parser: Parser = parser) -> str | None:
+        def abi_type(value: str, *, parameter: bool, parser: LayoutParser = parser) -> str | None:
             value = re.sub(r"\b(?:const|volatile|restrict|extern|static|inline)\b", "", value).strip()
             if parameter:
                 value = re.sub(r"\b[A-Za-z_]\w*\s*(?:\[[^]]*\]\s*)*$", "", value).strip()
@@ -144,8 +144,8 @@ def mapped_body(project: Project, function: str, version: str) -> dict[str, Any]
 
 def stack_arguments(source: str, context: str, function: str, body: dict[str, Any]) -> str:
     """Recover a lost stack operand only when every mapped call proves one value."""
-    from unbake.decomp.draft_macros import calls
     from unbake.config import Held
+    from unbake.decomp.draft_macros import calls
     from unbake.typemap import declarations
 
     if "Unable to find stack arg" not in source:

@@ -14,11 +14,10 @@ from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
 from unbake import cdecl
+from unbake.cdecl import LayoutParser, attribute_source, declaration_source
+from unbake.cdecl import declarations as header_declarations
 from unbake.config import Held, Host, Project
 from unbake.decomp.draft_context import ordered_headers
-from unbake.decomp.header_declarations import attribute_source, declaration_source
-from unbake.decomp.header_declarations import declarations as header_declarations
-from unbake.layout.structs_parser import Parser
 from unbake.project.headers import include_headers
 from unbake.typemap import storage
 
@@ -527,7 +526,7 @@ def _layout_records(
     unknown = []
     layout_source = clean(source)
     try:
-        for layout in Parser(layout_source).parse():
+        for layout in LayoutParser(layout_source).parse():
             if not layout.fields:
                 continue
             declaration = layout_source[layout.start : layout.end] + ";"

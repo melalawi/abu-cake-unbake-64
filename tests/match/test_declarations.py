@@ -7,10 +7,10 @@ from itertools import pairwise
 from unittest.mock import patch
 
 from tests.match.support import MatchFixture
+from unbake.cdecl import LayoutParser
 from unbake.decomp import needs
 from unbake.layout.header_context import Headers
 from unbake.layout.structs import layouts
-from unbake.layout.structs_parser import Parser
 from unbake.match import declarations, source_views, staging
 
 
@@ -361,7 +361,7 @@ class DeclarationTests(MatchFixture):
         edits = declarations.folded_edits(self.project, self.policy, "alpha", text, self.versions)
         destination = self.root / "include/main/alpha.h"
         generated = next(edit.after for edit in edits if edit.path == destination)
-        parsed = Parser(generated)
+        parsed = LayoutParser(generated)
         record = parsed.parse()[0]
         self.assertEqual((record.size, record.alignment), (8, 4))
         self.assertEqual([(field.offset, field.size) for field in record.fields], [(0, 4), (4, 4)])
@@ -442,7 +442,7 @@ class DeclarationTests(MatchFixture):
                 extern = "extern Second *global;"
                 body = "int alpha(First *arg) { return arg->value + global->value; }"
                 text = "\n".join([*forwards, definitions[0], extern, *definitions[1:], body]) + "\n"
-                parser = Parser(text)
+                parser = LayoutParser(text)
                 records = parser.parse()
                 self.assertEqual(
                     [text[item.start : item.end] for item in parser.declarations],
