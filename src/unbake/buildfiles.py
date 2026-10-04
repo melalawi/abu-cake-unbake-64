@@ -9,7 +9,6 @@ from compilers.drivers, the same templates the runner fills, so make and unbake 
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -267,7 +266,8 @@ def makefile(project: Project, host: Host) -> str:
         "\t@for v in $(VERSIONS); do $(MAKE) --no-print-directory VERSION=$$v rom || exit 1; done\n\n",
         "verify:\n",
         "\t@sha256sum --quiet -c tools/compilers.sha256\n",
-        '\t@echo "$$(cut -c1-64 tools/n64link.sha256)  $$(command -v $(N64LINK))" | sha256sum --quiet -c\n',
+        '\t@test "$$($(N64LINK) --version)" = "$$(cat tools/n64link.version)" '
+        "|| { echo 'n64link: expected' \"$$(cat tools/n64link.version)\"; exit 1; }\n",
         "\t@for v in $(VERSIONS); do sha1sum --quiet -c versions/$$v/baserom.sha1 || exit 1; done\n\n",
         "setup:\n",
         *(line + "\n" for line in setup_recipe(project)),
@@ -349,7 +349,10 @@ def gitlab_progress(project: Project) -> str:
 
 
 def n64link_pin(host: Host) -> str:
-    return hashlib.sha256(Path(host.n64link).read_bytes()).hexdigest() + "  n64link\n"
+    """The n64link release the build files expect; any build of that release passes make verify."""
+    from unbake import process
+
+    return process.run_tool([str(host.n64link), "--version"], Path(host.n64link).parent, "buildfiles")
 
 
 def generate(project: Project, host: Host) -> dict[Path, bytes]:
@@ -357,7 +360,7 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
     files: dict[Path, str] = {
         project.root / "Makefile": makefile(project, host),
         project.root / "units.mk": units_mk(project),
-        project.tools / "n64link.sha256": n64link_pin(host),
+        project.tools / "n64link.version": n64link_pin(host),
         project.root / ".github/workflows/progress.yml": github_progress(project, host),
         project.root / ".gitlab-ci.yml": gitlab_progress(project),
     }
