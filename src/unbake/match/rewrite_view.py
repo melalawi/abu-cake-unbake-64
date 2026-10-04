@@ -79,6 +79,30 @@ def decode(output: str, source: str, filename: str) -> View:
     return View("".join(pieces), tuple(locations), tuple(origins))
 
 
+def _source_output(output: str, boundary_line: int) -> str:
+    """Skip emitted headers only at the injected boundary's actual compiler token.
+
+    Verify the candidate within its output line so marker-like text inside a
+    string stays a string. C preprocessing tokens cannot contain raw newlines.
+    Providers without the expected stdin map retain the ordinary decoder path.
+    """
+    at = output.find(_BOUNDARY)
+    while at >= 0:
+        start = output.rfind("{P:", 0, at)
+        marker = _OUTPUT.match(output, start) if start >= 0 else None
+        if marker is not None and marker[1] == "<stdin>" and (int(marker[2]), int(marker[3])) == (boundary_line, 12):
+            token = next(_OUTPUT.finditer(output, marker.end()), None)
+            if token is not None and token.start() == at and token[4] == _BOUNDARY:
+                line = output.rfind("\n", 0, start) + 1
+                for part in _OUTPUT.finditer(output, line):
+                    if part.start() >= start:
+                        if part.start() == start and part[1] is not None:
+                            return output[start:]
+                        break
+        at = output.find(_BOUNDARY, at + len(_BOUNDARY))
+    return output
+
+
 def prepare(
     project: Project,
     policy: Policy,
@@ -117,4 +141,4 @@ def prepare(
         str(source_path.parent),
     ]
     output = (preprocess or declarations._preprocess)(project, command, unit)
-    return decode(output, source, filename)
+    return decode(_source_output(output, prelude.count("\n") + 1), source, filename)

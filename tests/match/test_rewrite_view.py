@@ -253,3 +253,41 @@ class PrepareTests(MatchFixture):
         self.assertIn("-I" + str(self.project.include[0]), command)
         self.assertIn('#line 1 "/authored/alpha.c"\n' + source, unit)
         self.assertEqual(view.origins, (0,))
+
+
+class HeaderOutputSkipTests(unittest.TestCase):
+    def test_skipping_header_tokens_preserves_provenance_and_rejects_marker_like_literals(self):
+        source = "int f(void) {return 1;}"
+        filename = "/source.c"
+        marker = (rewrite_view._BOUNDARY, "<stdin>", 30, 12)
+        suffix = dump([marker, (";", "<stdin>", 30, 40), ("int", filename, 1, 1)])
+        false_marker = dump([marker]).rstrip("\n")
+        prefixes = (
+            dump([("Header", "/header.h", 1, 1)]),
+            dump([('"' + false_marker + '"', "/header.h", 1, 1)]),
+            dump([('"prefix ' + false_marker + ' suffix"', "/header.h", 1, 1)]),
+            dump([(rewrite_view._BOUNDARY, "/header.h", 30, 12)]),
+            dump([(rewrite_view._BOUNDARY, "<stdin>", 29, 12)]),
+        )
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                output = prefix + suffix
+                trimmed = rewrite_view._source_output(output, 30)
+                self.assertEqual(trimmed, suffix)
+                # The expected source suffix is identical, including its origins.
+                self.assertEqual(
+                    rewrite_view.decode(trimmed, source, filename), rewrite_view.decode(suffix, source, filename)
+                )
+                if rewrite_view._BOUNDARY not in prefix:
+                    self.assertEqual(
+                        rewrite_view.decode(trimmed, source, filename), rewrite_view.decode(output, source, filename)
+                    )
+
+    def test_unsupported_or_missing_stdin_mapping_keeps_the_original_decoder_path(self):
+        for output in (
+            "plain compiler output",
+            dump([(rewrite_view._BOUNDARY, "<stdin>", 1, 1)]),
+            dump([(rewrite_view._BOUNDARY, "/header.h", 30, 12)]),
+        ):
+            with self.subTest(output=output):
+                self.assertEqual(rewrite_view._source_output(output, 30), output)
