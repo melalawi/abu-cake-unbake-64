@@ -10,8 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture, write_rendered
+from unbake.project import makefile
 from unbake.project.cache import key
-from unbake.project_tools import compile
+from unbake.project_tools import codegen, compile
 from unbake.project_tools.compile_identity import driver_content, driver_names, selected_pins
 
 
@@ -24,6 +25,38 @@ class CompileInputTests(unittest.TestCase):
         compile.dependency_digest.cache_clear()
         compile.manifest_pins.cache_clear()
         compile.tool_digest.cache_clear()
+
+    def test_consumer_macro_requires_a_matching_header_in_any_include_root(self):
+        project, _ = fixture(self.root, case=self)
+        data = makefile.description(project)
+        second = self.root / "other-include"
+        data["include"].append(str(second))
+        consumer = second / "shared/consumers/middle.h"
+        consumer.parent.mkdir(parents=True)
+        args = argparse.Namespace(
+            recipe=project.tools / "build.json",
+            source=project.src / "middle.c",
+            output=self.root / "result.o",
+            kind="cc",
+            version="us",
+            unit="src/middle.c",
+            non_matching="0",
+            depfile=None,
+        )
+        macro = "-DUNBAKE_CONSUMER_" + hashlib.sha256(b"middle").hexdigest()[:16].upper() + "=1"
+        for name, expected in ((None, False), ("other.h", False), ("middle.h", True), (None, False)):
+            with self.subTest(name=name, expected=expected):
+                consumer.unlink(missing_ok=True)
+                if name is not None:
+                    (consumer.parent / name).write_text("#define VALUE 1\n")
+                commands = []
+
+                def execute(command, commands=commands):
+                    commands.append(command)
+                    return b"B"
+
+                codegen.prepare(args, data, execute, lambda value: value)
+                self.assertEqual(macro in commands[0], expected)
 
     def test_shared_header_reuses_digest_and_observes_same_size_edits_and_replacement(self):
         header = self.root / "shared.h"

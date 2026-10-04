@@ -26,6 +26,7 @@ def base_ignore_text(root: Path) -> str:
         "/.unbake/",
         "__pycache__/",
         "*.py[cod]",
+        "*.lock",
         ".env",
         ".env.*",
         "*.pem",
@@ -56,7 +57,9 @@ def ignore_text(project: Project) -> str:
         "/.unbake/",
     ]
     entries.extend(f"/{directory.as_posix()}/" for directory in compiler_directories(project))
-    entries.append(f"/{project.tools.relative_to(project.root).as_posix()}/clone-policy.toml")
+    tools = project.tools.relative_to(project.root).as_posix()
+    entries.extend((f"/{tools}/compile/binaries/", f"/{tools}/compile/drivers/*.sha256"))
+    entries.append(f"/{tools}/clone-policy.toml")
     required = {entry.removeprefix("/") for entry in entries if entry.startswith("/") or entry.endswith("/")}
     lines: list[str] = []
     seen: set[str] = set()

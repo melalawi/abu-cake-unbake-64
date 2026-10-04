@@ -47,6 +47,17 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("/.splat/\n", content)
         self.assertEqual(hygiene.ignore_text(self.project), content)
 
+    def test_generated_compile_ignores_preserve_driver_sources(self) -> None:
+        self.track("tools/compile/drivers/custom.py", b"source")
+        content = hygiene.ignore_text(self.project)
+        self.assertIn("/tools/compile/binaries/\n", content)
+        self.assertIn("/tools/compile/drivers/*.sha256\n", content)
+        self.assertNotIn("/tools/compile/drivers/\n", content)
+        self.assertIn("*.lock\n", content)
+        self.assertIn("*.lock\n", hygiene.base_ignore_text(self.root))
+        (self.root / ".gitignore").write_text(content)
+        self.assertEqual(hygiene.ignore_text(self.project), content)
+
     def test_check_refuses_tracked_symlink_by_name_even_when_target_missing(self) -> None:
         path = self.root / "broken-link"
         path.symlink_to("missing")

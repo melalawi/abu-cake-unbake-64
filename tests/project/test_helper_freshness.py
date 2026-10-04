@@ -10,13 +10,31 @@ from unittest.mock import patch
 
 from tests.project.makefile_fixture import fixture, write_rendered
 from unbake.match import relink
-from unbake.project import build, makefile, setup
+from unbake.project import build, hygiene, makefile, setup
 from unbake.project.config import Held
 
 
 class HelperFreshnessTests(unittest.TestCase):
     def setUp(self):
         self.addCleanup(patch.stopall)
+
+    def test_laid_out_refresh_preserves_consumer_helper_and_pins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project, _policy = fixture(Path(directory).resolve(), case=self)
+            consumer = project.include[0] / "shared/consumers/middle.h"
+            consumer.parent.mkdir(parents=True)
+            consumer.write_text("#define VALUE 1\n")
+            (project.root / ".gitignore").write_text(hygiene.ignore_text(project))
+            write_rendered(project)
+            setup.refresh_helpers(project)
+            helper = project.tools / "codegen.py"
+            self.assertIn('"UNBAKE_CONSUMER_"', helper.read_text())
+            paths = [project.root / name for name in makefile.render(project)]
+            paths.extend((project.tools / "compiler.sha256", project.root / ".gitignore", consumer))
+            before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
+            setup.refresh_helpers(project)
+            setup.require_helpers(project)
+            self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}, before)
 
     def test_refresh_preserves_previous_recipe_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
