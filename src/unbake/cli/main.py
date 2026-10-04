@@ -88,6 +88,9 @@ def dispatch(args: argparse.Namespace, project: Project, policy: Policy) -> bool
 
 
 def _contextualize(action: str, root: Path | None, policy: Path | None) -> str:
+    if "; to redraft: " in action:
+        selected, redraft = action.split("; to redraft: ", 1)
+        return _contextualize(selected, root, policy) + "; to redraft: " + _contextualize(redraft, root, policy)
     if not action.startswith("unbake "):
         return action
     tokens = shlex.split(action)

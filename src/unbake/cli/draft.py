@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
-from unbake.decomp import exclusions, m2c, type_context, work
+from unbake.decomp import draft_presence, exclusions, m2c, type_context, work
 from unbake.decomp.trial_compile import default_scratch, scratch_directory
 from unbake.decomp.trial_target import inputs, owning_versions
 from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
@@ -20,6 +20,7 @@ def register(phases: Subparsers) -> None:
     parser = phases.add_parser("draft", phase="draft", help="Draft a function using the configured naming version.")
     parser.add_argument("function", nargs="?", metavar="FUNCTION")
     parser.add_argument("--scratch", type=Path, help="Private draft output directory outside the project.")
+    parser.add_argument("--redraft", action="store_true", help="Regenerate an existing draft, archiving its source.")
     parser.add_argument("--exclude", type=Path, metavar="FILE", help="Override the project exclusion manifest.")
     parser.add_argument("--without-type-db", action="store_true", help="Diagnostic baseline: omit solved type context.")
     parser.add_argument("--struct", metavar="ID", help="Draft an evidenced shared struct (implementation pending).")
@@ -42,11 +43,13 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         policy = load_policy(local)
     versions = owning_versions(project, function, None)
     naming = versions[0]
-    scratch = scratch_directory(project, args.scratch or default_scratch(project, policy), "draft")
+    remembered = draft_presence.attempts(project).get(function)
+    previous = Path(remembered["scratch"]) if remembered and getattr(args, "redraft", False) else None
+    scratch = scratch_directory(project, args.scratch or previous or default_scratch(project, policy), "draft")
     _database, context = ("", "") if args.without_type_db else type_context.snapshot(project, function)
     destination = scratch / "drafts" / function
     source = destination / (function + ".c")
-    refresh = source.exists() and function in type_context.redrafts(project)
+    refresh = source.exists() and (getattr(args, "redraft", False) or function in type_context.redrafts(project))
     if source.exists() and not refresh:
         try:
             work.overlay_data(project, source)
@@ -61,6 +64,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             next_action="unbake try " + shlex.quote(str(source)) + " --scratch " + shlex.quote(str(scratch)),
         )
     with inputs(project, function, versions, read_only=True) as pinned:
+        draft_presence.remember(project, function, scratch, "failed draft attempt")
         generated = m2c.draft(
             project,
             policy,
@@ -83,5 +87,6 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             destination / "manifest.json",
             work.encoded(work.identity(project, source, versions, pinned=pinned, policy=policy)),
         )
+    draft_presence.remember(project, function, scratch, "private draft")
     suggest(command(project.root, "try") + " " + shlex.quote(str(source)) + " --scratch " + shlex.quote(str(scratch)))
     return receipt("draft", [f"draft_path: {source}", f"versions: {', '.join(versions)}; draft version: {naming}"])

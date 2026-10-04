@@ -25,5 +25,7 @@ def run(args: argparse.Namespace, project: PendingProject) -> bool:
         reason = "--new: " + reason
     elif project.state == "ready":
         reason += "; next --new selects undrafted work"
+    if getattr(args, "new", False) and project.state == "ready":
+        action += "; to redraft: " + guidance.command(project.root, "draft") + " FUNCTION --redraft"
     suggest(action)
-    return receipt("next", [reason])
+    return receipt("next", reason.splitlines())

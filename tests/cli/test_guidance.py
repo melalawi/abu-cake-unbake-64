@@ -39,6 +39,8 @@ class GuidanceTests(MainCase):
         self.assertTrue(select.call_args.kwargs["new"])
         self.assertIn("OK(next): --new: ranked beta", out)
         self.assertIn("Next: unbake", out)
+        self.assertIn("; to redraft: ", out.splitlines()[-1])
+        self.assertTrue(out.splitlines()[-1].endswith("draft FUNCTION --redraft"))
         output = io.StringIO()
         with redirect_stdout(output), self.assertRaises(SystemExit) as exited:
             main(["next", "--help"])
@@ -134,3 +136,25 @@ class GuidanceTests(MainCase):
         self.assertEqual(error, "")
         action = out.split("Then run ", 1)[1].removesuffix(".\n")
         self.assertEqual(shlex.split(action), ["unbake", "--project", str(self.root), "--policy", str(policy), "setup"])
+
+    def test_next_new_contextualizes_both_commands_and_preserves_skip_receipt(self) -> None:
+        policy = self.directory / "operator policy.toml"
+        policy.write_text("")
+        with (
+            patch.dict(os.environ),
+            patch.object(config, "read_policy", return_value=self.policy),
+            patch(
+                "unbake.cli.workflow.select",
+                return_value=("unbake draft beta", "ranked beta\nSkipped: alpha (private draft)"),
+            ),
+        ):
+            code, out, error = self.run_main(["--project", str(self.root), "--policy", str(policy), "next", "--new"])
+        self.assertEqual((code, error), (0, ""))
+        self.assertIn("OK(next): Skipped: alpha (private draft)", out)
+        selected, redraft = out.splitlines()[-1].removeprefix("Next: ").split("; to redraft: ")
+        prefix = ["unbake", "--project", str(self.root), "--policy", str(policy)]
+        self.assertEqual(shlex.split(selected), [*prefix, "draft", "beta"])
+        self.assertEqual(
+            shlex.split(redraft),
+            ["unbake", "--policy", str(policy), "--project", str(self.root), "draft", "FUNCTION", "--redraft"],
+        )

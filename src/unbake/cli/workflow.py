@@ -5,7 +5,7 @@ import shlex
 from pathlib import Path
 
 from unbake.cli.guidance import command, resolve
-from unbake.decomp import drafts, exclusions, fuzzy_bar, plan, type_context, work
+from unbake.decomp import draft_presence, drafts, exclusions, fuzzy_bar, plan, type_context, work
 from unbake.decomp.assign import Ledger
 from unbake.decomp.trial_target import owning_versions
 from unbake.layout import split
@@ -46,7 +46,7 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None, new
     occupied = {name for row in Ledger(project, policy).open() for name in (row["function"], *row["names"].values())}
     store = drafts.Store(policy, project)
     actions = []
-    drafted: set[str] = set()
+    seen = draft_presence.private(project, policy) if new else {}
     inventory: list[split.Function] | None = None
     # Editable current work takes precedence over another fresh draft.
     for path in sorted(project.drafts.glob("*/manifest.json")):
@@ -63,7 +63,7 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None, new
         source = project.root / manifest["source"]
         if not source.resolve().is_relative_to(project.drafts.resolve()) or not source.is_file():
             continue
-        drafted.add(subject)
+        seen[subject] = "editable draft"
         if new:
             continue
         if inventory is None:
@@ -99,9 +99,30 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None, new
     if actions:
         _, action, reason = min(actions)
         return action, reason
-    rows = [row for row in plan.actionable(project, policy) if not excluded.intersection(row.aliases)]
-    if new:
-        rows = [row for row in rows if row.draft is None and not drafted.intersection(row.aliases)]
+    skipped: list[str] = []
+
+    def available(row: plan.Row) -> bool:
+        why = "explicit exclusion" if excluded.intersection(row.aliases) else None
+        if new and why is None:
+            why = next((seen[name] for name in row.aliases if name in seen), None)
+            if why is None and row.draft is not None:
+                why = "retained draft"
+        if why is not None:
+            entry = f"{row.function} ({why})"
+            if entry not in skipped:
+                skipped.append(entry)
+            return False
+        return True
+
+    def explanation(reason: str) -> str:
+        if new and skipped:
+            detail = ", ".join(skipped[:5])
+            if len(skipped) > 5:
+                detail += f"; +{len(skipped) - 5} more"
+            reason += "\nSkipped: " + detail
+        return reason
+
+    rows = [row for row in plan.actionable(project, policy) if available(row)]
     if rows:
         row = rows[0]
         reason = f"{row.function}: supported compiler and complete function boundary on {', '.join(row.versions)}; "
@@ -110,13 +131,9 @@ def select(project: Project, policy: Policy, *, exclude: Path | None = None, new
             if row.score is not None
             else f"smallest supported draft ({row.size} bytes)"
         )
-        return draft_command(row.function), reason
-    if any(
-        not excluded.intersection(row.aliases)
-        and (not new or (row.draft is None and not drafted.intersection(row.aliases)))
-        for row in plan.ranked(project, policy)
-    ):
+        return draft_command(row.function), explanation(reason)
+    if any(available(row) for row in plan.ranked(project, policy)):
         raise Held("next", "next.project: remaining items need boundary, ownership or claim resolution")
     if new:
-        return "No undrafted items.", "--new found no remaining supported undrafted functions"
+        return "No undrafted items.", explanation("--new found no remaining supported undrafted functions")
     return "No unfinished items.", "all supported functions are matched or explicitly excluded"

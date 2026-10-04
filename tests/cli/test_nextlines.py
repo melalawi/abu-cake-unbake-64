@@ -247,3 +247,43 @@ class NextLinesTests(MainCase):
         self.assertIn(f"Next: Put ROMs in {self.project.roms}.", out)
         retry = out.split("Then run ", 1)[1].removesuffix(".\n")
         self.assertEqual(shlex.split(retry), ["unbake", "--project", str(self.root), "--policy", str(policy), "setup"])
+
+    def test_explicit_redraft_archives_current_source_and_remembers_private_scratch(self):
+        source = self.stale_source()
+        original = source.read_bytes()
+        generated = self.directory / "generated/alpha.c"
+        generated.parent.mkdir()
+        generated.write_text("int alpha(void) { return 3; }\n")
+        work.overlay(self.project, generated.parent)
+        version = self.project.versions[0]
+        with (
+            patch.object(draft, "owning_versions", return_value=[version]),
+            patch.object(draft, "inputs", return_value=nullcontext({version: (self.project.build, generated)})),
+            patch("unbake.decomp.type_context.snapshot", return_value=("", "")),
+            patch.object(m2c, "draft", return_value=generated),
+            patch.object(work, "identity", return_value={"subject": "alpha"}),
+        ):
+            code, out, error = self.run_main(self.args("draft", "alpha", "--scratch", str(self.scratch), "--redraft"))
+            self.assertEqual((code, error), (0, ""))
+            code, out, error = self.run_main(self.args("draft", "alpha", "--redraft"))
+            self.assertEqual((code, error), (0, ""))
+        self.assertEqual(source.read_bytes(), generated.read_bytes())
+        archives = list(self.scratch.glob("alpha.redraft.*/alpha.c"))
+        self.assertEqual(len(archives), 2)
+        self.assertIn(original, [path.read_bytes() for path in archives])
+        self.assertEqual(self.action(out)[-2:], ["--scratch", str(self.scratch)])
+
+    def test_failed_generation_records_attempt_for_new_selection(self):
+        from unbake.decomp import draft_presence
+
+        with (
+            patch.object(draft, "owning_versions", return_value=[self.project.versions[0]]),
+            patch.object(
+                draft, "inputs", return_value=nullcontext({self.project.versions[0]: (self.project.build, self.source)})
+            ),
+            patch("unbake.decomp.type_context.snapshot", return_value=("", "")),
+            patch.object(m2c, "draft", side_effect=Held("m2c", "unsupported register")),
+        ):
+            code, _, error = self.run_main(self.args("draft", "alpha", "--scratch", str(self.scratch)))
+        self.assertEqual((code, error), (1, ""))
+        self.assertEqual(draft_presence.private(self.project, self.policy)["alpha"], "failed draft attempt")
