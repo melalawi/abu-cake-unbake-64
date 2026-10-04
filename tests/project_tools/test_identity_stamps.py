@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import tempfile
@@ -117,6 +118,28 @@ class IdentityStampTests(unittest.TestCase):
                     identity.sync_binaries(project.tools / "build.json")
                     self.assertEqual(stamp.read_bytes() != before[0], expected)
                     self.assertEqual(stamp.stat().st_mtime_ns != before[1], expected)
+
+    def test_preprocessor_byte_change_updates_only_its_stamp(self):
+        project, _ = fixture(self.root, "sn64", case=self)
+        write_rendered(project)
+        recipe = project.tools / "build.json"
+        data = json.loads(recipe.read_text())
+        cpp = project.tools / "cpp"
+        cpp.write_bytes(b"preprocessor")
+        data["cpp"] = "tools/cpp"
+        recipe.write_text(json.dumps(data))
+        with patch.object(
+            identity, "resolve_tool", side_effect=lambda value: "tools/as" if value == "policy:mips_as" else value
+        ):
+            identity.sync_binaries(recipe)
+            directory = project.tools / "compile/binaries"
+            before = {path: path.read_bytes() for path in directory.glob("*.sha256")}
+            cpp.write_bytes(b"changed preprocessor")
+            identity.sync_binaries(recipe)
+        changed = {path.name for path in before if path.read_bytes() != before[path]}
+        self.assertEqual(changed, {hashlib.sha256(b"tools/cpp").hexdigest() + ".sha256"})
+        graph = makefile.compile_rules(project, data=data)
+        self.assertIn(next(iter(changed)), graph)
 
     def test_kind_projection_table_and_installed_stamp_agreement(self):
         project, _ = fixture(self.root, "sn64", case=self)

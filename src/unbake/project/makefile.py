@@ -347,6 +347,7 @@ def compile_rules(project: Project, *, data: dict[str, Any] | None = None) -> st
                 (
                     f"{tools}/compile/binaries/{hashlib.sha256(compiler['as'].encode()).hexdigest()}.sha256",
                     f"{tools}/compile/drivers/abumasn64.sha256",
+                    f"{tools}/compile/binaries/{hashlib.sha256(data['cpp'].encode()).hexdigest()}.sha256",
                 )
             )
         elif kind == "as":

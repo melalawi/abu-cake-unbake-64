@@ -172,6 +172,8 @@ def sync_binaries(recipe: Path) -> None:
         publish_stamp(recipe.parent / "compile/binaries" / (ident + ".sha256"), content)
     tools = {data["as"]} if data["as"] else set()
     tools.update(compiler["as"] for compiler in data["compilers"].values() if compiler["kind"] == "sn64")
+    if data.get("cpp") and any(compiler["kind"] == "sn64" for compiler in data["compilers"].values()):
+        tools.add(data["cpp"])
     for value in sorted(tools):
         executable = resolve_tool(value)
         path = Path(shutil.which(executable) or executable)

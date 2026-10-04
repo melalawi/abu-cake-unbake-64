@@ -193,6 +193,7 @@ class CompileScopeTests(unittest.TestCase):
                 "compile/binaries/" + hashlib.sha256(b"policy:mips_as").hexdigest() + ".sha256",
                 {"src/middle", "asm/first"},
             ),
+            ("compile/binaries/" + hashlib.sha256(b"policy:cpp").hexdigest() + ".sha256", {"src/middle", "asm/first"}),
             ("compile/drivers/sn64_cc.py.sha256", {"src/middle", "asm/first"}),
             ("compile/drivers/abumasn64.sha256", {"src/middle", "asm/first"}),
             ("compile/drivers/resolve_external_branches.py.sha256", {"asm/first"}),
@@ -214,6 +215,7 @@ class CompileScopeTests(unittest.TestCase):
                     "default_compiler": "default",
                     "units": {},
                     "assembly_compiler": "default",
+                    "cpp": "policy:cpp",
                     "compilers": {"default": dict(kind="sn64", cc="tools/default/cc", **{"as": "policy:mips_as"})},
                 }
                 (tools / "build.json").write_text(json.dumps(recipe))
