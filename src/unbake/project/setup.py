@@ -212,7 +212,8 @@ def refresh_helpers(project: Project) -> None:
                 if previous is None:
                     path.unlink(missing_ok=True)
                 else:
-                    compiler_files.atomic_bytes(path, previous[0])
+                    if not path.is_file() or path.read_bytes() != previous[0]:
+                        compiler_files.atomic_bytes(path, previous[0])
                     path.chmod(previous[1])
             raise
 

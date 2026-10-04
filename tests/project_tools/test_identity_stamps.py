@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -46,6 +47,39 @@ class IdentityStampTests(unittest.TestCase):
         stamp.unlink()
         identity.publish_stamp(stamp, "same")
         self.assertEqual(stamp.read_text(), "same\n")
+
+    def test_concurrent_equal_stamp_publication_writes_once(self):
+        stamp = self.root / "concurrent/stamp"
+        with patch.object(identity, "write", wraps=identity.write) as write:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(lambda _: identity.publish_stamp(stamp, "same"), range(16)))
+            self.assertEqual(write.call_count, 1)
+        self.assertEqual(stamp.read_text(), "same\n")
+
+    def test_failed_refresh_keeps_unchanged_stamp_timestamps_and_graph(self):
+        project, _ = fixture(self.root, case=self)
+        write_rendered(project)
+        graph = project.root / "Makefile"
+        graph.write_text("previous graph\n")
+        stamps = {path: path.stat().st_mtime_ns for path in (project.tools / "compile").rglob("*") if path.is_file()}
+        original = setup.compiler_files.atomic_bytes
+
+        def fail_manifest(path, content):
+            if path.name == "compiler.sha256":
+                raise OSError("publication failed")
+            original(path, content)
+
+        # Ensure a pin changes, so failure follows the graph publication.
+        helper = project.tools / "compile.py"
+        helper.write_text("old helper\n")
+        with (
+            patch.object(setup.compiler_files, "atomic_bytes", side_effect=fail_manifest),
+            self.assertRaisesRegex(OSError, "publication failed"),
+        ):
+            setup.refresh_helpers(project)
+        self.assertEqual(graph.read_text(), "previous graph\n")
+        self.assertEqual(helper.read_text(), "old helper\n")
+        self.assertEqual({path: path.stat().st_mtime_ns for path in stamps}, stamps)
 
     def test_binary_stamps_ignore_mtime_and_pin_digests_but_track_selected_bytes(self):
         project, _ = fixture(self.root, case=self)

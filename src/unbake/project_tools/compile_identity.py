@@ -6,6 +6,7 @@ its own timestamp are deliberately absent from object identity.
 
 import argparse
 import ast
+import fcntl
 import hashlib
 import json
 import shutil
@@ -125,8 +126,11 @@ def binary_content(path: Path) -> str:
 def publish_stamp(path: Path, content: str) -> None:
     """Replace only changed identity content, including on hardlinked copies."""
     payload = (content + "\n").encode()
-    if not path.is_file() or path.read_bytes() != payload:
-        write(path, payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with (path.parent / ".identity.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not path.is_file() or path.read_bytes() != payload:
+            write(path, payload)
 
 
 def sync_drivers(recipe: Path) -> None:
