@@ -286,13 +286,12 @@ def fold_source(
         removed[version] = tuple(lines[row.line] for segment in segments for row in segment.rows if row.path in paths)
     from unbake.layout import apply
 
-    if destination not in headers.texts and not any(edit.path == destination for edit in edits):
-        from unbake.typemap.split import guarded
+    if edits or destination in headers.texts:
+        final = apply.source(project, final, function, {edit.path: edit.after.encode() for edit in edits})
+    else:
+        from unbake.layout import redeclarations
 
-        edits.append(
-            Edit(destination, "", guarded(destination.relative_to(project.include[0]), "").decode(), tuple(versions))
-        )
-    final = apply.source(project, final, function, {edit.path: edit.after.encode() for edit in edits})
+        final = redeclarations.strip(final, apply.imported(final, project.include[0], {}))
     return Folded(function, final, edits, removed)
 
 

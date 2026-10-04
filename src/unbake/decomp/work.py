@@ -213,7 +213,8 @@ def trial_view(project: Project, policy: Policy, source: Path, directory: Path) 
     tree = directory / "tree"
     tree.mkdir(parents=True)
     shutil.copyfile(project.root / "config.toml", tree / "config.toml")
-    shutil.copyfile(project.root / "layout.toml", tree / "layout.toml")
+    if (project.root / "layout.toml").is_file():
+        shutil.copyfile(project.root / "layout.toml", tree / "layout.toml")
     from unbake.layout import index
 
     lookup = index.path(project)

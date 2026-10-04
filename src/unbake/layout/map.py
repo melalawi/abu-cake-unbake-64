@@ -235,4 +235,6 @@ def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> 
             dict.fromkeys(child for name in group.get("split", []) for child in replacements.get(name, (name,)))
         )
     value["group"] = [group for group in value["group"] if group["members"]]
-    target.write_bytes(encoded(validate(value, project.versions, members)))
+    from unbake.typemap import storage
+
+    storage.write(target, encoded(validate(value, project.versions, members)))

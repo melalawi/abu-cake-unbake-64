@@ -93,7 +93,7 @@ def header_guard(headers: Headers, path: Path) -> str:
     """Choose a stable guard for a new header without shadowing another provider."""
     guard = f"UNBAKE_{path.stem.upper()}_H"
     pattern = re.compile(r"^\s*#\s*define\s+" + re.escape(guard) + r"\b", re.M)
-    if not any(home != path and pattern.search(text) for home, text in headers.texts.items()):
+    if not any(pattern.search(text) for home, text in headers.texts.items()):
         return guard
     relative = (
         path.relative_to(headers.root) if headers.root is not None and path.is_relative_to(headers.root) else path

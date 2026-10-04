@@ -310,7 +310,12 @@ class Layout:
         from unbake.typemap.storage import relative_root
 
         name = relative_root(self.root, path)
-        if destination is not None and path.parent == self.root and destination.parent != self.root:
+        if (
+            destination is not None
+            and path.parent == self.root
+            and path.name == "types.h"
+            and destination.parent != self.root
+        ):
             name = posixpath.relpath(path.as_posix(), destination.parent.as_posix())
         return f'#include "{name}"'
 

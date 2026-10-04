@@ -51,6 +51,27 @@ class Providers:
             self.macros.update(alias_types(text))
             self.macros.update(macros)
 
+        # Identical declarations can occur in broad compatibility headers and
+        # smaller prerequisite headers; prefer the smallest complete provider.
+        from unbake.layout import redeclarations
+
+        sizes = {
+            path: len(declarations(text).typedefs | declarations(text).declared | declarations(text).exports)
+            for path, text in contents.items()
+        }
+        catalogs = {path: redeclarations.catalog(text) for path, text in contents.items()}
+        for name, paths in self.names.items():
+            signatures = [catalogs[path].get(name, "") for path in paths]
+            if (
+                len(paths) > 1
+                and all(signatures)
+                and len({redeclarations.normalized(text) for text in signatures}) == 1
+            ):
+                chosen = min(paths, key=lambda path: (sizes[path], path.as_posix()))
+                self.names[name] = {chosen}
+                if name in self.tags:
+                    self.tags[name] = {chosen}
+
 
 def resolve(project: Project, headers: Headers, text: str, function: str = "", *, edits: tuple[Edit, ...] = ()) -> str:
     """Replace missing shared imports using live homes; preserve all non-include bytes."""

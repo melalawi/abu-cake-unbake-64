@@ -232,7 +232,10 @@ def _render(
         for alias, type_ in record.get("typedefs", {}).items():
             if alias in provided or alias in reserved or header_names.placeholder(alias):
                 continue
-            if alias in prerequisites and prerequisites[alias] != type_:
+            from unbake.typemap.declarations import canonical
+
+            type_ = canonical(type_, concrete)
+            if alias in prerequisites and canonical(prerequisites[alias], concrete) != type_:
                 raise Held("solve", f"types.header_parse: conflicting generated typedef {alias}")
             prerequisites[alias] = type_
     for path in (*authored, *(root / name for name in value.get("declaration_evidence", {}))):

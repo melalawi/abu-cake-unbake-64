@@ -118,7 +118,8 @@ def authored_contents(project: Project, headers: Headers, local: Project) -> dic
         staged / path.relative_to(root): text
         for root, staged in zip(project.include, local.include, strict=True)
         for path, text in headers.texts.items()
-        if path.is_relative_to(root) and not storage.generated(project, path)
+        if path.is_relative_to(root)
+        and not (isinstance(getattr(project, "build", None), Path) and storage.generated(project, path))
     }
 
 
@@ -127,7 +128,7 @@ def header_includes(project: Project, headers: Headers, directory: Path) -> tupl
     from unbake.layout import index as ownership_index
 
     texts = dict(headers.texts)
-    for path in ownership_index.headers(project):
+    for path in ownership_index.headers(project) if isinstance(getattr(project, "build", None), Path) else ():
         if path not in texts and path.is_file():
             texts[path] = path.read_text()
     shared = headers.__dict__.get("_shared_includes")

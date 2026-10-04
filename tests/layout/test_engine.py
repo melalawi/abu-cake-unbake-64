@@ -43,11 +43,15 @@ class MapTests(unittest.TestCase):
             (project.root / "layout.toml").write_bytes(
                 map.encoded(map.validate(self.value, project.versions, self.members))
             )
+            original = (project.root / "layout.toml").read_bytes()
+            mirror = project.root / "layout-before.toml"
+            os.link(project.root / "layout.toml", mirror)
             renamed = {**self.members, "replacement": map.Member("replacement", "span", 0x80001004, ("a",))}
             del renamed["second"]
             with patch.object(map, "catalog", return_value=renamed):
                 map.edit_members(project, {"second": ("replacement",)})
                 result = map.load(project)
+            self.assertEqual(mirror.read_bytes(), original)
             self.assertEqual(result.groups[0].name, "code")
             self.assertEqual(result.groups[0].members, ("first", "replacement"))
             self.assertEqual(result.groups[0].split, ("replacement",))
