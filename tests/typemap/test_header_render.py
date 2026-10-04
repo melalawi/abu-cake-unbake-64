@@ -12,7 +12,7 @@ from unbake.layout.header_context import Headers
 from unbake.layout.structs_parser import Parser
 from unbake.match import declarations as publication
 from unbake.project.config import Held
-from unbake.typemap import database, declaration_evidence, declarations, solver
+from unbake.typemap import database, declaration_evidence, declarations, facts, solver
 from unbake.typemap.solver import Constraints, _merge_records
 
 
@@ -149,7 +149,9 @@ class HeaderRenderTests(unittest.TestCase):
                     patch.object(declarations, "headers", side_effect=evidence_context),
                     patch.object(declaration_evidence, "feedback_components", return_value=evidence),
                 ):
-                    seeds = declarations.collect(self.project, self.policy)
+                    seeds = declarations.collect(
+                        self.project, self.policy, facts.published_keys(self.project, self.policy)
+                    )
                 self.assertEqual(len(seeds), 2)
                 for seed in seeds:
                     self.assertEqual(seed["authored_structs"], ["Authored"])

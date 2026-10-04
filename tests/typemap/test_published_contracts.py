@@ -23,13 +23,11 @@ class PublishedContractsTests(unittest.TestCase):
             "void setter(Word value);\n"
             '# 1 "owner.c"\nvoid owner(void) {setter(table[queue.count]);}\nvoid entry(void) {}\n',
         )
-        consumed = declarations._PublishedDeclarations(contracts=True).extract(
-            text, {"kind": "published"}, source, compact=True
-        )
+        consumed = declarations.published(text, {"kind": "published"}, source, contracts=True, compact=True)
         self.assertEqual(set(consumed["functions"]), {"setter", "owner", "entry"})
         self.assertEqual(set(consumed["globals"]), {"queue", "table"})
         self.assertIn("Queue", consumed["structs"])
-        owned = declarations._PublishedDeclarations().extract(text, {"kind": "proven"}, source)
+        owned = declarations.published(text, {"kind": "proven"}, source)
         self.assertEqual(set(owned["functions"]), {"owner", "entry"})
         self.assertEqual(owned["globals"], {})
 

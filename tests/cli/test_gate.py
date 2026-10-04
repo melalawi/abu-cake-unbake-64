@@ -170,9 +170,9 @@ class RelocationClassificationTests(MainCase):
 
 
 class GateBatchTests(MatchFixture):
-    def test_cli_batch_proves_two_sources_and_refreshes_types_once(self):
+    def test_cli_batch_proves_two_sources_and_caches_their_facts(self):
         from unbake.cli.main import main
-        from unbake.decomp import type_context
+        from unbake.typemap import facts
 
         alpha, beta = self.draft("alpha"), self.draft("beta")
         self.prove(alpha)
@@ -180,13 +180,12 @@ class GateBatchTests(MatchFixture):
         with (
             patch("unbake.cli.main.config.load", return_value=self.project),
             patch("unbake.cli.main.config.load_policy", return_value=self.policy),
-            patch.object(type_context, "feedback_many") as feedback,
+            patch.object(facts, "refresh", return_value={}) as refresh,
         ):
             code = main(["--project", str(self.root), "submit", "--batch", str(alpha), str(beta)])
         self.assertEqual(code, 0)
         self.assertEqual(self.calls, [("alpha", "beta")])
-        feedback.assert_called_once()
-        self.assertEqual({entry[0] for entry in feedback.call_args.args[1]}, {"alpha", "beta"})
+        self.assertEqual({task[0] for task in refresh.call_args.args[2]}, {"alpha", "beta"})
 
     def test_batch_proves_changed_source_with_other_source(self):
         from unbake.match import batch

@@ -570,41 +570,6 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 backup.unlink(missing_ok=True)
 
 
-def feedback_many(
-    project: Project,
-    entries: list[dict[str, Any]],
-    *,
-    policy: Policy | None = None,
-    regenerate: bool = True,
-) -> dict[str, Any]:
-    """Refresh cached facts after the caller has published ROM-checked C."""
-    from unbake.typemap.mapping import refresh_map
-    from unbake.typemap.solver import solve
-
-    facts = refresh_map(project)
-    if not regenerate:
-        return facts
-    if policy is None:
-        from unbake.project.config import read_policy
-
-        policy = read_policy()
-    return solve(project, policy, facts=facts)
-
-
-def feedback(
-    project: Project,
-    function: str,
-    source: Path,
-    *,
-    versions: list[str],
-    proof: dict[str, Any],
-    policy: Policy | None = None,
-) -> dict[str, Any]:
-    return feedback_many(
-        project, [{"function": function, "source": source, "versions": versions, "proof": proof}], policy=policy
-    )
-
-
 def validate_headers(
     project: Project,
     outputs: dict[Path, bytes | Path],

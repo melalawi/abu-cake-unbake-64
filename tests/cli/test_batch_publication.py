@@ -97,7 +97,7 @@ class BatchPublicationCliTests(unittest.TestCase):
         source = self.sources[0]
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
         with (
-            patch("unbake.typemap.declarations.validate_sources", return_value={source.stem: "types.declaration: bad"}),
+            patch("unbake.typemap.facts.refresh", return_value={source.stem: "types.declaration: bad"}),
             patch.object(incremental, "prepare") as proof,
             patch.object(batch, "_commit") as commit,
         ):
@@ -143,8 +143,8 @@ class BatchPublicationCliTests(unittest.TestCase):
         original = batch.staging.publication_stamps
         header = next(self.project.include[0].rglob("*.h"))
 
-        def feedback(project, policy, candidates, current, *, strict=False):
-            events.append(("feedback", strict))
+        def feedback(project, policy, candidates):
+            events.append(("feedback", None))
             header.write_bytes(header.read_bytes() + b"\n/* feedback wrote header */\n")
             return ["OK(types): mocked; follow-up: mock"]
 
@@ -163,7 +163,7 @@ class BatchPublicationCliTests(unittest.TestCase):
             published = self.project.src / self.sources[0].name
             published.write_bytes(published.read_bytes() + b"\n/* republication */\n")
             self.cli("submit", published)
-        self.assertEqual(events, [("feedback", False), ("refresh", None), ("feedback", True), ("refresh", None)])
+        self.assertEqual(events, [("feedback", None), ("refresh", None), ("feedback", None), ("refresh", None)])
 
     def test_refresh_failure_after_feedback_restores_headers_and_type_receipts(self):
         before = fixture.PublicationBoundaryCliTests.inputs(self)

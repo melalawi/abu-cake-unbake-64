@@ -67,6 +67,9 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
             else:
                 index_file.unlink(missing_ok=True)
         raise
+    if value is None:
+        common.suggest("unbake next")
+        return common.receipt("solve", ["unchanged inputs; build/types/database.json is current"])
     if reports:
         storage.write(
             project.build / "types/declaration-admission.json",

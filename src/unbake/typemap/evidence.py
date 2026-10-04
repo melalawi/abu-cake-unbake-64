@@ -245,7 +245,7 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
             conflicts.append("callee input registers differ across versions")
         missing = []
         for call in calls.get(name, []):
-            for reg in regs:
+            for reg in sorted(regs):
                 if not call["arguments"].get(reg, {}).get("defined", False):
                     missing.append(
                         {

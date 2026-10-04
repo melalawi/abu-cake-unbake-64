@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from unbake.decomp import plan
 from unbake.layout import index as layout_index
 from unbake.layout import split
 from unbake.project.config import Held
-from unbake.typemap import clear_redraft, context, feedback, feedback_many, load, map_program, redrafts, solve, storage
+from unbake.typemap import clear_redraft, context, load, map_program, redrafts, solve, storage
 
 
 class DatabaseTests(unittest.TestCase):
@@ -583,7 +584,7 @@ class DatabaseTests(unittest.TestCase):
             refresh_map(self.project)
         self.assertEqual(path.read_bytes(), before)
 
-    def test_feedback_preserves_a_proven_shared_shape_without_rescanning(self) -> None:
+    def test_solve_preserves_a_published_shared_shape_without_rescanning(self) -> None:
         import hashlib
         from dataclasses import replace
 
@@ -596,7 +597,7 @@ class DatabaseTests(unittest.TestCase):
         image[0x58:0x5C] = (0x8C820000).to_bytes(4, "big")
         cartridge.baserom.write_bytes(image)
         project.version_map["us"] = replace(cartridge, baserom_sha1=hashlib.sha1(image).hexdigest())
-        mapped = map_program(project)
+        map_program(project)
         first = solve(project)
         shapes = [name for name, row in first["structs"].items() if row["state"] == "known"]
         self.assertEqual(len(shapes), 1)
@@ -615,14 +616,9 @@ class DatabaseTests(unittest.TestCase):
             f"int beta(struct {shape} *p) {{ return p->field_0; }}\n"
         )
         cartridge.split.write_text(cartridge.split.read_text().replace(", asm, beta]", ", c, beta]"))
-        proof = {
-            "matched": True,
-            "source_sha256": storage.file_digest(source),
-            "versions": ["us"],
-            "target_sha256": {"us": mapped["functions"]["beta"]["versions"]["us"]["target_sha256"]},
-        }
         with patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("unexpected rescan")):
-            result = feedback(project, "beta", source, versions=["us"], proof=proof, policy=policy)
+            result = solve(project, policy)
+        assert result is not None
         self.assertEqual(result["structs"][shape]["state"], "known")
         self.assertTrue(result["structs"][shape]["generated"])
         self.assertEqual(result["structs"][shape]["aliases"], ["RetainedShape"])
@@ -692,14 +688,11 @@ class DatabaseTests(unittest.TestCase):
         self.assertFalse(list(path.parent.glob("abi-index-*")))
         self.assertFalse(list(path.parent.glob(".facts-*")))
 
-    def test_batch_feedback_maps_and_solves_once_for_all_exact_receipts(self) -> None:
-        from unbake.typemap.mapping import refresh_map as map_
-        from unbake.typemap.solver import solve as solve_
+    def test_unchanged_solve_is_skipped_and_one_source_edit_extracts_only_it(self) -> None:
+        from unbake.typemap import facts
 
-        entries = []
         for function in ("alpha", "beta"):
-            source = self.project.src / (function + ".c")
-            source.write_text(f"int {function}(void) {{ return 1; }}\n")
+            (self.project.src / (function + ".c")).write_text(f"int {function}(void) {{ return 1; }}\n")
             for version in self.project.versions:
                 split = self.project.version(version).split
                 split.write_text(
@@ -707,32 +700,17 @@ class DatabaseTests(unittest.TestCase):
                     .replace(f", asm, {function}]", f", c, {function}]")
                     .replace(f", asm, nonmatchings/{function}]", f", c, {function}]")
                 )
-            entries.append({"function": function, "source": source, "versions": list(self.project.versions)})
-        mapped = map_program(self.project)
-        for entry in entries:
-            entry["proof"] = {
-                "matched": True,
-                "source_sha256": storage.file_digest(entry["source"]),
-                "versions": entry["versions"],
-                "target_sha256": {
-                    v: row["target_sha256"] for v, row in mapped["functions"][entry["function"]]["versions"].items()
-                },
-            }
-        with (
-            patch("unbake.typemap.mapping.refresh_map", wraps=map_) as mapped_once,
-            patch("unbake.typemap.solver.solve", wraps=solve_) as solved_once,
-            patch("unbake.typemap.mapping.Analysis.run", side_effect=AssertionError("unexpected rescan")),
-        ):
-            result = feedback_many(self.project, entries, policy=self.policy)
-        self.assertEqual(mapped_once.call_count, 1)
-        self.assertEqual(solved_once.call_count, 1)
-        self.assertFalse((self.project.build / "types/proven.json").exists())
-        self.assertFalse((self.project.build / "types/sources").exists())
-        for function in ("alpha", "beta"):
-            self.assertEqual(result["functions"][function]["state"], "known")
-            self.assertEqual(result["functions"][function]["provenance"][0]["kind"], "proven")
+        map_program(self.project)
+        while solve(self.project, self.policy) is not None:
+            pass
+        # The cache is shared and content keyed: unique bytes force one extraction.
+        (self.project.src / "beta.c").write_text(f"int beta(void) {{ return 2; }} /* {uuid.uuid4()} */\n")
+        with patch.object(facts, "extract", wraps=facts.extract) as extracted:
+            self.assertIsNotNone(solve(self.project, self.policy))
+        tasks = [call.args[2] for call in extracted.call_args_list]
+        self.assertEqual({task[0] for task in tasks}, {"beta"})
 
-    def test_proven_feedback_resolves_signature_and_marks_calling_neighbour(self) -> None:
+    def test_published_source_resolves_signature_and_marks_calling_neighbour(self) -> None:
         # Alpha's delay slot leaves its incoming argument available to beta.
         directory = Path(self.project.root).parent / "other"
         directory.mkdir()
@@ -743,14 +721,9 @@ class DatabaseTests(unittest.TestCase):
         source.write_text("int beta(int value) { return value; }\n")
         split = project.version("us").split
         split.write_text(split.read_text().replace(", asm, beta]", ", c, beta]"))
-        mapped = map_program(project)
-        proof = {
-            "matched": True,
-            "source_sha256": storage.digest(source.read_bytes()),
-            "versions": ["us"],
-            "target_sha256": {"us": mapped["functions"]["beta"]["versions"]["us"]["target_sha256"]},
-        }
-        result = feedback(project, "beta", source, versions=["us"], proof=proof, policy=policy)
+        map_program(project)
+        result = solve(project, policy)
+        assert result is not None
         self.assertEqual(result["functions"]["beta"]["state"], "known")
         self.assertIn("alpha", redrafts(project))
         self.assertEqual(result["functions"]["beta"]["provenance"][0]["kind"], "proven")

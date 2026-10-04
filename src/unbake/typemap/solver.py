@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from typing import Any
 
+from unbake.project import cache as content_cache
 from unbake.project.config import Held, Policy, Project
 from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
 from unbake.typemap.mapping import refresh_map
@@ -970,7 +971,28 @@ def infer(
     }
 
 
-def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, Any] | None = None) -> dict[str, Any]:
+def _types_key(project: Project, policy: Policy | None, facts: dict[str, Any], fact_keys: list[str]) -> str:
+    """Every input of merge, infer and header publication."""
+    from unbake import steps
+    from unbake.layout import index
+
+    files = [project.root / "config.toml", project.root / "layout.toml", index.path(project)]
+    files += [path for root in project.include for path in sorted(root.rglob("*")) if path.is_file()]
+    files += sorted(path for path in (project.root / "versions").rglob("*") if path.is_file())
+    parts: list[str] = [steps.tool_fingerprint(), facts["shard_sha256"], json.dumps(facts.get("abi_supplement"))]
+    if policy is not None:
+        parts.append(json.dumps([str(policy.cpp), *policy.cppflags]))
+    parts.extend(fact_keys)
+    for path in files:
+        parts.append(storage.relative(project, path))
+        parts.append(storage.file_digest(path) if path.is_file() else "missing")
+    return content_cache.key(*parts)
+
+
+def solve(project: Project, policy: Policy | None = None) -> dict[str, Any] | None:
+    """Merge cached facts and infer types; None when no input changed since the last solve."""
+    from unbake import steps
+    from unbake.typemap import facts as source_facts
     from unbake.typemap.abi_facts import refine
 
     database = project.build / "types/database.json"
@@ -987,10 +1009,14 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
             storage.validate_identity(project, previous, "types.database")
         else:
             raise Held("solve", "types.summary: missing bounded semantic index for existing database")
-    facts = refine(project, refresh_map(project) if facts is None else facts)
+    facts = refine(project, refresh_map(project))
+    fact_keys = source_facts.published_keys(project, policy)
+    inputs = _types_key(project, policy, facts, fact_keys)
+    if database.is_file() and steps.recorded(project, "types") == inputs:
+        return None
     log = storage.FactLog(project.build / "types")
     try:
-        result = infer(project, facts, declarations.collect(project, policy), constraint_log=log)
+        result = infer(project, facts, declarations.collect(project, policy, fact_keys), constraint_log=log)
         from unbake.typemap import declaration_evidence
 
         result["declaration_evidence"] = {
@@ -1023,4 +1049,5 @@ def solve(project: Project, policy: Policy | None = None, *, facts: dict[str, An
     from unbake.typemap.database import publish
 
     publish(project, result, previous, policy=policy)
+    steps.record(project, "types", inputs)
     return result

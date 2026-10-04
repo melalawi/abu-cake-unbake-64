@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 from typing import Any
 
 from unbake.decomp.work import digest
-from unbake.project.config import Held, Policy, Project
+from unbake.project.config import Held, Project
 
 
 def provider() -> Any:
@@ -40,30 +39,3 @@ def redrafts(project: Project) -> dict[str, Any]:
     if not (project.build / "types/redraft.json").exists():
         return {}
     return dict(provider().redrafts(project))
-
-
-def feedback(
-    project: Project,
-    function: str,
-    source: Path,
-    versions: tuple[str, ...],
-    targets: dict[str, str],
-    *,
-    policy: Policy | None = None,
-) -> None:
-    provider().feedback(project, function, source, versions=list(versions), proof={}, policy=policy)
-
-
-def feedback_many(
-    project: Project,
-    entries: list[tuple[str, Path, tuple[str, ...], dict[str, str]]],
-    *,
-    policy: Policy | None = None,
-    regenerate: bool = True,
-) -> None:
-    provider().feedback_many(
-        project,
-        [{"function": function, "source": source} for function, source, _, _ in entries],
-        policy=policy,
-        regenerate=regenerate,
-    )

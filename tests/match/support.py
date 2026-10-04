@@ -41,10 +41,9 @@ class MatchFixture(unittest.TestCase):
         copier = boundary(staging, copy)
         copier.start()
         self.addCleanup(copier.stop)
-        for name in ("feedback", "feedback_many"):
-            feedback = patch("unbake.decomp.type_context." + name)
-            feedback.start()
-            self.addCleanup(feedback.stop)
+        feedback = patch("unbake.typemap.facts.refresh", return_value={})
+        feedback.start()
+        self.addCleanup(feedback.stop)
         (SCRATCH_ROOT).mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=SCRATCH_ROOT)
         self.addCleanup(self.temporary.cleanup)

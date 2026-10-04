@@ -194,8 +194,7 @@ class SplitTests(unittest.TestCase):
         self.assertIn("typedef struct Desc Desc;", layout.headers[holder].decode())
 
     def test_replayed_declarations_retain_header_typedefs_but_exclude_source_local_aliases(self):
-        batch = declarations._PublishedDeclarations()
-        seed = batch.extract(
+        seed = declarations.published(
             (
                 "typedef int (*Handler)(int);\n",
                 "typedef float Local; extern Handler callback; int f(void) { return 0; }",
@@ -209,7 +208,7 @@ class SplitTests(unittest.TestCase):
             '# 1 "shared/types/callback.h"\ntypedef int (*Imported)(int);\n'
             '# 1 "f.c"\ntypedef float Local; int f(void) { return 0; }'
         )
-        seed = batch.extract(("", imported), {}, Path("f.c"))
+        seed = declarations.published(("", imported), {}, Path("f.c"))
         self.assertIn("Imported", seed["shared_typedefs"])
         self.assertNotIn("Local", seed["shared_typedefs"])
 

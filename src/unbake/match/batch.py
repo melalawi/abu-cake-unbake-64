@@ -21,7 +21,7 @@ from typing import Any
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.decomp import checks, drafts, type_context, work
+from unbake.decomp import checks, drafts, work
 from unbake.decomp.needs import SymbolNeed
 from unbake.layout import split, split_apply
 from unbake.layout.header_context import Headers
@@ -987,7 +987,6 @@ def _commit(
                 held(f"{candidate.function}: source_sha256 changed during proof")
         report_paths = {project.root / "versions" / version / "report.json" for version in project.versions}
         touched = set(writes) | {project.root / "README.md"} | report_paths
-        republication = any(candidate.republication for candidate in candidates)
         touched.update(project.build / "types" / name for name in ("database.json", "summary.json", "redraft.json"))
         previous_headers = set(index.headers(project)) | {
             project.root / path.relative_to(staged.root) for path in index.headers(staged)
@@ -1010,7 +1009,7 @@ def _commit(
                 swapped.append(version)
             progress.write(project, policy, reports=reports)
             with reporting.phase("type_feedback", sources=len(candidates)):
-                followups = _feedback(config.load(project.root), policy, candidates, current, strict=republication)
+                followups = _feedback(config.load(project.root), policy, candidates)
             stale: set[Path] = set()
             rewritten = staging.publication_sources(project, previous_headers)
             if rewritten:
@@ -1051,15 +1050,16 @@ def _type_preflight(
 ) -> list[Candidate]:
     if all(candidate.compiled for candidate in candidates):
         return candidates
-    from unbake.typemap.declarations import validate_sources
+    from unbake.typemap import facts
 
-    refused = validate_sources(
+    refused = facts.refresh(
         project,
         policy,
         [
-            (candidate.function, project.src / f"{candidate.function}.c", candidate.versions)
+            (candidate.function, project.src / f"{candidate.function}.c", version)
             for candidate in candidates
             if candidate.matched and not candidate.compiled
+            for version in candidate.versions
         ],
     )
     # Declaration acceptance is weaker than the project's actual C compiler
@@ -1081,34 +1081,21 @@ def _type_preflight(
     return [candidate for candidate in candidates if candidate.function not in refused]
 
 
-def _feedback(
-    project: Project,
-    policy: Policy,
-    candidates: list[Candidate],
-    previous: dict[str, Path],
-    *,
-    strict: bool = False,
-) -> list[str]:
-    """Feed every proved layout back to solve once for the whole batch."""
-    entries: list[tuple[str, Path, tuple[str, ...], dict[str, str]]] = []
-    for candidate in candidates:
-        if candidate.matched:
-            entries.append((candidate.function, project.src / f"{candidate.function}.c", candidate.versions, {}))
-    if not entries:
-        return []
-    try:
-        refresh = not all(candidate.compiled for candidate in candidates)
-        if refresh:
-            type_context.feedback_many(project, entries, policy=policy)
-        else:
-            type_context.feedback_many(project, entries, policy=policy, regenerate=False)
-            from unbake.cli.guidance import command
+def _feedback(project: Project, policy: Policy, candidates: list[Candidate]) -> list[str]:
+    """Cache the published sources' facts; the next solve merges them without re-extracting."""
+    from unbake.typemap import facts
 
-            followup = command(project.root, "solve")
-            return [f"OK(types): updated map facts for {len(entries)} published sources; follow-up: {followup}"]
-    except (Held, OSError, ValueError, RuntimeError) as error:
-        if strict:
-            raise
-        reason = error.reason if isinstance(error, Held) else f"types.feedback: {error}"
-        return [f"HELD(types): {reason}; batch was published"]
-    return []
+    tasks = [
+        (candidate.function, project.src / f"{candidate.function}.c", version)
+        for candidate in candidates
+        if candidate.matched
+        for version in candidate.versions
+    ]
+    if not tasks:
+        return []
+    refused = facts.refresh(project, policy, tasks)
+    if refused:
+        return [f"HELD(types): {function}: {reason}; batch was published" for function, reason in refused.items()]
+    from unbake.cli.guidance import command
+
+    return [f"OK(types): facts cached for {len(tasks)} published sources; follow-up: {command(project.root, 'solve')}"]

@@ -259,7 +259,7 @@ class PublicationBoundaryCliTests(unittest.TestCase):
             obj = generation / "obj/src/alpha.o"
             obj.with_suffix(".d").write_text("target: src/alpha.c include/common/draft_fields_alpha.h\n")
 
-        def retire(project, policy, candidates, previous, strict=False):
+        def retire(project, policy, candidates):
             lookup = index.load(project)
             lookup["headers"].pop("common/draft_fields_alpha.h")
             lookup["symbols"] = {
@@ -295,11 +295,17 @@ class PublicationBoundaryCliTests(unittest.TestCase):
         before = cache.read_bytes()
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}
 
+        calls = []
+
         def failed_feedback(*args, **kwargs):
+            # The first call is the preflight; the second runs after publication.
+            calls.append(args)
+            if len(calls) == 1:
+                return {}
             storage.write(cache, b"partial replacement cache")
             raise Held("submit", "types.feedback.target_sha256: injected failure")
 
-        with patch("unbake.decomp.type_context.feedback_many", side_effect=failed_feedback):
+        with patch("unbake.typemap.facts.refresh", side_effect=failed_feedback):
             result = self.run_cli(
                 [str(self.script), "--project", str(self.root), "submit", str(published)], env=self.env
             )

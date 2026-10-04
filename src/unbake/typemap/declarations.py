@@ -7,10 +7,8 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from pycparser import c_ast, c_generator, c_parser  # type: ignore[import-untyped]
 
@@ -228,366 +226,11 @@ def _preprocess(project: Project, command: list[str], source: str) -> str:
     return str(result.stdout)
 
 
-class _PublishedHeaders:
-    """Preprocess the common includes once, then replay their final macro state.
-
-    Each source still runs cpp independently, so its defines and undefines cannot
-    affect another source. Include guards suppress already-emitted declarations.
-    Stateful preprocessor extensions retain the ordinary full-unit path.
-    """
-
-    def __init__(self, project: Project, policy: Policy | None, scratch: Path, *, source_context: bool = False) -> None:
-        self.project, self.policy, self.scratch = project, policy, scratch
-        self.include_generated = not source_context
-        self.contents = (
-            {}
-            if source_context
-            else {
-                path: path.read_text()
-                for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
-                if not storage.generated(project, path)
-            }
-        )
-        self.ordered = ordered_headers(self.contents)
-        texts = list(self.contents.values())
-        generated = [] if source_context else _generated_context(project)
-        texts.extend(path.read_text() for path in generated)
-        self.replay = policy is not None and not any(
-            re.search(r"__COUNTER__|^\s*#\s*pragma\b", text, re.M) for text in texts
-        )
-        self.guarded = {}
-        consumed = dict(self.contents)
-        consumed.update({path: path.read_text() for path in generated})
-        for path, text in consumed.items():
-            if guard := _outer_guard(text):
-                self.guarded[path.resolve()] = guard
-        self.prepared: dict[str, tuple[str, list[str]] | None] = {}
-        self.macros: dict[str, dict[str, str]] = {}
-        self.batch_headers: dict[Path, str] = {}
-        self.batch_guards: dict[Path, str | None] = {}
-        self.batch_effects: dict[
-            Path, list[tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str] | None]]
-        ] = {}
-        self.batch_directives: dict[Path, list[tuple[str, str]] | None] = {}
-        self.batch_includes: dict[tuple[Path, str], Path | None] = {}
-        self.batch_resolved: dict[Path, Path] = {}
-        self.batch_macro_names: dict[str, frozenset[str]] = {}
-        self.batch_safe: dict[str, bool] = {}
-
-    def source(self, version: str, source: Path) -> str | tuple[str, str]:
-        project, policy = self.project, self.policy
-        if self.replay and version not in self.prepared:
-            assert policy is not None
-            raw = _headers(
-                project,
-                policy,
-                version,
-                self.contents,
-                source,
-                line_markers=False,
-                ordered=self.ordered,
-                raw=True,
-                include_generated=self.include_generated,
-            )
-            prefix, marker, _ = raw.partition(_BOUNDARY + "\n")
-            if not marker:
-                raise Held("solve", "types.declaration: missing preprocessor source boundary")
-            prelude = "".join(f'#include "{path}"\n' for path in self.ordered)
-            if self.include_generated:
-                prelude += "".join(f'#include "{path}"\n' for path in _generated_context(project))
-            command = _cpp_command(project, policy, version, extra=True, line_markers=False)
-            macros = _preprocess(project, [*command[:-1], "-dM", "-"], prelude)
-            # A provider must support cpp's macro dump, including fixture providers.
-            if not macros.startswith("#define "):
-                self.prepared[version] = None
-            else:
-                path = self.scratch / (version + ".macros.h")
-                atomic_files.text(path, macros)
-                self.macros[version] = {
-                    match[1]: line
-                    for line in macros.splitlines(keepends=True)
-                    if (match := re.match(r"#define\s+([A-Za-z_]\w*)", line))
-                }
-                # Forced includes were already consumed while preparing the prefix.
-                pending = iter(command)
-                replay = []
-                for flag in pending:
-                    if flag == "-include":
-                        next(pending)
-                    else:
-                        replay.append(flag)
-                self.prepared[version] = prefix, [*replay[:-1], "-imacros", str(path), "-"]
-        prepared = self.prepared.get(version)
-        if prepared is None:
-            return _headers(
-                project,
-                policy,
-                version,
-                self.contents,
-                source,
-                line_markers=False,
-                ordered=self.ordered,
-                raw=True,
-                include_generated=self.include_generated,
-            )
-        prefix, command = prepared
-        content = source.read_text()
-        temporary = None
-        if not re.search(r"^\s*#\s*(?:undef|define|include_next)\b", content, re.M):
-            # A consumed, fully guarded include has no remaining effects. Avoid
-            # opening megabytes of those headers just to rediscover their guards.
-            def include(match: re.Match[str]) -> str:
-                relative = match[1]
-                paths = (source.parent / relative, *(root / relative for root in project.include))
-                found = next((path.resolve() for path in paths if path.is_file()), None)
-                if found in self.guarded:
-                    return "\n" * match[0].count("\n")
-                return match[0]
-
-            content = re.sub(r'^\s*#\s*include\s*"([^"\n]+)"[^\n]*(?:\n|$)', include, content, flags=re.M)
-            with tempfile.NamedTemporaryFile(
-                mode="w", prefix=version + ".", suffix=".c", dir=self.scratch, delete=False
-            ) as stream:
-                stream.write(f'#line 1 "{source}"\n' + content)
-                temporary = Path(stream.name)
-            command = [*command[:-1], "-iquote", str(source.parent), "-"]
-            source = temporary
-        try:
-            suffix = _preprocess(project, command, f'#include "{source}"\n')
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-        return prefix, suffix
-
-    def _batch_input(self, version: str, source: Path) -> tuple[str, set[str]] | None:
-        """Enumerate macro effects, caching closures under their observed guard state."""
-        macros = self.macros[version]
-        macro_names = self.batch_macro_names.get(version)
-        if macro_names is None:
-            macro_names = frozenset(macros)
-            self.batch_macro_names[version] = macro_names
-
-        def directives(text: str) -> list[tuple[str, str]] | None:
-            logical = re.sub(r"\\\r?\n", "", text)
-            logical = re.sub(
-                r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*',
-                lambda m: " " if m[0].startswith(("/*", "//")) else m[0],
-                logical,
-                flags=re.S,
-            )
-            if re.search(r"\b(?:__COUNTER__|_Pragma|__INCLUDE_LEVEL__)\b", logical):
-                return None
-            rows = [(m[1], m[2].strip()) for m in re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", logical, re.M)]
-            depth = 0
-            for kind, _ in rows:
-                if kind in {"if", "ifdef", "ifndef"}:
-                    depth += 1
-                elif kind in {"else", "elif", "endif"}:
-                    if not depth:
-                        return None
-                    if kind == "endif":
-                        depth -= 1
-            return rows if depth == 0 else None
-
-        def scan(
-            path: Path, rows: list[tuple[str, str]] | None, inherited: set[str], visiting: frozenset[Path]
-        ) -> tuple[set[str] | None, set[str]]:
-            effects: set[str] = set()
-            observed: set[str] = set()
-            if rows is None:
-                return None, observed
-            current = set(inherited)
-            for kind, argument in rows:
-                if kind not in {
-                    "define",
-                    "undef",
-                    "include",
-                    "if",
-                    "ifdef",
-                    "ifndef",
-                    "elif",
-                    "else",
-                    "endif",
-                    "line",
-                    "error",
-                    "warning",
-                }:
-                    return None, observed
-                if kind in {"define", "undef"}:
-                    name = re.match(r"[A-Za-z_]\w*", argument)
-                    if name is None or name[0] in {
-                        "__LINE__",
-                        "__FILE__",
-                        "__BASE_FILE__",
-                        "__DATE__",
-                        "__TIME__",
-                        "__TIMESTAMP__",
-                        "__COUNTER__",
-                        "__INCLUDE_LEVEL__",
-                        "__has_include",
-                    }:
-                        return None, observed
-                    effects.add(name[0])
-                    current.add(name[0])
-                elif kind == "include":
-                    include = re.fullmatch(r'[<"]([^>"\n]+)[>"]', argument)
-                    if include is None:
-                        return None, observed
-                    key = path.parent, argument
-                    if key not in self.batch_includes:
-                        roots = ([path.parent] if argument.startswith('"') else []) + list(self.project.include)
-                        found = next((root / include[1] for root in roots if (root / include[1]).is_file()), None)
-                        if found is None:
-                            self.batch_includes[key] = None
-                        else:
-                            canonical = self.batch_resolved.get(found)
-                            if canonical is None:
-                                canonical = found.resolve()
-                                self.batch_resolved[found] = canonical
-                            self.batch_includes[key] = canonical
-                    resolved = self.batch_includes[key]
-                    if resolved is None:
-                        return None, observed
-                    child, guards = header(resolved, current, visiting)
-                    observed.update(guards)
-                    if child is None:
-                        return None, observed
-                    effects.update(child)
-                    current.update(child)
-            return effects, observed
-
-        def header(path: Path, changed: set[str], visiting: frozenset[Path]) -> tuple[set[str] | None, set[str]]:
-            entries = self.batch_effects.setdefault(path, [])
-            for guards, context, defined, cached_effects in entries:
-                if changed.intersection(guards) == context and guards.intersection(macro_names) == defined:
-                    return None if cached_effects is None else set(cached_effects), set(guards)
-            if path not in self.batch_headers:
-                text = path.read_text()
-                self.batch_guards[path] = _outer_guard(text)
-                self.batch_directives[path] = directives(text)
-                self.batch_headers[path] = text
-            guard = self.batch_guards[path]
-            observed = {guard} if guard is not None else set()
-            if guard is not None and guard in macros and guard not in changed:
-                effects: set[str] | None = set()
-            elif path in visiting:
-                return None, observed
-            else:
-                effects, nested = scan(path, self.batch_directives[path], changed, visiting | {path})
-                observed.update(nested)
-            entries.append(
-                (
-                    frozenset(observed),
-                    frozenset(changed.intersection(observed)),
-                    frozenset(observed.intersection(macro_names)),
-                    None if effects is None else frozenset(effects),
-                )
-            )
-            del entries[:-4]
-            return effects, observed
-
-        effects, _ = header(source, set(), frozenset())
-        text = self.batch_headers[source]
-        if effects is None:
-            return None
-        return text, effects
-
-    def batch(self, version: str, sources: list[Path]) -> list[str | tuple[str, str] | Held]:
-        """One cpp for a bounded batch, restoring its exact macro state per source.
-
-        Literal closures enumerate all possible define/undef effects, including
-        inactive branches and header guards. Stateful or unresolved inputs and
-        failed framing use independent invocations, retaining per-source holds.
-        """
-
-        def individual(source: Path) -> str | tuple[str, str] | Held:
-            try:
-                return self.source(version, source)
-            except Held as error:
-                return error
-
-        prepared = self.prepared.get(version)
-        if prepared is None or len({source.parent for source in sources}) > 1:
-            return [individual(source) for source in sources]
-        if version not in self.batch_safe:
-            self.batch_safe[version] = not any(
-                re.search(r"__COUNTER__|_Pragma|__INCLUDE_LEVEL__", line)
-                for line in self.macros.get(version, {}).values()
-            )
-        if not self.batch_safe[version]:
-            return [individual(source) for source in sources]
-        prefix, command = prepared
-        inputs = [self._batch_input(version, source) for source in sources]
-        selected = [index for index, row in enumerate(inputs) if row is not None]
-        results: list[str | tuple[str, str] | Held] = ["" for _ in sources]
-        if selected:
-            changed = set().union(*(row[1] for index in selected if (row := inputs[index]) is not None))
-            reset = "".join(f"#undef {name}\n" + self.macros[version].get(name, "") for name in sorted(changed))
-            marker = "__unbake_feedback_unit_" + uuid4().hex + "_"
-            units = []
-            try:
-                for number, index in enumerate(selected):
-                    row = inputs[index]
-                    assert row is not None
-                    units.append(
-                        f"extern int {marker}{number};\n" + reset + f'#line 1 "{sources[index]}"\n' + row[0] + "\n"
-                    )
-                units.append(f"extern int {marker}{len(selected)};\n")
-                expanded = _preprocess(
-                    self.project, [*command[:-1], "-iquote", str(sources[selected[0]].parent), "-"], "".join(units)
-                )
-                frames = re.split(
-                    r"^[ \t]*extern[ \t]+int[ \t]+" + marker + r"(\d+)[ \t]*;[ \t]*$", expanded, flags=re.M
-                )
-
-                def padding(text: str) -> bool:
-                    return not re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", text, flags=re.M).strip()
-
-                if (
-                    len(frames) != 2 * len(selected) + 3
-                    or [int(frame) for frame in frames[1::2]] != list(range(len(selected) + 1))
-                    or not padding(frames[0])
-                    or not padding(frames[-1])
-                ):
-                    raise Held("solve", "types.declaration: independent preprocessor framing required")
-                for number, index in enumerate(selected):
-                    results[index] = prefix, frames[2 * number + 2]
-            except Held:
-                selected = []
-        accepted = set(selected)
-        for index, source in enumerate(sources):
-            if index not in accepted:
-                results[index] = individual(source)
-        return results
-
-
-def _source_units(
-    headers_batch: _PublishedHeaders, tasks: list[tuple[str, Path, str, dict[str, Any]]]
-) -> Iterator[tuple[tuple[str, Path, str, dict[str, Any]], str | tuple[str, str] | Held]]:
-    """Bound cpp concurrency and preserve receipt order for deterministic merging."""
-    dummy = headers_batch.scratch / ".empty.c"
-    atomic_files.text(dummy, "")
-    for version in dict.fromkeys(task[2] for task in tasks):
-        headers_batch.source(version, dummy)
-
-    def preprocess(group: tuple[str, list[int]]) -> list[tuple[int, str | tuple[str, str] | Held]]:
-        version, indices = group
-        texts = headers_batch.batch(version, [tasks[index][1] for index in indices])
-        return list(zip(indices, texts, strict=True))
-
-    cores = min(12, getattr(headers_batch.policy, "cores", 1))
-    with ThreadPoolExecutor(max_workers=cores) as pool:
-        for start in range(0, len(tasks), 128):
-            groups: dict[tuple[str, Path], list[int]] = {}
-            for index in range(start, min(start + 128, len(tasks))):
-                groups.setdefault((tasks[index][2], tasks[index][1].parent), []).append(index)
-            results = {
-                index: text
-                for rows in pool.map(preprocess, [(version, indices) for (version, _), indices in groups.items()])
-                for index, text in rows
-            }
-            for index in range(start, min(start + 128, len(tasks))):
-                yield tasks[index], results[index]
+def source_unit(project: Project, policy: Policy | None, version: str, source: Path) -> str:
+    """One source preprocessed with only its own includes, split by the source boundary."""
+    return _headers(
+        project, policy, version, {}, source, line_markers=False, ordered=[], raw=True, include_generated=False
+    )
 
 
 class ProvenStructs(Mapping[str, Any]):
@@ -947,112 +590,59 @@ def _portable_signatures(seed: dict[str, Any], shared_aliases: dict[str, str]) -
     return rewritten
 
 
-class _PublishedDeclarations:
-    """Share header parsing without sharing a source's preprocessor or C scope."""
-
-    def __init__(self, *, contracts: bool = False) -> None:
-        self.contracts = contracts
-        self.prefixes: dict[str, tuple[str, dict[str, bool], dict[str, Any]]] = {}
-        self.prefix_errors: dict[str, tuple[str, str]] = {}
-        self.sources: dict[tuple[str, str], dict[str, Any]] = {}
-        self.units: dict[str, str] = {}
-
-    def extract(
-        self, text: str | tuple[str, str], provenance: dict[str, Any], source: Path, *, compact: bool = False
-    ) -> dict[str, Any]:
-        if isinstance(text, tuple):
-            prefix, suffix = text
-        else:
-            prefix, marker, suffix = text.partition(_BOUNDARY + "\n")
-            if not marker:
-                raise Held("solve", "types.declaration: missing preprocessor source boundary")
-        if prefix in self.prefix_errors:
-            phase, reason = self.prefix_errors[prefix]
-            raise Held(phase, reason)
-        cached = self.prefixes.get(prefix)
-        if cached is None:
-            cleaned = clean(prefix, line_markers=True)
-            parser = c_parser.CParser()
-            try:
-                seed = extract(
-                    cleaned,
-                    {},
-                    definitions=True,
-                    owned_source=Path("__unbake_header_prefix__"),
-                    _parser=parser,
-                    _contracts=self.contracts,
-                )
-            except Held as error:
-                # The exact prefix fails independently of every source suffix.
-                # Preflight must retain each source's verdict without parsing
-                # the same broken headers hundreds of times. Store only text,
-                # never tracebacks that retain a partially parsed header AST.
-                self.prefix_errors[prefix] = error.phase, error.reason
-                raise
-            seed["shared_typedefs"] = seed["aliases"]
-            seed["layout_source"] = cleaned
-            cached = cleaned, parser._scope_stack[0].copy(), seed
-            self.prefixes[prefix] = cached
-            while len(self.prefixes) > 4:
-                del self.prefixes[next(iter(self.prefixes))]
-        cleaned, scope, seed = cached
-        unit = self.units.get(suffix)
-        if unit is None:
-            unit = _declaration_unit(clean(suffix, line_markers=True))
-            self.units[suffix] = unit
-            while len(self.units) > 8:
-                del self.units[next(iter(self.units))]
-        suffix = unit
-        source_key = None
-        if not re.search(r'^\s*#\s*\d+\s+"', suffix, re.M):
-            # Without line markers, the existing ownership rule excludes source
-            # globals. Resident literal storage and function bodies therefore
-            # cannot change these declaration facts across containing versions.
-            interface = re.sub(
-                r"\bconst\s+(?:float|double|unsigned\s+(?:int|char|short)|int|char|short|long)\s+"
-                r"unbake_rodata_[0-9A-Fa-f]+_[0-9A-Fa-f]+[^;]*;",
-                "",
-                suffix,
-            )
-            source_key = prefix, re.sub(r"\{\s*\}", "{}", interface).rstrip()
-            previous = self.sources.get(source_key)
-            if previous is not None:
-                return _receipt_seed(previous, provenance, compact=compact)
-        # New aggregate definitions need the full layout context. Anonymous
-        # extern declarations do not define named layouts and stay incremental.
+def published(
+    text: str | tuple[str, str],
+    provenance: dict[str, Any],
+    source: Path,
+    *,
+    contracts: bool = False,
+    compact: bool = False,
+) -> dict[str, Any]:
+    """Facts of one preprocessed source: its header prefix seeds a scoped parse of its own unit."""
+    if isinstance(text, tuple):
+        prefix, suffix = text
+    else:
+        prefix, marker, suffix = text.partition(_BOUNDARY + "\n")
+        if not marker:
+            raise Held("solve", "types.declaration: missing preprocessor source boundary")
+    cleaned = clean(prefix, line_markers=True)
+    parser = c_parser.CParser()
+    seed = extract(
+        cleaned,
+        {},
+        definitions=True,
+        owned_source=Path("__unbake_header_prefix__"),
+        _parser=parser,
+        _contracts=contracts,
+    )
+    seed["shared_typedefs"] = seed["aliases"]
+    seed["layout_source"] = cleaned
+    scope = parser._scope_stack[0].copy()
+    unit = _declaration_unit(clean(suffix, line_markers=True))
+    # New aggregate definitions need the full layout context. Anonymous
+    # extern declarations do not define named layouts and stay incremental.
+    try:
+        result = extract(
+            unit,
+            provenance,
+            definitions=True,
+            owned_source=source,
+            _scope=scope,
+            _prefix=seed,
+            _compact=compact,
+            _contracts=contracts,
+        )
+    except _FullDeclarationUnit:
+        result = extract(cleaned + unit, provenance, definitions=True, owned_source=source, _contracts=contracts)
+    if result["shared_typedefs"] is not seed["aliases"]:
+        result["shared_typedefs"] = {**seed["aliases"], **result["shared_typedefs"]}
+    prototypes = _portable_signatures(result, seed["aliases"])
+    if prototypes:
         try:
-            result = extract(
-                suffix,
-                provenance,
-                definitions=True,
-                owned_source=source,
-                _scope=scope,
-                _prefix=seed,
-                _compact=compact,
-                _contracts=self.contracts,
-            )
-        except _FullDeclarationUnit:
-            result = extract(
-                cleaned + suffix, provenance, definitions=True, owned_source=source, _contracts=self.contracts
-            )
-        if result["shared_typedefs"] is not seed["aliases"]:
-            result["shared_typedefs"] = {**seed["aliases"], **result["shared_typedefs"]}
-        prototypes = _portable_signatures(result, seed["aliases"])
-        if prototypes:
-            try:
-                _SeededParser(scope).parse("\n".join(prototypes))
-            except Exception as error:
-                raise Held("solve", f"types.declaration: {provenance}: emitted prototype: {error}") from error
-        if (
-            source_key is not None
-            and not result["globals"]
-            and not result["arrays"]
-            and result["unknown"] == seed["unknown"]
-        ):
-            self.sources[source_key] = result
-            while len(self.sources) > 8:
-                del self.sources[next(iter(self.sources))]
-        return result
+            _SeededParser(scope).parse("\n".join(prototypes))
+        except Exception as error:
+            raise Held("solve", f"types.declaration: {provenance}: emitted prototype: {error}") from error
+    return result
 
 
 def _receipt_seed(seed: dict[str, Any], provenance: dict[str, Any], *, compact: bool) -> dict[str, Any]:
@@ -1119,62 +709,42 @@ def published_sources(project: Project) -> list[tuple[str, Path, str]]:
     )
 
 
-def collect(project: Project, policy: Policy | None) -> list[dict[str, Any]]:
+def collect(project: Project, policy: Policy | None, keys: list[str]) -> list[dict[str, Any]]:
+    """Declared header seeds per version, declaration evidence, then every published source's facts."""
+    from unbake.typemap import facts
+
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".declarations-", dir=project.build) as temporary:
-        return _collect(project, policy, Path(temporary))
+        return _collect(project, policy, Path(temporary), facts.store(policy), keys)
 
 
-def validate_sources(
-    project: Project, policy: Policy | None, entries: list[tuple[str, Path, tuple[str, ...]]]
-) -> dict[str, str]:
-    """Refuse declaration errors in the staged batch before proof/publication."""
-    if not entries:
-        return {}
-    project.build.mkdir(parents=True, exist_ok=True)
-    refused = {}
-    with tempfile.TemporaryDirectory(prefix=".declarations-", dir=project.build) as temporary:
-        # Admission follows the compiler's actual source imports, including
-        # transitive providers and forced includes. Analysis imports every
-        # authored header and the generated umbrella; an unrelated provider's
-        # failure there must not veto the batch. Imported declarations remain
-        # in each suffix so the existing per-source refusal owns the hold.
-        headers_batch = _PublishedHeaders(project, policy, Path(temporary), source_context=True)
-        published = _PublishedDeclarations()
-        tasks: list[tuple[str, Path, str, dict[str, Any]]] = [
-            (function, source, version, {}) for function, source, versions in entries for version in versions
-        ]
-        for (function, source, version, _), text in _source_units(headers_batch, tasks):
-            if function in refused:
-                continue
-            try:
-                if isinstance(text, Held):
-                    raise text
-                published.extract(
-                    text, {"kind": "proven", "function": function, "version": version}, source, compact=True
-                )
-                published.sources.clear()
-            except Held as error:
-                refused[function] = error.reason
-    return refused
+def _collect(
+    project: Project, policy: Policy | None, scratch: Path, store: Any, keys: list[str]
+) -> list[dict[str, Any]]:
+    from unbake.typemap import facts
 
-
-def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dict[str, Any]]:
     seeds = []
     declared: dict[str, dict[str, Any]] = {}
-    headers_batch = _PublishedHeaders(project, policy, scratch)
-    published = _PublishedDeclarations()
+    contents = {
+        path: path.read_text()
+        for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
+        if not storage.generated(project, path)
+    }
+    ordered = ordered_headers(contents)
     authored = {
         path.resolve() for root in project.include for path in root.rglob("*.h") if not storage.generated(project, path)
     }
     for version in project.versions:
-        header_text = _headers(
-            project, policy, version, headers_batch.contents, None, line_markers=True, ordered=headers_batch.ordered
-        )
+        header_text = _headers(project, policy, version, contents, None, line_markers=True, ordered=ordered)
         provenance = {"kind": "declared", "version": version, "sha256": storage.digest(header_text.encode())}
         seed = declared.get(header_text)
         if seed is None:
-            seed = extract(header_text, provenance, authored_headers=authored)
+            seed = store.text(
+                header_text,
+                provenance,
+                authored,
+                lambda text=header_text, row=provenance: extract(text, row, authored_headers=authored),
+            )
             declared[header_text] = seed
         else:
             seed = {**seed}
@@ -1226,7 +796,12 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
             text = headers(project, policy, version, extra, line_markers=True)
             template = evidence.get(text)
             if template is None:
-                template = extract(text, provenance, authored_headers=authored)
+                template = store.text(
+                    text,
+                    provenance,
+                    authored,
+                    lambda text=text, row=provenance: extract(text, row, authored_headers=authored),
+                )
                 evidence[text] = template
             seed = _receipt_seed(template, provenance, compact=False)
             if "authored_structs" in template:
@@ -1243,31 +818,9 @@ def _collect(project: Project, policy: Policy | None, scratch: Path) -> list[dic
             }
             seed["authored_structs"] = sorted(set(seed["authored_structs"]) | declared_layouts)
             seeds.append(seed)
-    # C intervals in the ROM layout are already published matches, including
-    # including every source in src/. Import their actual compiler context;
-    # an unrelated generated umbrella must not redefine their local contracts.
-    contracts = _PublishedDeclarations(contracts=True)
-    source_headers = _PublishedHeaders(project, policy, scratch, source_context=True)
-    tasks: list[tuple[str, Path, str, dict[str, Any]]] = [
-        (function, source, version, {}) for function, source, version in published_sources(project)
-    ]
-    for (function, source, version, _), contract_text in _source_units(source_headers, tasks):
-        if isinstance(contract_text, Held):
-            raise contract_text
-        provenance = {
-            "kind": "published",
-            "function": function,
-            "version": version,
-            "source": str(source.relative_to(project.root)),
-            "sha256": storage.file_digest(source),
-        }
-        contract = contracts.extract(contract_text, provenance, source, compact=True)
-        seeds.append(consumed_contracts(contract, source.read_text()))
-        # The definition owns the function contract; imported prototypes are
-        # dependencies, and cannot override a ROM-proven definition elsewhere.
-        owned = published.extract(contract_text, {**provenance, "kind": "proven"}, source, compact=True)
-        owned["functions"] = {name: row for name, row in owned["functions"].items() if name == function}
-        seeds.append(owned)
+    # Published sources contribute their consumed contracts and owned definitions,
+    # read from the facts cache and extracted only when their inputs changed.
+    seeds.extend(facts.published(project, policy, store, keys))
     return seeds
 
 

@@ -380,16 +380,19 @@ class TypePreflightTests(unittest.TestCase):
                 return {"us": {}, "eu": {"broken": "redefinition of Record\nprevious declaration"}}
 
             with (
-                patch(
-                    "unbake.typemap.declarations.validate_sources", return_value={"declaration": "bad declaration"}
-                ) as validate,
+                patch("unbake.typemap.facts.refresh", return_value={"declaration": "bad declaration"}) as validate,
                 patch.object(batch.build, "compile_versions", side_effect=compile_versions) as compile_pool,
             ):
                 passing = batch._type_preflight(project, policy, members, receipts)
             self.assertEqual(passing, [members[0], members[2]])
             self.assertEqual(
                 validate.call_args.args[2],
-                [(c.function, project.src / f"{c.function}.c", c.versions) for c in members if c.matched],
+                [
+                    (c.function, project.src / f"{c.function}.c", version)
+                    for c in members
+                    if c.matched
+                    for version in c.versions
+                ],
             )
             compile_pool.assert_called_once()
             self.assertEqual(
