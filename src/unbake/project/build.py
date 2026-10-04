@@ -134,7 +134,8 @@ def build(
     tree = Path(tree).resolve()
     if not (tree / "Makefile").is_file():
         raise Held("build", f"{tree / 'Makefile'} is missing")
-    from unbake.project import setup, toolchain
+    from unbake.compilers import registry as toolchain
+    from unbake.project import setup
 
     setup.require_helpers(project, tree=tree)
     for ident in project.compilers:
@@ -288,7 +289,7 @@ def compile_objects(
 
     Objects land at out/<stem>.o. The result maps each failed source stem to its diagnostic.
     """
-    from unbake.project import toolchain
+    from unbake.compilers import registry as toolchain
 
     if cancel_file is not None and cancel_file.exists():
         return {}
@@ -356,7 +357,7 @@ def compile_object(
     source, out = Path(source).resolve(), Path(out).resolve()
     if not source.is_file():
         raise Held("compile", f"source {source} is missing")
-    from unbake.project import toolchain
+    from unbake.compilers import registry as toolchain
 
     compiler = project.compiler_for(source)
     toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))

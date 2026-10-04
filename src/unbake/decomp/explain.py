@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 
 from unbake.work.score import Compare
-from unbake.families.gcc.schedule import Schedule
+from unbake.compilers.families.gcc.schedule import Schedule
 from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 
@@ -159,7 +159,7 @@ def render(allocation: Allocation) -> str:
 
 def _flips(difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list[str]:
     """For globally allocated pairs, say which side wins first and the change that reverses it."""
-    from unbake.families.gcc.allocation import flip
+    from unbake.compilers.families.gcc.allocation import flip
 
     rows = []
     for candidate in (by_number[n] for n in difference.candidates):
@@ -181,8 +181,9 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
     """Compile private diagnostic streams and explain the normal compiler trial."""
     from unbake.process import run_tool
     from unbake.work import compare
-    from unbake.families import family_for
-    from unbake.project import makefile, toolchain
+    from unbake.compilers.families import family_for
+    from unbake.compilers import drivers
+    from unbake.compilers import registry as toolchain
 
     source = Path(source).resolve()
     if not source.is_file():
@@ -195,7 +196,7 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
     family = family_for(compiler.id)
     root = project.work / "_explain"
     root.mkdir(parents=True, exist_ok=True)
-    flags = list(makefile.flags(project, version, source))
+    flags = list(drivers.flags(project, version, source.stem))
     # The pinned native cc1 writes the allocator dumps itself; diagnostics use the exact build compiler.
     selected = compiler
     toolchain.verify(project.tools / selected.id, toolchain.specification(selected.id))
@@ -259,30 +260,19 @@ def _absolute_includes(project: Project, flags: list[str] | tuple[str, ...]) -> 
 def gcc_input(
     project: Project, policy: Host, source: Path, version: str, work: Path, *, preserve_lines: bool
 ) -> tuple[str, list[str]]:
-    """Prepare the exact GCC input with optional source line directives."""
+    """The exact GCC input of the unit (NON_MATCHING defined), optionally with source line directives."""
+    from unbake.compilers import drivers
     from unbake.process import run_tool
-    from unbake.project import makefile
-    from unbake.project_tools.sn64_cc import partition_flags
 
-    compiler = project.compiler_for(source)
-    flags = _absolute_includes(project, makefile.flags(project, version, source))
+    compiler = project.compiler_for(source.stem)
+    flags = _absolute_includes(project, drivers.flags(project, version, source.stem))
     if compiler.kind == "sn64":
-        try:
-            options, codeflags = partition_flags(flags)
-        except ValueError as error:
-            raise Held("explain", f"compiler.cflags: {error}") from error
-        recipe = makefile.recipe(project)
-        command = [
-            makefile.host_executable(policy, recipe.cpp or "", "cpp"),
-            *(f"-I{root}" for root in project.include),
-            *(flag for flag in recipe.cppflags if not (preserve_lines and flag == "-P")),
-            *options,
-            "-DNON_MATCHING=1",
-            str(source),
-        ]
+        _, codeflags = drivers.partition_sn64(flags)
     else:
         codeflags = [flag for flag in flags if flag != "-c"]
-        command = [str(compiler.cc), *codeflags, "-DNON_MATCHING=1", "-E", str(source)]
+    command = drivers.preprocess_command(
+        project, str(policy.cpp), version, source.stem, source, line_markers=preserve_lines
+    )
     expanded = run_tool(command, work, "explain")
     if not preserve_lines:
         expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
@@ -291,9 +281,9 @@ def gcc_input(
 
 def order(project: Project, policy: Host, source: Path, version: str) -> Schedule:
     """Read family scheduling evidence for one selected unit and VERSION."""
-    from unbake.families import family_for
+    from unbake.compilers.families import family_for
     from unbake.process import run_tool
-    from unbake.project import toolchain
+    from unbake.compilers import registry as toolchain
 
     source = Path(source).resolve()
     if not source.is_file():

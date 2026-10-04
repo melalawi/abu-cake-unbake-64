@@ -15,7 +15,7 @@ from unbake.config import Held
 
 if TYPE_CHECKING:
     from unbake.config import Project
-    from unbake.project.fingerprint import Region
+    from unbake.compilers.fingerprint import Region
 
 
 def cut_segments(yaml: str, regions: Sequence[Region]) -> str:

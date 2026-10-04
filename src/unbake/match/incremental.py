@@ -139,7 +139,7 @@ def reusable_sources(project: Project, generations: dict[str, Path], sources: di
             digests[path] = hashlib.sha256(path.read_bytes()).hexdigest()
         return digests[path]
 
-    from unbake.project import toolchain
+    from unbake.compilers import registry as toolchain
 
     for ident in {project.compiler_for(project.src / f"{name}.c").id for name in sources}:
         toolchain.verify(project.tools / ident, toolchain.specification(ident))

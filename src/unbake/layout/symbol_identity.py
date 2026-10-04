@@ -606,7 +606,7 @@ def data_slots(
     Raw operands require an exact label or a declared containing object; there
     is no nearest-label or surrounding-address inference.
     """
-    from unbake.families.mips import Relocation
+    from unbake.compilers.families.mips import Relocation
     from unbake.project_tools.elf import Object
     from unbake.project_tools.literal_layout import signed
 

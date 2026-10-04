@@ -71,7 +71,7 @@ def _facts_given(args: argparse.Namespace) -> bool:
 
 def run(context: Context) -> Result:
     from unbake import config
-    from unbake.compilers import propose, registry
+    from unbake.compilers import refresh, registry
     from unbake.project import census, flow, setup, setup_config
 
     args = context.args
@@ -96,7 +96,7 @@ def run(context: Context) -> Result:
             raise Held("setup", "setup.compiler_refresh: ready project required")
         if _facts_given(args):
             raise Held("setup", "setup.compiler_refresh: cannot change game facts or force a compiler")
-        lines = propose.redo(project, host, args.confirm)
+        lines = refresh.run(project, host, args.confirm)
         return Result.ok(NAME, {}, lines, context.cmd("next"))
     if project.state == "ready":
         if _facts_given(args):

@@ -114,7 +114,7 @@ def propose_compilers(
     choices: dict[str, str] | None = None,
 ) -> CompilerProposal:
     """Rank candidates without confirming or publishing compiler assignments."""
-    from unbake.project.fingerprint import propose_compilers as implementation
+    from unbake.compilers.fingerprint import propose_compilers as implementation
 
     return implementation(project, census, layout, policy, choices=choices)
 

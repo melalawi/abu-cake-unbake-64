@@ -13,7 +13,8 @@ from typing import Any
 
 from unbake.layout import split_analysis
 from unbake.layout.split import Function
-from unbake.project import compiler_files, rom
+from unbake.compilers import files as compiler_files
+from unbake.project import rom
 from unbake.config import Host, Held, PendingProject
 
 

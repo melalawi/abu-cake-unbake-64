@@ -38,7 +38,8 @@ from unbake.match import (
 from unbake.fold.common import atomic, held
 from unbake.match.publication import swap
 from unbake import config
-from unbake.project import build, compiler_choice, makefile, setup, workspace
+from unbake.compilers import choice as compiler_choice
+from unbake.project import build, makefile, setup, workspace
 from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.report import progress

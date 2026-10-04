@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from unbake.process import run_tool
-from unbake.project import compiler_profiles, toolchain
+from unbake.compilers import profiles as compiler_profiles
+from unbake.compilers import registry as toolchain
 from unbake.config import Held, PendingProject, Host
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object

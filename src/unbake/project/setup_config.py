@@ -9,7 +9,8 @@ from typing import Any
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.project import compiler_files, rom
+from unbake.compilers import files as compiler_files
+from unbake.project import rom
 from unbake.project.census import Census
 from unbake.config import Held, PendingProject
 
@@ -65,9 +66,9 @@ def write_facts(project: PendingProject, census: Census, *, name: str | None = N
     )
 
 
-def exception_units(default_compiler: str, assignments: dict[str, str]) -> dict[str, str]:
-    """A unit absent from [units] uses the default; list only the others."""
-    return {name: ident for name, ident in sorted(assignments.items()) if ident != default_compiler}
+def exception_units(default_compiler: str, assignments: dict[str, str]) -> dict[str, dict[str, str]]:
+    """A unit absent from [units] uses the default; list only the others, as { compiler = ID } rows."""
+    return {name: {"compiler": ident} for name, ident in sorted(assignments.items()) if ident != default_compiler}
 
 
 def render_ready(

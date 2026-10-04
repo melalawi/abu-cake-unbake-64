@@ -8,18 +8,18 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from unbake.layout.split import Function
-from unbake.project.compiler_proposal import (
+from unbake.compilers.propose import (
     confirm_proposal as confirm_proposal,
 )
-from unbake.project.compiler_proposal import (
+from unbake.compilers.propose import (
     propose_compilers as propose_compilers,
 )
-from unbake.project.compiler_proposal import (
+from unbake.compilers.propose import (
     receipt as receipt,
 )
 from unbake.config import Held, Host, Project
 from unbake.project.rom import Rom, shingles
-from unbake.project.toolchain import CompilerSpec
+from unbake.compilers.registry import CompilerSpec
 from unbake.project_tools import atomic as atomic_files
 
 
@@ -277,7 +277,8 @@ def choose(
 
 def prove(project_scratch: Project, region: Region, candidates: Sequence[CompilerSpec], policy: Host) -> Decision:
     from unbake.decomp import m2c
-    from unbake.project import build, toolchain
+    from unbake.compilers import registry as toolchain
+    from unbake.project import build
     from unbake.project.rom import load
 
     if not candidates:

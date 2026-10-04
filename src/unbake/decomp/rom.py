@@ -188,6 +188,8 @@ def rom_reader(version: Version, resident: Callable[[], list[dict[str, int]]]) -
 
 def project_reader(project: Project, name: str) -> RomReader:
     """Read a VERSION's memory, including its configured resident copies of ROM spans."""
-    from unbake.project import makefile
 
-    return rom_reader(project.version(name), lambda: makefile.recipe(project).resident_mappings.get(name, []))
+    return rom_reader(
+        project.version(name),
+        lambda: [dict(vars(row)) for row in project.resident_mappings.get(name, ())],
+    )

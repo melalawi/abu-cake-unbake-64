@@ -657,8 +657,8 @@ def prepare_setup(
     supply: Path | None = None,
 ) -> Iterator[Callable[[], list[str]]]:
     """Stage confirmed inputs, then release planning state before the proof."""
-    from unbake.project import compiler_proposal
-    from unbake.project import fingerprint as compilers
+    from unbake.compilers import propose as compiler_proposal
+    from unbake.compilers import fingerprint as compilers
 
     for line in compilers.receipt(proposal):
         print(f"OK(setup): {line}")

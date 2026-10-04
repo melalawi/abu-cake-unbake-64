@@ -10,21 +10,14 @@ from pathlib import Path
 from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
 
 from unbake.layout import split
-from unbake.project import makefile
+from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.typemap.declarations import clean
 
 
 def definitions(project: Project, policy: Host, source: Path, version: str, text: str) -> set[str]:
     """Read active global C definitions, excluding declarations and static helpers."""
-    flags = makefile.flags(project, version, project.src / source.name)
-    options: list[str] = []
-    pending = iter(flags)
-    for flag in pending:
-        if flag in ("-I", "-D", "-U", "-include", "-isystem"):
-            options.extend((flag, next(pending)))
-        elif flag.startswith(("-I", "-D", "-U")):
-            options.append(flag)
+    options = drivers.preprocessor_options(project, version, source.stem, absolute=False)
     result = subprocess.run(
         [str(policy.cpp), *project.cppflags, *options, "-DNON_MATCHING=1", "-x", "c", "-"],
         cwd=project.root,

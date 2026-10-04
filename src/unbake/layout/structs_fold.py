@@ -701,8 +701,8 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
     """
     from unbake.decomp.explain import _absolute_includes
     from unbake.process import run_tool
-    from unbake.project import makefile, toolchain
-    from unbake.project_tools.sn64_cc import partition_flags
+    from unbake.compilers import registry as toolchain
+    from unbake.compilers import drivers
 
     changed = {edit.path.resolve() for edit in edits}
     graph: dict[Path, set[Path]] = {}
@@ -719,10 +719,9 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
             regular[path] = path.is_file()
         return regular[path]
 
-    recipe = makefile.recipe(project)
     configured_flags = (
         *(compiler.cflags for compiler in project.compilers.values()),
-        *recipe.unit_cflags.values(),
+        *project.unit_flags.values(),
     )
     search = list(project.include)
     for configured in configured_flags:
@@ -780,7 +779,7 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
         if not direct and not forced_config:
             continue
         for version in project.versions:
-            flags = _absolute_includes(project, makefile.flags(project, version, source))
+            flags = _absolute_includes(project, drivers.flags(project, version, source.stem))
             forced = [Path(flags[index + 1]) for index, flag in enumerate(flags) if flag == "-include"]
             if direct or any(affected(path, set()) for path in forced):
                 includers.append((source, version, flags))
@@ -837,9 +836,9 @@ def _compile_includers(project: Project, edits: list[Edit]) -> None:
                     output = overlay / f"proof-{index}-{int(nonmatching)}.o"
                     try:
                         if compiler.kind == "sn64":
-                            cppflags, codeflags = partition_flags(options)
-                            cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
-                            expanded = run_tool([cpp, *recipe.cppflags, *cppflags, str(staged)], overlay, "structs")
+                            cppflags, codeflags = drivers.partition_sn64(options)
+                            cpp = str(policy.cpp)
+                            expanded = run_tool([cpp, *project.cppflags, *cppflags, str(staged)], overlay, "structs")
                             preprocessed = output.with_suffix(".i")
                             atomic_files.text(preprocessed, expanded)
                             run_tool(

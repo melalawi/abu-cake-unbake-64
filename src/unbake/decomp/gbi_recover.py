@@ -390,11 +390,10 @@ def lower(source: str, catalogue: list[Pattern]) -> str:
 
 def catalogue(project: Project, policy: Host, unit: Path, version: str, source: str) -> list[Pattern]:
     """Read active SDK definitions under the unit's configured preprocessor flags."""
+    from unbake.compilers import drivers
     from unbake.process import run_tool
-    from unbake.project import makefile
 
-    recipe = makefile.recipe(project)
-    flags = [*recipe.cppflags, *makefile.flags(project, version, project.src / unit.name)]
+    flags = [*project.cppflags, *drivers.preprocessor_options(project, version, unit.stem, absolute=True)]
     options: list[str] = []
     iterator = iter(flags)
     for flag in iterator:
@@ -431,7 +430,7 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
         probe = work / "sdk.c"
         atomic_files.text(probe, "\n".join([*directives, *(f'#include "{path}"' for path in sorted(headers))]) + "\n")
         command = [
-            makefile.host_executable(policy, recipe.cpp or "", "cpp"),
+            str(policy.cpp),
             "-dM",
             "-undef",
             "-nostdinc",

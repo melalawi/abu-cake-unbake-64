@@ -11,7 +11,9 @@ from typing import cast
 import toml  # type: ignore[import-untyped]
 
 from unbake import config
-from unbake.project import build, census, compiler_files, compiler_proposal, setup, setup_config
+from unbake.compilers import files as compiler_files
+from unbake.compilers import propose as compiler_proposal
+from unbake.project import build, census, setup, setup_config
 from unbake.config import Held, PendingProject, Host
 from unbake.project.flow import LayoutManifest
 from unbake.project_tools import atomic as atomic_files

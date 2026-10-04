@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from unbake.work.compare import Compared
-from unbake.project import makefile, toolchain
+from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
 from unbake.project_tools import atomic as atomic_files
 from unbake.search.core import Context, Mutation
@@ -66,39 +66,37 @@ def checkout(archive: Path, digest: str, work: Path) -> Path:
 
 
 def compile_script(project: Project, policy: Host, source_path: Path, version: str, work: Path) -> str:
-    """Render a scorer using generated compile.py, preserving unit and VERSION flags."""
+    """A permuter scorer script running the unit's exact build steps (compilers.drivers) on a candidate source."""
+    from unbake.compilers import drivers
+
     project.version(version)
-    cache = _outside(project, _required(policy, "cache_root", "policy"), "policy.cache_root")
-    unit = Path(source_path).resolve()
-    unit = (
-        unit.relative_to(project.root)
-        if unit.is_relative_to(project.src)
-        else project.src.relative_to(project.root) / (unit.stem + ".c")
-    )
-    command = [
-        sys.executable,
-        str(work / "recipe" / "compile.py"),
-        "--kind",
-        "cc",
-        "--recipe",
-        str(work / "recipe" / "build.json"),
-        "--version",
-        version,
-        "--unit",
-        str(unit),
-        "--cache-root",
-        str(cache),
-        "--non-matching",
-        "0",
+    unit = Path(source_path).stem
+    tools = drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link))
+    steps = drivers.steps(project, version, unit, '"$source"', tools)
+    cc = str(project.compiler_for(unit).cc)
+    compile_ = (cc, *steps.compile[1:])
+
+    def words(argv: tuple[str, ...]) -> str:
+        return " ".join(item if item == '"$source"' else shlex.quote(item) for item in argv)
+
+    lines = [
+        "#!/bin/sh",
+        "set -eu",
+        '[ "$#" -eq 3 ] && [ "$2" = "-o" ] || { echo "source -o output required" >&2; exit 2; }',
+        'source=$(realpath -- "$1")',
+        'output=$(realpath -m -- "$3")',
+        f'case "$output" in {shlex.quote(str(work))}/*) ;; *) echo "output outside search directory" >&2; exit 2;; esac',
+        f'scratch=$(mktemp -d {shlex.quote(str(work))}/build.XXXXXX)',
+        f"cd {shlex.quote(str(project.root))}",
+        f'{words(steps.preprocess)} > "$scratch/{unit}.i"',
+        'cd "$scratch"',
+        words(compile_),
     ]
-    return (
-        "#!/bin/sh\nset -eu\n"
-        '[ "$#" -eq 3 ] && [ "$2" = "-o" ] || { echo "source -o output required" >&2; exit 2; }\n'
-        'source=$(realpath -- "$1")\noutput=$(realpath -m -- "$3")\n'
-        f'case "$output" in {shlex.quote(str(work))}/*) ;; *) '
-        "echo 'output outside search directory' >&2; exit 2;; esac\n"
-        f'cd {shlex.quote(str(project.root))}\nexec {shlex.join(command)} --source "$source" --output "$output"\n'
-    )
+    if steps.assemble is not None:
+        lines.append(words(steps.assemble))
+    lines.append(f'mv -- "$scratch/{unit}.o" "$output"')
+    lines.append('rm -rf -- "$scratch"')
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
@@ -205,11 +203,6 @@ class Permuter:
             out.mkdir(parents=True, exist_ok=True)
             work = Path(tempfile.mkdtemp(prefix="permute-", dir=out))
             entry = checkout(archive, digest, work)
-            recipe = work / "recipe"
-            recipe.mkdir()
-            for name, content in makefile.helpers(project).items():
-                atomic_files.text(recipe / Path(name).name, content, encoding="utf-8")
-            atomic_files.copyfile(project.tools / "compiler.sha256", recipe / "compiler.sha256")
             atomic_files.text(work / "base.c", source, encoding="utf-8")
             environment = dict(
                 os.environ, TMPDIR=str(work), TMP=str(work), TEMP=str(work), PYTHONDONTWRITEBYTECODE="1", LC_ALL="C"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from unbake.project import toolchain
+from unbake.compilers import registry as toolchain
 from unbake.config import Project
 
 

@@ -25,6 +25,7 @@ class Attempt:
     best_percent: float
     exact: bool
     seconds: float
+    compiler: str
 
     def document(self) -> dict[str, Any]:
         return {
@@ -36,6 +37,7 @@ class Attempt:
             "best_percent": self.best_percent,
             "exact": self.exact,
             "seconds": self.seconds,
+            "compiler": self.compiler,
         }
 
 
@@ -82,6 +84,7 @@ def read(project: Project, function: str) -> list[Attempt]:
                     float(value["best_percent"]),
                     bool(value["exact"]),
                     float(value["seconds"]),
+                    str(value["compiler"]),
                 )
             )
         except (ValueError, KeyError, TypeError) as error:

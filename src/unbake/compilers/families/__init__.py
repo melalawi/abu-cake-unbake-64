@@ -6,13 +6,13 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from unbake.families.gcc.schedule import Schedule
+from unbake.compilers.families.gcc.schedule import Schedule
 from unbake.project_tools.elf import Object
 from unbake.project_tools.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.decomp.explain import Allocation
-    from unbake.families.mips import Relocation
+    from unbake.compilers.families.mips import Relocation
 
 from unbake.config import Held
 
@@ -36,9 +36,9 @@ class Family(Protocol):
 
 
 def family_for(compiler: str | CompilerIdentity) -> Family:
-    from unbake.families.gcc import Gcc
-    from unbake.families.ido import Ido
-    from unbake.project.toolchain import registry
+    from unbake.compilers.families.gcc import Gcc
+    from unbake.compilers.families.ido import Ido
+    from unbake.compilers.registry import registry
 
     ident = compiler if isinstance(compiler, str) else getattr(compiler, "id", None)
     if not ident:

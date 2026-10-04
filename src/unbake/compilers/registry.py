@@ -17,14 +17,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from unbake.project import compiler_files
+from unbake.compilers import files as compiler_files
 from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
     from unbake.config import Host, Project, Host
 
-REGISTRY_PATH = Path(__file__).with_name("compilers.toml")
+REGISTRY_PATH = Path(__file__).with_name("registry.toml")
+MANIFEST = "compilers.sha256"
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,6 @@ class CompilerSpec:
     cflags: tuple[str, ...]
     pins: dict[str, str]
     downloads: tuple[Download, ...]
-    drivers: tuple[str, ...]
     family: str
     decompme: str
 
@@ -128,9 +128,6 @@ def registry() -> dict[str, CompilerSpec]:
             raise Held("setup", f"{label}.downloads.files: missing {', '.join(sorted(set(pins) - covered))}")
         if fields["source"] == "mixed" and covered == set(pins):
             raise Held("setup", f"{label}.source: mixed requires supplied file pins")
-        drivers = _strings(_required(table, "drivers", label), label + ".drivers")
-        for driver in drivers:
-            compiler_files.relative(driver)
         result[ident] = CompilerSpec(
             ident,
             fields["kind"],
@@ -141,7 +138,6 @@ def registry() -> dict[str, CompilerSpec]:
             _strings(_required(table, "cflags", label), label + ".cflags"),
             pins,
             tuple(downloads),
-            drivers,
             _text(_required(table, "family", label), label + ".family"),
             _text(_required(table, "decompme", label), label + ".decompme"),
         )
@@ -305,7 +301,7 @@ def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Pat
         tools_relative = tools.absolute().relative_to(root.absolute())
         compiler_files.relative(tools_relative.as_posix())
     except ValueError as error:
-        raise Held("setup", f"[paths].tools: {tools} must be inside {root}") from error
+        raise Held("setup", f"tools/: {tools} must be inside {root}") from error
     specs = registry()
     for ident, compiler in compilers.items():
         if ident not in specs:
@@ -328,7 +324,7 @@ def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Pat
         refresh = any(pin != specs[ident].pins[name] for name, pin in previous.items())
         installs[ident] = _install(specs[ident], cache, sources.get(ident), refresh=refresh)
     tools.mkdir(parents=True, exist_ok=True)
-    manifest_path = tools / "compiler.sha256"
+    manifest_path = tools / MANIFEST
     if manifest_path.is_file():
         for line in manifest_path.read_text().splitlines():
             fields = line.split(maxsplit=1)
@@ -362,19 +358,6 @@ def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Pat
                 _replaced(target, old, pin)
             manifest.append(f"{pin}  {(tools_relative / ident / name).as_posix()}\n")
         verify(project_directory, specs[ident])
-    manifest_path = tools / "compiler.sha256"
-    if manifest_path.is_file():
-        for line in manifest_path.read_text().splitlines():
-            fields = line.split(maxsplit=1)
-            if (
-                len(fields) == 2
-                and re.fullmatch(r"[0-9a-f]{64}", fields[0])
-                and (
-                    Path(fields[1]).parent == tools_relative
-                    or Path(fields[1]).is_relative_to(tools_relative / "compile")
-                )
-            ):
-                manifest.append(line + "\n")
     compiler_files.atomic_bytes(manifest_path, "".join(manifest).encode())
     return manifest_path
 

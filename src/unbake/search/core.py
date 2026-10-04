@@ -14,9 +14,8 @@ from pathlib import Path
 from typing import Protocol
 
 from unbake.decomp import explain
-from unbake.decomp.candidate_ranking import measured_candidate_rank
+from unbake.compilers.ranking import measured_candidate_rank
 from unbake.process import read_text
-from unbake.project import makefile
 from unbake.config import Held, Host, Project
 from unbake.work.compare import Compared, measure
 from unbake.project_tools import atomic as atomic_files
@@ -76,22 +75,9 @@ def _positive(policy: Host, name: str) -> int:
 
 def preprocess(project: Project, policy: Host, source: Path, version: str, deadline: float) -> str:
     """Use the selected unit's build preprocessor, includes and VERSION flags."""
-    compiler = project.compiler_for(source)
-    flags = list(makefile.flags(project, version, source))
-    if compiler.kind == "sn64":
-        from unbake.project_tools.sn64_cc import partition_flags
+    from unbake.compilers import drivers
 
-        try:
-            options, _ = partition_flags(flags)
-        except ValueError as error:
-            raise Held("search", f"compiler.cflags: {error}") from error
-        recipe = makefile.recipe(project)
-        cpp = makefile.host_executable(policy, recipe.cpp or "", "cpp")
-        command = [cpp, *recipe.cppflags, *options, "-DNON_MATCHING=1", str(source)]
-    else:
-        if not compiler.cc:
-            raise Held("search", "compiler.cc: missing value")
-        command = [str(compiler.cc), *(flag for flag in flags if flag != "-c"), "-DNON_MATCHING=1", "-E", str(source)]
+    command = drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise Held("search", "context.deadline: preprocessing budget exhausted")

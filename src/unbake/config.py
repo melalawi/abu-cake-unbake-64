@@ -390,7 +390,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
     names_from = _text(value(project, "project", "names_from"), _label(path, "project", "names_from"))
     if names_from not in versions:
         raise Held("config", f"{_label(path, 'project', 'names_from')}: unknown VERSION {names_from}")
-    from unbake.project.toolchain import specification
+    from unbake.compilers.registry import specification
 
     tools = Layout(root).tools
     if not compiler_tables:

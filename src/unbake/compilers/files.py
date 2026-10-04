@@ -16,7 +16,7 @@ from unbake.config import Held
 from unbake.project_tools import atomic as atomic_files
 
 if TYPE_CHECKING:
-    from unbake.project.toolchain import Download
+    from unbake.compilers.registry import Download
 
 
 def relative(name: str) -> str:

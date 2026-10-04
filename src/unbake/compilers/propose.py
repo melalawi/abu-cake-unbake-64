@@ -12,7 +12,10 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from unbake.project import compiler_files, compiler_probes, compiler_profiles, toolchain
+from unbake.compilers import files as compiler_files
+from unbake.compilers import probe as compiler_probes
+from unbake.compilers import profiles as compiler_profiles
+from unbake.compilers import registry as toolchain
 from unbake.config import Held, PendingProject, Host
 
 if TYPE_CHECKING:
@@ -127,7 +130,7 @@ def propose_compilers(
 ) -> CompilerProposal:
     """Persist measured ranks only; no config, compiler install or publication."""
     from unbake.decomp.guide import prologue
-    from unbake.project.fingerprint import evidence
+    from unbake.compilers.fingerprint import evidence
 
     hashes = _verify_identity(project, census, layout)
     specs = toolchain.registry()
@@ -305,7 +308,7 @@ def propose_compilers(
         else:
             winners[region] = None
             reasons[region] = "mixed" if mixed else "tie" if len(tied) > 1 else "no evidence"
-    from unbake.project.proposal_accept import assignments as accept_assignments
+    from unbake.compilers.accept import assignments as accept_assignments
 
     assignments, unresolved, default = accept_assignments(unit_regions, winners, selected)
     # Weak or contradictory regional evidence never pins a unit: it builds with

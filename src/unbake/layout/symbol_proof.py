@@ -14,7 +14,8 @@ from pathlib import Path
 
 from unbake.layout import port, split
 from unbake.match import relink
-from unbake.project import build, compiler_files, setup
+from unbake.compilers import files as compiler_files
+from unbake.project import build, setup
 from unbake.config import Held, Project, Host
 from unbake.project_tools import atomic as atomic_files
 from unbake.project_tools.elf import Object

@@ -7,7 +7,7 @@ import struct
 from dataclasses import dataclass
 from typing import Any
 
-from unbake.project import toolchain
+from unbake.compilers import registry as toolchain
 from unbake.config import Held
 
 

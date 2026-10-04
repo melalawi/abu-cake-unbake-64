@@ -23,6 +23,7 @@ class Compared:
     compares: dict[str, Compare]
     preconditions: list[str] = field(default_factory=list)
     seconds: float = 0.0
+    compiler: str = ""
 
     @property
     def identical_everywhere(self) -> bool:
@@ -50,6 +51,7 @@ class Compared:
             "exact": self.exact,
             "preconditions": list(self.preconditions),
             "seconds": round(self.seconds, 3),
+            "compiler": self.compiler,
         }
 
     def lines(self) -> list[str]:
@@ -109,12 +111,21 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
             result.lines.extend(f"constant: {problem}" for problem in problems)
         results[version] = result
     digest = hashlib.sha256(content).hexdigest()
-    return Compared(function, file, digest, results, preconditions, time.monotonic() - started)
+    compiler = view.compiler_reference(function)
+    return Compared(function, file, digest, results, preconditions, time.monotonic() - started, compiler)
 
 
 def compare(project: Project, host: Host, file: Path) -> Compared:
-    """Measure every holding version and record the attempt in build/work/FUNC/attempts.jsonl."""
-    measured = measure(project, host, file)
+    """Measure every holding version (trying the other configured compilers when not exact) and record it."""
+    from unbake.compilers import candidates
+
+    try:
+        configured: Compared | Held = measure(project, host, file)
+    except Held as error:
+        configured = error
+    _choice, chosen = candidates.resolve(project, host, file, configured)
+    assert isinstance(chosen, Compared)
+    measured = chosen
     first = row_of(project, measured.function, next(iter(measured.compares)))
     size = first.end - first.start
     attempts.append(
@@ -128,6 +139,7 @@ def compare(project: Project, host: Host, file: Path) -> Compared:
             measured.best_percent,
             measured.exact,
             measured.seconds,
+            measured.compiler,
         ),
     )
     return measured

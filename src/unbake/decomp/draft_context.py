@@ -96,32 +96,11 @@ def required_headers(contents: dict[Path, str], output: str) -> set[Path]:
 
 
 def preprocess_context(source: Path, project: Project, policy: Host, version: str, function: str) -> str:
-    """Use the selected source unit's make recipe for context preprocessing."""
-    from unbake.decomp.explain import _absolute_includes
+    """Preprocess draft context with the unit's own preprocessor options, without line markers."""
+    from unbake.compilers import drivers
     from unbake.process import run_tool
-    from unbake.project import makefile
-    from unbake.project_tools.sn64_cc import partition_flags
 
-    unit = project.src / (function + ".c")
-    recipe = makefile.recipe(project)
-    flags = _absolute_includes(project, makefile.flags(project, version, unit))
-    if project.compiler_for(unit).kind == "sn64":
-        try:
-            options, _ = partition_flags(flags)
-        except ValueError as error:
-            raise Held("m2c", f"compiler.cflags: {error}") from error
-    else:
-        # Native IDO code-generation options are not SN64 driver options.
-        options = []
-        pending = iter(flags)
-        for flag in pending:
-            if flag in ("-I", "-D", "-U", "-include", "-isystem"):
-                value = next(pending, None)
-                if value is None:
-                    raise Held("m2c", f"compiler.cflags.{flag}: missing preprocessing argument")
-                options.extend((flag, value))
-            elif flag.startswith(("-I", "-D", "-U")):
-                options.append(flag)
-    cpp = makefile.host_executable(policy, recipe.cpp or "policy:cpp", "cpp")
-    expanded = run_tool([cpp, *recipe.cppflags, *options, "-DNON_MATCHING=1", str(source)], project.root, "m2c")
+    options = drivers.preprocessor_options(project, version, function, absolute=True)
+    command = [str(policy.cpp), *project.cppflags, *options, "-DNON_MATCHING=1", str(source)]
+    expanded = run_tool(command, project.root, "m2c")
     return re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
