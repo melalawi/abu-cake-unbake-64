@@ -11,6 +11,21 @@ from unbake.typemap import declarations, storage
 
 
 class BatchDeclarationsTests(unittest.TestCase):
+    def test_array_address_abstract_declarators_parse(self):
+        from pycparser import c_parser
+
+        for spelling, expected in (
+            ("int [] *", "int (*value)[]"),
+            ("int [4][3] **", "int (**value)[4][3]"),
+            ("int (*)[]", "int (*value)[]"),
+            ("int *[4]", "int * value[4]"),
+        ):
+            with self.subTest(spelling=spelling):
+                rendered = declarations.declarator(spelling, "value")
+                self.assertEqual(rendered, expected)
+                c_parser.CParser().parse("void function(" + rendered + ");")
+                c_parser.CParser().parse("void function(" + declarations.declarator(spelling, "").strip() + ");")
+
     def test_admission_partitions_provider_failures_by_actual_imports(self):
         # CPP is the external boundary: simulate its token output, including macro
         # replay and a dependent source's bad declaration on only one VERSION.

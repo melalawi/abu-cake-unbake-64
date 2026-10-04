@@ -10,7 +10,7 @@ from uuid import uuid4
 from unbake.cli.common import Subparsers, receipt, suggest
 from unbake.cli.guidance import command
 from unbake.decomp import exclusions, m2c, type_context, work
-from unbake.decomp.trial_compile import scratch_directory
+from unbake.decomp.trial_compile import default_scratch, scratch_directory
 from unbake.decomp.trial_target import inputs, owning_versions
 from unbake.project.config import Held, Policy, Project, Unfinished, load_policy
 from unbake.project_tools import atomic as atomic_files
@@ -42,7 +42,7 @@ def run(args: argparse.Namespace, project: Project, policy: Policy) -> bool:
         policy = load_policy(local)
     versions = owning_versions(project, function, None)
     naming = versions[0]
-    scratch = scratch_directory(project, args.scratch or policy.state_root / "draft-work", "draft")
+    scratch = scratch_directory(project, args.scratch or default_scratch(project, policy), "draft")
     _database, context = ("", "") if args.without_type_db else type_context.snapshot(project, function)
     destination = scratch / "drafts" / function
     source = destination / (function + ".c")

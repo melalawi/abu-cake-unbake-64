@@ -937,6 +937,10 @@ def declarator(type_: str, name: str) -> str:
     """Insert a name in an abstract C type, including arrays and function pointers."""
     if "(*" in type_ or re.search(r"\(\s*\*", type_):
         return re.sub(r"(\(\s*\*[^)]*)(\))", rf"\g<1>{name}\2", type_, count=1)
+    pointer_array = re.fullmatch(r"(.+?)\s*(\[[^\]]*\](?:\s*\[[^\]]*\])*)\s*(\*+)", type_)
+    if pointer_array:
+        base, dimensions, stars = pointer_array.groups()
+        return f"{base.rstrip()} ({stars}{name}){dimensions}"
     array = type_.find("[")
     if array >= 0:
         return type_[:array].rstrip() + " " + name + type_[array:]

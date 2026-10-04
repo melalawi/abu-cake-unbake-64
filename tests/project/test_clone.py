@@ -308,6 +308,22 @@ class CloneTests(unittest.TestCase):
         self.assertIn("policy.cache_root", output.getvalue())
         self.assertTrue((self.root / "absent/unbake/policy.toml").is_file())
 
+    def test_clone_uses_explicit_host_policy_even_with_local_placeholder(self) -> None:
+        host = self.root / "host-policy.toml"
+        host.write_text(clone.isolated_policy(self.policy, self.root / "host-state"))
+        (self.project.tools / "clone-policy.toml").write_text("cores=1\n")
+        from unittest.mock import Mock
+
+        create = Mock(return_value=self.project)
+        with (
+            patch.dict(os.environ, UNBAKE_POLICY=str(host)),
+            patch.object(clone, "create", create),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            code = main(["--project", str(self.live), "clone", str(self.destination)])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertEqual(create.call_args.args[1].cache_root, self.root / "host-state/.unbake/cache")
+
     def test_missing_or_unsafe_inputs_are_named_before_clone(self) -> None:
         cases = (
             (self.project.version("us").baserom, "baserom.us.z64"),

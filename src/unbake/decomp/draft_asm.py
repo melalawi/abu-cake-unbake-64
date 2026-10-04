@@ -91,3 +91,59 @@ def delay_slots(assembly: str, function: str) -> str:
             label + ":\n",
         ]
     return "".join(lines)
+
+
+def address_aliases(assembly: str, values: dict[str, int]) -> str:
+    """Give both halves of an unaligned transfer the same resolved symbol.
+
+    m2c pairs symbolic loads syntactically. Adjacent splat aliases can name
+    the two bytes of one transfer differently, despite identical addresses.
+    Only relocations at the measured left address or its right byte change.
+    """
+    expression = re.compile(r"([A-Za-z_]\w*)(?:\s*([+-])\s*(0[xX][\da-fA-F]+|\d+))?")
+
+    def address(text: str) -> int | None:
+        match = expression.fullmatch(text.strip())
+        if match is None or match[1] not in values:
+            return None
+        offset = int(match[3], 0) if match[3] else 0
+        return values[match[1]] + (-offset if match[2] == "-" else offset)
+
+    lefts: dict[int, str] = {}
+    for match in re.finditer(r"\b(?:lwl|swl)\s+\$\w+,\s*%lo\(([^)]+)\)", assembly):
+        resolved = address(match[1])
+        if resolved is not None:
+            lefts.setdefault(resolved, match[1].strip())
+
+    def replace(match: re.Match[str]) -> str:
+        resolved = address(match[2])
+        if resolved in lefts:
+            return f"%{match[1]}({lefts[resolved]})"
+        if resolved is not None and resolved - 3 in lefts:
+            origin = expression.fullmatch(lefts[resolved - 3])
+            assert origin is not None
+            delta = (int(origin[3], 0) * (-1 if origin[2] == "-" else 1) if origin[3] else 0) + 3
+            tail = f" {'-' if delta < 0 else '+'} 0x{abs(delta):X}" if delta else ""
+            return f"%{match[1]}({origin[1]}{tail})"
+        return match[0]
+
+    assembly = re.sub(r"%(hi|lo)\(([^)]+)\)", replace, assembly)
+    lines = assembly.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        transfer = re.search(r"\b(lwl|lwr|swl|swr)\s+\$\w+,\s*%lo\(([^)]+)\)\((\$\w+)\)", line)
+        if transfer is None:
+            continue
+        resolved = address(transfer[2])
+        delta = 3 if transfer[1].endswith("r") else 0
+        if resolved is None or resolved - delta not in lefts:
+            continue
+        origin = lefts[resolved - delta]
+        # m2c treats symbolic %hi as the complete address and %lo as zero.
+        # Retain the byte delta explicitly in this analysis-only input.
+        for previous in range(index - 1, max(-1, index - 4), -1):
+            high = re.search(r"\blui\s+" + re.escape(transfer[3]) + r",\s*%hi\(([^)]+)\)", lines[previous])
+            if high and address(high[1]) == resolved:
+                lines[previous] = lines[previous][: high.start(1)] + origin + lines[previous][high.end(1) :]
+                lines[index] = line[: transfer.start(2) - 4] + str(delta) + line[transfer.end(2) + 1 :]
+                break
+    return "".join(lines)

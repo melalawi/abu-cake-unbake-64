@@ -259,3 +259,19 @@ def stack_locals(output: str, context: str, function: str, assembly: str = "") -
         declarations = "\n" + "\n".join("    " + declaration for declaration in missing)
         output = output[: entry.end()] + declarations + output[entry.end() :]
     return output
+
+
+def canonical_aliases(project: Project, version: str, assembly: str, generation: Path | None = None) -> str:
+    """Resolve aliases from configured and extracted symbol addresses."""
+    from unbake.decomp.draft_asm import address_aliases
+    from unbake.decomp.rom import symbol_values
+
+    values = symbol_values(project.version(version).symbols)
+    build = project.build_link(version) if generation is None else generation
+    dump = build / "splat_symbols.csv"
+    if dump.is_file():
+        for name, value in discovered_symbols(dump, {}).items():
+            if name in values and values[name] != value:
+                raise Held("m2c", f"{name}: conflicting symbol addresses")
+            values[name] = value
+    return address_aliases(assembly, values)

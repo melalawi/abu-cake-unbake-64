@@ -1,5 +1,6 @@
 """Lower offset accesses using existing declarations without creating local types."""
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_parser import Parser
 from unbake.layout.structs_types import SCALARS
 from unbake.project.config import Held, Project
+from unbake.project_tools import atomic as atomic_files
 
 
 def share(
@@ -18,10 +20,10 @@ def share(
     *,
     layouts: dict[str, Any] | None = None,
 ) -> tuple[str, Path | None]:
-    """Use a declared base type or preserve a typed byte-offset access.
+    """Use a declared base type or publish a measured storage view.
 
     An offset and a local variable name never establish aggregate identity.
-    This is a pure transform: shared declarations belong to the project solve.
+    Fallback views describe only the measured access, never aggregate identity.
     """
     parser = Parser(context)
     try:
@@ -78,6 +80,8 @@ def share(
         if writes.count(local) == 1 and source in observed:
             observed[local] = observed[source]
 
+    views: dict[str, str] = {}
+
     def replace(args: list[str]) -> str:
         if len(args) != 3:
             raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
@@ -122,6 +126,42 @@ def share(
             ]
             if len(members) == 1:
                 return f"({base})->{members[0].name}"
-        return f"*({pointer})((char *)({base}) + ({literal}))"
+        if width is None or width <= 0:
+            raise Held("m2c", f"{function}: field at {literal} has no measured scalar width: {pointer}")
+        alignment = 4 if type_name.endswith(" *") else SCALARS[type_name][1]
+        if alignment is None or offset % alignment:
+            raise Held("m2c", f"{function}: unaligned field at {literal}: {pointer}")
+        from unbake.typemap.declarations import declarator
 
-    return calls(output, "M2C_FIELD", replace), None
+        key = hashlib.sha256(f"{offset}:{type_name}".encode()).hexdigest()[:12]
+        tag = f"Measured_{function}_{key}"
+        if offset >= 0:
+            padding = f"unsigned char padding[{offset}]; " if offset else ""
+            body = padding + declarator(type_name, "value") + ";"
+            access = f"((struct {tag} *)({base}))->value"
+        else:
+            size = max(-offset, width)
+            size = (size + alignment - 1) // alignment * alignment
+            prefix_size = size + offset
+            body = (
+                (f"unsigned char padding[{prefix_size}]; " if prefix_size else "")
+                + declarator(type_name, "value")
+                + ";"
+            )
+            trailing = size - prefix_size - width
+            if trailing:
+                body += f" unsigned char trailing[{trailing}];"
+            access = f"((struct {tag} *)({base}))[-1].value"
+        views[tag] = (
+            f"/* Measured {width}-byte access at {literal}; storage view, complete object unknown. */\n"
+            f"struct {tag} {{ {body} }};"
+        )
+        return access
+
+    output = calls(output, "M2C_FIELD", replace)
+    if not views:
+        return output, None
+    shared = project.include[0] / "common" / f"draft_fields_{function}.h"
+    guard = f"UNBAKE_DRAFT_FIELDS_{function.upper()}_H"
+    atomic_files.text(shared, f"#ifndef {guard}\n#define {guard}\n" + "\n".join(views.values()) + "\n#endif\n")
+    return output, shared

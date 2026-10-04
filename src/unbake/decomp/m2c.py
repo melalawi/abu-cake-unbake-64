@@ -7,7 +7,7 @@ import shlex
 import tempfile
 from pathlib import Path
 
-from unbake.decomp import draft_abi, gbi, similar
+from unbake.decomp import draft_abi, gbi, measured_storage, similar
 from unbake.decomp import work as draft_work
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
@@ -15,6 +15,7 @@ from unbake.decomp.draft_context import ordered_headers, preprocess_context, req
 from unbake.decomp.draft_fp import command, register_pairs
 from unbake.decomp.draft_input import (
     assembly_source,
+    canonical_aliases,
     canonical_entry,
     header_types,
     jump_tables,
@@ -196,6 +197,7 @@ def _draft(
     body = private_constants(
         project, v, function, jump_tables(project, v, function, saved_returns(body)), generation=generation
     )
+    body = canonical_aliases(project, v, body, generation)
     body = delay_slots(local_targets(body), function)
     database = None
     if type_context and use_type_db:
@@ -236,6 +238,10 @@ def _draft(
         item = next((item for name, item in mapped["functions"].items() if function in (name, *item["aliases"])), None)
         if item is not None:
             output = draft_abi.stack_arguments(output, context.read_text(), function, item["versions"][v])
+    output, stack_header = measured_storage.prepare(project, function, output, assembly.read_text())
+    if stack_header is not None:
+        headers.append((stack_header, stack_header.relative_to(project.include[0]).as_posix()))
+        atomic_files.text(context, context.read_text() + "\n" + stack_header.read_text())
     output = normalize(output, context.read_text())
     if "second half of f64" in output:
         raise Held("m2c", f"{function}: unresolved second half of f64 in decompiler output")

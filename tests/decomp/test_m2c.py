@@ -133,7 +133,11 @@ class M2cTests(unittest.TestCase):
                 )
                 source = m2c.draft(self.project, cast(Policy, self.policy), "alpha", "us", self.scratch)
                 # Both the actual m2c input and the standalone candidate must parse.
-                expanded = preprocess_context(source, self.project, cast(Policy, self.policy), "us", "alpha")
+                from unbake.decomp.work import compilation_project
+
+                expanded = preprocess_context(
+                    source, compilation_project(self.project, source), cast(Policy, self.policy), "us", "alpha"
+                )
                 c_parser.CParser().parse(expanded)
                 self.assertLess(expanded.index(f"}} {name};"), expanded.index("} Game;"))
 

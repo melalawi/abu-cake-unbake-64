@@ -12,6 +12,7 @@ from unbake.decomp.draft_context import required_headers
 from unbake.decomp.draft_macros import lower
 from unbake.decomp.field_access import share
 from unbake.project.config import Held
+from unbake.typemap.declarations import clean
 
 
 class DraftMacroTests(unittest.TestCase):
@@ -24,20 +25,20 @@ class DraftMacroTests(unittest.TestCase):
                 "M2C_FIELD((p + ((bits + 1) * 4)), s32 *, -0x10) = 7; "
                 "return M2C_FIELD(&bits, s32 *, -4) + (s32)M2C_BITWISE(float, bits); }"
             )
-            output, _ = share(project, "alpha", output, context)
+            output, shared = share(project, "alpha", output, context)
             output = lower(output, context)
             selected = required_headers({Path("types.h"): context, Path("globals.h"): "extern s32 bits;"}, output)
             self.assertIn(Path("globals.h"), selected)
             self.assertNotIn("M2C_FIELD", output)
             self.assertNotIn("M2C_BITWISE", output)
-            self.assertIn("+ (-0x10)", output)
-            c_parser.CParser().parse(context + output)
+            self.assertIn("[-1].value", output)
+            c_parser.CParser().parse(context + (clean(shared.read_text()) if shared else "") + output)
             with self.assertRaisesRegex(Held, r"unresolved M2C_UNKNOWN at line 2:.*M2C_UNKNOWN"):
                 lower("int alpha(void) {\n return M2C_UNKNOWN(1); }", context)
             with self.assertRaisesRegex(Held, "requires addressable value"):
                 lower("M2C_BITWISE(float, bits + 1)", context)
 
-    def test_unrelated_local_base_does_not_create_or_change_shared_layout(self) -> None:
+    def test_unrelated_local_base_gets_separate_measured_view(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
             project, _, _ = fixture(Path(directory).resolve(), case=self)
             header = project.include[0] / "structs.h"
@@ -45,10 +46,14 @@ class DraftMacroTests(unittest.TestCase):
             header.write_text(original)
             context = "typedef int s32;\n" + original
             output, shared = share(project, "alpha", "s32 alpha(void *p) { return M2C_FIELD(p, s32 *, 4); }", context)
-            self.assertIsNone(shared)
+            self.assertIsNotNone(shared)
             self.assertEqual(original, header.read_text())
             self.assertNotIn("Layout_alpha", output)
-            self.assertIn("*(s32 *)((char *)(p) + (4))", output)
+            self.assertIn("->value", output)
+            self.assertIsNotNone(shared)
+            from unbake.decomp.checks import run
+
+            self.assertFalse([finding for finding in run(output) if finding.rule == "raw-offset"])
             repeated, _ = share(
                 project,
                 "alpha",
@@ -56,7 +61,7 @@ class DraftMacroTests(unittest.TestCase):
                 "typedef int s32;\n" + header.read_text(),
             )
             self.assertEqual(output, repeated)
-            c_parser.CParser().parse("typedef int s32;\n" + header.read_text() + output)
+            c_parser.CParser().parse("typedef int s32;\n" + header.read_text() + clean(shared.read_text()) + output)
 
     def test_declared_base_uses_an_existing_field_without_header_writes(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:

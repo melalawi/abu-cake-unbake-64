@@ -27,7 +27,11 @@ def declarations(
     result: list[str] = []
     for name in sorted(callees):
         record = database["functions"].get(name, {}) if database is not None else {}
-        carrier = for_caller(record, function)
+        carrier = (
+            {"prototype": record["prototype"], "reasons": ["types.declaration: solved callee prototype"]}
+            if record.get("state") == "known" and record.get("prototype")
+            else for_caller(record, function)
+        )
         if not carrier.get("prototype"):
             continue
         reason = "; ".join(carrier["reasons"]).replace("*/", "* /")

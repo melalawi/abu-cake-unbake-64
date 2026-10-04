@@ -32,6 +32,14 @@ class TrialTests(MainCase):
         )
         self.assertIn("retained alpha source_sha256", out)
 
+    def test_try_without_scratch_uses_valid_external_default(self) -> None:
+        operation = Mock(return_value=SimpleNamespace(function="alpha", source_sha256="a" * 64))
+        args = ["--project", str(self.root), "try", str(self.source)]
+        code, out, error = self.run_main(args, {"trial": self.module("trial", retain_draft=operation)})
+        self.assertEqual(code, 0, error + out)
+        scratch = operation.call_args.args[3]
+        self.assertFalse(scratch.resolve().is_relative_to(self.project.root))
+
     def test_volatile_storage_is_delegated_to_the_proven_fold(self) -> None:
         from unbake.project.config import Held
 

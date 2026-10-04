@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from unbake.project import build
 from unbake.project.config import Held, Policy, Project
+
+
+def default_scratch(project: Project, policy: Policy) -> Path:
+    """Keep clone-local state from selecting a scratch inside its project."""
+    candidate = policy.state_root / "draft-work"
+    if not candidate.resolve().is_relative_to(project.root.resolve()):
+        return candidate
+    identity = hashlib.sha256(str(project.root.resolve()).encode()).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / "unbake-work" / identity
 
 
 def scratch_directory(project: Project, scratch: Path, phase: str) -> Path:
