@@ -83,17 +83,25 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     return changed
 
 
+def _compile(job: tuple[Project, Host, Path, str, str]) -> None:
+    """Worker body: compile one staged unit for one version."""
+    from unbake import runner
+
+    view, host, file, version, unit = job
+    runner.compile_unit(view, host, file, version, unit=unit)
+
+
 def validate(
     project: Project,
     host: Host,
     changed: dict[Path, bytes],
     disagreements: dict[Path, dict[str, tuple[str, str]]] | None = None,
 ) -> list[str]:
-    """Compile every unit the change reaches against staged copies; return the units compiled.
+    """Compile every unit the change reaches against staged copies, on all cores; return the units compiled.
 
     A source whose local declaration lost to its header's differing form must still match the ROM in every
     holding version with the header form; otherwise every such symbol is refused by name."""
-    from unbake import runner
+    from unbake import pool
     from unbake.layout import merge_units
 
     stage = project.work / "_headers"
@@ -110,6 +118,7 @@ def validate(
     memo: dict[Path, frozenset[Path]] = {}
     view = replace(project, work_include=(staged_headers,))
     compiled = []
+    jobs: list[tuple[Project, Host, Path, str, str]] = []
     try:
         for source in sorted(project.src.glob("*.c")):
             own = changed.get(source)
@@ -119,13 +128,21 @@ def validate(
             if own is not None:
                 file = staged_sources / source.name
                 atomic_files.write(file, own)
-            for version in split.holding_versions(project, source.stem):
-                runner.compile_unit(view, host, file, version, unit=source.stem)
+            jobs.extend(
+                (view, host, file, version, source.stem) for version in split.holding_versions(project, source.stem)
+            )
             compiled.append(source.stem)
+        pool.run(host, _compile, jobs)
+        proofs = sorted((disagreements or {}).items())
+        matched = pool.run(
+            host,
+            merge_units.prove_job,
+            [(view, host, (source.stem,), changed.get(source, source.read_bytes()).decode()) for source, _ in proofs],
+        )
         refused = [
             f"{name} in {source.name}: local `{local}` matched the ROM; header `{header}` does not"
-            for source, found in sorted((disagreements or {}).items())
-            if not merge_units.prove(view, host, (source.stem,), changed.get(source, source.read_bytes()).decode())
+            for (source, found), passed in zip(proofs, matched, strict=True)
+            if not passed
             for name, (local, header) in sorted(found.items())
         ]
     finally:

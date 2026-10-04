@@ -151,7 +151,7 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
     )
 
 
-def _prove_job(job: tuple[Project, Host, tuple[str, ...], str]) -> bool:
+def prove_job(job: tuple[Project, Host, tuple[str, ...], str]) -> bool:
     """Worker body: one run's proof in every holding version."""
     return prove(*job)
 
@@ -164,7 +164,7 @@ def run(project: Project, host: Host) -> list[str]:
     found = runs(project)
     sources = [merged_source(project, members) for _, members in found]
     proven = pool.run(
-        host, _prove_job, [(project, host, members, src) for (_, members), src in zip(found, sources, strict=True)]
+        host, prove_job, [(project, host, members, src) for (_, members), src in zip(found, sources, strict=True)]
     )
     if not found:
         return []
