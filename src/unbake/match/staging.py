@@ -458,6 +458,40 @@ def independent_objects(generation: Path) -> None:
                     _retain_object(source / obj.relative_to(Path("obj") / name), generation / obj)
 
 
+def object_identity(path: Path) -> str:
+    """Fingerprint link inputs while excluding IDO's nonloaded source/debug table."""
+    from unbake.project_tools.elf import Object
+
+    data = path.read_bytes()
+    try:
+        obj = Object(path, data=data)
+    except ValueError:
+        return hashlib.sha256(data).hexdigest()
+    digest = hashlib.sha256(data[:32] + data[36:52])
+    for index, name in enumerate(obj.names):
+        section = obj.sections[index]
+        if name == ".mdebug" and not section[2] & 2:
+            continue
+        digest.update(json.dumps([name, section[1:4], section[5:]], sort_keys=True).encode())
+        digest.update(obj.content(index))
+    return digest.hexdigest()
+
+
+def unchanged_objects(current: Path, generation: Path) -> bool:
+    """Require identical indexed link inputs; hardlinked inputs need no reread."""
+    paths = object_paths(current)
+    if not paths or paths != object_paths(generation):
+        return False
+    for path in paths:
+        old, new = current / path, generation / path
+        if not old.is_file() or not new.is_file():
+            return False
+        left, right = old.stat(), new.stat()
+        if (left.st_dev, left.st_ino) != (right.st_dev, right.st_ino) and object_identity(old) != object_identity(new):
+            return False
+    return True
+
+
 def publication_dependencies(project: Project, staged: Project, generations: dict[str, Path]) -> None:
     """Publish dependency evidence in project coordinates, never scratch coordinates."""
     prefixes = [str(staged.root) + "/", str(project.root) + "/"]

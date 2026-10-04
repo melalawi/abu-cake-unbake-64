@@ -112,3 +112,32 @@ class PublicationDependenciesTests(unittest.TestCase):
             )
             self.assertIn("submit-proof/tree", previous.read_text())
             self.assertEqual(json.loads(evidence.read_text()), {"src/unit.c": "digest"})
+
+
+class LinkIdentityTests(unittest.TestCase):
+    def test_nonloaded_debug_changes_reuse_but_code_symbols_and_loaded_debug_do_not(self):
+        import struct
+
+        from tests.elf_fixture import write_object
+        from unbake.project_tools.elf import Object
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def object_at(name, code=b"code", symbol="unit", debug=b"old", loaded=False):
+                path = write_object(root / name, {".text": code, ".mdebug": debug}, [(symbol, ".text", 0, 4)])
+                obj = Object(path)
+                if not loaded:
+                    struct.pack_into(">I", obj.data, obj.table + obj.section(".mdebug") * 40 + 8, 0)
+                    path.write_bytes(obj.data)
+                return path
+
+            old = object_at("old.o")
+            changed_debug = object_at("debug.o", debug=b"new debug with more source lines")
+            self.assertEqual(staging.object_identity(old), staging.object_identity(changed_debug))
+            for changed in (
+                object_at("code.o", code=b"diff"),
+                object_at("symbols.o", symbol="other"),
+                object_at("loaded.o", loaded=True),
+            ):
+                self.assertNotEqual(staging.object_identity(old), staging.object_identity(changed))

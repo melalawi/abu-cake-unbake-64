@@ -88,6 +88,15 @@ class BatchPublicationCliTests(unittest.TestCase):
             self.assertEqual(records[source.stem]["source_sha256"], hashlib.sha256(content).hexdigest())
         self.assertIn(": OK", self.make())
 
+    def test_comment_only_republication_reuses_native_reports_after_compile(self):
+        self.cli("submit", self.sources[0])
+        published = self.project.src / self.sources[0].name
+        published.write_text(published.read_text() + "\n/* documentation only */\n")
+        with patch.object(batch.progress, "measure", side_effect=AssertionError("unchanged link inputs")):
+            output = self.cli("submit", published)
+        self.assertIn("OK(match)", output)
+        self.assertTrue(any(row.get("unchanged_objects") for row in self.evidence() if row["event"] == "report_reuse"))
+
     def test_declaration_refusal_precedes_rom_proof_and_publication(self):
         source = self.sources[0]
         generations = {v: self.project.build_link(v).resolve() for v in self.project.versions}

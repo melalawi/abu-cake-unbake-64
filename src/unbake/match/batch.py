@@ -947,8 +947,17 @@ def _commit(
             for v in project.versions
         )
     )
+    report_unchanged = unchanged
+    if not report_unchanged and all(candidate.republication for candidate in candidates):
+        report_unchanged = makefile.description(project) == makefile.description(staged) and all(
+            project.version(v).split.read_text() == staged.version(v).split.read_text()
+            and project.version(v).symbols.read_text() == staged.version(v).symbols.read_text()
+            and staging.unchanged_objects(current[v], generations[v])
+            for v in project.versions
+        )
+    reporting.record("report_reuse", unchanged_objects=report_unchanged)
     reports: dict[str, dict[str, Any]] = {}
-    if unchanged:
+    if report_unchanged:
         for version in project.versions:
             cached = project.root / "versions" / version / "report.json"
             if not cached.is_file():
@@ -957,14 +966,16 @@ def _commit(
             document = progress._json(cached)
             progress._native_counts(document, cached)
             reports[version] = document
-    if not reports:
-        with ThreadPoolExecutor(
-            max_workers=min(policy.cores, policy.setup_version_jobs, len(project.versions))
-        ) as pool:
-            measured = {
-                v: pool.submit(progress.measure, staged, policy, v, generation=generations[v]) for v in project.versions
-            }
-            reports = {v: future.result() for v, future in measured.items()}
+    with reporting.phase("native_reports"):
+        if not reports:
+            with ThreadPoolExecutor(
+                max_workers=min(policy.cores, policy.setup_version_jobs, len(project.versions))
+            ) as pool:
+                measured = {
+                    v: pool.submit(progress.measure, staged, policy, v, generation=generations[v])
+                    for v in project.versions
+                }
+                reports = {v: future.result() for v, future in measured.items()}
     paths = [staged.root / "config.toml", staged.root / "Makefile", staged.tools / "compiler.sha256"]
     paths += [staged.root / relative for relative in makefile.helpers(config.load(staged.root))]
     paths += [p for v in staged.versions for p in (staged.version(v).split, staged.version(v).symbols)]

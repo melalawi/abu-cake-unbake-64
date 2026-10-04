@@ -202,6 +202,11 @@ def _prepare_version(
         staging.independent_objects(generation)
     if retained is not None:
         retained["sources"] = [source.stem for source in changed]
+        retained["objects"] = {
+            source.stem: staging.object_identity(generation / "obj/src" / (source.stem + ".o"))
+            for source in changed
+            if (generation / "obj/src" / (source.stem + ".o")).is_file()
+        }
         atomic_files.text(generation / "retained-layout.json", json.dumps(retained))
     return changed
 
@@ -268,6 +273,21 @@ def prepare(
                 [*changed[version], *(staged.src / f"{name}.c" for name in sorted(submitted) if name in intervals)]
             )
         )
+        snapshot = generation / "retained-layout.json"
+        placement = {source.stem for source in changed[version]}
+        if snapshot.is_file():
+            retained = json.loads(snapshot.read_text())
+            prior = retained.get("objects", {})
+            for source in changed[version]:
+                object_path = generation / "obj/src" / (source.stem + ".o")
+                if (
+                    source.stem in prior
+                    and object_path.is_file()
+                    and staging.object_identity(object_path) == prior[source.stem]
+                ):
+                    placement.discard(source.stem)
+            retained["sources"] = sorted(placement)
+            atomic_files.text(snapshot, json.dumps(retained))
         failures = compiled[version]
         faults = {name: [f"{version}: compile diagnostic: {reason}"] for name, reason in failures.items()}
         alignments = {
@@ -343,7 +363,7 @@ def prepare(
             )
             if unknown:
                 faults.setdefault(name, []).append(f"{version}: undefined reference to {', '.join(unknown)}")
-            if source not in changed[version]:
+            if name not in placement:
                 continue
             try:
                 layout.place_object(

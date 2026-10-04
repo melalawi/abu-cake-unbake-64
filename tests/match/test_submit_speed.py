@@ -68,7 +68,8 @@ class VersionPreparationTests(unittest.TestCase):
                 self.assertEqual(snapshot.exists(), advanced)
                 if advanced:
                     self.assertEqual(
-                        json.loads(snapshot.read_text()), {"raw": "raw", "placed": "placed", "sources": ["new"]}
+                        json.loads(snapshot.read_text()),
+                        {"raw": "raw", "placed": "placed", "sources": ["new"], "objects": {}},
                     )
 
 
