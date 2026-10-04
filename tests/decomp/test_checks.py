@@ -31,6 +31,7 @@ class ChecksTest(unittest.TestCase):
             ("comment", 1, "/* objdiff forced this statement */", "tool-comment"),
             ("version", 1, "#ifdef VERSION_US\nvoid f(void) {}\n#endif", "file-version-guard"),
             ("empty", 1, "void f(void) { do {} while (0); }", "empty-loop"),
+            ("resident", 2, "const float unbake_rodata_80001000_4 = 0.5f;", "resident-storage"),
         ]
         for function, line, content, rule in cases:
             with self.subTest(function=function, line=line):

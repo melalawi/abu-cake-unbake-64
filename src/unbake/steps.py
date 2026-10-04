@@ -209,7 +209,7 @@ STEPS: dict[str, Step] = {
         Step("headers", "layout.toml or the type solution changed", _headers_key, _headers, ("types",)),
         Step("buildfiles", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
         Step("progress", "a land or a boundary edit", _progress_key, _progress),
-        Step("resident", "a published source's resident constants changed", _resident_key, _resident),
+        Step("resident", "a published source changed (resident constant blocks are deleted)", _resident_key, _resident),
         Step("merge-units", "a land made a run of matched members", _merge_units_key, _merge_units),
         Step("trim-cache", "the cache passed [cache].max_bytes", _trim_key, _trim),
     )

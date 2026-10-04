@@ -239,11 +239,7 @@ def classify(
         byaddr[ref.address].append(ref)
     names: dict[int, list[str]] = defaultdict(list)
     for name, address in values.items():
-        if (
-            span_at(address) is not None
-            and not name.startswith("unbake_rodata_")
-            and ("D_" in name or name.startswith("jtbl_"))
-        ):
+        if span_at(address) is not None and ("D_" in name or name.startswith("jtbl_")):
             names[address].append(name)
     tables = set(table_ends)
     for address, rr in byaddr.items():

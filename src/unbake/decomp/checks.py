@@ -353,6 +353,11 @@ def _empty_loop(source: str, code: str) -> list[GuardFinding]:
     return _matches("empty-loop", r"\bdo\s*\{\s*\}\s*while\s*\(\s*0\s*\)", source, code)
 
 
+def _resident(source: str, code: str) -> list[GuardFinding]:
+    """Resident constant storage restates ROM bytes the link discards; slices supply them."""
+    return _matches("resident-storage", r"\bunbake_rodata_\w+", source, code)
+
+
 def _gfx(source: str, code: str) -> list[GuardFinding]:
     findings = _matches("raw-gfx", r"(?:\.|->)\s*(?:words\s*[._]\s*)?w[01]\s*(?:[|&^+\-]?=(?!=)|\+\+|--)", source, code)
     # Hidden packets still require SDK exposure. Recognize the command tag in
@@ -424,6 +429,7 @@ RULES = [
     Rule("tool-comment", "comments", _comments),
     Rule("file-version-guard", "directives", _versions),
     Rule("empty-loop", "code", _empty_loop),
+    Rule("resident-storage", "code", _resident),
     Rule("raw-gfx", "code", _gfx),
     Rule("shared-declarations", "code", _copies),
 ]
@@ -447,7 +453,9 @@ def run(source: str | Path) -> list[GuardFinding]:
             f.rule,
             f.line,
             f.text,
-            None if f.rule in {"raw-gfx", "local-gbi-macro", "local-type-copy", "invented-struct"} else reason,
+            None
+            if f.rule in {"raw-gfx", "local-gbi-macro", "local-type-copy", "invented-struct", "resident-storage"}
+            else reason,
         )
         for f in sorted(findings, key=lambda f: (f.line, f.rule))
     ]
