@@ -26,6 +26,16 @@ def spans(text: str) -> list[tuple[int, int]]:
             match = re.match(r"\s*(typedef|extern)\b", source[start : token.end()])
             if match:
                 result.append((start + match.start(1), token.end()))
+            else:
+                statement = source[start : token.end()]
+                # A file-scope function prototype has external linkage even
+                # when its author omits the extern storage specifier.
+                if "(" in statement and "=" not in statement and not re.search(r"\bstatic\b", statement):
+                    row = declarations(statement)
+                    if any(re.search(r"\b" + re.escape(name) + r"\s*\(", statement) for name in row.declared):
+                        beginning = re.search(r"\S", statement)
+                        assert beginning is not None
+                        result.append((start + beginning.start(), token.end()))
             start = token.end()
     return result
 
@@ -101,6 +111,6 @@ def strip(text: str, imported: list[str]) -> str:
         # Remove declaration bytes only; retain preceding comments and directives.
         masked = declaration_source(declaration)
         match = re.search(r"\b(?:typedef|extern)\b", masked)
-        assert match is not None
-        text = text[: start + match.start()] + text[end:]
+        begin = start + match.start() if match is not None else start
+        text = text[:begin] + text[end:]
     return text

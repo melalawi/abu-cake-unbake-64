@@ -326,3 +326,17 @@ class ApplyTests(unittest.TestCase):
             redeclarations.strip("int first(void) {typedef int Unknown; return 1;}", [shared]),
             "int first(void) {typedef int Unknown; return 1;}",
         )
+
+
+class ExternalPrototypeTests(unittest.TestCase):
+    def test_implicit_external_prototypes_follow_the_same_byte_rule(self):
+        for declaration in ("void api(int x);", "extern void api(int x);"):
+            with self.subTest(declaration=declaration):
+                self.assertEqual(redeclarations.strip(declaration, [declaration]), "")
+        local, shared = "void api(int x);", "void api(float x);"
+        with self.assertRaises(Held) as caught:
+            redeclarations.strip(local, [shared])
+        self.assertIn(local, caught.exception.reason)
+        self.assertIn(shared, caught.exception.reason)
+        self.assertEqual(redeclarations.strip("static void api(int x);", [shared]), "static void api(int x);")
+        self.assertEqual(redeclarations.strip("int (*callback)(int);", [shared]), "int (*callback)(int);")
