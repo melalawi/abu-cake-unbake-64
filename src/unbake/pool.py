@@ -26,11 +26,14 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 RECYCLE_AFTER = 64
+ITEM_SHOWN = 300
 
 
 class TaskFailed(Held):
     def __init__(self, key: str, item: object) -> None:
-        super().__init__("pool", f"{key}: task {item!r} failed twice")
+        text = repr(item)
+        shown = text if len(text) <= ITEM_SHOWN else text[:ITEM_SHOWN] + f"... ({len(text)} characters)"
+        super().__init__("pool", f"{key}: task {shown} failed twice")
         self.failure = key
         self.item = item
 
