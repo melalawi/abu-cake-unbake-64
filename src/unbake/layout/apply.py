@@ -137,6 +137,7 @@ def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False
             project, text, path.stem, outputs, ownership=session.ownership, lookup=lookup, previous=previous
         ).encode()
     count = install(project, outputs, dry_run=dry_run)
+    count += units(project, dry_run=dry_run)
     if not dry_run and "inputs_sha256" in value:
         value["rendered_sha256"] = {
             storage.relative(project, p): storage.digest(data)
@@ -153,6 +154,23 @@ def run(project: Project, policy: Policy | None = None, *, dry_run: bool = False
             storage.write(path, data)
             count += 1
     return count
+
+
+def units(project: Project, *, dry_run: bool = False) -> int:
+    """Rewrite every version's split rows so private pools form one row per run."""
+    from unbake.layout import split
+    from unbake.layout import units as view
+
+    changed = 0
+    for version in project.versions:
+        path = project.version(version).split
+        text = split.read(path)
+        merged = view.merge_pools(text)
+        if merged != text:
+            changed += 1
+            if not dry_run:
+                storage.write(path, merged.encode())
+    return changed
 
 
 def install(project: Project, outputs: dict[Path, bytes | Path], *, dry_run: bool = False) -> int:

@@ -605,6 +605,7 @@ def extract(args: argparse.Namespace) -> None:
                         relative = path.relative_to(extracted)
                         destination = args.asm / (directory if directory != "asm" else "") / relative
                         publish(destination, path.read_bytes())
+        prune_stale(args.asm, text, {Path(name).resolve() for name in _WRITTEN})
         tables = [args.symbols]
         symbol_dump = staging / ".splat" / "splat_symbols.csv"
         publish(args.build / "splat_symbols.csv", symbol_dump.read_bytes())
@@ -657,6 +658,22 @@ def extract(args: argparse.Namespace) -> None:
         store.put("extract", digest.hexdigest(), record)
         record.unlink()
         write(receipt, digest.hexdigest().encode())
+
+
+def prune_stale(asm: Path, text: str, written: set[Path]) -> int:
+    """Remove assembly this extraction did not emit for matched C members or pool rows."""
+    matched = {
+        Path(scalar(name)).with_suffix(".s")
+        for name in re.findall(r"^\s*-\s*\[\s*[\w]+\s*,\s*c\s*,\s*([^,\]]+)", text, re.M)
+    }
+    count = 0
+    for path in sorted(asm.rglob("*.s")):
+        relative = path.relative_to(asm)
+        if path.resolve() in written or not (relative in matched or relative.parts[0] == "data"):
+            continue
+        path.unlink()
+        count += 1
+    return count
 
 
 def _restore(record: dict[str, Any], build: Path) -> bool:
