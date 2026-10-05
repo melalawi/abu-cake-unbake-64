@@ -74,7 +74,7 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
             "symbol_similarity_margin": 0.1,
         },
         "search": {"stall_trials": 100, "beam": 4},
-        "cycle": {"min_bytes": 16, "max_bytes": 4096, "min_history": 3, "debounce_ms": 200},
+        "cycle": {"min_bytes": 16, "max_bytes": 4096, "min_history": 3, "debounce_ms": 200, "search_seconds": 5},
         "budgets": dict(BUDGETS),
         "publish": {
             "remote": "origin",

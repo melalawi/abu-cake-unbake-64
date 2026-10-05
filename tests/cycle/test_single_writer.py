@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import queue
+from collections.abc import Callable
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from unittest.mock import patch
 from tests.kit import TempCase
 from unbake import land, pool, steps
 from unbake.config import Held
-from unbake.cycle import engine
+from unbake.cycle import engine, ladder
 
 QUEUE = queue.Queue
 
@@ -29,13 +30,18 @@ class SingleWriterTests(TempCase):
         land_steps: list[object],
         edit_beta: bool = False,
         queue_beta_draft: bool = False,
+        search: Callable[[int, str, str], str | dict | None] | None = None,
     ) -> Run:
         """alpha is exact at its first compare; beta is 50% until alpha has landed.
 
-        land_steps: what each ensure of LAND_STEPS does, in turn: the names that ran, a Held to raise, or "quit"."""
+        land_steps: what each ensure of LAND_STEPS does, in turn: the names that ran, a Held to raise, or "quit".
+        search: (call number, the file's text, method) -> the text of the method's best file, a result dict, or
+        None for the file as it is. A beta text spelling "better" scores 10 points more each time, "worse" 10 less,
+        "EXACT" is exact. The run ends when beta needs a creative edit."""
         project = SimpleNamespace(root=self.root, build=self.root / "build", work=self.root / "work", versions=("us",))
         host = SimpleNamespace(
             cycle_debounce_ms=100,
+            cycle_search_seconds=1,
             workers=2,
             cores=2,
             memory_total_bytes=4,
@@ -68,18 +74,20 @@ class SingleWriterTests(TempCase):
             function = path.stem
             compares[function] = compares.get(function, 0) + 1
             log.append(f"compare {function}")
-            exact = function == "alpha" or "land alpha" in log
+            text = path.read_text()
+            exact = function == "alpha" or ("land alpha" in log and search is None) or "EXACT" in text
             if function == "beta" and edit_beta and compares[function] == 1:
                 inboxes[0].put(("edit", str(path)))  # saved by hand after this compare started
                 path.write_text("/* edited by hand */\n")
                 return {**result(exact=False), "sha256": hashlib.sha256(b"/* draft 1 */\n").hexdigest()}
-            return {**result(exact=exact), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            percent = 100.0 if exact else 50.0 + 10.0 * text.count("better") - 10.0 * text.count("worse")
+            return {**result(exact=exact, percent=percent), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
-        def result(exact: bool) -> dict:
+        def result(exact: bool, percent: float | None = None) -> dict:
             return {
                 "ok": True,
                 "per_version": {},
-                "best_percent": 100.0 if exact else 50.0,
+                "best_percent": percent if percent is not None else 100.0 if exact else 50.0,
                 "exact": exact,
                 "diagnostic": "",
                 "seconds": 0.0,
@@ -99,6 +107,9 @@ class SingleWriterTests(TempCase):
 
             def __exit__(self, *exc):
                 pass
+
+            def _fresh(self):
+                log.append("fresh")
 
             def submit(self, fn, spec):
                 future: Future = Future()
@@ -141,6 +152,25 @@ class SingleWriterTests(TempCase):
             log.append(f"recheck {spec[2]}")
             return {"exact": True, "best_percent": 100.0, "diagnostic": ""}
 
+        searches: list[str] = []
+
+        def search_task(spec):
+            _, _, file, method = spec
+            path = Path(file)
+            searches.append(method)
+            log.append(f"search {path.stem} {method}")
+            found = search(len(searches), path.read_text(), method) if search is not None else None
+            if isinstance(found, dict):
+                return found
+            best = path.with_name(f"{path.stem}.best.c")
+            best.write_text(path.read_text() if found is None else found)
+            return {"ok": True, "best_file": str(best), "seconds": 0.0}
+
+        def write_trouble(project_, host_, function, file, ladder_, difference):
+            log.append(f"trouble {function}")
+            inboxes[0].put(("quit", None))
+            return file.with_name("TROUBLE.md")
+
         def capture() -> queue.Queue:
             inbox: queue.Queue = QUEUE()
             inboxes.append(inbox)
@@ -154,6 +184,8 @@ class SingleWriterTests(TempCase):
         with (
             patch.object(engine, "_draft_task", draft_task),
             patch.object(engine, "_compare_task", compare_task),
+            patch.object(engine, "_search_task", search_task),
+            patch.object(ladder, "write_trouble", write_trouble),
             patch.object(engine, "_recheck_task", recheck),
             patch.object(engine, "choose", lambda *a: candidates),
             patch.object(engine, "interactive", lambda: False),
@@ -181,7 +213,7 @@ class SingleWriterTests(TempCase):
                 next_words=lambda *words: " ".join(words),
             )
         events = [json.loads(line) for line in stream.getvalue().splitlines()]
-        return Run(events=events, result=outcome, log=log, drafts=drafts, compares=compares)
+        return Run(events=events, result=outcome, log=log, drafts=drafts, compares=compares, searches=searches)
 
     def test_drafts_start_only_after_the_draft_steps(self) -> None:
         run = self.cycle(land_steps=["quit"])
@@ -201,12 +233,17 @@ class SingleWriterTests(TempCase):
         self.assertEqual(run.drafts, {"alpha": 1, "beta": 1})
         self.assertEqual(run.result.data["landed"], ["alpha"])  # beta waits for an edit
         self.assertEqual(run.names("fn.recheck"), [])
+        self.assertNotIn("fresh", run.log)  # no step ran, so no worker holds anything new
 
     def test_an_untouched_draft_is_drafted_again_after_the_steps_change_the_tree(self) -> None:
         run = self.cycle(land_steps=[["types", "headers"], []])
         self.assertEqual(run.drafts, {"alpha": 1, "beta": 2})
         self.assertEqual(run.result.data["landed"], ["alpha", "beta"])
         self.assertEqual([e["function"] for e in run.names("fn.recheck")], ["alpha"])
+        # The steps' workers are replaced after the land's steps and before the redone draft.
+        redo = len(run.log) - 1 - run.log[::-1].index("draft beta")
+        self.assertLess(run.log.index("ensure " + ",".join(engine.LAND_STEPS)), run.log.index("fresh"))
+        self.assertLess(run.log.index("fresh"), redo)
 
     def test_an_edited_draft_is_compared_again_not_replaced(self) -> None:
         run = self.cycle(land_steps=[["types"], []], edit_beta=True)
@@ -227,3 +264,57 @@ class SingleWriterTests(TempCase):
         self.assertEqual(run.names("steps.held")[0]["reason"], "types.declaration: broken")
         self.assertNotIn("draft beta", run.log[run.log.index("land alpha") :])
         self.assertEqual(run.result.data["landed"], ["alpha"])
+
+    # A draft that compiles but is short climbs search.BUILTINS in order before anyone is asked to edit it.
+
+    def methods(self, run: Run) -> list[str]:
+        return [e["method"] for e in run.names("fn.search.start", "beta")]
+
+    def test_a_method_that_gains_nothing_ends_the_ladder_at_once(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
+        self.assertEqual(self.methods(run), ["registers"])
+        creative = run.names("fn.creative", "beta")[0]
+        self.assertEqual(creative["methods"], {"registers": 50.0})
+        self.assertEqual(creative["best_percent"], 50.0)
+        self.assertEqual(run.result.data["carryovers"], ["beta"])
+
+    def test_each_gaining_method_hands_its_best_text_to_the_next(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + "better\n")
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
+        creative = run.names("fn.creative", "beta")[0]
+        self.assertEqual(creative["methods"], {"registers": 60.0, "order": 70.0, "permute": 80.0})
+        self.assertEqual((self.root / "work" / "beta" / "beta.c").read_text().count("better"), 3)
+
+    def test_a_middle_method_without_gain_stops_before_the_rest(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + "better\n" if n == 1 else None)
+        self.assertEqual(self.methods(run), ["registers", "order"])
+        self.assertEqual(run.names("fn.creative", "beta")[0]["methods"], {"registers": 60.0, "order": 60.0})
+
+    def test_a_worse_result_leaves_the_best_text_in_the_file(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + ("better\n" if n == 1 else "worse\n"))
+        text = (self.root / "work" / "beta" / "beta.c").read_text()
+        self.assertEqual((text.count("better"), text.count("worse")), (1, 0))
+        creative = run.names("fn.creative", "beta")[0]
+        self.assertEqual(creative["methods"], {"registers": 60.0, "order": 50.0})
+        self.assertEqual(creative["best_percent"], 60.0)
+
+    def test_an_exact_search_result_lands_like_any_exact_compare(self) -> None:
+        run = self.cycle(land_steps=[[], []], search=lambda n, text, method: text + "EXACT\n")
+        self.assertEqual(run.result.data["landed"], ["alpha", "beta"])
+        self.assertEqual(run.names("fn.creative"), [])
+        self.assertEqual(self.methods(run), ["registers"])
+
+    def test_a_method_that_fails_is_recorded_and_the_ladder_goes_on(self) -> None:
+        def failing(n: int, text: str, method: str) -> dict:
+            return {"ok": False, "key": "search", "diagnostic": f"{method} broke", "seconds": 0.0}
+
+        run = self.cycle(land_steps=[[]], search=failing)
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
+        self.assertEqual(
+            run.names("fn.creative", "beta")[0]["methods"],
+            {name: f"failed: {name} broke" for name in ("registers", "order", "permute")},
+        )
+
+    def test_a_search_started_before_the_land_runs_after_the_steps(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
+        self.assertLess(run.log.index("land alpha"), run.log.index("search beta registers"))

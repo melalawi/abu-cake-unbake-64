@@ -65,6 +65,7 @@
 # max_bytes = 4096
 # min_history = 5
 # debounce_ms = 300
+# search_seconds = 60              # one search method's time for a function the draft left short
 
 [publish]
 # remote = "origin"

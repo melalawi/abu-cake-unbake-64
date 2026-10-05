@@ -551,7 +551,13 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "main_rss_bytes": "int",
         "worker_rss_bytes": "int",
     },
-    "cycle": {"min_bytes": "int", "max_bytes": "int", "min_history": "int", "debounce_ms": "int"},
+    "cycle": {
+        "min_bytes": "int",
+        "max_bytes": "int",
+        "min_history": "int",
+        "debounce_ms": "int",
+        "search_seconds": "int",
+    },
     "publish": {
         "remote": "text",
         "branch": "text",
@@ -618,6 +624,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
         "cycle.max_bytes",
         "cycle.min_history",
         "cycle.debounce_ms",
+        "cycle.search_seconds",
     ),
     "recompute": (*_RESOURCES, *_CACHE, *_BUILDFILES, *_BUDGETS),
 }
@@ -801,6 +808,7 @@ class Host:
     cycle_max_bytes = property(lambda self: self.get("cycle.max_bytes"))
     cycle_min_history = property(lambda self: self.get("cycle.min_history"))
     cycle_debounce_ms = property(lambda self: self.get("cycle.debounce_ms"))
+    cycle_search_seconds = property(lambda self: self.get("cycle.search_seconds"))
     publish_remote = property(lambda self: self.get("publish.remote"))
     publish_branch = property(lambda self: self.get("publish.branch"))
     publish_author_name = property(lambda self: self.get("publish.author_name"))

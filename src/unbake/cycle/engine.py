@@ -24,10 +24,21 @@ from typing import Any, TextIO
 from unbake import atomic as atomic_files
 from unbake.cli.output import Result
 from unbake.config import Held, Host, Project
-from unbake.cycle import rank
+from unbake.cycle import ladder, rank
 from unbake.cycle.events import Emitter
 
-STAGES = ("queued", "drafting", "comparing", "waiting for edit", "landing", "landed", "held", "failed")
+STAGES = (
+    "queued",
+    "drafting",
+    "comparing",
+    "searching",
+    "needs creative",
+    "waiting for edit",
+    "landing",
+    "landed",
+    "held",
+    "failed",
+)
 
 
 @dataclass
@@ -47,6 +58,8 @@ class Row:
     commit: str = ""
     # The bytes of the last generated draft: a draft still holding them is drafted again after the steps change.
     drafted_sha: str = ""
+    # Where the mechanical search ladder stands; a fresh compare of the tree or a human edit starts it over.
+    ladder: ladder.Ladder = field(default_factory=ladder.Ladder)
 
 
 # ---- worker tasks (module level so the fork server can import them) ----
@@ -96,6 +109,19 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         or next((f"precondition: {line}" for line in measured.preconditions), ""),
         "seconds": time.monotonic() - started,
     }
+
+
+def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
+    from unbake import config
+    from unbake.work import search
+
+    root, host, file, method = spec
+    started = time.monotonic()
+    try:
+        found = search.search(config.load(root), host, Path(file), method, host.cycle_search_seconds)
+    except Held as error:
+        return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
+    return {"ok": True, "best_file": str(found.best_file), "seconds": time.monotonic() - started}
 
 
 def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
@@ -152,7 +178,7 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-BUSY = frozenset({"drafting", "comparing", "landing"})
+BUSY = frozenset({"drafting", "comparing", "searching", "landing"})
 
 
 class Stop:
@@ -217,14 +243,15 @@ LAND_STEPS = ("merge-units", "resident", *DRAFT_STEPS)
 
 
 # A row in one of these stages last read the tree before the steps changed it (a held-back task is in them too).
-REDONE = frozenset({"drafting", "comparing", "waiting for edit"})
+REDONE = frozenset({"drafting", "comparing", "searching", "needs creative", "waiting for edit"})
 
 
 @dataclass(frozen=True)
 class Task:
-    kind: str  # "draft" or "compare"
-    argument: str  # the function to draft, or the file to compare
+    kind: str  # "draft", "compare" or "search"
+    argument: str  # the function to draft, or the file to compare or search
     replace: bool = False
+    method: str = ""  # the search method
 
 
 def run(
@@ -361,6 +388,8 @@ def run(
             deferred.pop(function, None)
             if task.kind == "draft":
                 future = workers.submit(_draft_task, (project.root, host, task.argument, task.replace))
+            elif task.kind == "search":
+                future = workers.submit(_search_task, (project.root, host, task.argument, task.method))
             else:
                 future = workers.submit(_compare_task, (project.root, host, task.argument))
             inflight[function] = (future, task)
@@ -369,6 +398,7 @@ def run(
         def start(row: Row, *, redraft: bool = False) -> None:
             if row.held:
                 return
+            row.ladder = ladder.Ladder()
             file = project.work / row.function / f"{row.function}.c"
             if redraft:
                 row.stage, row.sha256 = "drafting", ""
@@ -431,6 +461,81 @@ def run(
             if pusher is not None:
                 pusher.request()
 
+        def search_next(row: Row) -> None:
+            """The next method of the ladder, else the function needs a creative edit."""
+            method = row.ladder.next_method()
+            if method is None:
+                creative(row)
+                return
+            row.ladder.method = method
+            row.stage = "searching"
+            emitter.emit("fn.search.start", function=row.function, method=method)
+            submit(row.function, Task("search", row.file, method=method))
+
+        def creative(row: Row) -> None:
+            file = Path(row.file)
+            row.stage = "needs creative"
+            row.best_percent = row.ladder.best
+            trouble = ladder.write_trouble(project, host, row.function, file, row.ladder, row.diagnostic)
+            emitter.emit(
+                "fn.creative",
+                function=row.function,
+                best_percent=row.ladder.best,
+                methods=dict(row.ladder.tried),
+                trouble=str(trouble),
+            )
+
+        def restore(row: Row) -> None:
+            """A method that gained nothing leaves the best text in the file."""
+            file = Path(row.file)
+            atomic_files.text(file, ladder.snapshot_path(file).read_text(), encoding="utf-8")
+            row.sha256 = _sha(file)
+
+        def climb(row: Row, percent: float) -> None:
+            """A compare that is not exact: score the method whose text it measured, else start the ladder."""
+            file = Path(row.file)
+            current = row.ladder
+            method, current.method = current.method, ""
+            if method:
+                gained = current.gained(percent)
+                current.tried[method] = percent
+                if not gained:
+                    restore(row)
+                    creative(row)
+                    return
+            current.best = percent
+            atomic_files.text(ladder.snapshot_path(file), file.read_text(), encoding="utf-8")
+            search_next(row)
+
+        def searched(row: Row, result: dict[str, Any]) -> None:
+            method, current = row.ladder.method, row.ladder
+            emitter.emit(
+                "fn.search.done",
+                function=row.function,
+                method=method,
+                ok=result["ok"],
+                seconds=round(result["seconds"], 3),
+                **({} if result["ok"] else {"diagnostic": result["diagnostic"]}),
+            )
+            if not result["ok"]:
+                current.tried[method] = f"failed: {result['diagnostic']}"
+                current.method = ""
+                search_next(row)
+                return
+            file, best = Path(row.file), Path(result["best_file"])
+            if best.read_bytes() == file.read_bytes():
+                current.tried[method] = current.best
+                current.method = ""
+                creative(row)
+                return
+            # The method's best text is compared like any edit; the watcher's event for this write matches the
+            # recorded digest and is ignored.
+            atomic_files.copyfile(best, file)
+            row.sha256 = _sha(file)
+            row.stage = "comparing"
+            emitter.emit("fn.compare.start", function=row.function, sha256=row.sha256)
+            submit(row.function, Task("compare", row.file))
+
         def land_drained(*, resume: bool) -> None:
             """The pool is empty: land every exact row, bring the tree current once, redo what read the old tree,
             then start the held-back tasks (unless the cycle is ending)."""
@@ -441,6 +546,8 @@ def run(
             ran = bring_current(LAND_STEPS)
             if ran:
                 recheck()
+                # The steps' work left memos in the workers; drafts start in clean ones.
+                workers._fresh()
             if not resume or steps_error:
                 deferred.clear()
                 return
@@ -482,7 +589,7 @@ def run(
                     kind, payload = inbox.get(timeout=stopper.timeout(rows))
                 except queue.Empty:
                     continue
-                if kind in ("draft", "compare"):
+                if kind in ("draft", "compare", "search"):
                     function, done = payload
                     entry = inflight.get(function)
                     if entry is None or entry[0] is not done:
@@ -492,10 +599,17 @@ def run(
                         deferred.setdefault(function, entry[1])
                     elif kind == "draft":
                         _drafted(rows[function], _result(done), project, emitter, next_words, start, stopper)
-                    elif _compared(rows[function], _result(done), emitter, stopper):
-                        rows[function].stage = "landing"
-                        exact.append(function)
-                        drain()
+                    elif kind == "search":
+                        if function not in deferred:  # a newer edit waits: this search read an older text
+                            searched(rows[function], _result(done))
+                    else:
+                        outcome = _compared(rows[function], _result(done), emitter, stopper)
+                        if outcome == "exact":
+                            rows[function].stage = "landing"
+                            exact.append(function)
+                            drain()
+                        elif outcome == "short" and function not in deferred:
+                            climb(rows[function], rows[function].best_percent or 0.0)
                     if function in deferred and not exact:
                         submit(function, deferred[function])
                 elif kind == "edit":
@@ -508,6 +622,7 @@ def run(
                     if sha == row.sha256:
                         continue
                     row.file, row.sha256 = str(path), sha
+                    row.ladder = ladder.Ladder()
                     stopper.note_activity()
                     emitter.emit("fn.edit", function=row.function, file=row.file, sha256=sha)
                     old = inflight.get(row.function)
@@ -648,8 +763,9 @@ def _drafted(
     start(row)
 
 
-def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop) -> bool:
-    """Record a compare; True when it is exact and the row should land."""
+def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop) -> str:
+    """Record a compare: "exact" when the row should land, "short" when the text compiles and links but differs
+    (the ladder's turn), else "" (refused, or the file changed meanwhile)."""
     row.tries += 1
     if not result["ok"]:
         row.stage, row.diagnostic = "waiting for edit", result["diagnostic"]
@@ -663,9 +779,9 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
             seconds=round(result["seconds"], 3),
             diagnostic=result["diagnostic"],
         )
-        return False
+        return ""
     if result["sha256"] != row.sha256:
-        return False  # the file changed while it was compared; the watcher queued a new compare
+        return ""  # the file changed while it was compared; the watcher queued a new compare
     row.best_percent = result["best_percent"]
     row.diagnostic = result["diagnostic"]
     emitter.emit(
@@ -681,9 +797,9 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
     stopper.note_activity()
     if result["exact"]:
         emitter.emit("fn.exact", function=row.function, bytes=row.bytes, sha256=row.sha256)
-        return True
+        return "exact"
     row.stage = "waiting for edit"
-    return False
+    return "short" if row.best_percent < 100 else ""
 
 
 def _pushed(ok: bool, unpushed: list[str], emitter: Emitter, host: Host) -> None:
