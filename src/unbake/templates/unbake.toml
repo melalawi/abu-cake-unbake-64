@@ -44,9 +44,18 @@
 [budgets]
 # What a step chain may cost on this machine; a project's .unbake/unbake.toml may set its own.
 # Over budget is reported by name on the step and in its JSON line on stderr.
-# recompute_seconds = 450          # a forced chain (recompute)
-# unchanged_seconds = 30           # an unforced chain in which no step ran
-# changed_seconds = 90             # an unforced chain in which a step ran
+# The verdict is CPU time; a wall-time miss while other processes keep contended_cores busy is reported as
+# contended, not a failure.
+# recompute_seconds = 450          # wall: a forced chain (recompute)
+# unchanged_seconds = 30           # wall: an unforced chain in which no step ran
+# changed_seconds = 90             # wall: an unforced chain in which a step ran
+# recompute_cpu_seconds = 3000     # CPU (this process, its tools and its workers) of a forced chain
+# unchanged_cpu_seconds = 60
+# changed_cpu_seconds = 300
+# step_cpu_seconds = 2000          # CPU of any one step
+# main_cpu_seconds = 60            # a step's own-process CPU past which main_cpu_fraction applies
+# main_cpu_fraction = 0.5          # a step's own-process share of its CPU: above it is a single-core stretch
+# contended_cores = 2              # other processes' average cores that make a wall miss contended
 # facts_miss_fraction = 0.01       # source units extracted of all, in an unforced solve
 # main_rss_bytes = 8000000000      # one step's peak resident memory of this process
 # worker_rss_bytes = 1500000000    # one step's peak resident memory of a pool worker

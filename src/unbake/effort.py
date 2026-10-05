@@ -12,7 +12,7 @@ import os
 import resource
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +29,17 @@ _ledger: dict[str, list[float]] = {}
 _counts: dict[str, list[int]] = {}
 # per memory window: [main peak, worker peak] in bytes; the last window is open
 _windows: list[list[int]] = [[0, 0]]
+
+
+def host_busy() -> float:
+    """CPU-seconds every process on this host has used since boot (/proc/stat), or 0 where it cannot be read."""
+    try:
+        fields = Path("/proc/stat").read_text().split("\n", 1)[0].split()[1:]
+    except OSError:
+        return 0.0
+    # user nice system idle iowait irq softirq steal: everything but idle and iowait is busy.
+    busy = sum(int(value) for index, value in enumerate(fields[:8]) if index not in (3, 4))
+    return busy / os.sysconf("SC_CLK_TCK")
 
 
 def resident_peak() -> int:
@@ -88,6 +99,7 @@ class Mark:
     pool: dict[str, tuple[float, int]]
     window: int = 0
     counts: dict[str, tuple[int, int]] = field(default_factory=dict)
+    host: float = 0.0
 
 
 def mark() -> Mark:
@@ -98,7 +110,13 @@ def mark() -> Mark:
         counts = {name: (row[0], row[1]) for name, row in _counts.items()}
         opened = len(_windows) - 1
     return Mark(
-        time.monotonic(), own.ru_utime + own.ru_stime, children.ru_utime + children.ru_stime, pool, opened, counts
+        time.monotonic(),
+        own.ru_utime + own.ru_stime,
+        children.ru_utime + children.ru_stime,
+        pool,
+        opened,
+        counts,
+        host_busy(),
     )
 
 
@@ -111,10 +129,16 @@ class Effort:
     main_rss: int = 0
     worker_rss: int = 0
     counts: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # CPU-seconds other processes on the host used meanwhile (host busy time less this command's).
+    external: float = 0.0
 
     @property
     def cpu(self) -> float:
         return self.main + self.tools + sum(seconds for seconds, _ in self.pool.values())
+
+    @property
+    def external_cores(self) -> float:
+        return self.external / self.wall if self.wall > 0 else 0.0
 
     @property
     def percent(self) -> float:
@@ -125,7 +149,7 @@ class Effort:
         text = (
             f"effort: {self.wall:.1f} s wall, {self.cpu:.1f} cpu-s ({self.percent:.0f}%): main {self.main:.1f}, "
             f"tools {self.tools:.1f}, pool {pooled:.1f}; peak RSS main {self.main_rss / MB:.0f} MB, "
-            f"worker {self.worker_rss / MB:.0f} MB"
+            f"worker {self.worker_rss / MB:.0f} MB; other processes {self.external_cores:.1f} cores"
         )
         top = sorted(self.pool.items(), key=lambda item: -item[1][0])[:TOP]
         if top:
@@ -143,6 +167,8 @@ class Effort:
             "main_rss_bytes": self.main_rss,
             "worker_rss_bytes": self.worker_rss,
             "counts": {name: list(value) for name, value in sorted(self.counts.items())},
+            "external_cpu_seconds": round(self.external, 3),
+            "external_cores": round(self.external_cores, 2),
         }
 
 
@@ -163,13 +189,17 @@ def since(start: Mark) -> Effort:
         _windows[-1][0] = max(_windows[-1][0], resident_peak())
         seen = _windows[start.window :]
         main_rss, worker_rss = max(row[0] for row in seen), max(row[1] for row in seen)
-    return Effort(
+    spent = Effort(
         end.wall - start.wall, end.main - start.main, end.tools - start.tools, pool, main_rss, worker_rss, counts
     )
+    # Pool CPU arrives when a task returns, so a window can count a task that started before it: never negative.
+    external = max(0.0, end.host - start.host - spent.cpu) if start.host and end.host else 0.0
+    return replace(spent, external=external)
 
 
 def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:
-    """A step's memory over the host's [budgets], each named by its budget key."""
+    """A step over the host's [budgets], each named by its budget key: its memory, its CPU, and a single-core
+    stretch (this process's CPU above main_cpu_fraction of the step's, once it passes main_cpu_seconds)."""
     found = []
     for field_name, value, limit in (
         ("main_rss_bytes", spent.main_rss, budgets.main_rss_bytes),
@@ -177,20 +207,42 @@ def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:
     ):
         if value > limit:
             found.append(f"budget.{field_name}: {name} peaked at {value / MB:.0f} MB, over {limit / MB:.0f} MB")
+    if spent.cpu > budgets.step_cpu_seconds:
+        found.append(f"budget.step_cpu_seconds: {name} spent {spent.cpu:.1f} cpu-s, over {budgets.step_cpu_seconds:g}")
+    if spent.main > budgets.main_cpu_seconds and spent.main > budgets.main_cpu_fraction * spent.cpu:
+        found.append(
+            f"budget.main_cpu_fraction: {name} spent {spent.main:.1f} of {spent.cpu:.1f} cpu-s in one process "
+            f"({spent.main / spent.cpu:.0%}), over {budgets.main_cpu_fraction:.0%}"
+        )
     return found
 
 
-def chain_findings(kind: str, spent: Effort, budgets: Host) -> list[str]:
-    """A step chain over the host's [budgets]. KIND is recompute, unchanged or changed; an unforced solve's facts
-    misses count against facts_miss_fraction."""
-    found = []
-    limit = {
-        "recompute": budgets.recompute_seconds,
-        "unchanged": budgets.unchanged_seconds,
-        "changed": budgets.changed_seconds,
+def contended(spent: Effort, budgets: Host) -> bool:
+    """Other processes kept at least contended_cores busy on average while this ran."""
+    return spent.wall > 0 and spent.external / spent.wall >= budgets.contended_cores
+
+
+def chain_findings(kind: str, spent: Effort, budgets: Host) -> tuple[list[str], list[str]]:
+    """A step chain against the host's [budgets]: (findings, contended). KIND is recompute, unchanged or changed.
+
+    The verdict is CPU time, which other processes cannot inflate. A wall-time miss is a finding too, unless other
+    processes kept contended_cores busy meanwhile: then it is reported as contended, not a failure. An unforced
+    solve's facts misses count against facts_miss_fraction."""
+    found: list[str] = []
+    notes: list[str] = []
+    seconds, cpu = {
+        "recompute": (budgets.recompute_seconds, budgets.recompute_cpu_seconds),
+        "unchanged": (budgets.unchanged_seconds, budgets.unchanged_cpu_seconds),
+        "changed": (budgets.changed_seconds, budgets.changed_cpu_seconds),
     }[kind]
-    if spent.wall > limit:
-        found.append(f"budget.{kind}_seconds: the {kind} chain took {spent.wall:.1f} s, over {limit:g} s")
+    if spent.cpu > cpu:
+        found.append(f"budget.{kind}_cpu_seconds: the {kind} chain spent {spent.cpu:.1f} cpu-s, over {cpu:g}")
+    if spent.wall > seconds:
+        line = f"budget.{kind}_seconds: the {kind} chain took {spent.wall:.1f} s, over {seconds:g} s"
+        if contended(spent, budgets):
+            notes.append(f"contended {line} (other processes used {spent.external_cores:.1f} cores)")
+        else:
+            found.append(line)
     done, total = spent.counts.get("facts", (0, 0))
     fraction = budgets.facts_miss_fraction
     if kind != "recompute" and total and done / total > fraction:
@@ -198,4 +250,4 @@ def chain_findings(kind: str, spent: Effort, budgets: Host) -> list[str]:
             f"budget.facts_miss_fraction: {done} of {total} source units extracted ({done / total:.2%}), "
             f"over {fraction:.2%}"
         )
-    return found
+    return found, notes

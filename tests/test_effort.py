@@ -48,7 +48,7 @@ class EffortTests(unittest.TestCase):
         self.assertEqual(
             spent.line(),
             "effort: 4.0 s wall, 10.0 cpu-s (250%): main 1.0, tools 1.0, pool 8.0; peak RSS main 10 MB, "
-            "worker 300 MB [typemap.facts._job 7.0 x1, work.plan._drafters 1.0 x1]",
+            "worker 300 MB; other processes 0.0 cores [typemap.facts._job 7.0 x1, work.plan._drafters 1.0 x1]",
         )
         document = spent.document()
         self.assertEqual(
@@ -79,8 +79,25 @@ def budgets(**changes: float) -> SimpleNamespace:
     return SimpleNamespace(**{**BUDGETS, **changes})
 
 
-def spent(wall: float = 1.0, main_rss: int = 0, worker_rss: int = 0, facts: tuple[int, int] | None = None):
-    return effort.Effort(wall, 0.0, 0.0, {}, main_rss, worker_rss, {"facts": facts} if facts else {})
+def spent(
+    wall: float = 1.0,
+    main_rss: int = 0,
+    worker_rss: int = 0,
+    facts: tuple[int, int] | None = None,
+    main: float = 0.0,
+    pool: float = 0.0,
+    external: float = 0.0,
+):
+    return effort.Effort(
+        wall,
+        main,
+        0.0,
+        {"f": (pool, 1)} if pool else {},
+        main_rss,
+        worker_rss,
+        {"facts": facts} if facts else {},
+        external,
+    )
 
 
 class FindingTests(unittest.TestCase):
@@ -107,5 +124,68 @@ class FindingTests(unittest.TestCase):
             ("no solve ran", "changed", spent(10.0), []),
         ]:
             with self.subTest(label):
-                found = effort.chain_findings(kind, used, limits)
+                found, notes = effort.chain_findings(kind, used, limits)
                 self.assertEqual([line.split(":")[0] for line in found], expected)
+                self.assertEqual(notes, [])
+
+    def test_cpu_is_the_verdict_and_a_contended_wall_miss_is_only_noted(self) -> None:
+        limits = budgets(recompute_seconds=450, recompute_cpu_seconds=3000, contended_cores=2)
+        for label, used, findings, contended in [
+            ("wall miss on a quiet host", spent(500.0, pool=2000.0, external=100.0), ["budget.recompute_seconds"], 0),
+            (
+                "near miss: 1.9 other cores is not contended",
+                spent(500.0, external=950.0),
+                ["budget.recompute_seconds"],
+                0,
+            ),
+            ("wall miss under 2 other cores", spent(500.0, pool=2000.0, external=1000.0), [], 1),
+            (
+                "cpu over is a failure whatever the load",
+                spent(400.0, pool=3001.0, external=4000.0),
+                ["budget.recompute_cpu_seconds"],
+                0,
+            ),
+        ]:
+            with self.subTest(label):
+                found, notes = effort.chain_findings("recompute", used, limits)
+                self.assertEqual([line.split(":")[0] for line in found], findings)
+                self.assertEqual(len(notes), contended)
+                self.assertTrue(all(note.startswith("contended budget.recompute_seconds") for note in notes))
+
+    def test_a_single_core_stretch_is_its_own_finding(self) -> None:
+        limits = budgets(main_cpu_seconds=60, main_cpu_fraction=0.5, step_cpu_seconds=1000)
+        for label, used, expected in [
+            ("small step mostly in one process", spent(main=50.0, pool=1.0), []),
+            ("long step spread over workers", spent(main=100.0, pool=400.0), []),
+            ("long step mostly in one process", spent(main=300.0, pool=100.0), ["budget.main_cpu_fraction"]),
+            ("step cpu over", spent(main=10.0, pool=1000.0), ["budget.step_cpu_seconds"]),
+        ]:
+            with self.subTest(label):
+                found = effort.step_findings("types", used, limits)
+                self.assertEqual([line.split(":")[0] for line in found], expected)
+
+
+class HostLoadTests(unittest.TestCase):
+    def test_other_processes_cpu_is_host_busy_time_less_ours(self) -> None:
+        busy = iter([1000.0, 1300.0])
+        with (
+            patch.object(effort, "host_busy", lambda: next(busy)),
+            patch.object(effort, "_ledger", {}),
+            patch.object(effort, "_counts", {}),
+            patch.object(effort, "_windows", [[0, 0]]),
+            patch.object(effort, "resident_peak", lambda: 0),
+            patch.object(effort.time, "monotonic", side_effect=[0.0, 100.0]),
+        ):
+            start = effort.mark()
+            effort.charge("f", 200.0)
+            used = effort.since(start)
+        self.assertEqual((round(used.external, 2), round(used.external_cores, 2)), (100.0, 1.0))
+        self.assertEqual(used.document()["external_cores"], 1.0)
+
+    def test_proc_stat_busy_excludes_idle_and_iowait(self) -> None:
+        stat = "cpu  100 20 30 5000 70 8 2 0 0 0\ncpu0 1 2 3\n"
+        with (
+            patch.object(effort.Path, "read_text", return_value=stat),
+            patch.object(effort.os, "sysconf", return_value=100),
+        ):
+            self.assertEqual(effort.host_busy(), 1.6)

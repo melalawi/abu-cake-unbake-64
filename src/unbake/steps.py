@@ -87,6 +87,8 @@ class StepResult:
     spent: effort.Effort | None = None
     # Budgets this step (or, on a chain's last result, the chain) went over, each named by its budget key.
     findings: tuple[str, ...] = ()
+    # Wall-time misses while other processes held the host busy: reported, never a failure.
+    contended: tuple[str, ...] = ()
 
     def document(self) -> dict[str, Any]:
         return {
@@ -96,6 +98,7 @@ class StepResult:
             "seconds": round(self.seconds, 3),
             **(self.spent.document() if self.spent is not None else {}),
             "findings": list(self.findings),
+            "contended": list(self.contended),
         }
 
     def line(self) -> str:
@@ -107,7 +110,9 @@ class StepResult:
                 f"peak RSS main {spent.main_rss / effort.MB:.0f} MB, worker {spent.worker_rss / effort.MB:.0f} MB "
                 f"({self.trigger})"
             )
-        return "".join([text, *(f"\n  OVER {finding}" for finding in self.findings)])
+        return "".join(
+            [text, *(f"\n  OVER {finding}" for finding in self.findings), *(f"\n  {note}" for note in self.contended)]
+        )
 
 
 @dataclass(frozen=True)
@@ -479,11 +484,11 @@ def _checked(host: Host, results: list[StepResult], chain: effort.Mark, *, force
     """The chain's cost against the host's [budgets]: findings go on its last result and in its event."""
     used = effort.since(chain)
     kind = "recompute" if force else "changed" if any(row.ran for row in results) else "unchanged"
-    findings = effort.chain_findings(kind, used, host)
-    _event({"event": "steps.effort", "kind": kind, **used.document(), "findings": findings})
-    if findings and results:
+    findings, notes = effort.chain_findings(kind, used, host)
+    _event({"event": "steps.effort", "kind": kind, **used.document(), "findings": findings, "contended": notes})
+    if (findings or notes) and results:
         last = results[-1]
-        results[-1] = replace(last, findings=(*last.findings, *findings))
+        results[-1] = replace(last, findings=(*last.findings, *findings), contended=tuple(notes))
     return results
 
 

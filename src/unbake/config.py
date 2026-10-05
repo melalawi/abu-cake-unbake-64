@@ -540,6 +540,13 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "recompute_seconds": "int",
         "unchanged_seconds": "int",
         "changed_seconds": "int",
+        "recompute_cpu_seconds": "int",
+        "unchanged_cpu_seconds": "int",
+        "changed_cpu_seconds": "int",
+        "step_cpu_seconds": "int",
+        "main_cpu_seconds": "int",
+        "main_cpu_fraction": "fraction",
+        "contended_cores": "int",
         "facts_miss_fraction": "fraction",
         "main_rss_bytes": "int",
         "worker_rss_bytes": "int",
@@ -798,6 +805,13 @@ class Host:
     publish_branch = property(lambda self: self.get("publish.branch"))
     publish_author_name = property(lambda self: self.get("publish.author_name"))
     publish_author_email = property(lambda self: self.get("publish.author_email"))
+    recompute_cpu_seconds = property(lambda self: self.get("budgets.recompute_cpu_seconds"))
+    unchanged_cpu_seconds = property(lambda self: self.get("budgets.unchanged_cpu_seconds"))
+    changed_cpu_seconds = property(lambda self: self.get("budgets.changed_cpu_seconds"))
+    step_cpu_seconds = property(lambda self: self.get("budgets.step_cpu_seconds"))
+    main_cpu_seconds = property(lambda self: self.get("budgets.main_cpu_seconds"))
+    main_cpu_fraction = property(lambda self: self.get("budgets.main_cpu_fraction"))
+    contended_cores = property(lambda self: self.get("budgets.contended_cores"))
     recompute_seconds = property(lambda self: self.get("budgets.recompute_seconds"))
     unchanged_seconds = property(lambda self: self.get("budgets.unchanged_seconds"))
     changed_seconds = property(lambda self: self.get("budgets.changed_seconds"))
