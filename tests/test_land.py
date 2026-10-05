@@ -109,3 +109,22 @@ class ProveVersionsTests(unittest.TestCase):
     def test_the_first_mismatching_version_in_order_refuses(self) -> None:
         with self.assertRaisesRegex(Held, r"land\.mismatch: alpha .* the eu ROM built"):
             self.prove([True, False, False])
+
+
+class GeneratedEditTests(LandTests):
+    def test_hand_edited_generated_headers_refuse_both_lands_and_clean_ones_proceed(self) -> None:
+        with patch.object(land.steps, "altered", return_value=["include/span_1/code.h"]) as altered:
+            for call in (
+                lambda: self.run_land([]),
+                lambda: land.land_original(self.project, self.host, "alpha"),
+            ):
+                with self.assertRaises(Held) as raised:
+                    call()
+                self.assertEqual(
+                    raised.exception.reason,
+                    "land.generated_edit: generated headers were edited by hand: include/span_1/code.h. "
+                    "Put the declarations in the draft; publish places them in the shared headers",
+                )
+            altered.assert_called_with(self.project, "headers")
+        with patch.object(land.steps, "altered", return_value=[]):
+            self.assertEqual(self.run_land([]), "c0ffee")

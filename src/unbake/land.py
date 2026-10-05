@@ -228,11 +228,23 @@ def subject(project: Project, function: str) -> str:
     return f"{'Clean' if compare.published(project, function) else 'Match'} {function}"
 
 
+def _refuse_edited_headers(project: Project) -> None:
+    """Publish places declarations in the shared headers; a hand-edited generated header is dropped by the next
+    regeneration, so it is refused before any work."""
+    if edited := steps.altered(project, "headers"):
+        raise Held(
+            "land",
+            f"land.generated_edit: generated headers were edited by hand: {', '.join(edited)}. Put the declarations "
+            "in the draft; publish places them in the shared headers",
+        )
+
+
 def land(project: Project, host: Host, file: Path) -> str:
     """Land one exact draft; return the commit id. Nothing is written unless every version proves."""
     from unbake.fold import apply as fold_apply
     from unbake.report import progress
 
+    _refuse_edited_headers(project)
     function = compare.function_of(file)
     message = subject(project, function)
     ident = exact_attempt(project, function, file).compiler or project.compiler_reference(function)
@@ -299,6 +311,7 @@ def land_original(project: Project, host: Host, function: str) -> str:
     from unbake.decomp import exclusions, original_asm
     from unbake.report import progress
 
+    _refuse_edited_headers(project)
     versions = list(split.holding_versions(project, function))
     rows = [compare.row_of(project, function, version) for version in versions]
     if any(row.kind != "asm" for row in rows):
