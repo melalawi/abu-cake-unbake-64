@@ -701,6 +701,21 @@ def located(text: str, message: str) -> str:
     return f"{where}:{column}: {reason}: {lines[number - 1].strip()}"
 
 
+_MARKER = re.compile(r'^[ \t]*#[ \t]*(?:line[ \t]+)?(\d+)(?:[ \t]+"((?:\\.|[^"\\])*)")?[^\n]*$', re.M)
+
+
+def resume_marker(text: str, start: int) -> str:
+    """A line marker that gives text[start:] the coordinates it has inside TEXT: the file of the last marker before
+    START (none when there is none) and START's line. A resumed parse keeps every node where a whole parse puts it."""
+    found = None
+    for found in _MARKER.finditer(text, 0, start):
+        pass
+    if found is None:
+        return f"# {text.count(chr(10), 0, start) + 1}\n"
+    line = int(found[1]) + text.count("\n", found.end() + 1, start)
+    return f'# {line} "{found[2]}"\n' if found[2] is not None else f"# {line}\n"
+
+
 def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
     """parser(scope).parse(text), resumed after the longest checkpointed prefix shared with a recent unit.
 
@@ -716,7 +731,7 @@ def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
         nodes, before = state or ((), scope)
         head = parser(before)
         try:
-            tree = head.parse(whole[start:end])
+            tree = head.parse(resume_marker(whole, start) + whole[start:end])
         except Exception:
             return None
         return (*nodes, *tree.ext), head._scope_stack[0].copy()
@@ -726,7 +741,7 @@ def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
             return parser(scope).parse(whole)
         nodes, after = state
         try:
-            rest = parser(after).parse(whole[start:])
+            rest = parser(after).parse(resume_marker(whole, start) + whole[start:])
         except Exception:
             return parser(scope).parse(whole)
         return c_ast.FileAST([*nodes, *rest.ext])

@@ -37,7 +37,7 @@ SHARED = "facts-shared"
 SOURCE = "facts-source"
 HEADER = "facts-header"
 # Bump when the facts extract() produces change for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # At most this many sources per worker job: neighbours in include order share their header expansion.
 SOURCES_PER_JOB = 24
