@@ -172,18 +172,22 @@ def trim(root: Path, max_bytes: int, trim_to_bytes: int) -> list[Path]:
 
 
 _memo: dict[str, OrderedDict[Hashable, Any]] = {}
+# A cycle refreshes steps on a second thread; lookups and evictions are one step each, compute runs unlocked.
+_memo_lock = threading.Lock()
 
 
 def memo(kind: str, content: Hashable, compute: Callable[[], T], *, keep: int = MEMO_ENTRIES_PER_KIND) -> T:
     """In-process reuse of a value derived from content; each kind keeps its latest `keep` values."""
-    values = _memo.setdefault(kind, OrderedDict())
-    if content in values:
-        values.move_to_end(content)
-        return values[content]  # type: ignore[no-any-return]
+    with _memo_lock:
+        values = _memo.setdefault(kind, OrderedDict())
+        if content in values:
+            values.move_to_end(content)
+            return values[content]  # type: ignore[no-any-return]
     value = compute()
-    values[content] = value
-    while len(values) > keep:
-        values.popitem(last=False)
+    with _memo_lock:
+        values[content] = value
+        while len(values) > keep:
+            values.popitem(last=False)
     return value
 
 
@@ -201,8 +205,9 @@ def parsed(kind: str, paths: Path | Sequence[Path], parse: Callable[[], T], *, e
 
 def forget(kinds: Sequence[str] | None = None) -> None:
     """Drop in-process memo entries (all kinds when None)."""
-    for kind in list(_memo) if kinds is None else kinds:
-        _memo.pop(kind, None)
+    with _memo_lock:
+        for kind in list(_memo) if kinds is None else kinds:
+            _memo.pop(kind, None)
 
 
 def serialized(value: Any) -> bytes:

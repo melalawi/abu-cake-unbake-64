@@ -24,6 +24,7 @@ REQUIRED = {
     "worker.crash": "pid function task signal retried",
     "worker.memory": "pid function bytes cap_bytes",
     "step.run": "step trigger seconds",
+    "types.refreshed": "steps seconds ok",
     "cycle.end": "landed landed_bytes unpushed held carryovers exit next",
 }
 

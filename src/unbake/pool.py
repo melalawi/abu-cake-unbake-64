@@ -139,6 +139,8 @@ class Pool:
         self._executor: ProcessPoolExecutor | None = None
         self._handlers: dict[int, Any] = {}
         self.killed = False
+        # A shared pool is used from several threads; replacing a broken executor is one step.
+        self._replacing = threading.Lock()
 
     @classmethod
     def from_host(cls, host: Host) -> Pool:
@@ -179,19 +181,24 @@ class Pool:
             raise KeyboardInterrupt
         raise SystemExit(128 + number)
 
-    def _fresh(self) -> ProcessPoolExecutor:
-        if self._executor is not None:
-            self._executor.shutdown(cancel_futures=True)
-        self._executor = _executor(self.size, self.memory_worker_bytes)
-        return self._executor
+    def _fresh(self, broken: ProcessPoolExecutor | None = None) -> ProcessPoolExecutor:
+        """A working executor; with broken, another thread's replacement of it is reused."""
+        with self._replacing:
+            if broken is not None and self._executor is not broken and self._executor is not None:
+                return self._executor
+            if self._executor is not None:
+                self._executor.shutdown(cancel_futures=True)
+            self._executor = _executor(self.size, self.memory_worker_bytes)
+            return self._executor
 
     def _submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
         if self._executor is None:
             raise Held("pool", "pool: use Pool as a context manager")
+        executor = self._executor
         try:
-            return self._executor.submit(fn, item)
+            return executor.submit(fn, item)
         except BrokenProcessPool:
-            return self._fresh().submit(fn, item)
+            return self._fresh(executor).submit(fn, item)
 
     def submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
         """One task; a broken pool is replaced first. The caller retries a crashed task at most once."""
@@ -224,10 +231,26 @@ class Pool:
                 break
 
 
+_shared: Pool | None = None
+
+
+@contextlib.contextmanager
+def sharing(pool: Pool) -> Iterator[None]:
+    """While open, run() from any thread uses this open pool, so its workers are never doubled."""
+    global _shared
+    previous, _shared = _shared, pool
+    try:
+        yield
+    finally:
+        _shared = previous
+
+
 def run(host: Host, fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
-    """Run fn over items in the host's pool; a single item runs in this process."""
+    """Run fn over items in the shared pool, else the host's pool; a single item runs in this process."""
     if len(items) < 2:
         return [fn(item) for item in items]
+    if _shared is not None:
+        return list(_shared.map(fn, items))
     with Pool.from_host(host) as pool:
         return list(pool.map(fn, items))
 

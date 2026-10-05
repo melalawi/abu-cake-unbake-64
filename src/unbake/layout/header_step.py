@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, steps
+from unbake import cache
 from unbake.config import Held, Host, Project
 from unbake.journal import Journal
 from unbake.layout import apply, index, split
@@ -34,9 +34,13 @@ _DECLARED = (
 
 
 def input_key(project: Project) -> str:
-    """layout.toml, the recorded type solution, every authored header and every published source."""
+    """layout.toml, the installed type solution, every header and every published source.
+
+    The solution is the types step's output, not its input key: a solve that changes nothing reruns nothing here."""
+    from unbake.typemap import types_db
+
     parts: list[str | bytes | Path] = ["headers", str(SCHEMA), project.root / "layout.toml"]
-    parts.append(steps.recorded(project, "types") or "")
+    parts.append(types_db.solution(types_db.path(project)) or "no solution")
     for include in project.include:
         parts.extend(sorted(include.rglob("*.h")))
     parts.extend(sorted(project.src.glob("*.c")))

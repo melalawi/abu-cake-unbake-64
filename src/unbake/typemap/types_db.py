@@ -1,7 +1,8 @@
 """build/types.sqlite: the type solution as per-symbol rows, its semantic summary and pending redraft marks.
 
 Tables:
-- meta(key, value): small top-level fields as JSON, plus `content_sha256`, the digest of the canonical solution.
+- meta(key, value): small top-level fields as JSON, plus `content_sha256`, the digest of the canonical solution,
+  and `solution_sha256`, the same digest without the revision: equal for an identical solution solved again.
 - entries(kind, name, value): one row per function/global/struct/array/dependency entry.
 - summary(kind, name, semantic_sha256, users): the bounded index the solver diffs against.
 - redraft(function, value): marks for drafts made against an older solution.
@@ -69,6 +70,23 @@ def content_digest(encoded: Encoded) -> str:
     return hash_.hexdigest()
 
 
+def solution_digest(encoded: Encoded) -> str:
+    """content_digest without the revision, which every solve advances."""
+    return content_digest({key: item for key, item in encoded.items() if key != "revision"})
+
+
+def solution(file: Path) -> str | None:
+    """The installed solution's digest; None for a missing database or one written before it was recorded."""
+    if not file.is_file():
+        return None
+    connection = _connect(file)
+    try:
+        row = connection.execute("SELECT value FROM meta WHERE key = 'solution_sha256'").fetchone()
+    finally:
+        connection.close()
+    return None if row is None else str(json.loads(row[0]))
+
+
 def _connect(file: Path) -> sqlite3.Connection:
     try:
         return sqlite3.connect(f"file:{file}?mode=ro", uri=True)
@@ -96,6 +114,7 @@ def stage(
                 connection.execute(statement)
             meta = {key: item for key, item in encoded.items() if key not in KINDS}
             meta["content_sha256"] = _encode(digest)
+            meta["solution_sha256"] = _encode(solution_digest(encoded))
             connection.executemany("INSERT INTO meta VALUES (?, ?)", sorted(meta.items()))
             for kind in KINDS:
                 rows = encoded.get(kind, {})

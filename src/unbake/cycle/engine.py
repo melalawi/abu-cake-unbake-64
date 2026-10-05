@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from unbake import atomic as atomic_files
+from unbake import lock
 from unbake.cli.output import Result
 from unbake.config import Held, Host, Project
 from unbake.cycle import rank
@@ -44,6 +45,9 @@ class Row:
     sha256: str = ""
     held: bool = False
     commit: str = ""
+    # The bytes of the last generated draft, and the refresh generation it was drafted against.
+    drafted_sha: str = ""
+    draft_epoch: int = 0
 
 
 # ---- worker tasks (module level so the fork server can import them) ----
@@ -56,7 +60,8 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
     root, host, function, replace = spec
     started = time.monotonic()
     try:
-        made = draft.draft(config.load(root), host, function, replace=replace)
+        with lock.reading(root):
+            made = draft.draft(config.load(root), host, function, replace=replace)
     except Held as error:
         return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
     return {"ok": True, "file": str(made.file), "seconds": time.monotonic() - started}
@@ -77,7 +82,8 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     root, host, file = spec
     started = time.monotonic()
     try:
-        measured = compare.compare(config.load(root), host, Path(file))
+        with lock.reading(root):
+            measured = compare.compare(config.load(root), host, Path(file))
     except Held as error:
         return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
     return {
@@ -188,8 +194,10 @@ def choose(project: Project, host: Host, pick: int | None, functions: tuple[str,
     return ui.pick(order)
 
 
-# The derived steps a cycle needs current: settled at its start and again at its end.
+# The derived steps a cycle settles at its end, so the next cycle drafts at once.
 CYCLE_STEPS = ("resident", "extract", "types", "headers", "buildfiles")
+# The steps drafting needs before it starts; types, headers and build files refresh behind the drafts.
+START_STEPS = ("resident", "extract", "rom-facts")
 
 
 def run(
@@ -243,7 +251,9 @@ def run(
             ),
         )
 
-    settle()
+    for done in steps.ensure(project, host, START_STEPS):
+        if done.ran:
+            emitter.emit("step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3))
     emitter.emit(
         "cycle.start",
         project=str(project.root),
@@ -272,8 +282,13 @@ def run(
     )
     watching.start()
     exit_code = 0
+    refresh_error = ""
+    generation = {"epoch": 0}
+    from unbake.cycle import refresh as background
 
-    with pool.Pool.from_host(host) as workers:
+    with pool.Pool.from_host(host) as workers, pool.sharing(workers):
+        refresh = background.Refresh(project.root, host, inbox)
+        refresh.request()
 
         def submit(kind: str, function: str, argument: str, *, replace: bool = False) -> None:
             if kind == "draft":
@@ -292,7 +307,7 @@ def run(
                 return
             file = project.work / row.function / f"{row.function}.c"
             if redraft:
-                row.stage, row.sha256 = "drafting", ""
+                row.stage, row.sha256, row.draft_epoch = "drafting", "", generation["epoch"]
                 emitter.emit("fn.draft.start", function=row.function)
                 submit("draft", row.function, row.function, replace=True)
             elif file.is_file():
@@ -302,7 +317,7 @@ def run(
                 emitter.emit("fn.compare.start", function=row.function, sha256=row.sha256)
                 submit("compare", row.function, str(file))
             else:
-                row.stage = "drafting"
+                row.stage, row.draft_epoch = "drafting", generation["epoch"]
                 emitter.emit("fn.draft.start", function=row.function)
                 submit("draft", row.function, row.function)
 
@@ -311,7 +326,9 @@ def run(
             message = land.subject(project, row.function)
             started = time.monotonic()
             try:
-                commit = land.land(project, host, Path(row.file))
+                # Between publishes: no refresh replaces headers or build files while the land proves and writes.
+                with lock.publishing(project.root):
+                    commit = land.land(project, host, Path(row.file))
             except Held as error:
                 again = (row.function, row.sha256) not in retried
                 retried.add((row.function, row.sha256))
@@ -343,8 +360,29 @@ def run(
             for merged in steps.ensure(project, host, ["merge-units"]):
                 if merged.ran:
                     emitter.emit("step.run", step=merged.step, trigger=merged.trigger, seconds=round(merged.seconds, 3))
+            refresh.request()
             if pusher is not None:
                 pusher.request()
+
+        def refreshed(done: background.Refreshed) -> None:
+            """Drafts and compares made against the old headers are made again against the new ones."""
+            generation["epoch"] += 1
+            for row in rows.values():
+                if row.held or row.stage not in ("comparing", "waiting for edit"):
+                    continue
+                file = Path(row.file) if row.file else project.work / row.function / f"{row.function}.c"
+                if not file.is_file():
+                    continue
+                old = inflight.get(row.function)
+                if old is not None:
+                    old.cancel()
+                sha = _sha(file)
+                if row.drafted_sha and sha == row.drafted_sha:
+                    start(row, redraft=True)
+                    continue
+                row.file, row.sha256, row.stage = str(file), sha, "comparing"
+                emitter.emit("fn.compare.start", function=row.function, sha256=sha)
+                submit("compare", row.function, row.file)
 
         for row in rows.values():
             emitter.emit(
@@ -378,8 +416,9 @@ def run(
                         )
                         if written.is_file():
                             # An unproven draft was written: compare it, then wait for edits like any other.
+                            row.drafted_sha = _sha(written)
                             stopper.note_activity()
-                            start(row)
+                            start(row, redraft=row.draft_epoch < generation["epoch"])
                             continue
                         row.stage, row.diagnostic = "held", result["diagnostic"]
                         emitter.emit(
@@ -398,7 +437,9 @@ def run(
                         seconds=round(result["seconds"], 3),
                     )
                     stopper.note_activity()
-                    start(row)
+                    row.drafted_sha = _sha(Path(result["file"]))
+                    # Drafted against headers a refresh has since replaced: draft again rather than compare.
+                    start(row, redraft=row.draft_epoch < generation["epoch"])
                 elif kind == "compare":
                     function, _file, done = payload
                     row = rows[function]
@@ -468,6 +509,21 @@ def run(
                     )
                     if payload:
                         unpushed.clear()
+                elif kind == "step":
+                    emitter.emit(
+                        "step.run", step=payload.step, trigger=payload.trigger, seconds=round(payload.seconds, 3)
+                    )
+                elif kind == "refreshed":
+                    emitter.emit(
+                        "types.refreshed",
+                        steps=list(payload.steps),
+                        seconds=round(payload.seconds, 3),
+                        ok=not payload.diagnostic,
+                        **({"diagnostic": payload.diagnostic} if payload.diagnostic else {}),
+                    )
+                    refresh_error = payload.diagnostic or refresh_error
+                    if payload.steps:
+                        refreshed(payload)
                 elif kind == "key":
                     _key(payload, rows, start, emitter, next_words)
                 elif kind == "quit":
@@ -476,6 +532,30 @@ def run(
             exit_code = 130
         finally:
             watcher_stop.set()
+            if exit_code != 130:
+                # The refresh uses this pool; it finishes (and reports) before the pool closes.
+                refresh.join()
+                while True:
+                    try:
+                        kind, payload = inbox.get_nowait()
+                    except queue.Empty:
+                        break
+                    if kind == "step":
+                        emitter.emit(
+                            "step.run", step=payload.step, trigger=payload.trigger, seconds=round(payload.seconds, 3)
+                        )
+                    elif kind == "refreshed":
+                        emitter.emit(
+                            "types.refreshed",
+                            steps=list(payload.steps),
+                            seconds=round(payload.seconds, 3),
+                            ok=not payload.diagnostic,
+                            **({"diagnostic": payload.diagnostic} if payload.diagnostic else {}),
+                        )
+                        refresh_error = payload.diagnostic or refresh_error
+                    else:
+                        inbox.put((kind, payload))
+                        break
             if board is not None:
                 board.close()
     from unbake import config
@@ -510,7 +590,7 @@ def run(
         settle()
     held = [name for name, row in rows.items() if row.stage in ("held", "failed")]
     carry = [name for name, row in rows.items() if row.stage not in ("landed", "held", "failed")]
-    if exit_code == 0 and (held or unpushed or carry):
+    if exit_code == 0 and (held or unpushed or carry or refresh_error):
         exit_code = 1
     following = next_words("cycle", "--pick", str(max(1, len(rows))), "--stop", stopper.condition)
     emitter.emit(
@@ -529,6 +609,8 @@ def run(
     )
     data = {"landed": landed, "unpushed": unpushed, "held": held, "carryovers": carry, "exit": exit_code}
     lines = [f"landed {len(landed)}; held {len(held)}; carried over {len(carry)}; unpushed {len(unpushed)}"]
+    if refresh_error:
+        lines.append(f"refresh: {refresh_error}")
     if exit_code == 130:
         return Result.held("cycle", Held("cycle", "interrupted: stopped by the user"), following, data)
     if exit_code:

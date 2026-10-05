@@ -188,14 +188,17 @@ def install(project: Project, outputs: dict[Path, bytes | Path], *, dry_run: boo
         for p, data in outputs.items()
         if not p.is_file() or p.read_bytes() != (data.read_bytes() if isinstance(data, Path) else data)
     }
-    if not dry_run:
-        # The index is installed last, so it always describes complete views.
-        for path in sorted(changed, key=lambda p: (p == index.path(project), str(p))):
-            data = changed[path]
-            if isinstance(data, Path):
-                storage.install(path, data)
-            else:
-                storage.write(path, data)
-        for path in obsolete:
-            path.unlink(missing_ok=True)
+    if not dry_run and (changed or obsolete):
+        from unbake import lock
+
+        with lock.publishing(project.root):
+            # The index is installed last, so it always describes complete views.
+            for path in sorted(changed, key=lambda p: (p == index.path(project), str(p))):
+                data = changed[path]
+                if isinstance(data, Path):
+                    storage.install(path, data)
+                else:
+                    storage.write(path, data)
+            for path in obsolete:
+                path.unlink(missing_ok=True)
     return len(changed) + len(obsolete)

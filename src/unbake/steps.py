@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,17 +42,26 @@ def recorded(project: Project, step: str) -> str | None:
 
 
 def record(project: Project, step: str, content_key: str) -> None:
-    value = _read(project)
-    value[step] = content_key
-    path = _path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_files.text(path, json.dumps(value, indent=1, sort_keys=True) + "\n")
+    with _updating(project):
+        value = _read(project)
+        value[step] = content_key
+        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
 
 
 def forget(project: Project, step: str) -> None:
-    value = _read(project)
-    if value.pop(step, None) is not None:
-        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+    with _updating(project):
+        value = _read(project)
+        if value.pop(step, None) is not None:
+            atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+
+
+@contextmanager
+def _updating(project: Project) -> Iterator[None]:
+    """One read-modify-write of steps.json at a time: a cycle records steps from two threads."""
+    from unbake import lock
+
+    with lock.exclusive(project.build / "steps.json.lock"):
+        yield
 
 
 @dataclass(frozen=True)

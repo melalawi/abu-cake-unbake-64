@@ -475,11 +475,13 @@ def drift(project: Project, host: Host) -> list[Path]:
 
 
 def write(project: Project, host: Host) -> list[Path]:
-    """Write the build files whose bytes changed; return them."""
-    changed = []
-    for path, content in generate(project, host).items():
-        if path.is_file() and path.read_bytes() == content:
-            continue
-        atomic_files.write(path, content)
-        changed.append(path)
+    """Write the build files whose bytes changed (all at once, between readers); return them."""
+    from unbake import lock
+
+    generated = generate(project, host)
+    changed = [path for path, content in generated.items() if not path.is_file() or path.read_bytes() != content]
+    if changed:
+        with lock.publishing(project.root):
+            for path in changed:
+                atomic_files.write(path, generated[path])
     return changed
