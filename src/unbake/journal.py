@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from types import TracebackType
 
@@ -39,8 +40,10 @@ def recover(directory: Path) -> list[Path]:
 
 
 class Journal:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, section: Callable[[], AbstractContextManager[object]] = nullcontext) -> None:
+        """section: entered around a rollback, so readers never see a half-restored set."""
         self.directory = directory
+        self.section = section
         self.rows: list[dict[str, str | None]] = []
         self.saved: set[Path] = set()
 
@@ -67,7 +70,8 @@ class Journal:
         self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None
     ) -> None:
         if kind is not None:
-            recover(self.directory)
+            with self.section():
+                recover(self.directory)
         else:
             shutil.rmtree(self.directory, ignore_errors=True)
 
