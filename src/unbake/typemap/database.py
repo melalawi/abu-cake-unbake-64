@@ -366,15 +366,13 @@ def _render(
         # Installed generated declarations are dependencies, not owners of a
         # source-local or defined contract. Conflicting local views stay local;
         # inference already records their disagreement as declaration evidence.
+        # A published declaration of a name this source defines yields to the definition when they disagree.
         for path, names in retained_contracts.items():
-            if (
-                path in components
-                and path not in published_homes
-                and any(
-                    not redeclarations.equivalent(variant, components[path], local_aliases)
-                    for name in local.keys() & names
-                    for variant in local[name]
-                )
+            if path in components and any(
+                not redeclarations.equivalent(variant, components[path], local_aliases)
+                for name in local.keys() & names
+                if path not in published_homes or name in definitions
+                for variant in local[name]
             ):
                 components.pop(path)
                 rendered.pop(path, None)

@@ -21,7 +21,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 1
+SCHEMA = 2
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 _DECLARED = (
@@ -71,19 +71,33 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     changed = {path: data for path, data in outputs.items() if not path.is_file() or path.read_bytes() != data}
     used: set[str] = set()
     for source in project.src.glob("*.c"):
-        used |= apply.spelled(source.read_text())
+        used |= uses(source.read_text())
     obsolete = {path: b"" for path in index.headers(project) - outputs.keys()}
     # A name that moves to another generated header is not removed.
     kept = set().union(*(declared(data.decode()) for path, data in outputs.items() if path.suffix == ".h"))
-    for path in {**changed, **obsolete}:
+    refusals = []
+    for path in sorted({**changed, **obsolete}):
         if path.suffix != ".h" or not path.is_file():
             continue
         removed = (declared(path.read_text()) - kept) & used
         if removed:
-            raise Held(
-                "headers", f"headers.merge_only: {path}: would remove {', '.join(sorted(removed))} used by published C"
-            )
+            refusals.append(f"{path}: would remove {', '.join(sorted(removed))} used by published C")
+    if refusals:
+        raise Held("headers", "headers.merge_only: " + "; ".join(refusals))
     return changed
+
+
+_DEFINED = re.compile(r"^[A-Za-z_][\w \t*]*?\b([A-Za-z_]\w*)[ \t]*\([^;{]*\)[ \t\n]*\{", re.M)
+
+
+def uses(text: str) -> set[str]:
+    """Names a source spells, except a function it only defines: its definition needs no header declaration."""
+    spelled = apply.spelled(text)
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
+    only_defined = {
+        name for name in _DEFINED.findall(code) if len(re.findall(r"\b" + re.escape(name) + r"\b", code)) == 1
+    }
+    return spelled - only_defined
 
 
 def _compile(job: tuple[Project, Host, Path, str, str]) -> None:

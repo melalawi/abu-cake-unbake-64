@@ -72,7 +72,7 @@ class PublishedContractsTests(unittest.TestCase):
                 "struct Dispatch { Callback callback; Word tail[2]; };\n"
                 "extern struct Dispatch dispatch[];\n"
                 "struct Record { Word index; };\nextern struct Record record;\n"
-                "void unused(void);\nstruct Private { int x; };\n"
+                "void unused(void);\nstruct Private { int x; };\nextern void owner(void);\n"
             )
             project = SimpleNamespace(root=root, src=src, include=(include,), versions=("us", "eu"))
             rows = [
@@ -94,6 +94,7 @@ class PublishedContractsTests(unittest.TestCase):
                 "typedef unsigned int Word",
                 "struct Record",
                 "record;",
+                "extern void owner(void);",
             ):
                 self.assertIn(contract, retained)
             self.assertNotIn("unused", retained)

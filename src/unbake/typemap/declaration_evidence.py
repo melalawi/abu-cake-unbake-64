@@ -327,9 +327,11 @@ def published_snapshot(project: Project) -> tuple[dict[Path, str], dict[Path, se
 
     pending = set()
     local_tags = set()
-    for function, source, _ in published_sources(project):
+    for _function, source, _ in published_sources(project):
         local_tags.update(redeclarations.local_tags(source.read_text()))
-        pending.update(set(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(source.read_text()))) - {function})
+        # A function's own installed declaration is carried too: it moves with its module to the new owner header.
+        # One that disagrees with the definition is dropped when types are rendered (database._render).
+        pending.update(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(source.read_text())))
     selected: dict[Path, str] = {}
     homes: dict[Path, set[Path]] = {}
     seen = set()

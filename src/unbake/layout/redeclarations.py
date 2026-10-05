@@ -127,8 +127,28 @@ def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
 
 _DECLARATOR = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\)\s*)*[\[(;=,]")
 _KEYWORDS = frozenset(
-    "auto char const double enum extern float inline int long register short signed static struct typedef union"
-    " unsigned void volatile".split()
+    [
+        "auto",
+        "char",
+        "const",
+        "double",
+        "enum",
+        "extern",
+        "float",
+        "inline",
+        "int",
+        "long",
+        "register",
+        "short",
+        "signed",
+        "static",
+        "struct",
+        "typedef",
+        "union",
+        "unsigned",
+        "void",
+        "volatile",
+    ]
 )
 
 

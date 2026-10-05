@@ -38,6 +38,28 @@ class HeaderPlanTests(ProjectCase):
         with self.assertRaisesRegex(Held, r"headers.merge_only: .*g.h: would remove foo used by published C"):
             self.plan({}, frozenset({self.header}))
 
+    def test_every_refusal_is_listed_once(self) -> None:
+        other = self.header.with_name("h.h")
+        other.write_text("int bar(void);\n")
+        (self.project.src / "beta.c").write_text("int beta(void) { return bar(); }\n")
+        with self.assertRaisesRegex(Held, r"merge_only: .*g.h: would remove foo .*; .*h.h: would remove bar "):
+            self.plan({self.header: b"", other: b""})
+
+    def test_a_function_a_source_only_defines_is_not_a_use(self) -> None:
+        for body, refused in [
+            ("void own(int a) {\n}\n", False),
+            ("void own(int a);\nvoid own(int a) {\n}\n", True),
+            ("void own(int a) {\n    own(a);\n}\n", True),
+        ]:
+            with self.subTest(body=body):
+                (self.project.src / "own.c").write_text(body)
+                self.header.write_text("int foo(void);\nvoid own(int a);\n")
+                if refused:
+                    with self.assertRaisesRegex(Held, r"would remove own used"):
+                        self.plan({self.header: b"int foo(void);\n"})
+                else:
+                    self.assertEqual(len(self.plan({self.header: b"int foo(void);\n"})), 1)
+
     def test_run_installs_every_output_so_unchanged_headers_are_kept(self) -> None:
         """apply.install deletes generated headers absent from what it is given; give it all outputs."""
         other = self.header.with_name("h.h")
