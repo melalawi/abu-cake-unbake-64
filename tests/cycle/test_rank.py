@@ -20,19 +20,21 @@ def names(result: list[Candidate]) -> list[str]:
 
 
 class RankTests(unittest.TestCase):
-    def test_no_history_ranks_by_size_descending_inside_the_window(self) -> None:
+    def test_smallest_first_without_history_or_with_only_sparse_buckets(self) -> None:
         pool = [cand("small", 32), cand("big", 2048), cand("mid", 256), cand("tiny", 8), cand("huge", 9000)]
-        self.assertEqual(names(rank(pool, [], **WINDOW)), ["big", "mid", "small"])
+        for history in ([], attempts(40, [True, False], 2.0), attempts(3000, [True], 30.0)):
+            with self.subTest(history=len(history)):
+                self.assertEqual(names(rank(pool, history, **WINDOW)), ["small", "mid", "big"])
 
     def test_window_edges_are_inclusive(self) -> None:
         pool = [cand("low", 16), cand("high", 4096), cand("under", 15), cand("over", 4097)]
-        self.assertEqual(names(rank(pool, [], **WINDOW)), ["high", "low"])
+        self.assertEqual(names(rank(pool, [], **WINDOW)), ["low", "high"])
 
     def test_carryovers_come_first_even_when_smaller(self) -> None:
         pool = [cand("fresh-big", 2048), cand("old-small", 32, True), cand("old-mid", 256, True), cand("fresh", 512)]
         result = names(rank(pool, [], **WINDOW))
         self.assertEqual(result[:2].count("old-small") + result[:2].count("old-mid"), 2)
-        self.assertEqual(result[2:], ["fresh-big", "fresh"])
+        self.assertEqual(result[2:], ["fresh", "fresh-big"])
 
     def test_history_prefers_bytes_per_effort_over_size(self) -> None:
         history = attempts(100, [True] * 5, 10.0) + attempts(300, [True] + [False] * 4, 100.0)
