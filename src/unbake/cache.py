@@ -172,7 +172,7 @@ def trim(root: Path, max_bytes: int, trim_to_bytes: int) -> list[Path]:
 
 
 _memo: dict[str, OrderedDict[Hashable, Any]] = {}
-# A cycle refreshes steps on a second thread; lookups and evictions are one step each, compute runs unlocked.
+# Extract runs one thread per version; lookups and evictions are one step each, compute runs unlocked.
 _memo_lock = threading.Lock()
 
 

@@ -204,13 +204,9 @@ def run(project: Project, host: Host) -> list[Path]:
 
     All or nothing: every path the step writes or deletes is journaled first (journal.py), so a hold, an
     exception or a killed process leaves the tree as it was."""
-    from unbake import lock
-
-    # Every write, the rollback included, happens inside the publish section that cycle readers respect.
-    with Journal(journal_path(project), section=lambda: lock.publishing(project.root)) as changes:
+    with Journal(journal_path(project)) as changes:
         changes.save(project.version(version).split for version in project.versions)
-        with lock.publishing(project.root):
-            apply.units(project)
+        apply.units(project)
         disagreements: dict[Path, dict[str, tuple[str, str]]] = {}
         outputs = apply.render(project, host, disagreements)
         changed = plan(project, outputs)
@@ -237,22 +233,6 @@ def missing(project: Project) -> list[str]:
             if name in generated and not (root / name).is_file():
                 absent.add(name)
     return sorted(absent)
-
-
-def absent(project: Project, functions: tuple[str, ...]) -> list[str]:
-    """Generated headers a draft context of FUNCTIONS includes and the tree lacks: the ones published sources and
-    present headers include (a draft context includes every header), and the group headers of FUNCTIONS."""
-    from unbake.layout import map as layout_map
-
-    root = project.include[0]
-    groups = layout_map.load(project).groups
-    generated = {path.relative_to(root).as_posix() for path in index.listed(project)}
-    generated |= {group.header for group in groups}
-    wanted = {group.header for group in groups if set(group.members) & set(functions)}
-    texts = [*project.src.glob("*.c"), *(path for include in project.include for path in include.rglob("*.h"))]
-    for path in texts:
-        wanted.update(_INCLUDE.findall(path.read_text(errors="replace")))
-    return sorted(name for name in wanted & generated if not (root / name).is_file())
 
 
 def journal_path(project: Project) -> Path:

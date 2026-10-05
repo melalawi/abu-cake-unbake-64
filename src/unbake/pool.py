@@ -152,8 +152,6 @@ class Pool:
         self._executor: ProcessPoolExecutor | None = None
         self._handlers: dict[int, Any] = {}
         self.killed = False
-        # A shared pool is used from several threads; replacing a broken executor is one step.
-        self._replacing = threading.Lock()
 
     @classmethod
     def from_host(cls, host: Host) -> Pool:
@@ -195,14 +193,13 @@ class Pool:
         raise SystemExit(128 + number)
 
     def _fresh(self, broken: ProcessPoolExecutor | None = None) -> ProcessPoolExecutor:
-        """A working executor; with broken, another thread's replacement of it is reused."""
-        with self._replacing:
-            if broken is not None and self._executor is not broken and self._executor is not None:
-                return self._executor
-            if self._executor is not None:
-                self._executor.shutdown(cancel_futures=True)
-            self._executor = _executor(self.size, self.memory_worker_bytes)
+        """A working executor; with broken, a replacement made since is reused."""
+        if broken is not None and self._executor is not broken and self._executor is not None:
             return self._executor
+        if self._executor is not None:
+            self._executor.shutdown(cancel_futures=True)
+        self._executor = _executor(self.size, self.memory_worker_bytes)
+        return self._executor
 
     def _submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
         if self._executor is None:
@@ -277,7 +274,7 @@ _shared: Pool | None = None
 
 @contextlib.contextmanager
 def sharing(pool: Pool) -> Iterator[None]:
-    """While open, run() from any thread uses this open pool, so its workers are never doubled."""
+    """While open, run() uses this open pool, so its workers are never doubled."""
     global _shared
     previous, _shared = _shared, pool
     try:

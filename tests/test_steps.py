@@ -228,7 +228,7 @@ class CommandJournalTests(TempCase):
         steps.record(project, "a", "1")
         steps.record(project, "b", "2")
         dead = steps.Command(project)
-        dead.path = self.root / "build" / "steps.journal" / "999999-1.json"
+        dead.path = self.root / "build" / "steps.journal" / "999999.json"
         dead.running("b")
         with patch.object(steps.os, "kill", side_effect=ProcessLookupError):
             for stale in steps.Command.stale(project):

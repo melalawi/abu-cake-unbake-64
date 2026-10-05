@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 import time
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,10 +47,9 @@ def recorded(project: Project, step: str) -> str | None:
 
 
 def record(project: Project, step: str, content_key: str, outputs: dict[str, str] | None = None) -> None:
-    with _updating(project):
-        value = _read(project)
-        value[step] = {"key": content_key, "outputs": outputs or {}}
-        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+    value = _read(project)
+    value[step] = {"key": content_key, "outputs": outputs or {}}
+    atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
 
 
 def _digests(project: Project, paths: Iterable[Path]) -> dict[str, str]:
@@ -75,19 +72,9 @@ def altered(project: Project, step: str) -> list[str]:
 
 
 def forget(project: Project, step: str) -> None:
-    with _updating(project):
-        value = _read(project)
-        if value.pop(step, None) is not None:
-            atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
-
-
-@contextmanager
-def _updating(project: Project) -> Iterator[None]:
-    """One read-modify-write of steps.json at a time: a cycle records steps from two threads."""
-    from unbake import lock
-
-    with lock.exclusive(project.build / "steps.json.lock"):
-        yield
+    value = _read(project)
+    if value.pop(step, None) is not None:
+        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
 
 
 @dataclass(frozen=True)
@@ -361,11 +348,11 @@ class Command:
     (extract's shape edits, merge-units) commit it together with the split and symbol files. Restoring an
     earlier layout.toml after such a step would name rows the split no longer has. A step that fails restores
     its own files (shape edits and merge-units keep a backup; the map step writes layout.toml in one atomic
-    write). Kept per process and thread on disk; a later command rolls back the journal of a process that died."""
+    write). Kept per process on disk; a later command rolls back the journal of a process that died."""
 
     def __init__(self, project: Project, path: Path | None = None) -> None:
         self.project = project
-        self.path = path or project.build / "steps.journal" / f"{os.getpid()}-{threading.get_ident()}.json"
+        self.path = path or project.build / "steps.journal" / f"{os.getpid()}.json"
         self.state: dict[str, str | None] = {"running": None}
         if path is not None:
             self.state = json.loads(path.read_text())
@@ -375,7 +362,7 @@ class Command:
         directory = project.build / "steps.journal"
         found = []
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else ():
-            pid = int(path.stem.split("-", 1)[0])
+            pid = int(path.stem)
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:

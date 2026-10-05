@@ -35,13 +35,13 @@ Stop conditions: all-landed, idle:SECONDS (no save or land for that long), after
 Events: every line has v, seq, t and event, one of cycle.start, fn.queued, fn.draft.start,
 fn.draft.done, fn.edit, fn.compare.start, fn.compare.done (per-version percentages and the first
 difference), fn.exact, fn.landed, fn.land_failed, fn.committed, cycle.committed (attempts or generated
-files), fn.pushed, fn.held, fn.failed, step.run, types.refreshed (types, headers and build files refreshed
-behind the drafts; untouched drafts are drafted again and the rest compared again), fn.recheck (a
-function landed before that refresh, measured again against the new headers) and cycle.end (what landed
-and the next command).
+files), fn.pushed, fn.held, fn.failed, step.run (types, headers and build files brought current before the first
+draft and after each land; drafts and compares that read the older tree are done again), steps.held (a step
+refused: the cycle stops), fn.recheck (a landed function measured again after its land's steps) and
+cycle.end (what landed and the next command).
 
-Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed, is unpushed or no
-longer matches after a refresh (cycle.regressed); 130 interrupted.
+Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed, is unpushed, a step
+refused (cycle.steps) or a land no longer matches after its steps (cycle.regressed); 130 interrupted.
 """
 PROJECT = "ready"
 

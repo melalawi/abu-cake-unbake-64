@@ -596,39 +596,35 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             inputs.digest(path) != inputs.digest(content) if isinstance(content, Path) else path.read_bytes() != content
         )
     }
-    from unbake import lock
-
-    # Readers in other processes never see a half-replaced header set or database.
-    with lock.publishing(project.root):
-        backups: dict[Path, Path | None] = {}
-        try:
-            for path in set(outputs) | {database}:
-                if path.is_file():
-                    descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
-                    os.close(descriptor)
-                    backup_path = Path(name)
-                    backups[path] = backup_path
-                    atomic_files.copyfile(path, backup_path)
-                else:
-                    backups[path] = None
-            for path, content in outputs.items():
-                if isinstance(content, Path):
-                    storage.install(path, content)
-                else:
-                    storage.write(path, content)
-            types_db.install(database, staged)
-        except BaseException:
-            for path, backup in backups.items():
-                if backup is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    atomic_files.publish(backup, path)
-            raise
-        finally:
-            staged.unlink(missing_ok=True)
-            for backup in backups.values():
-                if backup is not None:
-                    backup.unlink(missing_ok=True)
+    backups: dict[Path, Path | None] = {}
+    try:
+        for path in set(outputs) | {database}:
+            if path.is_file():
+                descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
+                os.close(descriptor)
+                backup_path = Path(name)
+                backups[path] = backup_path
+                atomic_files.copyfile(path, backup_path)
+            else:
+                backups[path] = None
+        for path, content in outputs.items():
+            if isinstance(content, Path):
+                storage.install(path, content)
+            else:
+                storage.write(path, content)
+        types_db.install(database, staged)
+    except BaseException:
+        for path, backup in backups.items():
+            if backup is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_files.publish(backup, path)
+        raise
+    finally:
+        staged.unlink(missing_ok=True)
+        for backup in backups.values():
+            if backup is not None:
+                backup.unlink(missing_ok=True)
 
 
 def validate_headers(

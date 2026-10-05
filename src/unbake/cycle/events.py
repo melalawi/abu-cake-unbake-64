@@ -36,7 +36,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("worker.crash", "pid function task signal retried", ""),
         ("worker.memory", "pid function bytes cap_bytes", ""),
         ("step.run", "step trigger seconds", ""),
-        ("types.refreshed", "steps seconds ok", "diagnostic"),
+        ("steps.held", "key reason", ""),
         ("fn.recheck", "function exact best_percent", "diagnostic"),
         ("cycle.end", "landed landed_bytes unpushed held carryovers exit next", ""),
     )

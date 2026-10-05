@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tests.kit import TempCase
 from unbake.cli import guidance
 from unbake.config import Held
-from unbake.layout import header_step, index
+from unbake.layout import header_step
 from unbake.layout import map as layout_map
 
 MEMBERS = {
@@ -144,35 +144,6 @@ class LayoutHoldNextTests(TempCase):
             with self.subTest(reason):
                 phase = reason.split(".", 1)[0]
                 self.assertEqual(guidance.after(context, Held(phase, reason)), expected)  # type: ignore[arg-type]
-
-
-class AbsentHeaderTests(TempCase):
-    def test_generated_headers_a_draft_includes(self) -> None:
-        include = self.root / "include"
-        (include / "common").mkdir(parents=True)
-        (self.root / "src").mkdir()
-        (include / "common" / "types.h").write_text("typedef int s32;\n")
-        (include / "audio.h").write_text('#include "common/data.h"\n')
-        project = SimpleNamespace(include=(include,), src=self.root / "src")
-        groups = (
-            layout_map.Group("code_800C0880", "span_1000", "default", ("func_800C3EF0_us",)),
-            layout_map.Group("code_800D0000", "span_1000", "default", ("func_800D0000_us",)),
-        )
-        generated = frozenset({include / "common" / "data.h", include / "common" / "types.h"})
-        for label, present, functions, expected in [
-            ("fresh tree", [], ("func_800C3EF0_us",), ["common/data.h", "span_1000/code_800C0880.h"]),
-            ("other picks", [], ("func_800D0000_us",), ["common/data.h", "span_1000/code_800D0000.h"]),
-            ("warm tree", ["common/data.h", "span_1000/code_800C0880.h"], ("func_800C3EF0_us",), []),
-        ]:
-            with (
-                self.subTest(label),
-                patch.object(layout_map, "load", return_value=SimpleNamespace(groups=groups)),
-                patch.object(index, "listed", return_value=generated),
-            ):
-                for name in present:
-                    (include / name).parent.mkdir(parents=True, exist_ok=True)
-                    (include / name).write_text("\n")
-                self.assertEqual(header_step.absent(project, functions), expected)  # type: ignore[arg-type]
 
 
 class HistoryRenameTests(TempCase):
