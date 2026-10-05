@@ -22,7 +22,13 @@ def function(params: list[tuple[str, str]], kind: str, source: str, aliases: dic
 class MergeOrderTests(unittest.TestCase):
     def test_cases(self) -> None:
         for label, seeds, conflict, facts, first in [
-            ("parameter names only differ", [(("a", "s32"),), (("b", "int"),)], False, [], "a"),
+            (
+                "parameter names only differ: the incoming equal record is kept",
+                [(("a", "s32"),), (("b", "int"),)],
+                False,
+                [],
+                "b",
+            ),
             (
                 "near miss: sign differs, same rank",
                 [(("a", "s32"),), (("a", "u32"),)],
