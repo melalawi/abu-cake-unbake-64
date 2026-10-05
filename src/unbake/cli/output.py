@@ -10,7 +10,7 @@ from typing import Any, TextIO
 
 from unbake.config import Held
 
-EXIT = {"ok": 0, "held": 1, "failed": 2}
+EXIT = {"ok": 0, "held": 1}
 # A receipt already rendered for people (OK(setup): ..., HELD(check): ...); JSON keeps only the text after it.
 _RENDERED = re.compile(r"^[A-Z]+\([\w-]+\): ")
 
@@ -33,11 +33,6 @@ class Result:
         body = {"phase": error.phase, "reason": error.reason, **(data or {})}
         return cls(command, "held", error.key, body, next_)
 
-    @classmethod
-    def failed(cls, command: str, error: BaseException) -> Result:
-        text = f"{type(error).__name__}: {error}"
-        return cls(command, "failed", "error", {"error": text}, None)
-
     def document(self) -> dict[str, Any]:
         return {
             "v": 1,
@@ -51,15 +46,13 @@ class Result:
 
 
 def human(result: Result, stream: TextIO) -> None:
-    """Receipts as OK(...) lines, the HELD/FAILED line, then the Next line."""
-    label = {"ok": "OK", "held": "HELD", "failed": "FAILED"}[result.status]
+    """Receipts as OK(...) lines, the HELD line, then the Next line."""
+    label = {"ok": "OK", "held": "HELD"}[result.status]
     for line in result.receipts:
         print(line if _RENDERED.match(line) else f"{label}({result.command}): {line}", file=stream)
     if result.status == "held":
         phase, reason = result.data.get("phase", result.command), result.data.get("reason", result.key)
         print(f"HELD({phase}): {reason}", file=stream)
-    elif result.status == "failed":
-        print(f"FAILED({result.command}): {result.data['error']}", file=stream)
     if result.next is not None:
         print(f"Next: {result.next}", file=stream)
 

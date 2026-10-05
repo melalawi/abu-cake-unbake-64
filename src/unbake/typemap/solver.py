@@ -771,9 +771,18 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
     """Every input of merge, infer and header publication."""
     from unbake.layout import index
 
-    files = [project.root / "config.toml", project.root / "layout.toml", index.path(project)]
-    files += [path for root in project.include for path in sorted(root.rglob("*")) if path.is_file()]
-    files += sorted(path for path in (project.root / "versions").rglob("*") if path.is_file())
+    # The generated headers and their index are this step's and the headers step's outputs. Keying on them
+    # reran types after its own publish and after headers, so a refresh took three passes to settle.
+    generated = index.headers(project) | {index.path(project)}
+    files = [project.root / "config.toml", project.root / "layout.toml"]
+    files += [
+        path for root in project.include for path in sorted(root.rglob("*")) if path.is_file() and path not in generated
+    ]
+    # Of versions/, the solve reads each version's split and symbols only: slices.mk and report.json are
+    # buildfiles' and progress' outputs, and keying on them reran types after both.
+    files += [
+        path for name in project.versions for path in (project.version(name).split, project.version(name).symbols)
+    ]
     parts: list[str] = ["types", str(SCHEMA), facts["shard_sha256"], json.dumps(facts.get("abi_supplement"))]
     if policy is not None:
         parts.append(json.dumps([str(policy.cpp), *project.cppflags]))

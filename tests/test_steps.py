@@ -110,6 +110,72 @@ class SettleTests(TempCase):
         self.assertIn("steps.a: input key changes on every run", str(raised.exception))
 
 
+class OutputDigestTests(TempCase):
+    """A step's recorded output that goes missing or changes makes that step run again; nothing else does."""
+
+    def test_a_missing_or_changed_output_reruns_its_step(self) -> None:
+        from unittest.mock import patch
+
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        output = self.root / "include" / "data.h"
+        output.parent.mkdir()
+
+        def write(project: object, host: object) -> None:
+            output.write_text("/* generated */\n")
+
+        table = {"a": steps.Step("a", "a", lambda project, host: "1", write, (), lambda project: [output])}
+
+        def ensure() -> list[tuple[str, str]]:
+            with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a"]):
+                return [(row.step, row.trigger) for row in steps.ensure(project, None, ["a"]) if row.ran]
+
+        for label, change, expected in [
+            ("first run", lambda: None, [("a", "a")]),
+            ("untouched", lambda: None, []),
+            ("deleted", output.unlink, [("a", "an output is missing or changed: include/data.h")]),
+            (
+                "edited",
+                lambda: output.write_text("edited\n"),
+                [("a", "an output is missing or changed: include/data.h")],
+            ),
+        ]:
+            with self.subTest(label):
+                change()
+                self.assertEqual(ensure(), expected)
+                self.assertEqual(output.read_text(), "/* generated */\n")
+
+
+class DamagedOutputOrderTests(TempCase):
+    def test_a_step_with_a_damaged_output_runs_before_the_steps_that_read_it(self) -> None:
+        from unittest.mock import patch
+
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        output = self.root / "data.h"
+        ran: list[str] = []
+
+        def reader(project: object, host: object) -> None:
+            ran.append("reader")
+            if output.read_text() != "good\n":
+                raise Held("steps", "reader read a damaged header")
+
+        def writer(project: object, host: object) -> None:
+            ran.append("writer")
+            output.write_text("good\n")
+
+        table = {
+            "reader": steps.Step("reader", "reader", lambda project, host: output.read_text(), reader),
+            "writer": steps.Step("writer", "writer", lambda project, host: "1", writer, (), lambda project: [output]),
+        }
+        output.write_text("good\n")
+        with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["reader", "writer"]):
+            steps.ensure(project, None, ["reader", "writer"])
+            output.write_text("damaged\n")
+            ran.clear()
+            steps.ensure(project, None, ["reader", "writer"])
+        self.assertEqual(ran, ["writer"])
+        self.assertEqual(output.read_text(), "good\n")
+
+
 class CommandJournalTests(TempCase):
     """One command publishes all of its outputs or none, and an unexpected error names the step."""
 
@@ -178,7 +244,7 @@ class BootstrapTests(TempCase):
 
         present, absent = self.root / "a.h", self.root / "common" / "data.h"
         present.write_text("\n")
-        with patch.object(index, "_listed", return_value=frozenset({present, absent})):
+        with patch.object(index, "listed", return_value=frozenset({present, absent})):
             self.assertEqual(index.headers(SimpleNamespace()), frozenset({present}))
 
     def test_missing_generated_headers_regenerate_before_the_solve(self) -> None:

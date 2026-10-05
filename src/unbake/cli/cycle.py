@@ -35,10 +35,11 @@ Events: every line has v, seq, t and event, one of cycle.start, fn.queued, fn.dr
 fn.draft.done, fn.edit, fn.compare.start, fn.compare.done (per-version percentages and the first
 difference), fn.exact, fn.landed, fn.land_failed, fn.committed, fn.pushed, fn.held, fn.failed,
 step.run, types.refreshed (types, headers and build files refreshed behind the drafts; untouched
-drafts are drafted again and the rest compared again) and cycle.end (what landed and the next command).
+drafts are drafted again and the rest compared again), fn.recheck (a function landed before that refresh,
+measured again against the new headers) and cycle.end (what landed and the next command).
 
-Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed or is unpushed;
-130 interrupted.
+Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed, is unpushed or no
+longer matches after a refresh (cycle.regressed); 130 interrupted.
 """
 PROJECT = "ready"
 

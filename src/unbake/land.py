@@ -55,6 +55,30 @@ def _git(project: Project, *args: str, env: dict[str, str] | None = None) -> str
     return result.stdout
 
 
+def dirty(project: Project) -> set[str]:
+    """Paths git reports changed or untracked, relative to the project root."""
+    rows = _git(project, "status", "--porcelain", "--untracked-files=all", "-z").split("\0")
+    paths = set()
+    skip = False
+    for row in rows:
+        if skip or not row:
+            skip = False
+            continue
+        if row[0] in "RC":
+            skip = True  # the next field is the rename's source
+        paths.add(row[3:])
+    return paths
+
+
+def commit_generated(project: Project, host: Host, before: set[str], message: str) -> str | None:
+    """Commit what the tool changed since BEFORE (the paths dirty when it started); None when nothing did."""
+    changed = sorted(dirty(project) - before)
+    if not changed:
+        return None
+    _commit(project, host, [project.root / path for path in changed], message)
+    return _git(project, "rev-parse", "HEAD").strip()
+
+
 def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
     _git(project, "add", "--", *(str(path.relative_to(project.root)) for path in paths))
     author = f"{host.publish_author_name} <{host.publish_author_email}>"
@@ -81,6 +105,7 @@ def record(project: Project, host: Host) -> str | None:
     from unbake.report import progress
 
     paths = progress.write(project, host)
+    steps.record(project, "progress", steps.STEPS["progress"].key(project, host))
     relative = [str(path.relative_to(project.root)) for path in paths]
     if not _git(project, "status", "--porcelain", "--", *relative).strip():
         return None
@@ -218,6 +243,7 @@ def land(project: Project, host: Host, file: Path) -> str:
         generated = buildfiles.write(updated, host)
         steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
         generated += progress.write(updated, host)
+        steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
         _commit(project, host, sorted({*written, *generated}), message)
     except BaseException:
         for path, previous in written.items():

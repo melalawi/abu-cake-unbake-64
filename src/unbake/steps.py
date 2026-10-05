@@ -28,7 +28,8 @@ def _path(project: Project) -> Path:
     return project.build / "steps.json"
 
 
-def _read(project: Project) -> dict[str, str]:
+def _read(project: Project) -> dict[str, dict[str, Any]]:
+    """Each step's record: the input key it ran for and the digest of each output it left (relative path)."""
     path = _path(project)
     if not path.is_file():
         return {}
@@ -38,18 +39,40 @@ def _read(project: Project) -> dict[str, str]:
         raise Held("steps", f"steps.json: {path}: {error}") from error
     if not isinstance(value, dict):
         raise Held("steps", f"steps.json: {path}: expected object")
-    return {name: text for name, text in value.items() if isinstance(text, str)}
+    return {
+        name: entry for name, entry in value.items() if isinstance(entry, dict) and isinstance(entry.get("key"), str)
+    }
 
 
 def recorded(project: Project, step: str) -> str | None:
-    return _read(project).get(step)
+    entry = _read(project).get(step)
+    return None if entry is None else entry["key"]
 
 
-def record(project: Project, step: str, content_key: str) -> None:
+def record(project: Project, step: str, content_key: str, outputs: dict[str, str] | None = None) -> None:
     with _updating(project):
         value = _read(project)
-        value[step] = content_key
+        value[step] = {"key": content_key, "outputs": outputs or {}}
         atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+
+
+def _digests(project: Project, paths: Iterable[Path]) -> dict[str, str]:
+    from unbake import inputs
+
+    return {str(path.relative_to(project.root)): inputs.digest(path) for path in sorted(paths) if path.is_file()}
+
+
+def altered(project: Project, step: str) -> list[str]:
+    """The recorded outputs of STEP that are now missing or hold other bytes."""
+    from unbake import inputs
+
+    entry = _read(project).get(step)
+    changed = []
+    for name, digest in sorted((entry or {}).get("outputs", {}).items()):
+        path = project.root / name
+        if not path.is_file() or inputs.digest(path) != digest:
+            changed.append(name)
+    return changed
 
 
 def forget(project: Project, step: str) -> None:
@@ -90,6 +113,8 @@ class Step:
     key: Callable[[Project, Host], str]
     run: Callable[[Project, Host], None]
     needs: tuple[str, ...] = ()
+    # The files the step writes; a recorded one that goes missing or changes makes the step run again.
+    outputs: Callable[[Project], Iterable[Path]] | None = None
 
 
 def _rom_facts_key(project: Project, host: Host) -> str:
@@ -137,6 +162,12 @@ def _headers(project: Project, host: Host) -> None:
     from unbake.layout import header_step
 
     header_step.run(project, host)
+
+
+def _headers_outputs(project: Project) -> Iterable[Path]:
+    from unbake.layout import index
+
+    return [index.path(project), *index.listed(project)]
 
 
 def _buildfiles_key(project: Project, host: Host) -> str:
@@ -228,7 +259,14 @@ STEPS: dict[str, Step] = {
             ("extract",),
         ),
         Step("types", "a published source's facts changed", _types_key, _types, ("rom-facts",)),
-        Step("headers", "layout.toml or the type solution changed", _headers_key, _headers, ("types",)),
+        Step(
+            "headers",
+            "layout.toml or the type solution changed",
+            _headers_key,
+            _headers,
+            ("types",),
+            _headers_outputs,
+        ),
         Step("buildfiles", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
         Step("progress", "a land or a boundary edit", _progress_key, _progress),
         Step("resident", "a published source changed (resident constant blocks are deleted)", _resident_key, _resident),
@@ -359,6 +397,10 @@ def _ensure(
     layout = project.root / "layout.toml"
     requested = set(names := list(names))
     steps = order(names)
+    # A step whose recorded output went missing or changed runs first: it regenerates from its recorded
+    # inputs (headers from the installed solution), and a later step must not read the damaged file.
+    damaged = [name for name in steps if STEPS[name].outputs is not None and altered(project, name)]
+    steps = damaged + [name for name in steps if name not in damaged]
     results: list[StepResult] = []
     for attempt in range(len(steps) + 1):
         ran = []
@@ -366,10 +408,13 @@ def _ensure(
             step = STEPS[name]
             started = time.monotonic()
             current = step.key(project, host)
-            if not (force and attempt == 0 and name in requested) and recorded(project, name) == current:
+            same = recorded(project, name) == current
+            changed = altered(project, name) if same and step.outputs is not None else []
+            if not (force and attempt == 0 and name in requested) and same and not changed:
                 if attempt == 0:
                     results.append(StepResult(name, step.trigger, False, 0.0))
                 continue
+            trigger = f"an output is missing or changed: {', '.join(changed)}" if changed else step.trigger
             before = layout.read_bytes() if layout.is_file() else None
             try:
                 step.run(project, host)
@@ -378,9 +423,16 @@ def _ensure(
             except Exception as error:
                 where = f" reading {error.filename}" if isinstance(error, OSError) and error.filename else ""
                 raise Held("steps", f"steps.{name}: {type(error).__name__}{where}: {error}") from error
-            record(project, name, step.key(project, host) if name in ("resident", "headers", "buildfiles") else current)
+            record(
+                project,
+                name,
+                # These steps write their own inputs (types publishes the headers its source facts preprocess):
+                # the key after the run is the one the next command sees.
+                step.key(project, host) if name in ("types", "resident", "headers", "buildfiles") else current,
+                None if step.outputs is None else _digests(project, step.outputs(project)),
+            )
             command.ran(name, before, layout.read_bytes() if layout.is_file() else None)
-            result = StepResult(name, step.trigger, True, time.monotonic() - started)
+            result = StepResult(name, trigger, True, time.monotonic() - started)
             results = [row for row in results if row.step != name or row.ran]
             results.append(result)
             ran.append(name)

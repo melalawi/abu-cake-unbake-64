@@ -213,7 +213,7 @@ def missing(project: Project) -> list[str]:
     from unbake.layout import map as layout_map
 
     root = project.include[0]
-    generated = {path.relative_to(root).as_posix() for path in index._listed(project)}
+    generated = {path.relative_to(root).as_posix() for path in index.listed(project)}
     generated |= {group.header for group in layout_map.load(project).groups}
     absent = set()
     for source in project.src.glob("*.c"):

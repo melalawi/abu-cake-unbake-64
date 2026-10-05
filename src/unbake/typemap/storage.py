@@ -102,7 +102,8 @@ def symbol_digest(path: Path) -> str:
 def generated(project: Project, path: Path) -> bool:
     from unbake.layout import index
 
-    return path in index.headers(project)
+    # One stat of PATH, not of every listed header: callers ask once per header, which was quadratic.
+    return path in index.listed(project) and path.is_file()
 
 
 def relative(project: Project, path: Path) -> str:

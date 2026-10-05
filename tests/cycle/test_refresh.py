@@ -113,9 +113,12 @@ class FakePool:
         future.set_result(fn(spec))
         return future
 
+    def map(self, fn, items):
+        return [fn(item) for item in items]
+
 
 class CycleStartTests(TempCase):
-    def test_drafts_start_at_once_and_the_refresh_redrafts_only_untouched_drafts(self) -> None:
+    def run_cycle(self, recheck_exact: bool) -> SimpleNamespace:
         project = SimpleNamespace(root=self.root, build=self.root / "build", work=self.root / "work", versions=("us",))
         host = SimpleNamespace(
             cycle_debounce_ms=100,
@@ -172,6 +175,8 @@ class CycleStartTests(TempCase):
 
             def request(self) -> None:
                 requests.append(1)
+                if not recheck_exact and len(requests) == 2:  # the first land's refresh replaces headers at once
+                    inboxes[0].put(("refreshed", background.Refreshed(("headers",), 1.0)))
 
             def join(self) -> None:
                 pass
@@ -183,6 +188,16 @@ class CycleStartTests(TempCase):
         def ensure(project_, host_, names, report=None):
             ensured.append(tuple(names))
             return []
+
+        rechecked: list[str] = []
+
+        def recheck(spec):
+            rechecked.append(spec[2])
+            return {
+                "exact": recheck_exact,
+                "best_percent": 100.0 if recheck_exact else 75.0,
+                "diagnostic": "" if recheck_exact else "first divergence: 0x10",
+            }
 
         candidates = [
             SimpleNamespace(function=name, bytes=8, versions=("us",), carryover=False, best_percent=None)
@@ -201,6 +216,9 @@ class CycleStartTests(TempCase):
             patch.object(land, "land", fake_land),
             patch.object(land, "subject", lambda *a: "Match"),
             patch.object(land, "record", lambda *a: None),
+            patch.object(land, "dirty", lambda project: set()),
+            patch.object(land, "commit_generated", lambda *a: None),
+            patch.object(engine, "_recheck_task", recheck),
             patch("unbake.cycle.watcher.watch", lambda *a: None),
             patch("unbake.config.load", lambda root: project),
             patch("sys.stderr", io.StringIO()),
@@ -216,12 +234,34 @@ class CycleStartTests(TempCase):
                 next_words=lambda *words: " ".join(words),
             )
         events = [json.loads(line) for line in stream.getvalue().splitlines()]
-        names = [event["event"] for event in events]
-        self.assertEqual(ensured[0], engine.START_STEPS)
+        return SimpleNamespace(
+            events=events,
+            result=result,
+            drafts=drafts,
+            compares=compares,
+            ensured=ensured,
+            landed_inside_publish=landed_inside_publish,
+            requests=len(requests),
+        )
+
+    def test_drafts_start_at_once_and_the_refresh_redrafts_only_untouched_drafts(self) -> None:
+        run = self.run_cycle(recheck_exact=True)
+        names = [event["event"] for event in run.events]
+        self.assertEqual(run.ensured[0], engine.START_STEPS)
         self.assertLess(names.index("fn.draft.start"), names.index("types.refreshed"))
-        self.assertEqual(drafts, {"alpha": 2, "beta": 1})  # the edited draft is compared again, not replaced
-        self.assertEqual(compares, {"alpha": 2, "beta": 2})
-        self.assertEqual(landed_inside_publish, [True, True])
-        self.assertEqual(len(requests), 3)  # cycle start, then once per land
-        self.assertEqual(sorted(result.data["landed"]), ["alpha", "beta"])
-        self.assertEqual(next(e for e in events if e["event"] == "types.refreshed")["steps"], ["types", "headers"])
+        self.assertEqual(run.drafts, {"alpha": 2, "beta": 1})  # the edited draft is compared again, not replaced
+        self.assertEqual(run.compares, {"alpha": 2, "beta": 2})
+        self.assertEqual(run.landed_inside_publish, [True, True])
+        self.assertEqual(run.requests, 3)  # cycle start, then once per land
+        self.assertEqual(sorted(run.result.data["landed"]), ["alpha", "beta"])
+        self.assertEqual(run.result.data["regressed"], [])
+        refreshed = next(e for e in run.events if e["event"] == "types.refreshed")
+        self.assertEqual(refreshed["steps"], ["types", "headers"])
+
+    def test_a_land_that_no_longer_matches_after_a_refresh_is_a_named_refusal(self) -> None:
+        run = self.run_cycle(recheck_exact=False)
+        result = run.result
+        checks = [event for event in run.events if event["event"] == "fn.recheck"]
+        self.assertTrue(checks and not any(event["exact"] for event in checks))
+        self.assertEqual(result.key, "cycle.regressed")
+        self.assertEqual({row["function"] for row in result.data["regressed"]}, {event["function"] for event in checks})

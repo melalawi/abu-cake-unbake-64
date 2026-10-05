@@ -160,7 +160,16 @@ def _render(
         if record.get("state") == "known" and record.get("declaration")
     )
     for path in sorted(layout_index.headers(project)):
-        for statement in split.statements(_body(path.read_text())):
+        try:
+            installed = split.statements(_body(path.read_text()))
+        except Held as error:
+            raise Held(
+                "solve",
+                f"{error.reason} in {storage.relative(project, path)}",
+                next_action=f"stop: repair or restore {storage.relative(project, path)} (a generated header is "
+                "retained layout evidence), then run the command again",
+            ) from error
+        for statement in installed:
             names = redeclarations.local_tags(statement)
             if names & (needed - defined):
                 digest = storage.digest(statement.encode())

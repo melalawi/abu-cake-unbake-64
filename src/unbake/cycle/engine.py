@@ -101,6 +101,25 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     }
 
 
+def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
+    """A landed function measured again from src/ against the current headers (no attempt is recorded)."""
+    from unbake import config
+    from unbake.work import compare
+
+    root, host, function = spec
+    try:
+        with lock.reading(root):
+            measured = compare.measure(config.load(root), host, root / "src" / f"{function}.c")
+    except Held as error:
+        return {"exact": False, "best_percent": 0.0, "diagnostic": error.reason}
+    return {
+        "exact": measured.exact,
+        "best_percent": measured.best_percent,
+        "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
+        or next((f"precondition: {line}" for line in measured.preconditions), ""),
+    }
+
+
 # ---- read-only entry points ----
 
 
@@ -213,6 +232,7 @@ def run(
 ) -> Result:
     from unbake import land, pool, steps
 
+    before = land.dirty(project)
     picked = choose(project, host, pick, functions)
     if not picked:
         raise Held("cycle", "cycle.pick: nothing to work on (no candidates in the size window)")
@@ -241,8 +261,8 @@ def run(
 
     emitter.listeners.append(save_state)
 
-    def settle() -> None:
-        steps.ensure(
+    def settle() -> list[Any]:
+        return steps.ensure(
             project,
             host,
             CYCLE_STEPS,
@@ -283,6 +303,25 @@ def run(
     watching.start()
     exit_code = 0
     refresh_error = ""
+    # Lands proved against headers a later refresh replaced are measured again; a miss is never ignored.
+    unchecked: list[str] = []
+    regressed: list[dict[str, Any]] = []
+
+    def recheck() -> None:
+        # All of them at once on the worker pool (the cycle's, while it is open).
+        results = pool.run(host, _recheck_task, [(project.root, host, function) for function in unchecked])
+        for function, result in zip(unchecked, results, strict=True):
+            emitter.emit(
+                "fn.recheck",
+                function=function,
+                exact=bool(result["exact"]),
+                best_percent=result["best_percent"],
+                **({"diagnostic": result["diagnostic"]} if result["diagnostic"] else {}),
+            )
+            if not result["exact"]:
+                regressed.append({"function": function, "diagnostic": result["diagnostic"]})
+        unchecked.clear()
+
     generation = {"epoch": 0}
     from unbake.cycle import refresh as background
 
@@ -347,6 +386,7 @@ def run(
                 return
             row.stage, row.commit = "landed", commit
             landed.append(row.function)
+            unchecked.append(row.function)
             emitter.emit(
                 "fn.landed",
                 function=row.function,
@@ -523,6 +563,7 @@ def run(
                     )
                     refresh_error = payload.diagnostic or refresh_error
                     if payload.steps:
+                        recheck()
                         refreshed(payload)
                 elif kind == "key":
                     _key(payload, rows, start, emitter, next_words)
@@ -553,6 +594,8 @@ def run(
                             **({"diagnostic": payload.diagnostic} if payload.diagnostic else {}),
                         )
                         refresh_error = payload.diagnostic or refresh_error
+                        if payload.steps:
+                            recheck()
                     else:
                         inbox.put((kind, payload))
                         break
@@ -564,6 +607,15 @@ def run(
     if recorded is not None:
         emitter.emit("fn.committed", function="", commit=recorded, message="Record attempts")
         unpushed.append(recorded)
+    if exit_code != 130:
+        # Lands and merges changed step inputs; settle them now so the next cycle drafts at once, measure the
+        # lands again if anything was refreshed, and commit what the settle wrote so the tree is left clean.
+        if any(done.ran for done in settle()):
+            recheck()
+        settled = land.commit_generated(project, host, before, "Refresh generated files")
+        if settled is not None:
+            emitter.emit("fn.committed", function="", commit=settled, message="Refresh generated files")
+            unpushed.append(settled)
     if pusher is not None:
         pusher.wait()
         if unpushed:
@@ -585,12 +637,9 @@ def run(
                 )
                 if payload:
                     unpushed.clear()
-    if exit_code != 130:
-        # Lands and merges changed step inputs; settle them now so the next cycle drafts at once.
-        settle()
     held = [name for name, row in rows.items() if row.stage in ("held", "failed")]
     carry = [name for name, row in rows.items() if row.stage not in ("landed", "held", "failed")]
-    if exit_code == 0 and (held or unpushed or carry or refresh_error):
+    if exit_code == 0 and (held or unpushed or carry or refresh_error or regressed):
         exit_code = 1
     following = next_words("cycle", "--pick", str(max(1, len(rows))), "--stop", stopper.condition)
     emitter.emit(
@@ -607,12 +656,24 @@ def run(
         state_path(project),
         json.dumps({"running": False, "rows": [asdict(r) for r in rows.values()]}, sort_keys=True, default=list) + "\n",
     )
-    data = {"landed": landed, "unpushed": unpushed, "held": held, "carryovers": carry, "exit": exit_code}
+    data = {
+        "landed": landed,
+        "unpushed": unpushed,
+        "held": held,
+        "carryovers": carry,
+        "regressed": regressed,
+        "exit": exit_code,
+    }
     lines = [f"landed {len(landed)}; held {len(held)}; carried over {len(carry)}; unpushed {len(unpushed)}"]
     if refresh_error:
         lines.append(f"refresh: {refresh_error}")
+    lines.extend(
+        f"regressed: {row['function']} no longer matches after a refresh: {row['diagnostic']}" for row in regressed
+    )
     if exit_code == 130:
         return Result.held("cycle", Held("cycle", "interrupted: stopped by the user"), following, data)
+    if regressed:
+        return Result("cycle", "held", "cycle.regressed", data, following, tuple(lines))
     if exit_code:
         return Result("cycle", "held", "cycle.incomplete", data, following, tuple(lines))
     return Result.ok("cycle", data, lines, following)

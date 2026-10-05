@@ -341,6 +341,63 @@ class IncludeClosure:
         return {Path(item) for item in seen}
 
 
+def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], list[str]]:
+    """The names and tags one source declares, across its per-version views (a pool task)."""
+    import json
+
+    from unbake.cache import Cache, key
+    from unbake.fold.source_views import _preprocessed_lines, _version_lines
+    from unbake.typemap.declarations import clean
+
+    project, policy, path, text = item
+    cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+    generator = key(Path(__file__))
+    # Preserve the no-owned-type fast path, but still collect authored
+    # header ownership for sources with no local typedefs or tags.
+    views = {text} if re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)) else set()
+    if views and re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
+        if policy is None:
+            raise Held("solve", f"types.header_parse: {path}: policy.cpp required for conditional source names")
+        lines = declaration_source(text).splitlines(keepends=True)
+        views = set()
+        for version in project.versions:
+            active = _version_lines(project, policy, text, version)
+            if active is None:
+                active = _preprocessed_lines(project, policy, text, version)
+            views.add("".join(line for index, line in enumerate(lines) if index in active))
+    owned: set[str] = set()
+    tags: set[str] = set()
+    for view in views:
+        content = clean(declaration_source(view))
+        content_key = key(generator, content)
+
+        def compute(output: Path, content: str = content) -> None:
+            parser = _Declarations(content)
+            try:
+                row = parser.parse()
+            except Held as error:
+                raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
+            atomic_files.text(output, json.dumps({"names": sorted(parser.names), "tags": sorted(row.tags)}))
+
+        row = json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes())
+        owned.update(row["names"])
+        tags.update(row["tags"])
+    return sorted(owned), sorted(tags)
+
+
+def _header_owned(item: tuple[Path, str]) -> tuple[list[str], list[str]]:
+    """The names, external names and tags one authored header declares (a pool task)."""
+    from unbake.typemap.declarations import clean
+
+    path, text = item
+    parser = _Declarations(clean(declaration_source(text)))
+    try:
+        row = parser.parse()
+    except Held as error:
+        raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
+    return sorted(parser.names | parser.external_names), sorted(row.tags)
+
+
 def source_names(
     project: Project,
     header: Path,
@@ -354,83 +411,50 @@ def source_names(
 
     Conditional source bodies must be viewed per version: simply deleting cpp
     directives can leave both arms' opening braces and hide later declarations.
+    Each source's views and each authored header are parsed on the worker pool.
     """
-    import json
-
-    from unbake.cache import Cache, key
-    from unbake.fold.source_views import _preprocessed_lines, _version_lines
-    from unbake.typemap.declarations import clean
-    from unbake.typemap.storage import generated
+    from unbake import pool
+    from unbake.layout import index
 
     supplied = texts
     closure = IncludeClosure(project, texts)
-    cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
     header = Path(closure.resolved(str(header)))
-    generator = key(Path(__file__))
+    generated = index.headers(project)
 
-    names: set[str] = set()
-    header_owned: dict[Path, tuple[set[str], set[str]]] = {}
-    sources = (
+    sources = sorted(
         (path for path in supplied if str(path).startswith(str(project.src) + os.sep) and path.suffix == ".c")
         if supplied is not None
         else project.src.rglob("*.c")
     )
-    for path in sorted(sources):
-        included = closure.paths(path, authored_only=True)
-        text = closure.texts[closure.resolved(str(path))]
-        # Preserve the no-owned-type fast path, but still collect authored
-        # header ownership for sources with no local typedefs or tags.
-        views = {text} if re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)) else set()
-        if views and re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
-            if policy is None:
-                raise Held("solve", f"types.header_parse: {path}: policy.cpp required for conditional source names")
-            lines = declaration_source(text).splitlines(keepends=True)
-            views = set()
-            for version in project.versions:
-                active = _version_lines(project, policy, text, version)
-                if active is None:
-                    active = _preprocessed_lines(project, policy, text, version)
-                views.add("".join(line for index, line in enumerate(lines) if index in active))
-        owned: set[str] = set()
-        local: set[str] = set()
-        tags: set[str] = set()
-        for view in views:
-            content = clean(declaration_source(view))
-            content_key = key(generator, content)
+    included = {path: closure.paths(path, authored_only=True) for path in sources}
+    tasks = [(project, policy, path, closure.texts[closure.resolved(str(path))]) for path in sources]
+    deps = sorted(
+        {
+            dep
+            for path in sources
+            for dep in included[path] - {Path(closure.resolved(str(path)))}
+            if dep not in generated
+        }
+    )
+    dep_tasks = [(dep, closure.texts[closure.resolved(str(dep))]) for dep in deps]
+    if policy is None:
+        owned_rows = [_owned(task) for task in tasks]
+        header_rows = [_header_owned(task) for task in dep_tasks]
+    else:
+        owned_rows = pool.run(policy, _owned, tasks)
+        header_rows = pool.run(policy, _header_owned, dep_tasks)
+    header_owned = {dep: (set(names), set(tags)) for dep, (names, tags) in zip(deps, header_rows, strict=True)}
 
-            def compute(output: Path, content: str = content, path: Path = path) -> None:
-                parser = _Declarations(content)
-                try:
-                    row = parser.parse()
-                except Held as error:
-                    raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
-                atomic_files.text(
-                    output,
-                    json.dumps(
-                        {
-                            "names": sorted(parser.names),
-                            "tags": sorted(row.tags),
-                        }
-                    ),
-                )
-
-            row = json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes())
-            owned.update(row["names"])
-            tags.update(row["tags"])
+    names: set[str] = set()
+    for path, (owned, own_tags) in zip(sources, owned_rows, strict=True):
         names.update(owned)
         # Header ownership is per consumer. Reserving it globally would remove
         # aliases from consumers that never import that authored declaration.
-        local.update(owned)
-        for dep in sorted(included - {Path(closure.resolved(str(path)))}):
-            if generated(project, dep):
+        local = set(owned)
+        tags = set(own_tags)
+        for dep in sorted(included[path] - {Path(closure.resolved(str(path)))}):
+            if dep in generated:
                 continue
-            if dep not in header_owned:
-                parser = _Declarations(clean(declaration_source(closure.texts[closure.resolved(str(dep))])))
-                try:
-                    row = parser.parse()
-                except Held as error:
-                    raise Held("solve", f"types.header_parse: {dep}: {error.reason}") from error
-                header_owned[dep] = parser.names | parser.external_names, row.tags
             dep_names, dep_tags = header_owned[dep]
             local.update(dep_names)
             tags.update(dep_tags)

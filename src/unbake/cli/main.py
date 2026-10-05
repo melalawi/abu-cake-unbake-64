@@ -104,8 +104,20 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
             return verb.run(context)  # type: ignore[no-any-return]
     except Held as error:
         return Result.held(verb.NAME, error, error.next_action or guidance.after(context, error))
+    except Exception as error:  # nothing unexpected reaches the terminal raw: it is a refusal with a key and a Next
+        unexpected = Held(verb.NAME, f"{verb.NAME}.unexpected: {_where(error)}")
+        return Result.held(verb.NAME, unexpected, guidance.after(context, unexpected))
     except KeyboardInterrupt:
         return Result.held(verb.NAME, Held(verb.NAME, "interrupted: stopped by the user"), None)
+
+
+def _where(error: BaseException) -> str:
+    """The error and the innermost tool frame that raised it."""
+    import traceback
+
+    frames = [frame for frame in traceback.extract_tb(error.__traceback__) if "/unbake/" in frame.filename]
+    place = f" (at {Path(frames[-1].filename).name}:{frames[-1].lineno})" if frames else ""
+    return f"{type(error).__name__}: {error}{place}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -114,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         with redirect_stdout(sys.stderr):
             result = _run(argv, stdout)
     except Exception as error:
-        result = Result.failed("unbake", error)
+        result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}"), "unbake next")
     code = emit(result, stdout, sys.stderr)
     return 130 if result.key == "interrupted" else code
 

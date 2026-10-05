@@ -85,6 +85,19 @@ class ContractTests(TempCase):
                     self.assertRegex(result["next"], r"^(unbake \S|stop: )")
                     self.assertIn("Next: " + result["next"], stderr)
 
+    def test_an_unexpected_error_is_a_refusal_with_a_key_and_a_next_line(self) -> None:
+        from unittest.mock import patch
+
+        crash = FileNotFoundError(2, "No such file or directory", "include/common/data.h")
+        with patch("unbake.cli.main._root", side_effect=crash):
+            code, stdout, stderr = self.run_main(["--config", str(self.root / "absent.toml"), "check"])
+        result = self.only_object(stdout)
+        self.assertEqual((code, result["status"], result["key"]), (1, "held", "check.unexpected"))
+        self.assertIn("FileNotFoundError", result["data"]["reason"])
+        self.assertIn("include/common/data.h", result["data"]["reason"])
+        self.assertRegex(result["next"], r"^unbake \S")
+        self.assertNotIn("Traceback", stderr)
+
     def test_deleted_verbs_are_usage_refusals(self) -> None:
         for verb in DELETED:
             with self.subTest(verb):
