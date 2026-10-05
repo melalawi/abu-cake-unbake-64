@@ -47,7 +47,7 @@ class SourceFactsTests(TempCase):
             patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
             self.assertRaises(facts.Held) as raised,
         ):
-            facts._unit_job((project, None, {"us": {}}, [[(0, stale, task)]]))
+            facts._unit_job((project, None, {"us": {}}), [[(0, stale, task)]])
         self.assertIn("facts.inputs: src/alpha.c changed during the solve", str(raised.exception))
 
     def test_source_key_follows_schema_not_tool_code(self) -> None:
@@ -55,7 +55,7 @@ class SourceFactsTests(TempCase):
         snapshot = facts.Snapshot(project)
         task = ("alpha", self.source, "us")
         base = facts.source_key(project, None, task, snapshot)
-        with patch.object(facts, "SCHEMA", facts.SCHEMA + 1):
+        with patch.object(facts, "FACTS_SCHEMA", facts.FACTS_SCHEMA + 1):
             self.assertNotEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
         self.assertEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
 
@@ -92,7 +92,7 @@ class SharedVersionsTests(TempCase):
             patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
             patch.object(facts, "_whole_tasks", lambda p, h, o, group, c: whole.append(group) or []),
         ):
-            _, counts = facts._unit_job((project, None, {v: {} for v in texts}, groups))
+            _, counts = facts._unit_job((project, None, {v: {} for v in texts}), groups)
         self.assertEqual(sorted(parts), sorted(set(texts.values())))
         self.assertEqual(counts["sources"], 2)
         self.assertEqual([len(group) for group in whole], [4])  # one whole call for all four versions

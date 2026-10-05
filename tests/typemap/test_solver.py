@@ -30,7 +30,7 @@ def solve(programs: dict, source: str) -> dict:
 
 
 class SolverTests(unittest.TestCase):
-    def test_sharded_bodies_are_read_once_during_caller_inference(self) -> None:
+    def test_bodies_are_read_once_per_stage_during_caller_inference(self) -> None:
         class Reads(UserDict):
             def __getitem__(self, key):
                 counts[key] = counts.get(key, 0) + 1
@@ -47,7 +47,9 @@ class SolverTests(unittest.TestCase):
         expected = infer(SimpleNamespace(), machine, seeds)
         actual = infer(SimpleNamespace(), {**machine, "functions": Reads(machine["functions"])}, seeds)
         self.assertEqual(actual, expected)
-        self.assertEqual(counts, {"caller": 1, "leaf": 1})
+        # One body read each for the ABI, the machine graph and caller inference; the main process never
+        # decodes every body at once.
+        self.assertEqual(counts, {"caller": 3, "leaf": 3})
 
     def test_array_and_pointer_declarators_are_valid_c(self) -> None:
         self.assertEqual(declarator("unsigned char[4]", "arg0"), "unsigned char arg0[4]")

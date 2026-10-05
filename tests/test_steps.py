@@ -91,7 +91,7 @@ class SettleTests(TempCase):
                 if churn:
                     inputs[name] += 1
 
-            return steps.Step(name, name, lambda project, host: str(inputs[name]), run)
+            return steps.Step(name, name, name, lambda project, host: str(inputs[name]), run)
 
         table = {"a": step("a"), "b": step("b")}
         commands = []
@@ -129,7 +129,7 @@ class OutputDigestTests(TempCase):
         def write(project: object, host: object) -> None:
             output.write_text("/* generated */\n")
 
-        table = {"a": steps.Step("a", "a", lambda project, host: "1", write, (), lambda project: [output])}
+        table = {"a": steps.Step("a", "a", "a", lambda project, host: "1", write, (), lambda project: [output])}
 
         def ensure() -> list[tuple[str, str]]:
             with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a"]):
@@ -169,8 +169,10 @@ class DamagedOutputOrderTests(TempCase):
             output.write_text("good\n")
 
         table = {
-            "reader": steps.Step("reader", "reader", lambda project, host: output.read_text(), reader),
-            "writer": steps.Step("writer", "writer", lambda project, host: "1", writer, (), lambda project: [output]),
+            "reader": steps.Step("reader", "reader", "reader", lambda project, host: output.read_text(), reader),
+            "writer": steps.Step(
+                "writer", "writer", "writer", lambda project, host: "1", writer, (), lambda project: [output]
+            ),
         }
         output.write_text("good\n")
         with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["reader", "writer"]):
@@ -194,8 +196,8 @@ class CommandJournalTests(TempCase):
             (self.root / "layout.toml").write_text("inferred\n")
 
         table = {
-            "a": steps.Step("a", "a", lambda project, host: "1", write_layout),
-            "b": steps.Step("b", "b", lambda project, host: "2", run),
+            "a": steps.Step("a", "a", "a", lambda project, host: "1", write_layout),
+            "b": steps.Step("b", "b", "b", lambda project, host: "2", run),
         }
         with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a", "b"]):
             steps.ensure(project, BUDGET_HOST, ["a", "b"])
@@ -290,7 +292,7 @@ class TypesFixedPointTests(TempCase):
         def run(project: object, host: object) -> None:
             header.write_text(solve(header.read_text()))  # type: ignore[operator]
 
-        table = {"types": steps.Step("types", "types", lambda project, host: header.read_text(), run)}
+        table = {"types": steps.Step("types", "types", "types", lambda project, host: header.read_text(), run)}
         with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["types"]):
             first = [row.step for row in steps.ensure(project, BUDGET_HOST, ["types"]) if row.ran]
             again = [row.step for row in steps.ensure(project, BUDGET_HOST, ["types"]) if row.ran]
@@ -337,47 +339,31 @@ class TypesFixedPointTests(TempCase):
 class BudgetTests(TempCase):
     """Each step and each chain reports its effort on stderr and names the budgets it went over."""
 
-    def run_chain(self, budgets: dict, *, force: bool = False) -> tuple[list, list[dict]]:
-        import io
-        import json
+    def run_chain(self, budgets: dict, *, force: bool = False) -> list:
         from unittest.mock import patch
 
         from tests.kit import BUDGETS
 
         project = SimpleNamespace(build=self.root / "build", root=self.root)
-        table = {"a": steps.Step("a", "a", lambda project, host: "1", lambda project, host: None)}
+        table = {"a": steps.Step("a", "a", "a", lambda project, host: "1", lambda project, host: None)}
         host = SimpleNamespace(**{**BUDGETS, **budgets})
-        stream = io.StringIO()
-        with (
-            patch.object(steps, "STEPS", table),
-            patch.object(steps, "order", lambda names: ["a"]),
-            patch("sys.stderr", stream),
-        ):
-            results = steps.ensure(project, host, ["a"], force=force)
-        return results, [json.loads(line) for line in stream.getvalue().splitlines()]
+        with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a"]):
+            return steps.ensure(project, host, ["a"], force=force)
 
-    def test_a_step_and_its_chain_emit_one_effort_event_each(self) -> None:
-        results, events = self.run_chain({})
-        self.assertEqual([event["event"] for event in events], ["step.effort", "steps.effort"])
-        self.assertEqual(events[0]["step"], "a")
-        self.assertEqual(events[1]["kind"], "changed")
+    def test_a_step_result_carries_its_effort_document(self) -> None:
+        results = self.run_chain({})
+        document = results[-1].document()
         for field in ("wall_seconds", "cpu_percent", "main_rss_bytes", "worker_rss_bytes", "findings"):
-            self.assertIn(field, events[0])
+            self.assertIn(field, document)
         self.assertEqual(results[-1].findings, ())
-        self.assertNotIn("OVER", results[-1].line())
 
     def test_over_budget_is_a_named_finding_on_the_step_and_its_chain(self) -> None:
-        results, events = self.run_chain({"main_rss_bytes": 1, "recompute_seconds": 1e-9}, force=True)
-        self.assertEqual(events[1]["kind"], "recompute")
-        self.assertEqual([line.split(":")[0] for line in events[0]["findings"]], ["budget.main_rss_bytes"])
-        self.assertEqual([line.split(":")[0] for line in events[1]["findings"]], ["budget.recompute_seconds"])
+        results = self.run_chain({"main_rss_bytes": 1, "recompute_seconds": 1e-9}, force=True)
         self.assertEqual(
             [line.split(":")[0] for line in results[-1].findings], ["budget.main_rss_bytes", "budget.recompute_seconds"]
         )
-        self.assertIn("\n  OVER budget.main_rss_bytes", results[-1].line())
 
     def test_an_unchanged_chain_is_checked_against_its_own_budget(self) -> None:
         self.run_chain({})
-        _, events = self.run_chain({"unchanged_seconds": 1e-9})
-        self.assertEqual(events[-1]["kind"], "unchanged")
-        self.assertEqual([line.split(":")[0] for line in events[-1]["findings"]], ["budget.unchanged_seconds"])
+        results = self.run_chain({"unchanged_seconds": 1e-9})
+        self.assertEqual([line.split(":")[0] for line in results[-1].findings], ["budget.unchanged_seconds"])

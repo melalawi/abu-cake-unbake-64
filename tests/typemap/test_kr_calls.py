@@ -3,7 +3,7 @@
 import unittest
 
 from unbake.layout import redeclarations
-from unbake.typemap.database import unprototyped_calls, without_void
+from unbake.typemap.database import unprototyped_calls, void_calls, without_void
 
 
 def record(prototype: str | None, caller_arguments: list[str]) -> dict:
@@ -37,16 +37,17 @@ class KRCallTests(unittest.TestCase):
             "extern void func_80293B28_de(void *);\n"
             "extern void other(void);\n"
         )
-        rewritten = without_void(carried, {"func_80293DE8_de"})
+        rewritten = without_void(carried, void_calls({"func_80293DE8_de"}))
         self.assertIn("extern void func_80293DE8_de();", rewritten)
         # Only the named function changes; a similar name and other functions keep (void).
         self.assertIn("extern void other(void);", rewritten)
         self.assertEqual(
-            without_void("void func_80293DE8_de_x(void);", {"func_80293DE8_de"}), "void func_80293DE8_de_x(void);"
+            without_void("void func_80293DE8_de_x(void);", void_calls({"func_80293DE8_de"})),
+            "void func_80293DE8_de_x(void);",
         )
-        self.assertEqual(without_void(carried, set()), carried)
+        self.assertEqual(without_void(carried, void_calls(set())), carried)
 
     def test_the_callers_local_declaration_matches_the_header_after_the_rewrite(self) -> None:
         # Layout apply strips a local declaration equivalent to the header's: with `f()` the caller's call compiles.
-        header = without_void("extern void func_80293DE8_de(void);", {"func_80293DE8_de"})
+        header = without_void("extern void func_80293DE8_de(void);", void_calls({"func_80293DE8_de"}))
         self.assertTrue(redeclarations.equivalent("extern void func_80293DE8_de();", header, {}))

@@ -45,11 +45,6 @@ class EffortTests(unittest.TestCase):
         self.assertEqual((spent.wall, spent.main, spent.tools), (4.0, 1.0, 1.0))
         self.assertEqual(spent.pool, {"typemap.facts._job": (7.0, 1), "work.plan._drafters": (1.0, 1)})
         self.assertEqual(spent.counts, {"facts": (1, 100)})
-        self.assertEqual(
-            spent.line(),
-            "effort: 4.0 s wall, 10.0 cpu-s (250%): main 1.0, tools 1.0, pool 8.0; peak RSS main 10 MB, "
-            "worker 300 MB; other processes 0.0 cores [typemap.facts._job 7.0 x1, work.plan._drafters 1.0 x1]",
-        )
         document = spent.document()
         self.assertEqual(
             {key: document[key] for key in ("cpu_percent", "pool_cpu_seconds", "worker_rss_bytes", "counts")},

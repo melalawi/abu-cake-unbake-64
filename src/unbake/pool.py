@@ -156,7 +156,7 @@ class WorkerMemory(MemoryError):
 def _where(error: BaseException) -> str:
     """The innermost frame the tool owns (else the innermost frame) that raised ERROR, as file:line."""
     frames = traceback.extract_tb(error.__traceback__)
-    owned = [frame for frame in frames if "/unbake/" in frame.filename]
+    owned = [frame for frame in frames if "/unbake/" in frame.filename and not frame.filename.endswith("/pool.py")]
     chosen = owned or list(frames)
     return f"{Path(chosen[-1].filename).name}:{chosen[-1].lineno}" if chosen else "an unknown place"
 

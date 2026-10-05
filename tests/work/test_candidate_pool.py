@@ -1,4 +1,4 @@
-"""plan.candidates sends its word rules through the pool in chunks; each chunk's verdicts equal the serial rules.
+"""plan.candidates sends its word rules through the pool one group at a time; each verdict equals the serial rules.
 The declared-header digest reads cpp line markers relative to the tree root."""
 
 import unittest
@@ -16,7 +16,7 @@ OPEN = words("27bdffe8 afbf0014 0c000000 00000000")
 
 
 class DrafterVerdictTests(unittest.TestCase):
-    def test_chunked_verdicts_equal_the_serial_rules(self) -> None:
+    def test_each_verdict_equals_the_serial_rules(self) -> None:
         groups = [
             (TARGET, EMITTED, ((FRAMED, 0x80001000),), ()),
             (TARGET, EMITTED, ((FILLER, 0x8008EC78),), ()),
@@ -29,10 +29,7 @@ class DrafterVerdictTests(unittest.TestCase):
             for t, e, bodies, tails in groups
         ]
         self.assertEqual(serial, [True, False, False, True])
-        for size in (1, 2, 3, 4):
-            with self.subTest(size=size):
-                chunks = [groups[i : i + size] for i in range(0, len(groups), size)]
-                self.assertEqual([v for chunk in map(plan._drafters, chunks) for v in chunk], serial)
+        self.assertEqual([plan._drafter(group) for group in groups], serial)
 
 
 class DeclaredDigestTests(unittest.TestCase):

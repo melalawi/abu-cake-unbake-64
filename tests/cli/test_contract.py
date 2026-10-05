@@ -7,7 +7,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from tests.kit import TempCase
 from unbake.cli.main import main
 
-KEYS = {"v", "command", "status", "key", "data", "next", "receipts"}
+KEYS = {"v", "command", "status", "key", "data", "next", "receipts", "effort"}
 VERBS = {
     "init": ["demo", "--functions-per-header", "2"],
     "setup": [],

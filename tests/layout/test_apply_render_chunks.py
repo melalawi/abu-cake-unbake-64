@@ -39,7 +39,11 @@ class RenderChunkTests(unittest.TestCase):
             patch.object(apply.index, "load", return_value={"headers": {"a.h": "0"}}),
             patch.object(apply.index, "path", return_value=index_path),
             patch.object(apply.pool.Pool, "from_host", return_value=SimpleNamespace(size=workers)),
-            patch.object(apply.pool, "run", side_effect=lambda host, fn, items: [fn(item) for item in items]),
+            patch.object(
+                apply.pool,
+                "run",
+                side_effect=lambda host, fn, items, shared: [fn(shared, item) for item in items],
+            ),
             patch.object(apply, "source", side_effect=fake_source),
         ):
             outputs = apply.render(project, policy, disagreements)

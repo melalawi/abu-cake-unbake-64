@@ -1,6 +1,7 @@
 """Layered facts (a source part joined to header parts) equal the whole unit's facts, or refuse to stand in."""
 
 import json
+import os
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,7 @@ SHAPES = ("/r/include/shapes.h", "\nstruct Shape { s32 kind; f32 size; };\ntyped
 DATA = "/r/include/data.h"
 NESTED = {SHAPES[0]: (TYPES,), DATA: (TYPES,)}
 SOURCE = Path("/r/src/alpha.c")
+spell = os.path.normpath
 
 
 def marker(path: str, line: int = 1, flag: str = "") -> str:
@@ -49,7 +51,7 @@ def normal(seed: dict) -> object:
 
 def header_parts(headers: list[tuple[str, str]]) -> dict[str, dict]:
     return {
-        layers.path(path): layers.header_part(header_text((path, text), *NESTED.get(path, ())), Path(path))
+        spell(path): layers.header_part(header_text((path, text), *NESTED.get(path, ())), Path(path), spell)
         for path, text in headers
     }
 
@@ -58,11 +60,11 @@ def layered(headers: list[tuple[str, str]], body: str, function: str) -> tuple[o
     marked, _ = unit(headers, body)
     provenance = {"kind": "published", "function": function, "version": "us", "source": "src/alpha.c"}
     parts = header_parts(headers)
-    part = layers.source_part(marked, SOURCE, parts, provenance)
+    part = layers.source_part(marked, SOURCE, parts, provenance, spell)
     if part is None:
         return None
     consumed, definition = layers.assemble(
-        layers.Context(parts), part, SOURCE, body, lambda kind: {**provenance, "kind": kind}, frozenset()
+        layers.Context(parts), part, spell(str(SOURCE)), body, lambda kind: {**provenance, "kind": kind}, frozenset()
     )
     return normal(consumed), normal(facts._owned(definition, function))
 
@@ -126,8 +128,8 @@ class LayeredFactsTests(unittest.TestCase):
     def test_a_header_split_by_its_nested_include(self) -> None:
         nested = ("/r/include/outer.h", "struct Outer { s32 a; };\n")
         parts = {
-            layers.path(TYPES[0]): layers.header_part(header_text(TYPES), Path(TYPES[0])),
-            layers.path(nested[0]): layers.header_part(header_text(nested, TYPES), Path(nested[0])),
+            spell(TYPES[0]): layers.header_part(header_text(TYPES), Path(TYPES[0]), spell),
+            spell(nested[0]): layers.header_part(header_text(nested, TYPES), Path(nested[0]), spell),
         }
         marked = (
             BOUNDARY
@@ -140,10 +142,10 @@ class LayeredFactsTests(unittest.TestCase):
             + marker(str(SOURCE), 2, "2")
             + "void alpha(struct Outer *o) { }\n"
         )
-        part = layers.source_part(marked, SOURCE, parts, {})
+        part = layers.source_part(marked, SOURCE, parts, {}, spell)
         assert part is not None
         _, definition = layers.assemble(
-            layers.Context(parts), part, SOURCE, "", lambda kind: {"kind": kind}, frozenset()
+            layers.Context(parts), part, spell(str(SOURCE)), "", lambda kind: {"kind": kind}, frozenset()
         )
         self.assertEqual(list(definition["aliases"]), ["s32", "f32"])
         self.assertEqual(list(definition["structs"]), ["Outer"])
@@ -162,7 +164,7 @@ class DependencyTests(unittest.TestCase):
         ]
         for named, expected in cases:
             with self.subTest(named=named):
-                self.assertEqual(sorted(layers.dependencies(context, runs, SOURCE, named)), expected)
+                self.assertEqual(sorted(layers.dependencies(context, runs, spell(str(SOURCE)), named)), expected)
 
 
 class StaleFactsTests(unittest.TestCase):
@@ -174,10 +176,10 @@ class StaleFactsTests(unittest.TestCase):
         parts = header_parts(headers)
         marked, _ = unit(headers, body)
         if part is None:
-            part = layers.source_part(marked, SOURCE, parts, {})
+            part = layers.source_part(marked, SOURCE, parts, {}, spell)
         assert part is not None
         consumed, _ = layers.assemble(
-            layers.Context(parts), part, SOURCE, body, lambda kind: {"kind": kind}, frozenset()
+            layers.Context(parts), part, spell(str(SOURCE)), body, lambda kind: {"kind": kind}, frozenset()
         )
         return set(consumed["globals"]), part
 
@@ -214,12 +216,14 @@ class GeneratedEvidenceTests(unittest.TestCase):
         headers = [header]
         parts = header_parts(headers)
         marked, _ = unit(headers, self.BODY)
-        part = layers.source_part(marked, SOURCE, parts, {})
+        part = layers.source_part(marked, SOURCE, parts, {}, spell)
         assert part is not None
-        return layers.assemble(layers.Context(parts), part, SOURCE, self.BODY, lambda kind: {"kind": kind}, generated)
+        return layers.assemble(
+            layers.Context(parts), part, spell(str(SOURCE)), self.BODY, lambda kind: {"kind": kind}, generated
+        )
 
     def test_a_generated_header_yields_no_published_seed(self) -> None:
-        consumed, _ = self.assembled(self.GEN, frozenset({layers.path(self.GEN[0])}))
+        consumed, _ = self.assembled(self.GEN, frozenset({spell(self.GEN[0])}))
         self.assertEqual(set(consumed["globals"]), set())
         self.assertNotIn("A", consumed["structs"])
 
@@ -229,5 +233,5 @@ class GeneratedEvidenceTests(unittest.TestCase):
         self.assertIn("A", consumed["structs"])
 
     def test_the_definition_seed_still_sees_the_generated_struct_size(self) -> None:
-        _, definition = self.assembled(self.GEN, frozenset({layers.path(self.GEN[0])}))
+        _, definition = self.assembled(self.GEN, frozenset({spell(self.GEN[0])}))
         self.assertEqual(definition["structs"]["B"]["size"], 2)

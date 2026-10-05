@@ -39,7 +39,7 @@ class AbiTests(unittest.TestCase):
                 "leaf": (0x80002000, [0x00851021, 0x03E00008, 0]),
             }
         )
-        result = abi(mapped)["leaf"]
+        result = abi(mapped["functions"])["leaf"]
         self.assertEqual(result["registers"], ["r4", "r5"])
         self.assertTrue(result["arity_known"])
         self.assertFalse(result["missing"])
@@ -139,7 +139,7 @@ class AbiTests(unittest.TestCase):
                 "leaf": (0x80002000, [0x24020001, 0x03E00008, 0]),
             }
         )
-        result = abi(mapped, {"caller": "r2"})["leaf"]
+        result = abi(mapped["functions"], {"caller": "r2"})["leaf"]
         self.assertEqual(result["used_returns"], ["r2"])
         self.assertEqual(result["return_register"], "r2")
         self.assertTrue(result["return_known"])
@@ -151,7 +151,7 @@ class AbiTests(unittest.TestCase):
                 "leaf": (0x80002000, [0x40026000, 0x03E00008, 0]),
             }
         )
-        result = abi(mapped, {"caller": "r2"})
+        result = abi(mapped["functions"], {"caller": "r2"})
         self.assertTrue(result["leaf"]["return_known"])
         self.assertTrue(result["caller"]["return_known"])
         self.assertEqual(result["caller"]["defined_returns"], ["r2"])
@@ -165,7 +165,7 @@ class AbiTests(unittest.TestCase):
                 }
             )
             with self.subTest(arithmetic=bool(middle)):
-                result = abi(mapped, {"caller": "r2"})
+                result = abi(mapped["functions"], {"caller": "r2"})
                 self.assertFalse(result["leaf"]["return_known"])
                 self.assertFalse(result["caller"]["return_known"])
                 self.assertNotIn("r2", result["caller"]["defined_returns"])
@@ -212,7 +212,7 @@ class AbiTests(unittest.TestCase):
                 "leaf": (0x80002000, [0x03E00008, 0]),
             }
         )
-        result = abi(mapped)["caller"]
+        result = abi(mapped["functions"])["caller"]
         self.assertFalse(result["return_known"])
         self.assertIn("direct exits and tail calls disagree on return ABI", result["conflicts"])
 
@@ -223,13 +223,13 @@ class AbiTests(unittest.TestCase):
                 "leaf": (0x80002000, [0x08000400, 0]),
             }
         )
-        for result in abi(mapped).values():
+        for result in abi(mapped["functions"]).values():
             self.assertFalse(result["return_known"])
             self.assertFalse(result["void"])
 
     def test_big_endian_subword_stack_input_occupies_its_argument_word(self):
         mapped = facts({"leaf": (0x80001000, [0x27BDFFE0, 0x97A20032, 0x27BD0020, 0x03E00008, 0])})
-        result = abi(mapped)["leaf"]
+        result = abi(mapped["functions"])["leaf"]
         self.assertEqual(result["registers"], ["stack16"])
         self.assertNotIn("stack18", result["registers"])
 
@@ -299,7 +299,7 @@ class AbiTests(unittest.TestCase):
                 "leaf": (0x80003000, [0x24020001, 0x03E00008, 0]),
             }
         )
-        result = abi(mapped)["leaf"]
+        result = abi(mapped["functions"])["leaf"]
         self.assertEqual(result["return_register"], "r2")
         self.assertEqual(result["unproven_return_reads"], ["f0"])
         self.assertTrue(result["return_known"])
