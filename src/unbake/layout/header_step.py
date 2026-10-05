@@ -112,12 +112,21 @@ def validate(
     staged_headers = stage / "include"
     staged_sources = stage / "src"
     headers = {path.resolve() for path in changed if path.suffix == ".h"}
+    roots: set[Path] = set()
     for path, data in changed.items():
         if path.suffix == ".h":
             root = next((r for r in project.include if path.is_relative_to(r)), None)
             if root is None:
                 raise Held("headers", f"headers.path: {path} is outside include/")
             atomic_files.write(staged_headers / path.relative_to(root), data)
+            roots.add(root)
+    # A staged header's quoted includes ("../types.h") resolve beside it, so the rest of its tree is linked in.
+    for root in sorted(roots):
+        for path in root.rglob("*"):
+            mirror = staged_headers / path.relative_to(root)
+            if path.is_file() and not mirror.exists():
+                mirror.parent.mkdir(parents=True, exist_ok=True)
+                mirror.symlink_to(path)
     memo: dict[Path, frozenset[Path]] = {}
     view = replace(project, work_include=(staged_headers,))
     compiled = []

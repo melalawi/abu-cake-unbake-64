@@ -89,7 +89,8 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         },
         "best_percent": measured.best_percent,
         "exact": measured.exact,
-        "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), ""),
+        "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
+        or next((f"precondition: {line}" for line in measured.preconditions), ""),
         "seconds": time.monotonic() - started,
     }
 
@@ -177,7 +178,7 @@ def choose(project: Project, host: Host, pick: int | None, functions: tuple[str,
             raise Held(
                 "cycle",
                 f"cycle.functions: {', '.join(missing)}: "
-                "not candidates (published, unknown or outside the size window)",
+                "not candidates (published and clean, unknown or outside the size window)",
             )
         return [by_name[name] for name in functions]
     if pick is not None:
@@ -299,6 +300,7 @@ def run(
 
         def finish_land(row: Row) -> None:
             row.stage = "landing"
+            message = land.subject(project, row.function)
             started = time.monotonic()
             try:
                 commit = land.land(project, host, Path(row.file))
@@ -328,7 +330,7 @@ def run(
                 seconds=round(time.monotonic() - started, 3),
                 retried=(row.function, row.sha256) in retried,
             )
-            emitter.emit("fn.committed", function=row.function, commit=commit, message=f"Match {row.function}")
+            emitter.emit("fn.committed", function=row.function, commit=commit, message=message)
             unpushed.append(commit)
             for merged in steps.ensure(project, host, ["merge-units"]):
                 if merged.ran:

@@ -6,8 +6,9 @@ from dataclasses import dataclass
 
 from unbake.config import Host, Project
 from unbake.cycle import rank
-from unbake.decomp import exclusions
-from unbake.work import attempts, inventory
+from unbake.decomp import checks, exclusions
+from unbake.layout import split
+from unbake.work import attempts, compare, inventory
 
 M2C_KINDS = ("sn64", "ido")
 
@@ -20,7 +21,8 @@ class Action:
 
 
 def candidates(project: Project) -> list[rank.Candidate]:
-    """Unmatched functions m2c can draft: complete bodies, one name in every version, not excluded."""
+    """Units not yet exact and clean: unmatched functions m2c can draft (complete bodies, one name in every
+    version, not excluded), and published units that break a source rule (drafted from their src/ text)."""
     excluded = exclusions.load(project)
     _, functions, bodies = inventory.inventory(project)
     carry = {name for name in attempts.functions(project) if attempts.path(project, name).is_file()}
@@ -46,6 +48,21 @@ def candidates(project: Project) -> list[rank.Candidate]:
                 canonical.end - canonical.start,
                 tuple(item.version for item in items),
                 canonical.name in carry,
+                summary.best_percent if summary else None,
+            )
+        )
+    for source in sorted(project.src.glob("*.c")):
+        if not compare.published(project, source.stem) or not checks.unmarked(source):
+            continue
+        versions = split.holding_versions(project, source.stem)
+        row = compare.row_of(project, source.stem, versions[0])
+        summary = history.get(source.stem)
+        result.append(
+            rank.Candidate(
+                source.stem,
+                row.end - row.start,
+                versions,
+                source.stem in carry,
                 summary.best_percent if summary else None,
             )
         )
@@ -88,4 +105,4 @@ def next_action(project: Project, host: Host, *, undrafted: bool) -> Action:
             continue
         reason = f"{row.function}: {row.bytes} bytes in {', '.join(row.versions)}"
         return Action(("draft", row.function), reason, row.function)
-    return Action(None, "no unmatched function is ready to draft", None)
+    return Action(None, "no unit is ready to draft", None)

@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import land
+from unbake import config, land
 from unbake.config import Held
 from unbake.fold.apply import Folded
 
@@ -71,3 +71,17 @@ class LandTests(ProjectCase):
         with self.assertRaisesRegex(Held, "hook refused"):
             self.run_land(["us", "eu"])
         self.assert_untouched()
+
+    def test_published_unit_lands_again_as_clean_with_no_row_edits(self) -> None:
+        (self.project.src / "alpha.c").write_text("int alpha(void) { do {} while (0); return 1; }\n")
+        for version in self.project.versions:
+            split = self.project.version(version).split
+            split.write_text(split.read_text().replace("asm, alpha]", "c, alpha]"))
+        self.project = config.load(self.project.root)
+        published = {v: self.project.version(v).split.read_text() for v in self.project.versions}
+        self.assertEqual(self.run_land(["us", "eu"]), "c0ffee")
+        self.assertEqual((self.project.src / "alpha.c").read_text(), SOURCE)
+        self.assertEqual({v: self.project.version(v).split.read_text() for v in self.project.versions}, published)
+        commits = [args for args in self.git if "commit" in args]
+        self.assertEqual(len(commits), 1)
+        self.assertIn("Clean alpha", commits[0])

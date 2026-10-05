@@ -461,6 +461,11 @@ def run(source: str | Path) -> list[GuardFinding]:
     ]
 
 
+def unmarked(source: str | Path) -> list[GuardFinding]:
+    """Findings without a FAKEMATCH reason: what refuses a land and holds `unbake check`."""
+    return [finding for finding in run(source) if finding.fakematch is None]
+
+
 def message(finding: GuardFinding) -> str:
     return f"{finding.rule}:{finding.line}: {finding.text}"
 

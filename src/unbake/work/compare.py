@@ -78,9 +78,19 @@ def row_of(project: Project, function: str, version: str) -> split.Function:
     return rows[0]
 
 
+def published(project: Project, function: str) -> bool:
+    """FUNC's row is C in every holding version: src/FUNC.c is what the build links, not an unmatched draft."""
+    return all(row_of(project, function, v).kind == "c" for v in split.holding_versions(project, function))
+
+
 def view_for(project: Project, file: Path, function: str) -> Project:
     """A file under build/work/FUNC/ sees that draft's own headers first."""
-    return draft_view(project, function) if file.resolve().is_relative_to(project.work.resolve()) else project
+    from unbake.fold import apply as fold_apply
+
+    if not file.resolve().is_relative_to(project.work.resolve()):
+        return project
+    fold_apply.link_private_includes(project, function)
+    return draft_view(project, function)
 
 
 def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ...] | None = None) -> Compared:

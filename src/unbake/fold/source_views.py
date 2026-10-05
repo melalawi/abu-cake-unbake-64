@@ -145,6 +145,12 @@ def header_includes(project: Project, headers: Headers, directory: Path) -> tupl
                 destination = staged / path.relative_to(root)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 atomic_files.text(destination, content)
+        # Links beside a private header copy (fold.apply.link_relative_includes) resolve its relative includes.
+        for link in root.rglob("*") if root in getattr(project, "work_include", ()) else ():
+            destination = staged / link.relative_to(root)
+            if link.is_symlink() and not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.symlink_to(link.resolve())
         roots.append(staged)
     if shared is not None and shared[0] == project.root:
         for path in before.keys() - texts.keys():

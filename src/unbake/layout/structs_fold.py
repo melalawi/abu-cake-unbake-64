@@ -322,6 +322,7 @@ def fold(
     prove_headers: bool = True,
     context: Headers | None = None,
     host: Host | None = None,
+    republished: Path | None = None,
 ) -> list[Edit]:
     """Merge fields into existing include headers, returning edits without writing.
 
@@ -679,14 +680,14 @@ def fold(
             if prove_headers:
                 if host is None:
                     raise Held("structs", "structs.header_proof: the host config (unbake.toml) is required")
-                _prove_includers(project, edits, host)
+                _prove_includers(project, edits, host, republished)
     return edits
 
 
-def _prove_includers(project: Project, edits: list[Edit], policy: Host) -> None:
+def _prove_includers(project: Project, edits: list[Edit], policy: Host, republished: Path | None) -> None:
     label = ", ".join(str(edit.path) for edit in edits)
     try:
-        _compile_includers(project, edits, policy)
+        _compile_includers(project, edits, policy, republished)
     except Held as error:
         if error.reason.startswith(label):
             raise
@@ -695,7 +696,7 @@ def _prove_includers(project: Project, edits: list[Edit], policy: Host) -> None:
         held(label, f"header compile proof unavailable: {error}")
 
 
-def _compile_includers(project: Project, edits: list[Edit], policy: Host) -> None:
+def _compile_includers(project: Project, edits: list[Edit], policy: Host, republished: Path | None = None) -> None:
     """Compile all possible includers in a physical overlay before returning edits.
 
     Conditional literal includes are deliberately overapproximated. Computed
@@ -778,6 +779,9 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host) -> Non
     sources = sorted(project.src.rglob("*.c"))
     includers: list[tuple[Path, str, list[str]]] = []
     for source in sources:
+        # The source this fold republishes is replaced, and land proves its new text against these headers.
+        if republished is not None and source.resolve() == republished.resolve():
+            continue
         direct = affected(source, set())
         if not direct and not forced_config:
             continue

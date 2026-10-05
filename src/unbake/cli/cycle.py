@@ -15,6 +15,8 @@ DESCRIPTION = """\
 Work one round on several functions at once. Each picked function gets a draft in
 build/work/FUNC/FUNC.c. Every time you save that file it is compared again by itself. A function that
 is exact in every version is landed (ROM proof, commit, push) within seconds, while the others keep going.
+A published unit that breaks a source rule is a candidate too: its draft is its own src/ text, and once it is
+exact and clean it lands again as "Clean UNIT".
 At the end the attempt history is folded into attempts.json and committed as "Record attempts" with the
 progress reports it moves, so fuzzy progress and the ranking survive a fresh clone.
 

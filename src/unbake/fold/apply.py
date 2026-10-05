@@ -6,6 +6,8 @@ so fold edits a private copy; tidy leaves those copies in the work dir and land 
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +41,24 @@ def view(project: Project, function: str) -> Project:
     if shared.is_file() and not private.exists():
         private.parent.mkdir(parents=True, exist_ok=True)
         atomic_files.copyfile(shared, private)
+    link_private_includes(project, function)
     return drafted
+
+
+def link_private_includes(project: Project, function: str) -> None:
+    """A private header copy's parent-relative includes ("../types.h") resolve as they do beside its shared
+    original: each missing target is linked to the shared file. Links are never private headers."""
+    root = project.work / function / "include"
+    for private in sorted(root.rglob("*.h")) if root.is_dir() else ():
+        if private.is_symlink():
+            continue
+        shared = project.include[-1] / private.relative_to(root)
+        for name in re.findall(r'^[ \t]*#[ \t]*include[ \t]*"(\.\./[^"]+)"', private.read_text(), re.M):
+            mirror = Path(os.path.normpath(private.parent / name))
+            target = Path(os.path.normpath(shared.parent / name))
+            if mirror.is_relative_to(root) and target.is_file() and not mirror.exists():
+                mirror.parent.mkdir(parents=True, exist_ok=True)
+                mirror.symlink_to(target)
 
 
 def relative_header(project: Project, path: Path) -> str | None:
@@ -86,4 +105,8 @@ def private_headers(project: Project, function: str) -> dict[str, str]:
     root = project.work / function / "include"
     if not root.is_dir():
         return {}
-    return {path.relative_to(root).as_posix(): path.read_text() for path in sorted(root.rglob("*.h"))}
+    return {
+        path.relative_to(root).as_posix(): path.read_text()
+        for path in sorted(root.rglob("*.h"))
+        if not path.is_symlink()
+    }

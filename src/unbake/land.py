@@ -1,5 +1,7 @@
 """land(F): fold, prove every holding version against the ROM, write, commit "Match F", push in the background.
 
+An already published unit lands the same way (its row edits are a no-op) and commits "Clean F".
+
 Proof: every ROM piece other than F's row is either a raw ROM slice or an already matched unit, so the ROM of a
 version is byte-identical to the original exactly when F's linked .text (strict `n64link place`, every constant
 proved) equals the ROM bytes of F's row. That is checked in every holding version before anything is written.
@@ -135,7 +137,8 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
         if not (project.include[-1] / name).is_file() or (project.include[-1] / name).read_text() != text
     }
     if changed:
-        header_step.validate(project, host, changed)
+        # A published unit's own source is validated as its new text, the one this land writes.
+        header_step.validate(project, host, {**changed, project.src / f"{function}.c": source.encode()})
     return list(versions)
 
 
@@ -159,12 +162,18 @@ def _row_edits(project: Project, function: str, versions: list[str]) -> list[spl
     return edits
 
 
+def subject(project: Project, function: str) -> str:
+    """The land commit subject, read before the write: "Clean F" for a published unit, else "Match F"."""
+    return f"{'Clean' if compare.published(project, function) else 'Match'} {function}"
+
+
 def land(project: Project, host: Host, file: Path) -> str:
     """Land one exact draft; return the commit id. Nothing is written unless every version proves."""
     from unbake.fold import apply as fold_apply
     from unbake.report import progress
 
     function = compare.function_of(file)
+    message = subject(project, function)
     ident = chosen_compiler(project, function)
     project = _with_compiler(project, function, ident)
     folded = fold_apply.fold(project, host, function, file.read_text())
@@ -209,7 +218,7 @@ def land(project: Project, host: Host, file: Path) -> str:
         generated = buildfiles.write(updated, host)
         steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
         generated += progress.write(updated, host)
-        _commit(project, host, sorted({*written, *generated}), f"Match {function}")
+        _commit(project, host, sorted({*written, *generated}), message)
     except BaseException:
         for path, previous in written.items():
             if previous is None:

@@ -1,4 +1,7 @@
-"""draft: write build/work/FUNC/FUNC.c from the function's assembly with m2c and the solved types."""
+"""draft: write build/work/FUNC/FUNC.c from the function's assembly with m2c and the solved types.
+
+A published unit that breaks a source rule is drafted from its own src/ text instead (published_seed).
+"""
 
 from __future__ import annotations
 
@@ -26,8 +29,25 @@ def naming_version(project: Project, versions: tuple[str, ...]) -> str:
     return project.names_from if project.names_from in versions else versions[0]
 
 
+def published_seed(project: Project, function: str) -> str | None:
+    """A published unit's own text when it still breaks a source rule; None when FUNC is unmatched.
+
+    That text is the draft of a published unit: landing it again republishes the unit once it is exact and clean.
+    """
+    from unbake.decomp import checks
+    from unbake.work import compare
+
+    if not compare.published(project, function):
+        return None
+    source = project.src / f"{function}.c"
+    if not checks.unmarked(source):
+        raise Held("draft", f"draft.published: {function}: {source} is published and breaks no source rule")
+    return source.read_text()
+
+
 def draft(project: Project, host: Host, function: str, *, replace: bool) -> Drafted:
-    if function in exclusions.load(project):
+    seed = published_seed(project, function)
+    if seed is None and function in exclusions.load(project):
         raise Held("draft", f"draft.excluded: {function}: listed in {exclusions.MANIFEST}")
     versions = split.holding_versions(project, function)
     directory = attempts.directory(project, function)
@@ -38,6 +58,12 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
             f"draft.exists: {file} already exists; edit it, or redraft with --replace",
             next_action=f"unbake compare {file}",
         )
+    if seed is not None:
+        if replace:
+            shutil.rmtree(directory / "include", ignore_errors=True)
+        (directory / "include").mkdir(parents=True, exist_ok=True)
+        atomic_files.text(file, seed, encoding="utf-8")
+        return Drafted(function, file, versions)
     version = naming_version(project, versions)
     _digest, context = type_context.snapshot(project, function)
     extracted = extract.directory(project, host, version)

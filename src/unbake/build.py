@@ -43,10 +43,7 @@ def source_findings(project: Project) -> list[str]:
 
     findings = []
     for path in sorted(project.src.glob("*.c")):
-        text = path.read_text()
-        for finding in checks.run(text):
-            if finding.fakematch is None:
-                findings.append(f"{path.relative_to(project.root)}: {checks.message(finding)}")
+        findings += [f"{path.relative_to(project.root)}: {checks.message(f)}" for f in checks.unmarked(path)]
     return findings
 
 
