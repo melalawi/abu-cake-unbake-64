@@ -237,3 +237,17 @@ class SplitTests(unittest.TestCase):
         text = "\n".join(outputs.values())
         self.assertEqual(text.count("*Callback)"), 1)
         self.assertFalse(any("consumer_alias_Callback" in name for name in outputs))
+
+
+class StatementMemoTests(unittest.TestCase):
+    def test_equal_text_splits_once_and_returns_equal_tuples(self) -> None:
+        from unbake import cache
+        from unbake.typemap import split
+
+        text = "struct B_memo_probe { int a; };\nint B_memo_probe_x;\n"
+        cache.forget(["typemap-statements"])
+        with patch.object(split, "_split", wraps=split._split) as inner:
+            first, second = split.statements(text), split.statements(text)
+        self.assertEqual(inner.call_count, 1)
+        self.assertEqual(first, second)
+        self.assertIsInstance(first, tuple)

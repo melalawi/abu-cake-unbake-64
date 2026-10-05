@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
+from unbake.cache import memo
 from unbake.cdecl import declaration_source
 from unbake.config import Held
 
@@ -44,12 +46,17 @@ def guarded(path: Path, text: str) -> bytes:
     return f"#ifndef {guard}\n#define {guard}\n{text}\n#endif\n".encode()
 
 
-def statements(text: str) -> list[str]:
+def statements(text: str) -> tuple[str, ...]:
     """Separate declarations, retaining complete conditional blocks.
 
     This accepts a header body, without its outer include guard. Directives at
     file scope remain individual units; conditional branches remain together.
+    The result is shared by every caller of equal text, so it is a tuple.
     """
+    return memo("typemap-statements", hashlib.sha256(text.encode()).digest(), lambda: _split(text), keep=4096)
+
+
+def _split(text: str) -> tuple[str, ...]:
     cleaned = declaration_source(text)
     tokens = list(re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{};]|\S', cleaned))
     directives = list(re.finditer(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M))
@@ -79,4 +86,4 @@ def statements(text: str) -> list[str]:
                 start = None
     if depth or conditional or start is not None:
         raise Held("solve", "types.split: incomplete declaration or conditional")
-    return result
+    return tuple(result)
