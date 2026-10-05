@@ -12,16 +12,19 @@ import re
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, steps
+from unbake import cache
 from unbake.config import Held, Host, Project
 
 MARKER = "/* Native resident constant storage; absolute access symbols retain their addresses. */"
 _DEFINITION = re.compile(r"const [A-Za-z_][\w ]*? (unbake_rodata_\w+?)(?:\[\w*\])* = .+;")
 _BRANCH = re.compile(r"#(?:elif|else)\b.*")
 
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
+
 
 def input_key(project: Project) -> str:
-    return cache.key(steps.tool_fingerprint(), *sorted(project.src.glob("*.c")))
+    return cache.key("resident", str(SCHEMA), *sorted(project.src.glob("*.c")))
 
 
 def deleted(text: str, unit: str) -> str:
