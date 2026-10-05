@@ -21,31 +21,42 @@ from unbake.typemap.mapping import refresh_map
 SCHEMA = 3
 
 
+_MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")
+
+
+def _comparable(record: dict[str, Any], key: str, aliases: dict[str, str]) -> dict[str, Any]:
+    """A record's type meaning: typedef names resolved through its own seed's aliases (s32 and int are one type),
+    parameter names dropped."""
+    row = {k: v for k, v in record.items() if k not in _MERGE_IGNORED}
+    if key == "functions":
+        row["params"] = [declarations.canonical(p["type"], aliases) for p in row["params"]]
+    for field in ("type", "return"):
+        if isinstance(row.get(field), str):
+            row[field] = declarations.canonical(row[field], aliases)
+    return row
+
+
 def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) -> dict[str, Any]:
     records: dict[str, Any] = {}
+    meanings: dict[str, dict[str, Any]] = {}
     index = 0
     while index < len(seeds):
         seed = seeds[index]
         index += 1
         conflicts_before = len(graph.facts)
+        aliases = seed.get("aliases", {})
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
-                ignored = (
-                    "provenance",
-                    "prototype",
-                    "declaration",
-                    "aliases",
-                    "typedefs",
-                    "registers",
-                    "declaration_conflict",
-                )
-                old = {k: v for k, v in previous.items() if k not in ignored}
-                new = {k: v for k, v in record.items() if k not in ignored}
+                old = {k: v for k, v in previous.items() if k not in _MERGE_IGNORED}
+                new = {k: v for k, v in record.items() if k not in _MERGE_IGNORED}
                 if key == "functions":
                     # Parameter names have no type meaning.
                     for row in (old, new):
                         row["params"] = [p["type"] for p in row["params"]]
+                if meanings[name] == _comparable(record, key, aliases):
+                    # The same type spelled through a typedef: no conflict, the first spelling stays.
+                    continue
                 if old != new:
                     ranks = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
                     old_rank = ranks.get(previous["provenance"].get("kind"), 1)
@@ -63,6 +74,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                         )
                         if new_rank > old_rank:
                             records[name] = {**record, "declaration_conflict": False}
+                            meanings[name] = _comparable(record, key, aliases)
                         continue
                 if old != new:
                     graph.facts.append(
@@ -77,6 +89,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     records[name] = {**previous, "declaration_conflict": True}
                     continue
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
+            meanings[name] = _comparable(record, key, aliases)
         shared = seed[key]
         if isinstance(shared, declarations.ProvenStructs) and len(graph.facts) == conflicts_before:
             # An uninterrupted run of identical layouts only replaces provenance.

@@ -19,7 +19,8 @@ from typing import IO, Any
 def staging(path: Path, *, durable: bool = True) -> Iterator[Path]:
     """Yield a nonexistent private path on the destination filesystem."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(prefix=".publish-", suffix=path.suffix, dir=path.parent)
+    # Not the destination's suffix: a reader globbing src/*.c or include/*.h must never see a staging file.
+    descriptor, name = tempfile.mkstemp(prefix=".publish-", suffix=".partial", dir=path.parent)
     os.close(descriptor)
     temporary = Path(name)
     temporary.unlink()

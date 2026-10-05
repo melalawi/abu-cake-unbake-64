@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import struct
-import time
 from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
@@ -42,7 +41,6 @@ def map_program(project: Project, host: Host) -> dict[str, Any]:
 
 
 def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    started = time.monotonic()
     pinned = storage.map_inputs(project)
     images = {}
     inventory = []
@@ -282,7 +280,6 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
             "reused": reused,
             "rescanned": rescanned,
             "previous_shard_sha256": previous["shard_sha256"],
-            "seconds": round(time.monotonic() - started, 3),
             "abi_upgrade": previous.get("abi_analysis_sha256") != analyzer,
         }
         if not rescanned and previous.get("abi_analysis_sha256") == analyzer:
