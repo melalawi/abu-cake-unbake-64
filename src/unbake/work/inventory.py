@@ -54,10 +54,64 @@ def classify(data: bytes) -> tuple[str, str]:
             return "boundary", "padding beyond the return delay slot"
         if any(words[end:]):
             return "boundary", "words beyond the return delay slot"
+        reason = not_c(words)
+        if reason:
+            return "dead", reason
         return "drafter", "one complete return"
     if any(word >> 26 == 0 and word & 63 == 8 for word in words):
         return "drafter", "indirect dispatch"
     return "merge", "no complete return or indirect dispatch"
+
+
+_SAVED = frozenset({16, 17, 18, 19, 20, 21, 22, 23, 30})
+
+
+def _registers(word: int) -> tuple[set[int], set[int]]:
+    """General registers an instruction reads and writes (MIPS III integer subset; others read none)."""
+    op, rs, rt, rd = word >> 26, (word >> 21) & 31, (word >> 16) & 31, (word >> 11) & 31
+    if op == 0:
+        function = word & 63
+        if function in (8, 9):
+            return {rs}, {rd} if function == 9 else set()
+        if function in (0, 2, 3):
+            return {rt}, {rd}
+        if function in (16, 18):
+            return set(), {rd}
+        if function in (17, 19, 24, 25, 26, 27):
+            return {rs, rt} if function >= 24 else {rs}, set()
+        return {rs, rt}, {rd}
+    if op == 3:
+        return set(), {31}
+    if op == 15:
+        return set(), {rt}
+    if op in (1, 6, 7, 49, 53, 57, 61):
+        return {rs}, set()
+    if op in (4, 5, 40, 41, 42, 43, 46, 63):
+        return {rs, rt}, set()
+    if 8 <= op <= 14 or 32 <= op <= 39 or op == 55:
+        return {rs}, {rt}
+    return set(), set()
+
+
+def not_c(words: list[int]) -> str | None:
+    """Why a body with one complete return cannot be compiled C, or None. Each rule is one no compiler breaks:
+    a stack frame allocated without a release (or released without an allocation), a call without saving ra,
+    and a callee-saved register read before anything sets or saves it."""
+    adjusts = [((word & 0xFFFF) ^ 0x8000) - 0x8000 for word in words if word >> 16 == 0x27BD]
+    if any(value < 0 for value in adjusts) != any(value > 0 for value in adjusts):
+        return "stack frame allocated or released but not both"
+    calls = any(word >> 26 == 3 or (word >> 26 == 0 and word & 63 == 9) for word in words)
+    if calls and not any(word >> 16 == 0xAFBF for word in words):
+        return "call without saving ra"
+    saved = {(word >> 16) & 31 for word in words if word >> 21 == (43 << 5 | 29)}
+    written: set[int] = set()
+    for word in words:
+        reads, writes = _registers(word)
+        unset = (reads & _SAVED) - written - saved
+        if unset:
+            return f"reads callee-saved ${min(unset)} before setting it"
+        written |= writes
+    return None
 
 
 def inventory(project: Project) -> tuple[str, list[split.Function], dict[tuple[str, str], bytes]]:
