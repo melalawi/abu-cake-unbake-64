@@ -106,6 +106,19 @@ def generated(project: Project, path: Path) -> bool:
     return path in index.listed(project) and path.is_file()
 
 
+def relocatable(value: Any, root: Path) -> Any:
+    """VALUE with every str or Path under ROOT spelled relative to it, so a moved tree keys the same."""
+    if isinstance(value, dict):
+        return {key: relocatable(item, root) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [relocatable(item, root) for item in value]
+    if isinstance(value, Path):
+        return relative_root(root, value) if value.is_relative_to(root) else str(value)
+    if isinstance(value, str) and value.startswith(str(root) + os.sep):
+        return relative_root(root, Path(value))
+    return value
+
+
 def relative(project: Project, path: Path) -> str:
     """Use already normalized project paths without scanning pathlib ancestors."""
     return relative_root(project.root, path)
