@@ -6,7 +6,7 @@ from unittest import mock
 
 from tests import project_fixture
 from tests.kit import TempCase
-from unbake import buildfiles, config, extract, land
+from unbake import buildfiles, config, land
 from unbake.config import Held
 from unbake.decomp import original_asm
 from unbake.layout import split

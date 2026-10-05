@@ -18,6 +18,8 @@ _LOCKS = {
 _STATE: dict[str, set[str]] = {
     "work/attempts.py": {"os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)"},
     "extract.py": {'tarfile.open(destination, "w")'},
+    # A kernel control write: resets this process's peak RSS counter; no file is written.
+    "effort.py": {'os.open("/proc/self/clear_refs", os.O_WRONLY)'},
 }
 
 
