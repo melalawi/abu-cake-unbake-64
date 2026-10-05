@@ -48,3 +48,16 @@ class FunctionSymbolsTests(TempCase):
             "beta = 0x80000010; // type:func\n"
         )
         self.assertEqual(extract.function_symbols(path), {0x80000000: "alpha", 0x80000010: "beta"})
+
+
+class CutBoundaryTests(unittest.TestCase):
+    def test_a_function_at_a_row_start_or_its_end_is_never_a_cut(self) -> None:
+        for label, inner, expected in [
+            ("at the row start", 0x80000000, 0),
+            ("one word in", 0x80000004, 1),
+            ("last word", 0x8000000C, 1),
+            ("at the next row", 0x80000010, 0),
+        ]:
+            with self.subTest(label):
+                text = extract.assembly_rows(split('[0x1000, c, "alpha"]', '[0x1010, asm, "beta"]'), {inner: "inner"})
+                self.assertEqual(text.count('"inner"'), expected)

@@ -49,8 +49,11 @@ def assembly_rows(text: str, functions: dict[int, str]) -> str:
     lines = text.splitlines(keepends=True)
     cuts: dict[int, list[str]] = {}
     if functions:
+        import bisect
+
         from unbake.layout import split
 
+        addresses = sorted(functions)
         _, _, segments = split.parse_layout(Path("split"), text)
         for segment in segments:
             if "start" not in segment.fields or "vram" not in segment.fields:
@@ -62,10 +65,14 @@ def assembly_rows(text: str, functions: dict[int, str]) -> str:
                 stop = segment.rows[index + 1].start if index + 1 < len(segment.rows) else segment.end
                 assert stop is not None
                 folder = posixpath.dirname(scalar(row.path))
+                # The functions strictly inside the row: one bisect per row, never a scan of every function.
+                inside = addresses[
+                    bisect.bisect_right(addresses, row.start + bias) : bisect.bisect_left(addresses, stop + bias)
+                ]
+                indent = row.match["indent"]
                 cuts[row.line] = [
-                    f'{row.match["indent"]}- [0x{address - bias:X}, asm, "{posixpath.join(folder, name)}"]\n'
-                    for address, name in sorted(functions.items())
-                    if row.start < address - bias < stop
+                    f'{indent}- [0x{address - bias:X}, asm, "{posixpath.join(folder, functions[address])}"]\n'
+                    for address in inside
                 ]
     out = []
     for index, line in enumerate(lines):
@@ -88,8 +95,15 @@ def function_symbols(path: Path) -> dict[int, str]:
 
 def splat_rows(project: Project, version: str) -> str:
     """The split splat extracts for VERSION (assembly_rows of the configured split and symbols)."""
+    from unbake.cache import parsed
+
     configured = project.version(version)
-    return assembly_rows(configured.split.read_text(), function_symbols(configured.symbols))
+    # Read once per process while the split and symbols are unchanged: the step key and each archive ask for it.
+    return parsed(
+        "extract.splat_rows",
+        (configured.split, configured.symbols),
+        lambda: assembly_rows(configured.split.read_text(), function_symbols(configured.symbols)),
+    )
 
 
 def _version_key(project: Project, host: Host, version: str) -> str:
