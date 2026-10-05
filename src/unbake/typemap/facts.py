@@ -326,7 +326,8 @@ def _load(path: Path) -> Any:
 class Store:
     """Encode and intern seeds in the shared cache."""
 
-    def __init__(self, cache: Cache | None) -> None:
+    def __init__(self, project: Project, cache: Cache | None) -> None:
+        self.project = project
         self.cache = cache
         self.memory: dict[str, Any] = {}
         self.documents: dict[tuple[str, str], Any] = {}
@@ -439,7 +440,11 @@ class Store:
     def text(
         self, text: str, provenance: dict[str, Any], authored: set[Path], compute: Callable[[], dict[str, Any]]
     ) -> dict[str, Any]:
-        content_key = text_key(text, provenance, sorted(str(path) for path in authored))
+        content_key = text_key(
+            declarations.rooted(self.project, text),
+            provenance,
+            sorted(storage.relative(self.project, path) for path in authored),
+        )
         rows = self.get(content_key)
         if rows is None:
             self.put(content_key, [compute()])
@@ -449,7 +454,7 @@ class Store:
 
 
 def store(project: Project, policy: Host | None) -> Store:
-    return Store(None if policy is None else Cache(project.cache))
+    return Store(project, None if policy is None else Cache(project.cache))
 
 
 def _provenance(project: Project, function: str, version: str, source: Path) -> dict[str, Any]:

@@ -28,7 +28,7 @@ class SourceFactsTests(TempCase):
     def test_stamped_facts_equal_each_task_extracted_alone(self) -> None:
         tasks = [(f, self.source, v) for v in ("eu", "jp", "us") for f in ("alpha", "beta")]
         with patch.object(declarations, "source_unit", self.units):
-            store = facts.Store(None)
+            store = facts.Store(self.project, None)
             stamped = facts.source_facts(self.project, None, store, tasks)
             for task, data in zip(tasks, stamped, strict=True):
                 with self.subTest(task=task[0] + "/" + task[2]):

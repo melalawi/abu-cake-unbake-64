@@ -44,7 +44,7 @@ class AssembledCacheTests(TempCase):
             root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
         )
         text = declarations.BOUNDARY + "\nint alpha;\n"
-        output = source_facts.Store(None)
+        output = source_facts.Store(project, None)
         snapshot = source_facts.Snapshot(project)
         content_key = source_facts.unit_key(project, None, source, "us", snapshot)
         group = [(0, content_key, ("alpha", source, "us"))]

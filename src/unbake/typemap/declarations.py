@@ -6,7 +6,6 @@ import copy
 import hashlib
 import json
 import re
-import shutil
 import subprocess
 import weakref
 from collections.abc import Callable, Iterator, Mapping
@@ -864,16 +863,10 @@ def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict
     from unbake.typemap import facts
 
     project.build.mkdir(parents=True, exist_ok=True)
-    from unbake import journal
-
-    temporary = journal.scratch(project.build, ".declarations-")
-    try:
-        return _collect(project, policy, temporary, facts.store(project, policy), keys)
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+    return _collect(project, policy, facts.store(project, policy), keys)
 
 
-def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, keys: list[str]) -> list[dict[str, Any]]:
+def _collect(project: Project, policy: Host | None, store: Any, keys: list[str]) -> list[dict[str, Any]]:
     from unbake.typemap import facts
 
     seeds = []
@@ -925,7 +918,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
         exports = set().union(*(header_declarations(text).declared for text in components.values()))
         # Generated layouts are part of the prefix, while extern evidence is
         # retained at declared confidence (never promoted to an exact C proof).
-        extra = scratch / "declaration_evidence.c"
+        extra = project.build / "types" / "declaration_evidence.c"
         from unbake.layout import redeclarations
         from unbake.typemap import split
         from unbake.typemap.declaration_evidence import _body
@@ -948,6 +941,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
                         )
                 if not duplicates:
                     supplemental.append(statement)
+        extra.parent.mkdir(parents=True, exist_ok=True)
         atomic_files.text(extra, "\n".join(supplemental))
         evidence: dict[str, dict[str, Any]] = {}
         evidence_texts = _version_texts(project, policy, contents, extra, ordered)
