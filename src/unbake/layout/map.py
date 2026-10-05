@@ -230,7 +230,7 @@ def ensure(project: Project) -> bool:
 
 
 def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> None:
-    """Apply explicit member edits while retaining authored groups and cuts."""
+    """Apply explicit member edits while retaining authored groups, cuts and address order."""
     target = project.root / "layout.toml"
     value = tomllib.loads(target.read_text())
     members = catalog(project)
@@ -239,6 +239,8 @@ def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> 
         refuse(f"member.{name}", "edit names an absent member")
     for group in value["group"]:
         selected = tuple(dict.fromkeys(child for name in group["members"] for child in replacements.get(name, (name,))))
+        # A replacement can move a member (a boundary edit changes its address): keep address order, stably.
+        selected = tuple(sorted(selected, key=lambda name: members[name].address if name in members else 0))
         marks = {name: versions for name, versions in group.get("only", {}).items() if name not in replacements}
         for name in group["members"]:
             for child in replacements.get(name, ()):

@@ -189,10 +189,14 @@ def _extract_key(project: Project, host: Host) -> str:
 
 
 def _extract(project: Project, host: Host) -> None:
-    """One splat process per version, [setup].version_jobs of them at once."""
+    """Shape edits the ROM proves (alignment filler, cut tails) first, then one splat process per version,
+    [setup].version_jobs of them at once. The step records the key of the split it extracted (after the edits)."""
     from concurrent.futures import ThreadPoolExecutor
 
     from unbake import extract
+    from unbake.layout import shape_edits
+
+    shape_edits.run(project, host)
 
     with ThreadPoolExecutor(max_workers=host.setup_version_jobs) as executor:
         list(executor.map(lambda version: extract.segments(project, host, version), project.versions))
@@ -426,9 +430,11 @@ def _ensure(
             record(
                 project,
                 name,
-                # These steps write their own inputs (types publishes the headers its source facts preprocess):
-                # the key after the run is the one the next command sees.
-                step.key(project, host) if name in ("types", "resident", "headers", "buildfiles") else current,
+                # These steps write their own inputs (types publishes the headers its source facts preprocess;
+                # extract applies shape edits to the split): the key after the run is the one the next command sees.
+                step.key(project, host)
+                if name in ("extract", "types", "resident", "headers", "buildfiles")
+                else current,
                 None if step.outputs is None else _digests(project, step.outputs(project)),
             )
             command.ran(name, before, layout.read_bytes() if layout.is_file() else None)
