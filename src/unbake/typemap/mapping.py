@@ -19,6 +19,9 @@ from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis, control
 from unbake.work import inventory as plan
 
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
+
 
 def map_program(project: Project) -> dict[str, Any]:
     return _map(project)

@@ -20,6 +20,9 @@ from unbake import cache, steps
 from unbake.config import Held, Host, Project
 from unbake.layout import apply, index, split
 
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
+
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 _DECLARED = (
     re.compile(r"^[ \t]*#[ \t]*define[ \t]+(\w+)", re.M),
@@ -31,7 +34,7 @@ _DECLARED = (
 
 def input_key(project: Project) -> str:
     """layout.toml, the recorded type solution, every authored header and every published source."""
-    parts: list[str | bytes | Path] = [steps.tool_fingerprint(), project.root / "layout.toml"]
+    parts: list[str | bytes | Path] = ["headers", str(SCHEMA), project.root / "layout.toml"]
     parts.append(steps.recorded(project, "types") or "")
     for include in project.include:
         parts.extend(sorted(include.rglob("*.h")))

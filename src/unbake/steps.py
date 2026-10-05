@@ -7,7 +7,6 @@ runs them. Read-only commands use whatever the last run produced.
 
 from __future__ import annotations
 
-import functools
 import json
 import time
 from collections.abc import Callable, Iterable
@@ -55,13 +54,6 @@ def forget(project: Project, step: str) -> None:
         atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
 
 
-@functools.cache
-def tool_fingerprint() -> str:
-    """Digest of the installed tool's code; a tool change reruns every step once."""
-    root = Path(__file__).resolve().parent
-    return key(*sorted(root.rglob("*.py")))
-
-
 @dataclass(frozen=True)
 class StepResult:
     step: str
@@ -87,9 +79,9 @@ class Step:
 
 
 def _rom_facts_key(project: Project, host: Host) -> str:
-    from unbake.typemap import storage
+    from unbake.typemap import mapping, storage
 
-    return key(tool_fingerprint(), json.dumps(storage.map_inputs(project), sort_keys=True))
+    return key("rom-facts", str(mapping.SCHEMA), json.dumps(storage.map_inputs(project), sort_keys=True))
 
 
 def _rom_facts(project: Project, host: Host) -> None:
@@ -157,7 +149,9 @@ def _extract(project: Project, host: Host) -> None:
 
 
 def _progress_key(project: Project, host: Host) -> str:
-    return key(tool_fingerprint(), project.root / "layout.toml", *sorted(project.src.glob("*.c")))
+    from unbake.report import progress
+
+    return key("progress", str(progress.SCHEMA), project.root / "layout.toml", *sorted(project.src.glob("*.c")))
 
 
 def _progress(project: Project, host: Host) -> None:

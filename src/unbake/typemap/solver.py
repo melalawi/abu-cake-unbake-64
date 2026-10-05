@@ -13,6 +13,9 @@ from unbake.config import Host, Project
 from unbake.typemap import abi_declarations, declarations, evidence, layouts, storage
 from unbake.typemap.mapping import refresh_map
 
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
+
 
 class Constraints:
     def __init__(self, log: storage.FactLog | None = None) -> None:
@@ -974,13 +977,12 @@ def infer(
 
 def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fact_keys: list[str]) -> str:
     """Every input of merge, infer and header publication."""
-    from unbake import steps
     from unbake.layout import index
 
     files = [project.root / "config.toml", project.root / "layout.toml", index.path(project)]
     files += [path for root in project.include for path in sorted(root.rglob("*")) if path.is_file()]
     files += sorted(path for path in (project.root / "versions").rglob("*") if path.is_file())
-    parts: list[str] = [steps.tool_fingerprint(), facts["shard_sha256"], json.dumps(facts.get("abi_supplement"))]
+    parts: list[str] = ["types", str(SCHEMA), facts["shard_sha256"], json.dumps(facts.get("abi_supplement"))]
     if policy is not None:
         parts.append(json.dumps([str(policy.cpp), *project.cppflags]))
     parts.extend(fact_keys)

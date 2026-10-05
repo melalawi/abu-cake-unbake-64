@@ -14,6 +14,9 @@ from unbake.config import Held, Host, Project
 from unbake.report import files, readme_layout
 from unbake.report import units as report_units
 
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
+
 
 def _json(path: Path) -> dict[str, Any]:
     try:

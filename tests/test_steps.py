@@ -32,9 +32,24 @@ class StepRecordTests(TempCase):
                     steps.recorded(self.project, "types")
                 self.assertEqual(raised.exception.phase, "steps")
 
-    def test_tool_fingerprint_is_a_stable_digest(self) -> None:
-        self.assertRegex(steps.tool_fingerprint(), re.compile(r"^[0-9a-f]{64}$"))
-        self.assertEqual(steps.tool_fingerprint(), steps.tool_fingerprint())
+    def test_step_key_follows_inputs_and_schema_not_tool_code(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.typemap import mapping, storage
+
+        def key(inputs: dict[str, str], schema: int) -> str:
+            with patch.object(storage, "map_inputs", return_value=inputs), patch.object(mapping, "SCHEMA", schema):
+                return steps.STEPS["rom-facts"].key(self.project, SimpleNamespace())
+
+        base = key({"config.toml": "a"}, 1)
+        self.assertRegex(base, re.compile(r"^[0-9a-f]{64}$"))
+        for label, inputs, schema, changes in [
+            ("same inputs and schema", {"config.toml": "a"}, 1, False),
+            ("an input changed", {"config.toml": "b"}, 1, True),
+            ("the schema was bumped", {"config.toml": "a"}, 2, True),
+        ]:
+            with self.subTest(label):
+                self.assertEqual(key(inputs, schema) != base, changes)
 
 
 class StepOrderTests(TempCase):

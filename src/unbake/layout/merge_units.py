@@ -22,17 +22,20 @@ from dataclasses import replace
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, runner, steps
+from unbake import cache, runner
 from unbake.config import Held, Host, Project
 from unbake.layout import map as layout_map
 from unbake.layout import split
 from unbake.work import compare
 
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
+
 _INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[^\n]*\n?", re.M)
 
 
 def input_key(project: Project) -> str:
-    parts: list[str | bytes | Path] = [steps.tool_fingerprint(), project.root / "layout.toml"]
+    parts: list[str | bytes | Path] = ["merge-units", str(SCHEMA), project.root / "layout.toml"]
     parts.extend(sorted(project.src.glob("*.c")))
     return cache.key(*parts)
 

@@ -14,11 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, steps
+from unbake import cache
 from unbake.compilers import drivers
 from unbake.compilers import registry as compiler_registry
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+
+# Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -448,7 +451,8 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
 def input_key(project: Project, host: Host) -> str:
     """Everything the build files are made from."""
     parts: list[str | bytes | Path] = [
-        steps.tool_fingerprint(),
+        "buildfiles",
+        str(SCHEMA),
         project.root / "config.toml",
         Path(host.n64link),
         host.publish_branch,
