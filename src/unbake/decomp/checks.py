@@ -441,15 +441,23 @@ RULES = [
 ]
 
 
-# Rules a FAKEMATCH comment never waives. Volatile stays waivable (an open decision).
+# Rules a FAKEMATCH comment never waives.
 UNWAIVABLE = frozenset(
-    {"inline-asm", "raw-gfx", "local-gbi-macro", "local-type-copy", "invented-struct", "resident-storage"}
+    {
+        "inline-asm",
+        "volatile-storage",
+        "raw-gfx",
+        "local-gbi-macro",
+        "local-type-copy",
+        "invented-struct",
+        "resident-storage",
+    }
 )
 
 # One plain sentence per rule id a finding can carry.
 SENTENCE = {
     "inline-asm": "inline assembly is never allowed",
-    "volatile-storage": "volatile storage is not allowed here",
+    "volatile-storage": "volatile storage is never allowed",
     "raw-offset": "a raw byte offset is used instead of a typed field",
     "local-include": "a local include is not allowed",
     "tool-comment": "a tool comment is left in the source",

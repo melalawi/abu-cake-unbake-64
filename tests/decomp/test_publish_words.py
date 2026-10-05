@@ -66,11 +66,11 @@ class ExactAttemptTests(TempCase):
 
 
 class RuleTests(TempCase):
-    def test_a_marker_waives_volatile_but_never_inline_asm(self) -> None:
+    def test_a_marker_waives_neither_volatile_nor_inline_asm(self) -> None:
         marker = "/* FAKEMATCH: measured scheduling */\n"
         cases = [
             ("inline asm with a marker", 'void f(void) { __asm__("nop"); }\n', 1),
-            ("volatile with a marker", "volatile int x;\n", 0),
+            ("volatile with a marker", "volatile int x;\n", 1),
         ]
         for label, body, unmarked in cases:
             with self.subTest(label):
