@@ -130,9 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             result = _run(argv, stdout)
     except Exception as error:
         result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}"), "unbake next")
+    code = emit(result, stdout, sys.stderr)
     # Every command ends with what it cost: wall, CPU of this process, its tools and its pool work by function.
     print(effort.since(started).line(), file=sys.stderr)
-    code = emit(result, stdout, sys.stderr)
     return 130 if result.key == "interrupted" else code
 
 
