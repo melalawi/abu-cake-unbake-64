@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -17,8 +18,43 @@ def _typedefs(text: str) -> set[str]:
     return declarations(text).typedefs
 
 
+_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"', re.M)
+
+
+def _includes(contents: dict[Path, str]) -> dict[Path, set[Path]]:
+    """Each header's include closure among CONTENTS: a quoted include names a header relative to the including
+    one, or (without "..") by its trailing path."""
+    paths = {os.path.normpath(path): path for path in contents}
+    direct: dict[Path, set[Path]] = {}
+    for path, text in contents.items():
+        found = set()
+        for name in _INCLUDE.findall(text):
+            beside = paths.get(os.path.normpath(path.parent / name))
+            if beside is not None:
+                found.add(beside)
+            elif ".." not in Path(name).parts:
+                tail = Path(name).parts
+                found.update(other for other in contents if other.parts[-len(tail) :] == tail)
+        direct[path] = found - {path}
+    closure: dict[Path, set[Path]] = {}
+    for path in contents:
+        seen: set[Path] = set()
+        pending = [*direct[path]]
+        while pending:
+            other = pending.pop()
+            if other not in seen:
+                seen.add(other)
+                pending.extend(direct[other])
+        closure[path] = seen - {path}
+    return closure
+
+
 def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None = None) -> list[Path]:
-    """Put shared types before consumers even when headers omit includes."""
+    """Put shared types before consumers even when headers omit includes.
+
+    A typedef name a header uses needs one declaration before it: a provider the header includes is that
+    declaration, else every provider precedes it. A complete use of a tag (directly or through an alias) also
+    needs the tag's definition before it; a pointer to a tag needs nothing."""
     parsed = {}
     for path, text in contents.items():
         try:
@@ -29,15 +65,13 @@ def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None
     for path, header in parsed.items():
         for name in header.typedefs:
             providers.setdefault(name, set()).add(path)
-    dependencies = {
-        path: {
-            provider
-            for name in header.uses - header.typedefs
-            for provider in providers.get(name, set())
-            if provider != path
-        }
-        for path, header in parsed.items()
-    }
+    included = _includes(contents)
+    dependencies: dict[Path, set[Path]] = {}
+    for path, header in parsed.items():
+        dependencies[path] = set()
+        for name in header.uses - header.typedefs:
+            offered = providers.get(name, set()) - {path}
+            dependencies[path] |= (offered & included[path]) or offered
     tag_providers: dict[str, set[Path]] = {}
     for path, header in parsed.items():
         for name in header.tags:
@@ -49,7 +83,8 @@ def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None
             if re.fullmatch(r"(?:struct|union) \w+", target):
                 complete.add(target.split()[1])
         for name in complete - header.tags:
-            dependencies[path].update(provider for provider in tag_providers.get(name, set()) if provider != path)
+            offered = tag_providers.get(name, set()) - {path}
+            dependencies[path] |= (offered & included[path]) or offered
     ordered: list[Path] = []
     active: list[Path] = []
     visited: set[Path] = set()

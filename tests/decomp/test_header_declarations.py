@@ -143,6 +143,32 @@ class HeaderDeclarationsTests(unittest.TestCase):
             declarations("struct Holder { Value *next; Value (*pointer)[2]; };").complete_alias_uses, set()
         )
 
+    def test_an_included_typedef_satisfies_a_pointer_use_and_only_complete_uses_order_definitions(self) -> None:
+        # Modelled on two module headers: one embeds the other's Rules by value; that one points at a shared
+        # alias it includes from the co-usage header, which the first header also (stale) declares.
+        shared = Path("include/common/shared.h")
+        rules, game = Path("include/span_1000/rules.h"), Path("include/span_1000/game.h")
+        aliases = {"Shared": "struct Shared", "Rules": "struct Rules"}
+
+        def headers(world_field: str, include_shared: bool = True) -> dict[Path, str]:
+            include = '#include "common/shared.h"\n' if include_shared else ""
+            return {
+                game: '#include "common/shared.h"\ntypedef struct Shared Shared;\n'
+                "struct Shared { int x; };\nstruct Game { Rules rules; };\n",
+                rules: include + f"struct Rules {{ int teams; }};\ntypedef struct Rules Rules;\n"
+                f"struct World {{ {world_field}; }};\n",
+                **({shared: "typedef struct Shared Shared;\n"} if include_shared else {}),
+            }
+
+        self.assertEqual(ordered_headers(headers("Shared *players"), aliases=aliases), [shared, rules, game])
+        cycle = "cyclic shared type context: include/span_1000/game.h -> include/span_1000/rules.h -> "
+        for label, contents in [
+            ("both by value", headers("Shared players")),
+            ("pointer use with no included declaration", headers("Shared *players", False)),
+        ]:
+            with self.subTest(label), self.assertRaisesRegex(Held, cycle):
+                ordered_headers(contents, aliases=aliases)
+
     def test_complete_alias_cycles_still_refuse(self) -> None:
         contents = {
             Path("aliases.h"): "typedef struct A A; typedef struct B B;",
