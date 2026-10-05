@@ -274,7 +274,15 @@ def run(
     emitter.listeners.append(save_state)
 
     def report(done: Any) -> None:
-        emitter.emit("step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3))
+        spent = done.spent.document() if done.spent is not None else {}
+        emitter.emit(
+            "step.run",
+            step=done.step,
+            trigger=done.trigger,
+            seconds=round(done.seconds, 3),
+            **{name: spent[name] for name in ("cpu_percent", "main_rss_bytes", "worker_rss_bytes") if name in spent},
+            **({"findings": list(done.findings)} if done.findings else {}),
+        )
 
     for done in started:
         if done.ran:

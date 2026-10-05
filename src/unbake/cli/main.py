@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
@@ -133,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
         result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}"), "unbake next")
     code = emit(result, stdout, sys.stderr)
     # Every command ends with what it cost: wall, CPU of this process, its tools and its pool work by function.
-    print(effort.since(started).line(), file=sys.stderr)
+    spent = effort.since(started)
+    print(spent.line(), file=sys.stderr)
+    print(json.dumps({"event": "command.effort", "command": result.command, **spent.document()}), file=sys.stderr)
     return 130 if result.key == "interrupted" else code
 
 
