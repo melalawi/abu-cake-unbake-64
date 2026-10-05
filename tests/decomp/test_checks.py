@@ -175,11 +175,9 @@ class ChecksTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 findings = [finding for finding in checks.run(content) if finding.rule == "volatile-storage"]
                 self.assertEqual(len(findings), count)
-                if count and "FAKEMATCH" not in content:
+                if count:
                     with self.assertRaisesRegex(Held, "volatile-storage"):
                         checks.resolve(list(findings), None, None)
-                elif "FAKEMATCH" in content:
-                    self.assertEqual(checks.resolve(list(findings), None, None), [])
 
     def test_marked_exception_is_accepted_and_serializable(self) -> None:
         content = "/* FAKEMATCH: preserve the measured scheduling effect. */\nvoid f(void) { do {} while (0); }"
