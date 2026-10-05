@@ -1,5 +1,7 @@
 """Landing one function: write and commit only after every holding version proves; restore on any failure."""
 
+import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -86,3 +88,24 @@ class LandTests(ProjectCase):
         commits = [args for args in self.git if "commit" in args]
         self.assertEqual(len(commits), 1)
         self.assertIn("Clean alpha", commits[0])
+
+
+class ProveVersionsTests(unittest.TestCase):
+    def prove(self, results: list[bool]) -> list:
+        calls: list = []
+
+        def run(host, fn, items, shared=None):
+            calls.append((fn, [item[-1] for item in items]))
+            return results
+
+        project = SimpleNamespace(work=Path("/w"))
+        with patch("unbake.pool.run", side_effect=run):
+            land._prove_versions(project, None, project, "alpha", Path("/f.c"), ["us", "eu", "de"])
+        return calls
+
+    def test_every_version_goes_to_the_pool_once_in_version_order(self) -> None:
+        self.assertEqual(self.prove([True, True, True]), [(land._builds_row, ["us", "eu", "de"])])
+
+    def test_the_first_mismatching_version_in_order_refuses(self) -> None:
+        with self.assertRaisesRegex(Held, r"land\.mismatch: alpha .* the eu ROM built"):
+            self.prove([True, False, False])

@@ -15,7 +15,7 @@ import hashlib
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -144,6 +144,35 @@ def _with_compiler(project: Project, function: str, ident: str) -> Project:
     return replace(project, units=units)
 
 
+def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> bool:
+    """Pool worker: one version's compile, place and link of the staged unit equals its ROM row."""
+    project, view, host, function, file, version = spec
+    row = compare.row_of(project, function, version)
+    obj = runner.compile_unit(view, host, file, version, unit=function)
+    with tempfile.TemporaryDirectory(prefix="land-") as temporary:
+        work = Path(temporary)
+        placed = work / "placed.o"
+        runner.place(project, host, obj, version, row, placed, score=False)
+        linked = runner.link(project, host, placed, version, row, work, file)
+    return linked == split.words(project, row)
+
+
+def _prove_versions(
+    project: Project, host: Host, view: Project, function: str, file: Path, versions: Sequence[str]
+) -> None:
+    """Build every version at once in the pool; the first version in order that differs refuses."""
+    from unbake import pool
+
+    results = pool.run(host, _builds_row, [(project, view, host, function, file, version) for version in versions])
+    for version, equal in zip(versions, results, strict=True):
+        if not equal:
+            raise Held(
+                "land",
+                f"land.mismatch: {function} compares exact but the {version} ROM built with it differs. "
+                f"The tree changed since the compare. Run: unbake compare {project.work / function / f'{function}.c'}",
+            )
+
+
 def prove(project: Project, host: Host, function: str, source: str, headers: dict[str, str], stage: Path) -> list[str]:
     """Compile the folded source against staged headers; its linked bytes must equal the ROM row everywhere."""
     from unbake.layout import header_step
@@ -162,20 +191,7 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
     atomic_files.text(file, source)
     view = replace(project, work_include=(include,))
     versions = split.holding_versions(project, function)
-    for version in versions:
-        row = compare.row_of(project, function, version)
-        obj = runner.compile_unit(view, host, file, version, unit=function)
-        with tempfile.TemporaryDirectory(prefix="land-") as temporary:
-            work = Path(temporary)
-            placed = work / "placed.o"
-            runner.place(project, host, obj, version, row, placed, score=False)
-            linked = runner.link(project, host, placed, version, row, work, file)
-        if linked != split.words(project, row):
-            raise Held(
-                "land",
-                f"land.mismatch: {function} compares exact but the {version} ROM built with it differs. "
-                f"The tree changed since the compare. Run: unbake compare {project.work / function / f'{function}.c'}",
-            )
+    _prove_versions(project, host, view, function, file, versions)
     changed = {
         project.include[-1] / name: text.encode()
         for name, text in headers.items()
