@@ -214,8 +214,15 @@ def _extract(project: Project, host: Host) -> None:
 
     shape_edits.run(project, host)
 
-    with ThreadPoolExecutor(max_workers=host.setup_version_jobs) as executor:
-        list(executor.map(lambda version: extract.segments(project, host, version), project.versions))
+    from unbake import cache
+    from unbake.layout import split
+
+    try:
+        with ThreadPoolExecutor(max_workers=host.setup_version_jobs) as executor:
+            list(executor.map(lambda version: extract.segments(project, host, version), project.versions))
+    finally:
+        # splat rewrites asm files in place, which no directory signature records.
+        cache.forget([split.ASM_ROWS])
 
 
 def _progress_key(project: Project, host: Host) -> str:

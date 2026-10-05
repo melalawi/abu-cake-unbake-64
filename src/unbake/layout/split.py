@@ -342,44 +342,68 @@ def bss_end(project: Project, version: str, segment: str) -> int:
 
 def functions(project: Project, v: str) -> list[Function]:
     """List named function rows with explicit ROM and VRAM boundaries."""
-    from unbake.cache import parsed
+    return list(_rows(project, v))
+
+
+ASM_ROWS = "split.functions.asm"
+
+
+def _rows(project: Project, v: str) -> tuple[Function, ...]:
+    """functions(), shared read-only: one object while the split, symbols and asm tree are unchanged.
+
+    The asm tree counts by its directories' stat signatures: the tool writes files there by rename, and the
+    extract step, which overwrites splat output in place, forgets this memo when it ends."""
+    import os
+
+    from unbake import inputs
+    from unbake.cache import memo, parsed
 
     version = project.version(v)
     rows = parsed("split.functions", (version.split, version.symbols), lambda: _functions(project, v), extra=v)
     asm = getattr(project, "asm", None)
-    if asm is None:
-        return list(rows)
-    output = []
-    for row in rows:
-        path = asm / v / (row.path + ".s")
-        # Old layouts can still call explicitly emitted data an asm row. Keep
-        # that interval out of every function consumer, without editing YAML.
-        if row.kind == "asm" and path.is_file():
+    root = None if asm is None else asm / v
+    tree = (
+        tuple((top, inputs.signature(Path(top))) for top, _, _ in os.walk(root))
+        if root is not None and root.is_dir()
+        else ()
+    )
 
-            def text_data(path: Path = path) -> tuple[tuple[int, int], ...]:
-                return _text_data(read(path))
+    def filtered() -> tuple[tuple[Function, ...], object]:
+        output = []
+        for row in rows:
+            path = None if root is None else root / (row.path + ".s")
+            # Old layouts can still call explicitly emitted data an asm row. Keep
+            # that interval out of every function consumer, without editing YAML.
+            if path is not None and row.kind == "asm" and path.is_file():
 
-            data = parsed("split.text_data", path, text_data)
-            if any(start < row.end and row.start < stop for start, stop in data):
-                continue
-        output.append(row)
-    return output
+                def text_data(path: Path = path) -> tuple[tuple[int, int], ...]:
+                    return _text_data(read(path))
+
+                data = parsed("split.text_data", path, text_data)
+                if any(start < row.end and row.start < stop for start, stop in data):
+                    continue
+            output.append(row)
+        # The parsed rows ride along so their identity in the key stays theirs.
+        return tuple(output), rows
+
+    return memo(ASM_ROWS, (v, id(rows), tree), filtered, keep=16)[0]
 
 
 def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
     """Function rows keyed by every row stem and symbol alias, shared read-only."""
     from unbake.cache import memo
 
-    rows = functions(project, v)
+    rows = _rows(project, v)
 
-    def build() -> dict[str, list[Function]]:
+    def build() -> tuple[dict[str, list[Function]], tuple[Function, ...]]:
         index: dict[str, list[Function]] = {}
         for row in rows:
             for alias in row.aliases:
                 index.setdefault(alias, []).append(row)
-        return index
+        return index, rows
 
-    return memo("split.aliases", tuple(rows), build, keep=16)
+    # Keyed by the shared rows object, never by hashing every row on each call.
+    return memo("split.aliases", (v, id(rows)), build, keep=16)[0]
 
 
 def holding_versions(
