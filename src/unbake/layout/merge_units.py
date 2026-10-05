@@ -43,7 +43,25 @@ def input_key(project: Project) -> str:
 def runs(project: Project) -> list[tuple[layout_map.Group, tuple[str, ...]]]:
     """Mergeable runs, in layout order."""
     landed = {path.stem for path in project.src.glob("*.c")}
-    return member_runs(layout_map.load(project).groups, landed, lambda left, right: _joins(project, left, right))
+    owners = _owners(project)
+    return member_runs(
+        layout_map.load(project).groups, landed, lambda left, right: _joins(project, owners, left, right)
+    )
+
+
+Owners = dict[str, dict[str, list[split.Function]]]
+
+
+def _owners(project: Project) -> Owners:
+    """Each version's rows by alias, read once per pass (a per-pair lookup re-hashes every row of the split)."""
+    return {v: split.owners_by_alias(project, v) for v in project.versions}
+
+
+def _row(owners: Owners, function: str, version: str) -> split.Function:
+    rows = owners[version].get(function, [])
+    if len(rows) != 1:
+        raise Held("compare", f"compare.row: {function}: expected one row in VERSION {version}, found {len(rows)}")
+    return rows[0]
 
 
 def member_runs(
@@ -64,13 +82,13 @@ def member_runs(
     return found
 
 
-def _joins(project: Project, left: str, right: str) -> bool:
-    versions = split.holding_versions(project, left)
-    if versions != split.holding_versions(project, right):
+def _joins(project: Project, owners: Owners, left: str, right: str) -> bool:
+    versions = split.holding_versions(project, left, owners)
+    if versions != split.holding_versions(project, right, owners):
         return False
     if project.compiler_reference(left) != project.compiler_reference(right):
         return False
-    return all(compare.row_of(project, left, v).end == compare.row_of(project, right, v).start for v in versions)
+    return all(_row(owners, left, v).end == _row(owners, right, v).start for v in versions)
 
 
 def merged_source(project: Project, members: tuple[str, ...]) -> str:
@@ -169,14 +187,15 @@ def run(project: Project, host: Host) -> list[str]:
     starts: dict[str, set[int]] = {}
     cuts: list[str] = []
     firsts: list[str] = []
+    owners = _owners(project)
     try:
         for (group, members), source, passed in zip(found, sources, proven, strict=True):
             if not passed:
                 cuts += members[1:]
                 lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; recorded as split")
                 continue
-            for version in split.holding_versions(project, members[0]):
-                starts.setdefault(version, set()).update(compare.row_of(project, m, version).start for m in members[1:])
+            for version in split.holding_versions(project, members[0], owners):
+                starts.setdefault(version, set()).update(_row(owners, m, version).start for m in members[1:])
             atomic_files.text(project.src / f"{members[0]}.c", source)
             for member in members[1:]:
                 (project.src / f"{member}.c").unlink()
