@@ -193,6 +193,19 @@ def _typedefs(seeds: list[dict[str, Any]], aliases: dict[str, str]) -> dict[str,
     return {name: declarations.canonical(type_, aliases) for name, type_ in known.items()}
 
 
+def _by_address() -> dict[int, list[str]]:
+    return defaultdict(list)
+
+
+def _addresses(facts: dict[str, Any]) -> dict[str, dict[int, list[str]]]:
+    """Global names by version and address; a picklable mapping, because the pool ships it to its workers."""
+    addresses: dict[str, dict[int, list[str]]] = defaultdict(_by_address)
+    for name, record in facts["globals"].items():
+        for version, placement in record["versions"].items():
+            addresses[version][placement["address"]].append(name)
+    return addresses
+
+
 def infer(
     project: Project,
     facts: dict[str, Any],
@@ -221,10 +234,7 @@ def infer(
     globals_ = _merge_records(seeds, "globals", declared)
     structs = _merge_records(seeds, "structs", declared)
     arrays = _merge_records(seeds, "arrays", declared)
-    addresses: dict[str, dict[int, list[str]]] = defaultdict(lambda: defaultdict(list))
-    for name, record in facts["globals"].items():
-        for version, placement in record["versions"].items():
-            addresses[version][placement["address"]].append(name)
+    addresses = _addresses(facts)
     # canonical() under the one solve-wide alias map, once per spelling: thousands of seeds repeat each type.
     resolve = _Canonical().bound(aliases)
     for seed in seeds:

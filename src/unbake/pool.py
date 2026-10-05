@@ -216,6 +216,17 @@ def width(count: int, workers: int, per_worker: int = JOBS_PER_WORKER) -> int:
     return max(1, -(-count // (workers * per_worker)))
 
 
+class _Outer(Future[R]):
+    """A task's future: cancelling it cancels the task only while it is still queued."""
+
+    def __init__(self, inner: Future[Any]) -> None:
+        super().__init__()
+        self._inner = inner
+
+    def cancel(self) -> bool:
+        return self._inner.cancel() and super().cancel()
+
+
 class Pool:
     def __init__(
         self,
@@ -302,7 +313,7 @@ class Pool:
         from unbake import effort
 
         inner = self._submit(_measured, (fn, item))
-        outer: Future[R] = Future()
+        outer: Future[R] = _Outer(inner)
 
         def finished(done: Future[tuple[R, float, int, dict[str, tuple[int, int]]]]) -> None:
             if done.cancelled():
@@ -316,7 +327,6 @@ class Pool:
             effort.charge(effort.name_of(fn), seconds, rss, counts)
             outer.set_result(result)
 
-        outer.add_done_callback(lambda done: inner.cancel() if done.cancelled() else None)
         inner.add_done_callback(finished)
         return outer
 

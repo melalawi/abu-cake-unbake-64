@@ -127,6 +127,7 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
         "ok": True,
         "best_file": str(found.best_file),
         "mutations": found.mutations,
+        "words": found.words,
         "seconds": time.monotonic() - started,
     }
 
@@ -213,6 +214,11 @@ def narrate(record: dict[str, Any]) -> None:
             )
         case "fn.search.start":
             tui.line(f"{function}: trying {record['method']} changes")
+        case "fn.search.done" if "words" in record:
+            tui.line(
+                f"  {function}: tried {record['mutations']} variants in {record['seconds']:g}s; "
+                f"best leaves {record['words']} words different"
+            )
         case "fn.exact":
             tui.verdict("cracked", f"{function}: byte-identical in every version")
         case "fn.creative":
@@ -572,6 +578,7 @@ def run(
                 seconds=round(result["seconds"], 3),
                 **({} if result["ok"] else {"diagnostic": result["diagnostic"]}),
                 **({"diagnostic": SKIPPED} if result["ok"] and not result["mutations"] else {}),
+                **({"mutations": result["mutations"], "words": result["words"]} if result["ok"] else {}),
             )
             if not result["ok"]:
                 # A method that errors is a tool gap, never a plateau: the row holds with the method's reason.

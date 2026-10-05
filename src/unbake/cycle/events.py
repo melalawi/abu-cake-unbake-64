@@ -26,7 +26,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("fn.compare.start", "function sha256", ""),
         ("fn.compare.done", "function sha256 per_version best_percent tries seconds", "diagnostic"),
         ("fn.search.start", "function method", ""),
-        ("fn.search.done", "function method ok seconds", "diagnostic"),
+        ("fn.search.done", "function method ok seconds", "diagnostic mutations words"),
         ("fn.creative", "function best_percent methods trouble", ""),
         ("fn.exact", "function bytes sha256", ""),
         ("fn.landed", "function bytes versions seconds retried", ""),

@@ -26,7 +26,7 @@ class SearchViewTests(TempCase):
             best.write_text("int f(void) { return 0; }\n")
             (out / "steps").write_text("{}\n")
             return SimpleNamespace(
-                source=best, fuzzy=75.0, trial=SimpleNamespace(exact=False), steps=out / "steps", trials=1
+                source=best, fuzzy=75.0, trial=SimpleNamespace(exact=False), steps=out / "steps", trials=1, score=3
             )
 
         with (

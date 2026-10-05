@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import struct
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,9 @@ class Searched:
     steps: Path
     # Mutations the methods proposed and measured (the starting source is not one).
     mutations: int
+    # Words that still differ in the best text, and the wall time the search ran.
+    words: int
+    seconds: float
 
     def document(self) -> dict[str, Any]:
         return {
@@ -33,11 +37,17 @@ class Searched:
             "exact": self.exact,
             "steps": str(self.steps),
             "mutations": self.mutations,
+            "words": self.words,
         }
 
     def lines(self) -> list[str]:
         state = "EXACT" if self.exact else f"best {self.best_percent:.2f}%"
-        return [f"{self.function}: {state}: {self.best_file}", f"steps: {self.steps}"]
+        return [
+            f"{self.function}: {state}: {self.best_file}",
+            f"{self.function}: tried {self.mutations} variants in {self.seconds:g}s; "
+            f"best leaves {self.words} words different",
+            f"steps: {self.steps}",
+        ]
 
 
 def target_object(function: str, code: bytes) -> bytes:
@@ -91,6 +101,7 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
     from unbake.search.core import run
     from unbake.search.permute import Permuter
 
+    started = time.monotonic()
     function = compare.function_of(file)
     # The external permuter refuses a work directory inside the project, so every search works under the cache.
     host.cache_machine_root.mkdir(parents=True, exist_ok=True)
@@ -113,4 +124,13 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
         atomic_files.copyfile(result.steps, steps)
     finally:
         shutil.rmtree(out, ignore_errors=True)
-    return Searched(function, best, result.fuzzy, result.trial.exact, steps, result.trials - 1)
+    return Searched(
+        function,
+        best,
+        result.fuzzy,
+        result.trial.exact,
+        steps,
+        result.trials - 1,
+        result.score,
+        time.monotonic() - started,
+    )

@@ -284,9 +284,6 @@ def run(
         if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
             raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
         tui.line("external permuter ran; no improving candidates emitted")
-    tui.line(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s")
     if best.trial.identical_everywhere:
         tui.verdict("cracked", f"IDENTICAL {best.trial.function}: {best.path}")
-    else:
-        tui.line(f"best so far: {best.score} words differ. Next: {best.trial.next_command}")
     return SearchResult(best.path, best.trial, best.score, best.fuzzy, evaluated, steps)

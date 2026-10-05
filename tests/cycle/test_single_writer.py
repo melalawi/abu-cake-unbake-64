@@ -170,10 +170,10 @@ class SingleWriterTests(TempCase):
             if isinstance(found, dict):
                 return found
             if found == "SKIP":
-                return {"ok": True, "best_file": str(path), "mutations": 0, "seconds": 0.0}
+                return {"ok": True, "best_file": str(path), "mutations": 0, "words": 3, "seconds": 0.0}
             best = path.with_name(f"{path.stem}.best.c")
             best.write_text(path.read_text() if found is None else found)
-            return {"ok": True, "best_file": str(best), "mutations": 1, "seconds": 0.0}
+            return {"ok": True, "best_file": str(best), "mutations": 1, "words": 3, "seconds": 0.0}
 
         def write_trouble(project_, host_, function, file, ladder_, difference):
             log.append(f"trouble {function}")
