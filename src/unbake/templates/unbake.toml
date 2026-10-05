@@ -41,6 +41,16 @@
 # stall_trials = 200
 # beam = 4
 
+[budgets]
+# What a step chain may cost on this machine; a project's .unbake/unbake.toml may set its own.
+# Over budget is reported by name on the step and in its JSON line on stderr.
+# recompute_seconds = 450          # a forced chain (recompute)
+# unchanged_seconds = 30           # an unforced chain in which no step ran
+# changed_seconds = 90             # an unforced chain in which a step ran
+# facts_miss_fraction = 0.01       # source units extracted of all, in an unforced solve
+# main_rss_bytes = 8000000000      # one step's peak resident memory of this process
+# worker_rss_bytes = 1500000000    # one step's peak resident memory of a pool worker
+
 [cycle]
 # min_bytes = 16
 # max_bytes = 4096

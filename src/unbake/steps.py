@@ -455,7 +455,7 @@ def _ensure(
                 True,
                 time.monotonic() - started,
                 used,
-                tuple(effort.step_findings(name, used, project.budgets)),
+                tuple(effort.step_findings(name, used, host)),
             )
             _event({"event": "step.effort", **result.document()})
             results = [row for row in results if row.step != name or row.ran]
@@ -464,7 +464,7 @@ def _ensure(
             if report is not None:
                 report(result)
         if not ran:
-            return _checked(project, results, chain, force=force)
+            return _checked(host, results, chain, force=force)
     raise Held(
         "steps", f"steps.{ran[0]}: input key changes on every run ({', '.join(ran)}); a step rewrites its inputs"
     )
@@ -475,11 +475,11 @@ def _event(document: dict[str, Any]) -> None:
     print(json.dumps(document, sort_keys=True), file=sys.stderr, flush=True)
 
 
-def _checked(project: Project, results: list[StepResult], chain: effort.Mark, *, force: bool) -> list[StepResult]:
-    """The chain's cost against the project's budgets: findings go on its last result and in its event."""
+def _checked(host: Host, results: list[StepResult], chain: effort.Mark, *, force: bool) -> list[StepResult]:
+    """The chain's cost against the host's [budgets]: findings go on its last result and in its event."""
     used = effort.since(chain)
     kind = "recompute" if force else "changed" if any(row.ran for row in results) else "unchanged"
-    findings = effort.chain_findings(kind, used, project.budgets)
+    findings = effort.chain_findings(kind, used, host)
     _event({"event": "steps.effort", "kind": kind, **used.document(), "findings": findings})
     if findings and results:
         last = results[-1]

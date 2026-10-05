@@ -63,7 +63,7 @@ class Unfinished(Held, NotImplementedError):
 # Project facts: config.toml with a fixed directory layout.
 
 SCHEMA_VERSION = 1
-CONFIG_SECTIONS = frozenset({"schema", "project", "compilers", "units", "version", "build", "budgets"})
+CONFIG_SECTIONS = frozenset({"schema", "project", "compilers", "units", "version", "build"})
 RETIRED_SECTIONS = ("paths", "workspace")
 BUILD_KEYS = frozenset({"asflags", "cppflags", "sn64_asflags", "resident_mappings"})
 
@@ -131,38 +131,6 @@ class Layout:
 
 
 @dataclass(frozen=True)
-class Budgets:
-    """[budgets]: what a step chain may cost on this project; over budget is a named finding (effort.findings)."""
-
-    recompute_seconds: float  # a forced chain (recompute)
-    unchanged_seconds: float  # an unforced chain in which no step ran
-    changed_seconds: float  # an unforced chain in which a step ran
-    facts_miss_fraction: float  # source units extracted of all, in an unforced solve
-    main_rss_bytes: int  # one step's peak resident memory of this process
-    worker_rss_bytes: int  # one step's peak resident memory of a pool worker
-
-
-BUDGET_KEYS = tuple(Budgets.__dataclass_fields__)
-
-
-def _budgets(path: Path, data: dict[str, Any]) -> Budgets:
-    table = _table(data, "budgets", f"{path} [budgets]")
-    unknown = sorted(set(table) - set(BUDGET_KEYS))
-    if unknown:
-        raise Held("config", f"{path} [budgets].{unknown[0]}: unknown key")
-    values: dict[str, Any] = {}
-    for name in BUDGET_KEYS:
-        label = _label(path, "budgets", name)
-        given = _required(table, name, label)
-        values[name] = (
-            _positive(given, label, integer=True) if name.endswith("_bytes") else _positive(given, label, integer=False)
-        )
-    if values["facts_miss_fraction"] > 1:
-        raise Held("config", f"{_label(path, 'budgets', 'facts_miss_fraction')}: expected at most 1")
-    return Budgets(**values)
-
-
-@dataclass(frozen=True)
 class Project:
     root: Path
     name: str
@@ -178,7 +146,6 @@ class Project:
     asflags: tuple[str, ...]
     cppflags: tuple[str, ...]
     sn64_asflags: tuple[str, ...]
-    budgets: Budgets
     resident_mappings: dict[str, tuple[ResidentMapping, ...]] = field(default_factory=dict)
     unit_flags: dict[str, tuple[str, ...]] = field(default_factory=dict)
     work_include: tuple[Path, ...] = ()
@@ -526,7 +493,6 @@ def load(root: Path, *, text: str | None = None) -> Project:
         flags("asflags"),
         flags("cppflags"),
         flags("sn64_asflags"),
-        _budgets(path, data),
         _resident(path, build["resident_mappings"]) if "resident_mappings" in build else {},
         unit_flags,
     )
@@ -569,6 +535,15 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "symbol_similarity_margin": "fraction",
     },
     "search": {"stall_trials": "int", "beam": "int"},
+    # What a step chain may cost here (a project's .unbake/unbake.toml sets its own); over budget is a finding.
+    "budgets": {
+        "recompute_seconds": "int",
+        "unchanged_seconds": "int",
+        "changed_seconds": "int",
+        "facts_miss_fraction": "fraction",
+        "main_rss_bytes": "int",
+        "worker_rss_bytes": "int",
+    },
     "cycle": {"min_bytes": "int", "max_bytes": "int", "min_history": "int", "debounce_ms": "int"},
     "publish": {
         "remote": "text",
@@ -589,7 +564,9 @@ _CACHE = ("cache.root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_
 _BINUTILS = ("tools.cpp", "tools.mips_as", "tools.mips_ld", "tools.mips_objcopy", "tools.n64link")
 # buildfiles writes the CI workflow for [publish].branch, so every command that may regenerate it needs it.
 _BUILDFILES = (*_BINUTILS, "publish.branch")
-_COMPARE = (*_RESOURCES, *_CACHE, *_BUILDFILES)
+# Every command that runs steps checks them against the budgets.
+_BUDGETS = tuple(f"budgets.{name}" for name in HOST_KEYS["budgets"])
+_COMPARE = (*_RESOURCES, *_CACHE, *_BUILDFILES, *_BUDGETS)
 _PUBLISH = ("publish.remote", "publish.branch", "publish.author_name", "publish.author_email", "publish.credential")
 _SETUP = (
     *_RESOURCES,
@@ -622,7 +599,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
     ),
     "publish": (*_COMPARE, *_PUBLISH),
     "boundary": (*_RESOURCES, *_CACHE, "tools.splat", "tools.cpp"),
-    "check": (*_RESOURCES, *_CACHE, *_BUILDFILES, "tools.make", "tools.path"),
+    "check": (*_RESOURCES, *_CACHE, *_BUILDFILES, *_BUDGETS, "tools.make", "tools.path"),
     "explain": (*_CACHE, "tools.cpp", "tools.mips_objdump", "tools.splat"),
     "cycle": (
         *_COMPARE,
@@ -635,7 +612,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
         "cycle.min_history",
         "cycle.debounce_ms",
     ),
-    "recompute": (*_RESOURCES, *_CACHE, *_BUILDFILES),
+    "recompute": (*_RESOURCES, *_CACHE, *_BUILDFILES, *_BUDGETS),
 }
 
 
@@ -821,6 +798,12 @@ class Host:
     publish_branch = property(lambda self: self.get("publish.branch"))
     publish_author_name = property(lambda self: self.get("publish.author_name"))
     publish_author_email = property(lambda self: self.get("publish.author_email"))
+    recompute_seconds = property(lambda self: self.get("budgets.recompute_seconds"))
+    unchanged_seconds = property(lambda self: self.get("budgets.unchanged_seconds"))
+    changed_seconds = property(lambda self: self.get("budgets.changed_seconds"))
+    facts_miss_fraction = property(lambda self: self.get("budgets.facts_miss_fraction"))
+    main_rss_bytes = property(lambda self: self.get("budgets.main_rss_bytes"))
+    worker_rss_bytes = property(lambda self: self.get("budgets.worker_rss_bytes"))
 
 
 @dataclass(frozen=True)

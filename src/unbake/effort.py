@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unbake.config import Budgets
+    from unbake.config import Host
 
 TOP = 5
 MB = 1_000_000
@@ -162,8 +162,8 @@ def since(start: Mark) -> Effort:
     )
 
 
-def step_findings(name: str, spent: Effort, budgets: Budgets) -> list[str]:
-    """A step's memory over the project's budgets, each named by its budget key."""
+def step_findings(name: str, spent: Effort, budgets: Host) -> list[str]:
+    """A step's memory over the host's [budgets], each named by its budget key."""
     found = []
     for field_name, value, limit in (
         ("main_rss_bytes", spent.main_rss, budgets.main_rss_bytes),
@@ -174,8 +174,8 @@ def step_findings(name: str, spent: Effort, budgets: Budgets) -> list[str]:
     return found
 
 
-def chain_findings(kind: str, spent: Effort, budgets: Budgets) -> list[str]:
-    """A step chain over the project's budgets. KIND is recompute, unchanged or changed; an unforced solve's facts
+def chain_findings(kind: str, spent: Effort, budgets: Host) -> list[str]:
+    """A step chain over the host's [budgets]. KIND is recompute, unchanged or changed; an unforced solve's facts
     misses count against facts_miss_fraction."""
     found = []
     limit = {
