@@ -18,6 +18,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake import cache, steps
 from unbake.config import Held, Host, Project
+from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
@@ -179,14 +180,24 @@ def validate(
 
 
 def run(project: Project, host: Host) -> list[Path]:
-    """Regenerate, validate the affected units, then write the changed files; return them."""
-    apply.units(project)
-    disagreements: dict[Path, dict[str, tuple[str, str]]] = {}
-    outputs = apply.render(project, host, disagreements)
-    changed = plan(project, outputs)
-    if not changed:
-        return []
-    validate(project, host, changed, disagreements)
-    # install needs every output: a generated header missing from them is deleted as obsolete.
-    apply.install(project, dict(outputs))
-    return sorted(changed)
+    """Regenerate, validate the affected units, then write the changed files; return them.
+
+    All or nothing: every path the step writes or deletes is journaled first (journal.py), so a hold, an
+    exception or a killed process leaves the tree as it was."""
+    with Journal(journal_path(project)) as changes:
+        changes.save(project.version(version).split for version in project.versions)
+        apply.units(project)
+        disagreements: dict[Path, dict[str, tuple[str, str]]] = {}
+        outputs = apply.render(project, host, disagreements)
+        changed = plan(project, outputs)
+        if not changed:
+            return []
+        validate(project, host, changed, disagreements)
+        # install needs every output: a generated header missing from them is deleted as obsolete.
+        changes.save([*changed, *(index.headers(project) - outputs.keys())])
+        apply.install(project, dict(outputs))
+        return sorted(changed)
+
+
+def journal_path(project: Project) -> Path:
+    return project.build / "headers.journal"

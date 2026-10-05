@@ -5,8 +5,8 @@ from __future__ import annotations
 import copy
 import json
 import re
+import shutil
 import subprocess
-import tempfile
 import weakref
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -444,12 +444,13 @@ def extract(
     _compact: bool = False,
     _contracts: bool = False,
 ) -> dict[str, Any]:
+    original = source
     source = _unit_clean("extract", source, line_markers=owned_source is not None or authored_headers is not None)
     source = _declaration_unit(source)
     try:
         tree = _parser.parse(source) if _parser is not None else _tree(source, _scope or {})
     except Exception as error:
-        raise Held("solve", f"types.declaration: {provenance}: {error}") from error
+        raise Held("solve", f"types.declaration: {provenance}: {cdecl.located(original, str(error))}") from error
     incoming = {node.name: _type(node.type) for node in tree.ext if isinstance(node, c_ast.Typedef)}
     aliases = {} if _prefix is None else _prefix["aliases"] if _compact and not incoming else dict(_prefix["aliases"])
     aliases.update(incoming)
@@ -761,8 +762,13 @@ def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict
     from unbake.typemap import facts
 
     project.build.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".declarations-", dir=project.build) as temporary:
-        return _collect(project, policy, Path(temporary), facts.store(policy), keys)
+    from unbake import journal
+
+    temporary = journal.scratch(project.build, ".declarations-")
+    try:
+        return _collect(project, policy, temporary, facts.store(policy), keys)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
 
 
 def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, keys: list[str]) -> list[dict[str, Any]]:

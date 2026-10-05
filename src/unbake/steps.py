@@ -252,6 +252,11 @@ def ensure(
     steps pass again until none ran: the command leaves every recorded key equal to its current key, and
     the next command reruns nothing. A key that still changes after one pass per step is refused by name.
     report hears each step that ran as soon as it finishes, so a long chain is not silent."""
+    from unbake import journal
+    from unbake.layout import header_step
+
+    # A headers step killed mid-write is rolled back before any step reads the tree.
+    journal.recover(header_step.journal_path(project))
     requested = set(names := list(names))
     steps = order(names)
     results: list[StepResult] = []

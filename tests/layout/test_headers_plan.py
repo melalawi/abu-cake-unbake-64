@@ -73,3 +73,54 @@ class HeaderPlanTests(ProjectCase):
         ):
             self.assertEqual(header_step.run(self.project, self.host), [other])
         install.assert_called_once_with(self.project, outputs)
+
+
+class HeaderRunTests(ProjectCase):
+    def test_a_hold_after_writing_leaves_the_tree_byte_identical(self) -> None:
+        header = self.project.include[-1] / "main" / "g.h"
+        header.parent.mkdir()
+        header.write_text("int foo(void);\n")
+        split = self.project.version("us").split
+        before = {path: path.read_bytes() for path in (header, split)}
+        new = header.with_name("h.h")
+
+        def units(project: object) -> None:
+            split.write_text(split.read_text() + "# merged pools\n")
+
+        def install(project: object, outputs: dict) -> None:
+            header.write_text("int moved(void);\n")  # one file written, then the process holds
+            raise Held("headers", "headers.declaration: refused")
+
+        outputs = {header: b"int moved(void);\n", new: b"int foo(void);\n"}
+        with (
+            patch.object(header_step.apply, "units", side_effect=units),
+            patch.object(header_step.apply, "render", return_value=outputs),
+            patch.object(header_step.index, "headers", return_value=frozenset({header})),
+            patch.object(header_step, "validate"),
+            patch.object(header_step.apply, "install", side_effect=install),
+            self.assertRaises(Held),
+        ):
+            header_step.run(self.project, self.host)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertFalse(new.exists())
+        self.assertFalse(header_step.journal_path(self.project).exists())
+
+
+class ReachableTypeTests(ProjectCase):
+    def test_a_type_that_moved_is_included_from_its_new_home(self) -> None:
+        from types import SimpleNamespace
+
+        from unbake.layout import apply
+
+        owner = SimpleNamespace(header="span_16E000/code_80405454.h")
+        ownership = SimpleNamespace(owners={"func_804085E0_de": owner})
+        lookup = {
+            "headers": {"span_16E000/code_80405454.h": "a", "span_16E000/code_80405DC0.h": "b"},
+            "symbols": {"Menu_func_804085E0_de": "span_16E000/code_80405DC0.h"},
+        }
+        text = '#include "span_16E000/code_80405454.h"\nvoid func_804085E0_de(Menu_func_804085E0_de *menu) {\n}\n'
+        result = apply.rewrite(
+            self.project.src / "func_804085E0_de.c", text, "func_804085E0_de", ownership, lookup, previous=set()
+        )
+        self.assertIn('#include "span_16E000/code_80405DC0.h"', result)
+        self.assertIn('#include "span_16E000/code_80405454.h"', result)

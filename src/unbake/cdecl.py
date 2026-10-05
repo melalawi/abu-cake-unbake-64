@@ -682,6 +682,25 @@ class SeededParser(c_parser.CParser):  # type: ignore[misc]
         return super()._parse_translation_unit_or_empty()
 
 
+def located(text: str, message: str) -> str:
+    """A parse error "file:line:col: reason" against a combined unit, restated against the real file through the
+    unit's cpp linemarkers (`# 12 "src/a.c"`), with the offending line. Cleaning keeps line numbers."""
+    found = re.match(r"^([^:]*):(\d+):(\d+): (.*)$", message, re.S)
+    if found is None:
+        return message
+    number, column, reason = int(found[2]), found[3], found[4]
+    lines = text.splitlines()
+    if not 1 <= number <= len(lines):
+        return message
+    where = f"unit line {number}"
+    for index in range(number - 2, -1, -1):
+        marker = re.match(r'^\s*#\s*(\d+)\s+"([^"]+)"', lines[index])
+        if marker:
+            where = f"{marker[2]}:{int(marker[1]) + number - index - 2}"
+            break
+    return f"{where}:{column}: {reason}: {lines[number - 1].strip()}"
+
+
 def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
     """parser(scope).parse(text), resumed after the longest checkpointed prefix shared with a recent unit.
 
