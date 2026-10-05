@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
+from unbake.cache import Cache
 from unbake.config import Host, Project
 from unbake.cycle import rank
 from unbake.decomp import checks, exclusions
 from unbake.layout import split
-from unbake.work import attempts, compare, inventory
+from unbake.work import attempts, inventory
 
 M2C_KINDS = ("sn64", "ido")
 
@@ -20,7 +22,7 @@ class Action:
     function: str | None
 
 
-def candidates(project: Project) -> list[rank.Candidate]:
+def candidates(project: Project, host: Host) -> list[rank.Candidate]:
     """Units not yet exact and clean: unmatched functions m2c can draft (complete bodies, one name in every
     version, not excluded), and published units that break a source rule (drafted from their src/ text)."""
     excluded = exclusions.load(project)
@@ -51,11 +53,10 @@ def candidates(project: Project) -> list[rank.Candidate]:
                 summary.best_percent if summary else None,
             )
         )
-    for source in sorted(project.src.glob("*.c")):
-        if not compare.published(project, source.stem) or not checks.unmarked(source):
-            continue
-        versions = split.holding_versions(project, source.stem)
-        row = compare.row_of(project, source.stem, versions[0])
+    published = _published_rows(project)
+    sources = [source for source in sorted(project.src.glob("*.c")) if source.stem in published]
+    for source in checks.dirty(Cache(host.cache_root), sources):
+        versions, row = published[source.stem]
         summary = history.get(source.stem)
         result.append(
             rank.Candidate(
@@ -69,6 +70,22 @@ def candidates(project: Project) -> list[rank.Candidate]:
     return result
 
 
+def _published_rows(project: Project) -> dict[str, tuple[tuple[str, ...], split.Function]]:
+    """Each published unit (compare.published) with its holding versions and first row, from one read of every
+    version's rows."""
+    by_alias: dict[str, dict[str, list[split.Function]]] = {}
+    for version in project.versions:
+        for row in split.functions(project, version):
+            for alias in row.aliases:
+                by_alias.setdefault(alias, {}).setdefault(version, []).append(row)
+    result = {}
+    for name, rows in by_alias.items():
+        holding = tuple(v for v in project.versions if any(Path(row.path).name == name for row in rows.get(v, ())))
+        if holding and all(len(rows[v]) == 1 and rows[v][0].kind == "c" for v in holding):
+            result[name] = (holding, rows[holding[0]][0])
+    return result
+
+
 def history(project: Project) -> list[rank.History]:
     return [
         rank.History(function, summary.bytes, summary.exact, summary.minutes)
@@ -78,7 +95,7 @@ def history(project: Project) -> list[rank.History]:
 
 def ranked(project: Project, host: Host) -> list[rank.Candidate]:
     return rank.rank(
-        candidates(project),
+        candidates(project, host),
         history(project),
         min_bytes=host.cycle_min_bytes,
         max_bytes=host.cycle_max_bytes,

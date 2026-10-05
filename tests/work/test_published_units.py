@@ -60,7 +60,7 @@ class PublishedUnitTests(ProjectCase):
     def test_candidates_hold_both_and_the_ranker_mixes_them(self) -> None:
         self.publish("alpha", BROKEN)
         self.publish("beta", CLEAN.replace("alpha", "beta"))
-        found = {row.function: row for row in plan.candidates(self.project)}
+        found = {row.function: row for row in plan.candidates(self.project, self.host)}
         self.assertEqual(sorted(found), ["alpha", "gamma"])
         self.assertEqual((found["alpha"].bytes, found["alpha"].versions), (12, ("us", "eu")))
         history = [rank.History("old", 12, True, 1.0)]

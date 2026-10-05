@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake.cache import Cache, key
 from unbake.config import Held
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
@@ -464,6 +466,19 @@ def run(source: str | Path) -> list[GuardFinding]:
 def unmarked(source: str | Path) -> list[GuardFinding]:
     """Findings without a FAKEMATCH reason: what refuses a land and holds `unbake check`."""
     return [finding for finding in run(source) if finding.fakematch is None]
+
+
+def dirty(cache: Cache, sources: list[Path]) -> list[Path]:
+    """The sources with an unmarked finding, cached on every source's stat signature (a change to any source
+    rescans them all once)."""
+    from unbake import inputs
+
+    content_key = key(*(f"{path}\0{inputs.signature(path)}" for path in sources))
+
+    def make(path: Path) -> None:
+        path.write_text(json.dumps([str(source) for source in sources if unmarked(source)]))
+
+    return [Path(name) for name in json.loads(cache.produce("source-findings", content_key, make).read_text())]
 
 
 def message(finding: GuardFinding) -> str:
