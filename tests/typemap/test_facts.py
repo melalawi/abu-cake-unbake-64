@@ -1,6 +1,7 @@
 """Per-source facts keys follow exactly what the facts depend on."""
 
 from types import SimpleNamespace
+from typing import ClassVar
 
 from tests.kit import TempCase, host_values
 from unbake.config import Host
@@ -72,6 +73,10 @@ class UnitKeyTests(SourceKeyTests):
     """A source part keys on generated headers' interface only: a land that changes their declarations,
     layouts or (void) spellings (the second types pass) re-extracts no source."""
 
+    def setUp(self) -> None:
+        super().setUp()
+        self.source.write_text('#include "used.h"\nUsed alpha(void) { return 1; }\n')
+
     def key(self, version: str = "us") -> str:  # type: ignore[override]
         return facts.unit_key(self.project, self.host, self.source, version, facts.Snapshot(self.project))
 
@@ -88,10 +93,10 @@ class UnitKeyTests(SourceKeyTests):
             ("a prototype respelled (void)", original + "extern void f(void);\n", False),
             ("a layout changed", original + "struct Shape { int a; };\n", False),
             ("a comment", original + "/* typedef long Commented; */\n", False),
-            ("a typedef added", original + "typedef long Used2;\n", True),
+            ("a typedef of a name the source never spells", original + "typedef long Used2;\n", False),
             ("a typedef retargeted", original.replace("typedef int Used;", "typedef long Used;"), True),
             ("a directive added", original + "#define USED 1\n", True),
-            ("a typedef of an aggregate body", original + "typedef struct { int a; } Anon;\n", True),
+            ("an aggregate typedef of an unspelled name", original + "typedef struct { int a; } Anon;\n", False),
         ]
         with patch.object(index, "headers", return_value=frozenset({used})):
             base = self.key()
@@ -105,14 +110,62 @@ class UnitKeyTests(SourceKeyTests):
     def test_generated_header_bytes_stay_in_the_key(self) -> None:
         """Overridden: generated header bytes are the header layer's input, not the source part's."""
 
-    def test_interface_lists_directives_and_typedefs(self) -> None:
-        text = (
-            "#ifndef GUARD\n#define GUARD\n/* typedef int Hidden; */\nextern int value;\n"
-            "typedef struct Pair {\n    int a;\n} Pair;\nstruct Body { int b; };\n#endif\n"
-        )
+    def test_a_spelled_typedef_is_read(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include" / "used.h"
+        original = used.read_text()
+        with patch.object(index, "headers", return_value=frozenset({used})):
+            self.source.write_text(self.source.read_text() + "Used2 other;\n")
+            spelled = self.key()
+            used.write_text(original + "typedef long Used2;\n")
+            self.assertNotEqual(self.key(), spelled)
+
+    def test_a_spelled_typedef_reads_the_aggregate_it_names(self) -> None:
+        """Used is typedef'd to a header's struct: the struct's body is read through the typedef's own text."""
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include" / "used.h"
+        used.write_text("struct Shape { int a; };\ntypedef struct Shape Used;\n")
+        with patch.object(index, "headers", return_value=frozenset({used})):
+            base = self.key()
+            used.write_text("struct Shape { long a; };\ntypedef struct Shape Used;\n")
+            self.assertNotEqual(self.key(), base)
+            used.write_text("struct Shape { int a; };\ntypedef struct Shape Used;\nstruct Other { int b; };\n")
+            self.assertEqual(self.key(), base)
+
+
+class InterfaceTests(TempCase):
+    TEXT = (
+        "#ifndef GUARD\n#define GUARD\n/* typedef int Hidden; */\nextern int value;\n"
+        "typedef struct Pair {\n    int a;\n} Pair;\nstruct Body { int b; };\n"
+        "typedef int (*Fn)(int);\ntypedef enum { A, B } E;\ntypedef unsigned int u32;\n#endif\n"
+    )
+    DIRECTIVES: ClassVar[list[str]] = ["#ifndef GUARD", "#define GUARD", "#endif"]
+
+    def lines(self, *names: str) -> list[str]:
+        return facts.interface(self.TEXT, names).split("\n")
+
+    def test_no_names_keeps_only_the_directives(self) -> None:
+        self.assertEqual(self.lines(), self.DIRECTIVES)
+        self.assertEqual(self.lines("value", "int", "unsigned", "a", "b", "Hidden"), self.DIRECTIVES)
+
+    def test_a_name_selects_the_statement_that_declares_it(self) -> None:
+        self.assertEqual(self.lines("Pair"), [*self.DIRECTIVES, "typedef struct Pair { int a; } Pair;"])
+        self.assertEqual(self.lines("Body"), [*self.DIRECTIVES, "struct Body { int b; };"])
+        self.assertEqual(self.lines("Fn"), [*self.DIRECTIVES, "typedef int (*Fn)(int);"])
+        self.assertEqual(self.lines("u32"), [*self.DIRECTIVES, "typedef unsigned int u32;"])
+
+    def test_an_enumerator_selects_its_enum(self) -> None:
+        self.assertEqual(self.lines("B"), [*self.DIRECTIVES, "typedef enum { A, B } E;"])
+
+    def test_statements_keep_the_text_order(self) -> None:
         self.assertEqual(
-            facts.interface(text).split("\n"),
-            ["#ifndef GUARD", "#define GUARD", "#endif", "typedef struct Pair { int a; } Pair;"],
+            self.lines("u32", "Pair")[3:], ["typedef struct Pair { int a; } Pair;", "typedef unsigned int u32;"]
         )
 
 
@@ -131,6 +184,9 @@ class HeaderKeyTests(SourceKeyTests):
     def test_key_changes_with_its_inputs_only(self) -> None:
         """Overridden: the source's bytes are no input of a header part."""
 
+    def test_generated_header_bytes_stay_in_the_key(self) -> None:
+        """Overridden: a generated include counts by its interface for the names this header spells."""
+
     def test_generated_include_changes(self) -> None:
         from unittest.mock import patch
 
@@ -142,8 +198,9 @@ class HeaderKeyTests(SourceKeyTests):
             ("a declaration added", original + "extern int added;\n", False),
             ("a prototype respelled (void)", original + "extern void f(void);\n", False),
             ("a comment", original + "/* struct Gone { int a; }; */\n", False),
-            ("an aggregate defined (a by-value field reads it)", original + "struct Shape { int a; };\n", True),
-            ("an enumerator (an array extent reads it)", original + "enum { COUNT = 4 };\n", True),
+            ("an aggregate the header never spells", original + "struct Shape { int a; };\n", False),
+            ("an enumerator the header never spells", original + "enum { COUNT = 4 };\n", False),
+            ("a typedef of a name the header never spells", original + "typedef struct Shape Used2;\n", False),
             ("a typedef retargeted", original.replace("typedef int Used;", "typedef long Used;"), True),
             ("a directive added", original + "#define USED 1\n", True),
         ]
@@ -158,8 +215,20 @@ class HeaderKeyTests(SourceKeyTests):
             self.header.write_text(self.header.read_text() + "extern int own;\n")
             self.assertNotEqual(self.key(), base)  # its own bytes always count, generated or not
 
-    def test_shape_keeps_aggregates_and_drops_declarations(self) -> None:
-        text = "extern int value;\nstruct Body { int b; };\nint f(int);\nenum E { A, B };\ntypedef int T;\n"
-        self.assertEqual(
-            facts.shape(text).split("\n"), ["typedef int T;", "struct Body { int b; };", "enum E { A, B };"]
-        )
+    def test_a_spelled_aggregate_is_read(self) -> None:
+        """Holder embeds Shape by value: a change of Shape's body (and of a name its members spell) re-keys."""
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include" / "used.h"
+        used.write_text("struct Shape { Used a; };\ntypedef int Used;\n")
+        self.header.write_text('#include "used.h"\nstruct Holder { struct Shape s; };\n')
+        with patch.object(index, "headers", return_value=frozenset({used, self.header})):
+            base = self.key()
+            used.write_text("struct Shape { Used a; Used b; };\ntypedef int Used;\n")
+            self.assertNotEqual(self.key(), base)
+            used.write_text("struct Shape { Used a; };\ntypedef long Used;\n")
+            self.assertNotEqual(self.key(), base)
+            used.write_text("struct Shape { Used a; };\ntypedef int Used;\nstruct Unspelled { int z; };\n")
+            self.assertEqual(self.key(), base)

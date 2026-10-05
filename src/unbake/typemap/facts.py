@@ -22,9 +22,9 @@ import itertools
 import json
 import re
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from unbake import atomic as atomic_files
 from unbake import inputs
@@ -39,14 +39,10 @@ HEADER = "facts-header"
 # Bump when the facts extract() produces change for the same inputs. Keys never digest the tool's code.
 SCHEMA = 3
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
-# At most this many sources per worker job: neighbours in include order share their header expansion.
-SOURCES_PER_JOB = 24
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
 # Shared alias maps and layout templates a process keeps between solves.
 SHARED_KEPT = 16384
-# At least this many jobs per worker, so a small fill still spreads over every worker.
-JOBS_PER_WORKER = 4
 # Placeholders for the provenance fields that differ between tasks sharing one unit text.
 _FUNCTION = "\x00function"
 _VERSION = "\x00version"
@@ -67,8 +63,8 @@ class Snapshot:
         self._edges: dict[Path, tuple[Path, ...]] = {}
         self._closures: dict[tuple[Path, ...], tuple[Path, ...]] = {}
         self._digests: dict[Path, str] = {}
-        self._interfaces: dict[Path, str] = {}
-        self._shapes: dict[Path, str] = {}
+        self._parsed: dict[Path, Parsed] = {}
+        self._identifiers: dict[Path, frozenset[str]] = {}
         self._generated: frozenset[Path] | None = None
 
     def edges(self, path: Path) -> tuple[Path, ...]:
@@ -110,67 +106,142 @@ class Snapshot:
             self._generated = frozenset(index.headers(self.project))
         return self._generated
 
-    def interface(self, path: Path) -> str:
-        """A generated header's directives and typedefs: what a source's own facts read of it."""
-        found = self._interfaces.get(path)
+    def parsed(self, path: Path) -> Parsed:
+        found = self._parsed.get(path)
         if found is None:
-            found = self._interfaces[path] = hashlib.sha256(interface(path.read_text()).encode()).hexdigest()
+            found = self._parsed[path] = parse(path.read_text())
         return found
 
-    def shape(self, path: Path) -> str:
-        """A generated header's directives, typedefs and aggregate definitions: what another header's part reads
-        of it (its own layouts embed included aggregates and size arrays by included enumerators)."""
-        found = self._shapes.get(path)
+    def identifiers(self, path: Path) -> frozenset[str]:
+        """Every identifier an authored file spells."""
+        found = self._identifiers.get(path)
         if found is None:
-            found = self._shapes[path] = hashlib.sha256(shape(path.read_text()).encode()).hexdigest()
+            found = self._identifiers[path] = frozenset(_IDENTIFIER.findall(path.read_text(errors="replace")))
         return found
 
 
-def interface(text: str) -> str:
-    """The preprocessor directives and typedef statements of a header, one per line, in order."""
+_IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
+_KEYWORDS = frozenset(
+    [
+        "void",
+        "int",
+        "char",
+        "short",
+        "long",
+        "float",
+        "double",
+        "unsigned",
+        "signed",
+        "const",
+        "volatile",
+        "struct",
+        "union",
+        "enum",
+        "typedef",
+    ]
+)
+
+
+class Statement(NamedTuple):
+    declared: frozenset[str]
+    identifiers: frozenset[str]
+    text: str
+
+
+class Parsed(NamedTuple):
+    """A generated header's directives and its typedef and aggregate statements, parsed once."""
+
+    directives: tuple[str, ...]
+    statements: tuple[Statement, ...]
+    by_name: dict[str, tuple[int, ...]]
+
+
+def parse(text: str) -> Parsed:
     from unbake.cdecl import declaration_source
 
     code = declaration_source(text)
-    found = [line.strip() for line in re.findall(r"^[ \t]*#.*$", text, re.M)]
-    depth = 0
-    start = None
-    for match in re.finditer(r"\btypedef\b|[{};]", code):
-        token = match[0]
-        if token == "typedef" and depth == 0 and start is None:
-            start = match.start()
-        elif token == "{":
-            depth += 1
-        elif token == "}":
-            depth -= 1
-        elif token == ";" and depth == 0 and start is not None:
-            found.append(" ".join(code[start : match.end()].split()))
-            start = None
-    return "\n".join(found)
-
-
-def shape(text: str) -> str:
-    """interface() and every file-scope aggregate definition (struct, union, enum body), one per line, in order:
-    a header's facts read no more of the headers it includes. Externs and prototypes are left out, so a publish
-    that changes only declarations changes no includer's shape."""
-    from unbake.cdecl import declaration_source
-
-    code = declaration_source(text)
-    found = [interface(text)]
+    directives = tuple(line.strip() for line in re.findall(r"^[ \t]*#.*$", text, re.M))
+    statements: list[Statement] = []
     depth = 0
     start = 0
-    aggregate = False
     for match in re.finditer(r"[{};]", code):
         token = match[0]
         if token == "{":
-            aggregate |= depth == 0
             depth += 1
         elif token == "}":
             depth -= 1
         elif depth == 0:
-            if aggregate:
-                found.append(" ".join(code[start : match.end()].split()))
-            start, aggregate = match.end(), False
-    return "\n".join(found)
+            written = " ".join(code[start : match.end()].split())
+            start = match.end()
+            if re.match(r"(?:typedef\b|(?:struct|union|enum)\b[^;{]*\{)", written):
+                statements.append(_statement(written))
+    by_name: dict[str, list[int]] = {}
+    for index, statement in enumerate(statements):
+        for name in statement.declared:
+            by_name.setdefault(name, []).append(index)
+    return Parsed(directives, tuple(statements), {name: tuple(rows) for name, rows in by_name.items()})
+
+
+def _statement(text: str) -> Statement:
+    """The names a statement declares: its declarators and tags outside any body, and an enum's enumerators."""
+    kept, depth = [], 0
+    for character in text:
+        depth += character == "{"
+        if depth == 0 or (character in "{}" and depth == 1):
+            kept.append(character)
+        depth -= character == "}"
+    outside = "".join(kept)
+    declared = {
+        match[1] for match in re.finditer(r"\b([A-Za-z_]\w*)\s*(?=[;,\[)({])", outside) if match[1] not in _KEYWORDS
+    }
+    if re.search(r"\benum\b", text):
+        declared.update(match[1] for match in re.finditer(r"[{,]\s*([A-Za-z_]\w*)", text))
+    return Statement(frozenset(declared), frozenset(_IDENTIFIER.findall(text)), text)
+
+
+def interface(text: str, names: Iterable[str], *, parsed: Parsed | None = None) -> str:
+    """The preprocessor directives of a header, and only those typedef statements and aggregate definitions
+    that declare a name in NAMES, one per line, in order. A declared name changes how a text parses only where
+    the name appears in that text."""
+    parsed = parsed or parse(text)
+    wanted = set(names)
+    rows = sorted({index for name in wanted & parsed.by_name.keys() for index in parsed.by_name[name]})
+    return "\n".join([*parsed.directives, *(parsed.statements[index].text for index in rows)])
+
+
+def _interfaces(
+    snapshot: Snapshot, closure: tuple[Path, ...], own: Path, names: set[str]
+) -> list[tuple[Path, str | None]]:
+    """For each file of the closure, its interface digest if generated (else None, the caller digests it).
+
+    The names grow to a fixpoint: a selected statement spells names whose own statements it needs, in
+    this header or another."""
+    generated = snapshot.generated()
+    headers = [path for path in closure if path in generated and path != own]
+    for path in closure:
+        if path not in generated or path == own:
+            names |= snapshot.identifiers(path)
+    for path in headers:
+        for directive in snapshot.parsed(path).directives:
+            names.update(_IDENTIFIER.findall(directive))
+    taken: dict[Path, set[int]] = {path: set() for path in headers}
+    grown = True
+    while grown:
+        grown = False
+        for path in headers:
+            parsed = snapshot.parsed(path)
+            for name in names & parsed.by_name.keys():
+                for index in parsed.by_name[name]:
+                    if index not in taken[path]:
+                        taken[path].add(index)
+                        names |= parsed.statements[index].identifiers
+                        grown = True
+    return [
+        (path, hashlib.sha256(interface("", names, parsed=snapshot.parsed(path)).encode()).hexdigest())
+        if path in taken
+        else (path, None)
+        for path in closure
+    ]
 
 
 def _forced(project: Project, command: list[str]) -> list[Path]:
@@ -204,23 +275,25 @@ def unit_key(project: Project, policy: Host | None, source: Path, version: str, 
     roots = (source, *_forced(project, command))
     parts: list[str | bytes] = [SOURCE, str(SCHEMA), "unit", version, json.dumps(command)]
     parts.extend((storage.relative(project, source), source.read_bytes()))
-    generated = snapshot.generated()
-    for path in snapshot.closure(roots):
-        state = "interface " + snapshot.interface(path) if path in generated else snapshot.digest(path)
+    closure = snapshot.closure(roots)
+    names = set(_IDENTIFIER.findall(source.read_text(errors="replace")))
+    for path, found in _interfaces(snapshot, closure, source, names):
+        state = "interface " + found if found is not None else snapshot.digest(path)
         parts.extend((storage.relative(project, path), state))
     return key(*parts)
 
 
 def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Snapshot) -> str:
-    """A header part: the header's bytes, authored includes' bytes, generated includes' shape only (unit_key's
-    scheme, reading aggregate definitions too)."""
+    """A header part: the header's bytes, authored includes' bytes, generated includes' interface only (unit_key's
+    scheme, keyed on the header's own identifiers)."""
     command = _command(project, policy, version, marked=True)
     roots = (header, *_forced(project, command))
     parts: list[str | bytes] = [HEADER, str(SCHEMA), version, json.dumps(command), storage.relative(project, header)]
     parts.extend(("self", snapshot.digest(header)))
-    generated = snapshot.generated()
-    for path in snapshot.closure(roots):
-        state = "shape " + snapshot.shape(path) if path in generated and path != header else snapshot.digest(path)
+    closure = snapshot.closure(roots)
+    names = set(_IDENTIFIER.findall(header.read_text(errors="replace")))
+    for path, found in _interfaces(snapshot, closure, header, names):
+        state = "interface " + found if found is not None else snapshot.digest(path)
         parts.extend((storage.relative(project, path), state))
     return key(*parts)
 
@@ -592,29 +665,34 @@ def _whole_tasks(
     return result
 
 
+# The worker's header parts and layer contexts: the items of one pool job share their header_keys object.
+_session: tuple[dict[str, dict[str, str]], dict[str, _Parts], dict[str, layers.Context]] | None = None
+
+
 def _unit_job(
-    job: tuple[Project, Host | None, dict[str, dict[str, str]], list[list[list[tuple[int, str, Task]]]]],
+    job: tuple[Project, Host | None, dict[str, dict[str, str]], list[list[tuple[int, str, Task]]]],
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
-    """Worker body: encoded facts of each task of its sources (each source with all its versions), extracting
-    only missing source parts, each distinct one once."""
-    project, host, header_keys, sources = job
+    """Worker body: encoded facts of each task of one source (with all its versions), extracting only missing
+    source parts, each distinct one once."""
+    global _session
+    project, host, header_keys, versions = job
     output = store(host)
-    parts = {version: _Parts(output, keys) for version, keys in header_keys.items()}
-    contexts: dict[str, layers.Context] = {}
+    if _session is None or _session[0] is not header_keys:
+        _session = (header_keys, {version: _Parts(output, keys) for version, keys in header_keys.items()}, {})
+    _, parts, contexts = _session
     counts: dict[str, int] = {"sources": 0, "whole": 0}
     result = []
-    for versions in sources:
-        shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
-        snapshot = Snapshot(project)
-        whole: list[tuple[int, str, Task]] = []
-        for group in versions:
-            found = _source_tasks(project, host, output, parts, contexts, group, counts, shared, snapshot)
-            if found is None:
-                whole.extend(group)
-            else:
-                result.extend(found)
-        if whole:
-            result.extend(_whole_tasks(project, host, output, whole, counts))
+    shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
+    snapshot = Snapshot(project)
+    whole: list[tuple[int, str, Task]] = []
+    for group in versions:
+        found = _source_tasks(project, host, output, parts, contexts, group, counts, shared, snapshot)
+        if found is None:
+            whole.extend(group)
+        else:
+            result.extend(found)
+    if whole:
+        result.extend(_whole_tasks(project, host, output, whole, counts))
     return result, counts
 
 
@@ -659,13 +737,10 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         for start in range(0, len(headers), HEADERS_PER_JOB)
     ]
     if policy is None or output.cache is None:
-        results = [_unit_job((project, policy, header_keys, ordered))]
+        results = [_unit_job((project, policy, header_keys, versions)) for versions in ordered]
     else:
         pool.run(policy, _header_job, header_jobs)
-        workers = pool.Pool.from_host(policy).size
-        size = max(1, min(SOURCES_PER_JOB, -(-len(ordered) // (workers * JOBS_PER_WORKER))))
-        jobs = [(project, policy, header_keys, ordered[start : start + size]) for start in range(0, len(ordered), size)]
-        results = pool.run(policy, _unit_job, jobs)
+        results = pool.run(policy, _unit_job, [(project, policy, header_keys, versions) for versions in ordered])
     encoded: dict[int, bytes] = {}
     counts = {"sources": 0, "whole": 0}
     for found, spent in results:
