@@ -1,5 +1,6 @@
 """Landing one function: write and commit only after every holding version proves; restore on any failure."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
@@ -31,7 +32,7 @@ class LandTests(ProjectCase):
 
         prove = {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": proved}
         with (
-            patch.object(land, "chosen_compiler", return_value="ido-7.1"),
+            patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", SOURCE, {}, ())),
             patch("unbake.fold.apply.private_headers", return_value={}),
             patch.object(land, "prove", **prove),
