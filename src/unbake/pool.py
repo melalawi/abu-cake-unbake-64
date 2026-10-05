@@ -39,15 +39,19 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 RECYCLE_AFTER = 64
+# run() batches items into jobs: at most this many items per job (neighbouring items share a worker's memos),
+# and at least this many jobs per worker so a small fill still spreads over every worker.
+ITEMS_PER_JOB = 24
+JOBS_PER_WORKER = 4
 ITEM_SHOWN = 300
 SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 class TaskFailed(Held):
-    def __init__(self, key: str, item: object) -> None:
+    def __init__(self, key: str, item: object, detail: str = "") -> None:
         text = repr(item)
         shown = text if len(text) <= ITEM_SHOWN else text[:ITEM_SHOWN] + f"... ({len(text)} characters)"
-        super().__init__("pool", f"{key}: task {shown} failed twice")
+        super().__init__("pool", f"{key}: task {shown} failed twice{detail}")
         self.failure = key
         self.item = item
 
@@ -141,6 +145,10 @@ def _cpu() -> float:
     return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
 
 
+class WorkerMemory(MemoryError):
+    """A task ran out of memory; the one argument is the worker's peak resident bytes."""
+
+
 def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float, int]:
     """Worker body: the task's result, the CPU it and the tools it ran spent and the worker's peak resident bytes
     so far (effort ledger)."""
@@ -148,8 +156,16 @@ def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float, int]:
 
     fn, item = task
     start = _cpu()
-    result = fn(item)
+    try:
+        result = fn(item)
+    except MemoryError:
+        raise WorkerMemory(effort.resident_peak()) from None
     return result, _cpu() - start, effort.resident_peak()
+
+
+def _batch(job: tuple[Callable[[T], R], Sequence[T]]) -> list[R]:
+    fn, chunk = job
+    return [fn(item) for item in chunk]
 
 
 class Pool:
@@ -241,11 +257,19 @@ class Pool:
         inner.add_done_callback(finished)
         return outer
 
-    def map(self, fn: Callable[[T], R], items: Sequence[T]) -> Iterator[R]:
-        """Results in item order; at most `size` tasks in flight. Each task's CPU is charged to fn (effort)."""
+    def run(self, fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
+        """fn over items, batched into jobs by the one sizing rule; results in item order, effort charged to fn."""
         from unbake import effort
 
-        name = effort.name_of(fn)
+        size = max(1, min(ITEMS_PER_JOB, -(-len(items) // (self.size * JOBS_PER_WORKER))))
+        jobs = [(fn, items[start : start + size]) for start in range(0, len(items), size)]
+        return [result for batch in self.map(_batch, jobs, charge=effort.name_of(fn)) for result in batch]
+
+    def map(self, fn: Callable[[T], R], items: Sequence[T], *, charge: str | None = None) -> Iterator[R]:
+        """Results in item order; at most `size` tasks in flight. Each task's CPU is charged to charge, else fn."""
+        from unbake import effort
+
+        name = charge or effort.name_of(fn)
 
         def submit(item: T) -> Future[tuple[R, float, int]]:
             return self._submit(_measured, (fn, item))
@@ -263,7 +287,10 @@ class Pool:
             except (BrokenProcessPool, MemoryError) as error:
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 if attempt:
-                    raise TaskFailed(failure, item) from error
+                    detail = f" (worker cap {self.memory_worker_bytes} bytes"
+                    if isinstance(error, WorkerMemory) and error.args:
+                        detail += f", worker peak resident {error.args[0]} bytes"
+                    raise TaskFailed(failure, item, detail + ")") from error
                 if isinstance(error, BrokenProcessPool):
                     self._fresh()
                     pending = deque((i, submit(i), a) for i, _, a in pending)
@@ -295,9 +322,9 @@ def run(host: Host, fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
     if len(items) < 2:
         return [fn(item) for item in items]
     if _shared is not None:
-        return list(_shared.map(fn, items))
+        return _shared.run(fn, items)
     with Pool.from_host(host) as pool:
-        return list(pool.map(fn, items))
+        return pool.run(fn, items)
 
 
 def describe(host: Host) -> dict[str, Any]:
