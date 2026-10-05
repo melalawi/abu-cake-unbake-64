@@ -68,21 +68,22 @@ def owner(server: int) -> int:
 def _die_with_owner() -> None:
     """Wait on the owner's pidfd in a thread; when it exits, kill the fork server and this group."""
     server = os.getppid()
-
-    def orphaned(descriptor: int | None) -> None:
-        if descriptor is not None:
-            select.select([descriptor], [], [])
-        # The server or the group may already be gone (an ordinary shutdown): nothing is left to kill.
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(server, signal.SIGKILL)
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(0, signal.SIGKILL)
-
     try:
         descriptor: int | None = os.pidfd_open(owner(server))
     except (ProcessLookupError, FileNotFoundError):
         descriptor = None
-    threading.Thread(target=orphaned, args=(descriptor,), name="owner", daemon=True).start()
+    threading.Thread(target=_orphaned, args=(descriptor, server), name="owner", daemon=True).start()
+
+
+def _orphaned(descriptor: int | None, server: int) -> None:
+    """When the owner exits, kill the fork server and this worker's group. A stopped owner often takes the server
+    down first: its absence must never spare the group (orphan workers kept running and holding memory)."""
+    if descriptor is not None:
+        select.select([descriptor], [], [])
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(server, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(0, signal.SIGKILL)
 
 
 def _cap(memory_worker_bytes: int) -> None:

@@ -64,3 +64,20 @@ class PoolSignalTests(unittest.TestCase):
                 self.assertEqual(killed.called, killed_groups)
                 if not killed_groups:
                     executor.shutdown.assert_called_once_with(cancel_futures=True)
+
+
+class OrphanTests(unittest.TestCase):
+    def test_an_exited_owner_takes_the_group_down_even_when_the_server_is_gone(self) -> None:
+        for label, server_alive in [("server already gone", False), ("server still running", True)]:
+            with (
+                self.subTest(label),
+                patch.object(pool.os, "kill", side_effect=None if server_alive else ProcessLookupError) as kill,
+                patch.object(pool.os, "killpg") as killpg,
+            ):
+                pool._orphaned(None, 4242)
+            kill.assert_called_once_with(4242, signal.SIGKILL)
+            killpg.assert_called_once_with(0, signal.SIGKILL)
+
+    def test_a_group_already_gone_is_not_an_error(self) -> None:
+        with patch.object(pool.os, "kill"), patch.object(pool.os, "killpg", side_effect=ProcessLookupError):
+            pool._orphaned(None, 4242)
