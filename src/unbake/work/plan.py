@@ -30,6 +30,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
     carry = {name for name in attempts.functions(project) if attempts.path(project, name).is_file()}
     history = attempts.summaries(project)
     result = []
+    before = {(item.version, item.end): item for item in functions}
     for items in inventory.groups(functions, bodies):
         if all(item.kind == "c" for item in items):
             continue
@@ -37,7 +38,16 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         aliases = {name for item in items for name in (item.name, *item.aliases)}
         if aliases & excluded or any(item.kind == "c" for item in items):
             continue
-        if any(inventory.classify(bodies[item.version, item.name])[0] != "drafter" for item in items):
+        level = inventory.isa(project.compiler_for(canonical.name).cflags)
+        if any(
+            inventory.classify(bodies[item.version, item.name], item.address, level)[0] != "drafter" for item in items
+        ):
+            continue
+        if any(
+            (previous := before.get((item.version, item.start))) is not None
+            and inventory.tail(bodies[item.version, previous.name], previous.address, bodies[item.version, item.name])
+            for item in items
+        ):
             continue
         if any(item.name != canonical.name for item in items):
             continue
