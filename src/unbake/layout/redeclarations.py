@@ -310,6 +310,35 @@ def privatize_tags(text: str, imported: list[str], owner: str) -> tuple[str, dic
     return text, renamed
 
 
+def _locals(text: str) -> list[tuple[int, int, str, dict[str, str]]]:
+    """Each file-scope declaration of TEXT with the names it declares in any branch (name -> variant).
+    A name the source #defines is an alias (often per version) for another symbol: the header's declaration of
+    that name does not declare what the local one does after expansion, so it is left out."""
+    macros = set(re.findall(r"^[ \t]*#[ \t]*define[ \t]+(\w+)", text, re.M))
+    rows = []
+    for start, end in spans(text):
+        declaration = text[start:end]
+        local = {
+            name: variant
+            for variant in variants(declaration)
+            for name in declarations(variant).typedefs | declarations(variant).declared
+            if name not in macros
+        }
+        rows.append((start, end, declaration, local))
+    return rows
+
+
+def uncovered(text: str, imported: list[str]) -> set[str]:
+    """Names of local declarations the imported headers declare only in part (a per-version conditional naming one
+    shared symbol and one the headers lack): importing their homes too lets `strip` remove the whole declaration."""
+    shared = {name for header in imported for name in catalog(header)}
+    result: set[str] = set()
+    for _, _, _, local in _locals(text):
+        if local.keys() & shared:
+            result |= local.keys() - shared
+    return result
+
+
 def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, str]] | None = None) -> str:
     """Remove local declarations the imported headers already make.
 
@@ -324,17 +353,7 @@ def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, st
             if name in shared and not equivalent(shared[name], declaration, mapping):
                 raise Held("layout", f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}")
             shared[name] = declaration
-    # A name the source #defines is an alias (often per version) for another symbol: the header's declaration
-    # of that name does not declare what the local one does after expansion, so it is kept.
-    macros = set(re.findall(r"^[ \t]*#[ \t]*define[ \t]+(\w+)", text, re.M))
-    for start, end in reversed(spans(text)):
-        declaration = text[start:end]
-        local = {
-            name: variant
-            for variant in variants(declaration)
-            for name in declarations(variant).typedefs | declarations(variant).declared
-            if name not in macros
-        }
+    for start, end, declaration, local in reversed(_locals(text)):
         collisions = local.keys() & shared.keys()
         if not collisions:
             continue

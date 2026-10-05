@@ -35,13 +35,20 @@ def _local_names(source: Path, text: str) -> set[str]:
 
 
 def rewrite(
-    source: Path, text: str, member: str, ownership: map.Map, lookup: dict[str, Any], *, previous: set[str]
+    source: Path,
+    text: str,
+    member: str,
+    ownership: map.Map,
+    lookup: dict[str, Any],
+    *,
+    previous: set[str],
+    wanted: frozenset[str] = frozenset(),
 ) -> str:
     owner = ownership.owners.get(member)
     if owner is None:
         raise Held("layout", f"layout.member.{member}: source has no group")
-    # A header is imported only for names the source does not already declare itself.
-    tokens = spelled(text) - _local_names(source, text)
+    # A header is imported only for names the source does not already declare itself, or WANTED ones.
+    tokens = spelled(text) - (_local_names(source, text) - wanted)
     homes = {owner.header} | {lookup["symbols"][name] for name in tokens if name in lookup["symbols"]}
     homes.update(home for name in tokens for home in lookup.get("type_headers", {}).get(name, ()))
     includes = "".join(f'#include "{home}"\n' for home in sorted(homes))
@@ -119,8 +126,16 @@ def source(
                     lookup["symbols"][symbol] = name
     ownership = ownership or map.load(project)
     previous = set(index.load(project)["headers"]) if previous is None else previous
-    text = rewrite(project.src / f"{member}.c", text, member, ownership, lookup, previous=previous)
-    bodies = imported(text, project.include[0], outputs)
+    path = project.src / f"{member}.c"
+    rewritten = rewrite(path, text, member, ownership, lookup, previous=previous)
+    bodies = imported(rewritten, project.include[0], outputs)
+    # A local declaration the imports cover only in part (a per-version conditional) also imports the homes of
+    # its other names, so it is removed whole rather than refused.
+    wanted = frozenset(redeclarations.uncovered(rewritten, bodies) & lookup["symbols"].keys())
+    if wanted:
+        rewritten = rewrite(path, text, member, ownership, lookup, previous=previous, wanted=wanted)
+        bodies = imported(rewritten, project.include[0], outputs)
+    text = rewritten
     text, _ = redeclarations.privatize_tags(text, bodies, member)
     return redeclarations.strip(text, bodies, disagreements)
 
