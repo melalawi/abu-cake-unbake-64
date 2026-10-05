@@ -397,8 +397,13 @@ def assemble(
     source: Path,
     source_text: str,
     provenance: Callable[[str], dict[str, Any]],
+    generated: frozenset[str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The unit's consumed contracts and its whole definition seed (every function it defines).
+
+    GENERATED names the headers the solver wrote (layers.path spelling): their declarations are the solver's own
+    output, so they never come back as consumed evidence. The definition seed keeps them, because a source's own
+    layouts embed included structs by value.
 
     PROVENANCE(kind) gives the provenance of the "published" contracts and of the "proven" definitions.
     """
@@ -409,10 +414,11 @@ def assemble(
     built = context.facts(spans, part)
     layouts = _layouts(built)
     published, proven = provenance("published"), provenance("proven")
+    visible = context.facts(tuple(span for span in spans if span[0] not in generated), part)
     contract = {
-        **built["contracts"],
-        "structs": layouts,
-        "aliases": built["aliases"],
+        **visible["contracts"],
+        "structs": _layouts(visible),
+        "aliases": visible["aliases"],
         "shared_typedefs": {},
         "unknown": [],
     }

@@ -629,6 +629,7 @@ def _source_tasks(
             raise Held("solve", f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun")
     output.put_json(SOURCE, part_key, part)
     source_text = source.read_text()
+    generated = frozenset(layers.path(str(header)) for header in snapshot.generated())
     result = []
     for index, _, (function, _, _) in group:
         stamped = _provenance(project, function, version, source)
@@ -636,7 +637,7 @@ def _source_tasks(
         def provenance(kind: str, row: dict[str, Any] = stamped) -> dict[str, Any]:
             return {**row, "kind": kind}
 
-        consumed, definition = layers.assemble(context, part, source, source_text, provenance)
+        consumed, definition = layers.assemble(context, part, source, source_text, provenance, generated)
         result.append((index, output.encoded([consumed, _owned(definition, function)])))
     return result
 
