@@ -100,18 +100,32 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
         conflicts_before = len(graph.facts)
         aliases = seed.get("aliases", {})
         canonical = environments.bound(aliases)
-        for name, record in seed[key].items():
+        shared = seed[key]
+        proven = isinstance(shared, declarations.ProvenStructs)
+        incoming_rank = _RANKS.get(shared.provenance.get("kind"), 1) if proven else 0
+        for name in shared:
+            # A layout template's record is shared by every receipt of it: its identity, not the receipt's fresh
+            # per-name copy, says whether this name was already merged in this alias map.
+            origin = shared.template[name] if proven else shared[name]
             previous = records.get(name)
+            if previous is not None and last_object.get(name) == id(origin) and last_aliases.get(name) == id(aliases):
+                # Same meaning as the accepted record: only a receipt (provenance) of equal or higher rank replaces it.
+                if proven and incoming_rank >= _rank(previous):
+                    records[name] = {
+                        **origin,
+                        "provenance": shared.provenance,
+                        "declaration_conflict": bool(previous.get("declaration_conflict")),
+                    }
+                continue
+            record = {**origin, "provenance": shared.provenance} if proven else origin
             if previous is not None:
-                if last_object.get(name) == id(record) and last_aliases.get(name) == id(aliases):
-                    continue
                 spelled = spellings[name]
                 stripped = _stripped(record, key)
                 if (spelled[1] is aliases and spelled[0] == stripped) or (
                     meanings[name] == _comparable(record, key, aliases, canonical)
                 ):
                     spellings[name] = stripped, aliases
-                    accepted[name], last_object[name], last_aliases[name] = record, id(record), id(aliases)
+                    accepted[name], last_object[name], last_aliases[name] = origin, id(origin), id(aliases)
                     # The same type, maybe spelled through a typedef: no conflict. As for identical records,
                     # the incoming one is kept unless it ranks lower, so a published contract replaces a
                     # declared one (and the published-storage rule then keeps it in the header).
@@ -138,7 +152,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                             records[name] = {**record, "declaration_conflict": False}
                             meanings[name] = _comparable(record, key, aliases, canonical)
                             spellings[name] = stripped, aliases
-                            accepted[name], last_object[name], last_aliases[name] = record, id(record), id(aliases)
+                            accepted[name], last_object[name], last_aliases[name] = origin, id(origin), id(aliases)
                         continue
                 if old != new:
                     graph.facts.append(
@@ -155,9 +169,8 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
             meanings[name] = _comparable(record, key, aliases, canonical)
             spellings[name] = _stripped(record, key), aliases
-            accepted[name], last_object[name], last_aliases[name] = record, id(record), id(aliases)
-        shared = seed[key]
-        if isinstance(shared, declarations.ProvenStructs) and len(graph.facts) == conflicts_before:
+            accepted[name], last_object[name], last_aliases[name] = origin, id(origin), id(aliases)
+        if proven and len(graph.facts) == conflicts_before:
             # An uninterrupted run of identical layouts only replaces provenance.
             # Keep the first merge (confidence/conflict handling) and the last
             # receipt. A conflicting run retains every diagnostic as before.
