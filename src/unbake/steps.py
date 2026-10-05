@@ -7,7 +7,11 @@ runs them. Read-only commands use whatever the last run produced.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import os
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -113,8 +117,13 @@ def _types_key(project: Project, host: Host) -> str:
 
 
 def _types(project: Project, host: Host) -> None:
+    from unbake.layout import header_step
     from unbake.typemap import solver
 
+    # The solve preprocesses published sources, which include generated headers: a tree missing any is first
+    # regenerated from the recorded solution.
+    if header_step.missing(project):
+        header_step.run(project, host)
     solver.solve(project, host)
 
 
@@ -265,8 +274,89 @@ def ensure(
     from unbake import journal
     from unbake.layout import header_step
 
-    # A headers step killed mid-write is rolled back before any step reads the tree.
+    # A command killed mid-write is rolled back before any step reads the tree.
     journal.recover(header_step.journal_path(project))
+    for stale in Command.stale(project):
+        stale.rollback()
+    command = Command(project)
+    try:
+        results = _ensure(project, host, names, force=force, report=report, command=command)
+    except BaseException:
+        command.rollback()
+        raise
+    command.close()
+    return results
+
+
+class Command:
+    """What one ensure changed, so a failed command publishes none of it: the steps it recorded (forgotten on
+    rollback) and layout.toml's bytes before its first rewrite (restored only while the file still holds what
+    this command wrote, so a concurrent merge-units write is never undone). Kept per process and thread on disk;
+    a later command rolls back the journal of a process that died."""
+
+    def __init__(self, project: Project, path: Path | None = None) -> None:
+        self.project = project
+        self.path = path or project.build / "steps.journal" / f"{os.getpid()}-{threading.get_ident()}.json"
+        self.state: dict[str, object] = {"ran": [], "before": None, "after": None}
+        if path is not None:
+            self.state = json.loads(path.read_text())
+
+    @classmethod
+    def stale(cls, project: Project) -> list[Command]:
+        directory = project.build / "steps.journal"
+        found = []
+        for path in sorted(directory.glob("*.json")) if directory.is_dir() else ():
+            pid = int(path.stem.split("-", 1)[0])
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                found.append(cls(project, path))
+            except PermissionError:
+                pass
+        return found
+
+    def _save(self) -> None:
+        atomic_files.write(self.path, json.dumps(self.state).encode())
+
+    def ran(self, name: str, before: bytes | None, after: bytes | None) -> None:
+        ran = self.state["ran"]
+        assert isinstance(ran, list)
+        ran.append(name)
+        if before != after and self.state["after"] is None:
+            self.state["before"] = None if before is None else base64.b64encode(before).decode()
+        if before != after:
+            self.state["after"] = None if after is None else hashlib.sha256(after).hexdigest()
+        self._save()
+
+    def rollback(self) -> None:
+        from unbake import lock
+
+        layout = self.project.root / "layout.toml"
+        with lock.publishing(self.project.root):
+            for name in self.state["ran"]:  # type: ignore[attr-defined]
+                forget(self.project, name)
+            after, before = self.state["after"], self.state["before"]
+            if after is not None and layout.is_file() and hashlib.sha256(layout.read_bytes()).hexdigest() == after:
+                if before is None:
+                    layout.unlink()
+                else:
+                    atomic_files.write(layout, base64.b64decode(str(before)))
+        self.close()
+
+    def close(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+
+def _ensure(
+    project: Project,
+    host: Host,
+    names: Iterable[str],
+    *,
+    force: bool,
+    report: Callable[[StepResult], object] | None,
+    command: Command,
+) -> list[StepResult]:
+    layout = project.root / "layout.toml"
     requested = set(names := list(names))
     steps = order(names)
     results: list[StepResult] = []
@@ -280,8 +370,16 @@ def ensure(
                 if attempt == 0:
                     results.append(StepResult(name, step.trigger, False, 0.0))
                 continue
-            step.run(project, host)
+            before = layout.read_bytes() if layout.is_file() else None
+            try:
+                step.run(project, host)
+            except Held:
+                raise
+            except Exception as error:
+                where = f" reading {error.filename}" if isinstance(error, OSError) and error.filename else ""
+                raise Held("steps", f"steps.{name}: {type(error).__name__}{where}: {error}") from error
             record(project, name, step.key(project, host) if name in ("resident", "headers", "buildfiles") else current)
+            command.ran(name, before, layout.read_bytes() if layout.is_file() else None)
             result = StepResult(name, step.trigger, True, time.monotonic() - started)
             results = [row for row in results if row.step != name or row.ran]
             results.append(result)

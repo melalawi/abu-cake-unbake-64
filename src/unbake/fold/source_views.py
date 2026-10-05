@@ -170,9 +170,16 @@ def _preprocessed_lines(
         source = Path(temporary) / "source.c"
         atomic_files.text(source, text)
         include = header_includes(project, headers, Path(temporary)) if headers is not None else ()
+        # A header the tree does not have yet (the headers step regenerates it) is empty here, searched last:
+        # only VERSION and command-line macros choose the source's lines.
+        absent = Path(temporary) / "absent"
+        for name in re.findall(r'^[ \t]*#[ \t]*include[ \t]*"([^"]+)"', text, re.M):
+            if not any((root / name).is_file() for root in (*include, *project.include, absent)):
+                (absent / name).parent.mkdir(parents=True, exist_ok=True)
+                atomic_files.fresh(absent / name, b"")
         command = [
             str(policy.cpp),
-            *(f"-I{root}" for root in (*include, *project.include)),
+            *(f"-I{root}" for root in (*include, *project.include, absent)),
             *(flag for flag in project.cppflags if flag != "-P"),
             "-fdirectives-only",
             *(f"-D{macro}" for macro in project.version(version).macros),

@@ -207,5 +207,21 @@ def run(project: Project, host: Host) -> list[Path]:
         return sorted(changed)
 
 
+def missing(project: Project) -> list[str]:
+    """Generated headers (listed by the index or homed by a layout group) that published sources include and the
+    tree lacks."""
+    from unbake.layout import map as layout_map
+
+    root = project.include[0]
+    generated = {path.relative_to(root).as_posix() for path in index._listed(project)}
+    generated |= {group.header for group in layout_map.load(project).groups}
+    absent = set()
+    for source in project.src.glob("*.c"):
+        for name in _INCLUDE.findall(source.read_text(errors="replace")):
+            if name in generated and not (root / name).is_file():
+                absent.add(name)
+    return sorted(absent)
+
+
 def journal_path(project: Project) -> Path:
     return project.build / "headers.journal"

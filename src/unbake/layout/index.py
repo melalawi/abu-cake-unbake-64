@@ -69,6 +69,12 @@ def safe(name: str) -> None:
 
 
 def headers(project: Project) -> frozenset[Path]:
+    """The generated headers the index lists that exist: a header missing from a fresh or partial tree is not an
+    input; the headers step regenerates it from the type solution."""
+    return frozenset(path for path in _listed(project) if path.is_file())
+
+
+def _listed(project: Project) -> frozenset[Path]:
     if not project.include:
         return frozenset()
     target = path(project)

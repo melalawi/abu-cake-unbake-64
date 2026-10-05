@@ -75,7 +75,7 @@ class SettleTests(TempCase):
     def run_steps(self, writes: dict[str, str], *, churn: bool = False) -> list[list[str]]:
         from unittest.mock import patch
 
-        project = SimpleNamespace(build=self.root / "build")
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
         inputs = {"a": 0, "b": 0}
 
         def step(name: str) -> steps.Step:
@@ -108,3 +108,92 @@ class SettleTests(TempCase):
         with self.assertRaises(Held) as raised:
             self.run_steps({}, churn=True)
         self.assertIn("steps.a: input key changes on every run", str(raised.exception))
+
+
+class CommandJournalTests(TempCase):
+    """One command publishes all of its outputs or none, and an unexpected error names the step."""
+
+    def ensure(self, run: object) -> None:
+        from unittest.mock import patch
+
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+
+        def write_layout(project: object, host: object) -> None:
+            (self.root / "layout.toml").write_text("inferred\n")
+
+        table = {
+            "a": steps.Step("a", "a", lambda project, host: "1", write_layout),
+            "b": steps.Step("b", "b", lambda project, host: "1", run),
+        }
+        with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a", "b"]):
+            steps.ensure(project, None, ["a", "b"])
+
+    def test_a_failing_later_step_rolls_back_an_earlier_step_and_the_record(self) -> None:
+        (self.root / "layout.toml").write_text("authored\n")
+
+        def missing(project: object, host: object) -> None:
+            open(self.root / "include" / "common" / "data.h")  # noqa: SIM115
+
+        with self.assertRaises(Held) as caught:
+            self.ensure(missing)
+        self.assertIn("steps.b: FileNotFoundError reading", caught.exception.reason)
+        self.assertIn("include/common/data.h", caught.exception.reason)
+        self.assertEqual((self.root / "layout.toml").read_text(), "authored\n")
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), (None, None))
+        self.assertEqual(list((self.root / "build" / "steps.journal").glob("*.json")), [])
+
+    def test_a_concurrent_rewrite_of_layout_is_never_undone(self) -> None:
+        (self.root / "layout.toml").write_text("authored\n")
+
+        def merged_elsewhere(project: object, host: object) -> None:
+            (self.root / "layout.toml").write_text("merged by another command\n")
+            raise RuntimeError("held")
+
+        with self.assertRaises(Held):
+            self.ensure(merged_elsewhere)
+        self.assertEqual((self.root / "layout.toml").read_text(), "merged by another command\n")
+
+    def test_a_dead_commands_journal_is_rolled_back_by_the_next(self) -> None:
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        (self.root / "layout.toml").write_text("authored\n")
+        dead = steps.Command(project)
+        dead.path = self.root / "build" / "steps.journal" / "999999-1.json"
+        (self.root / "layout.toml").write_text("inferred\n")
+        steps.record(project, "a", "1")
+        dead.ran("a", b"authored\n", b"inferred\n")
+        from unittest.mock import patch
+
+        with patch.object(steps.os, "kill", side_effect=ProcessLookupError):
+            for stale in steps.Command.stale(project):
+                stale.rollback()
+        self.assertEqual(((self.root / "layout.toml").read_text(), steps.recorded(project, "a")), ("authored\n", None))
+
+
+class BootstrapTests(TempCase):
+    def test_listed_headers_that_do_not_exist_are_not_inputs(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        present, absent = self.root / "a.h", self.root / "common" / "data.h"
+        present.write_text("\n")
+        with patch.object(index, "_listed", return_value=frozenset({present, absent})):
+            self.assertEqual(index.headers(SimpleNamespace()), frozenset({present}))
+
+    def test_missing_generated_headers_regenerate_before_the_solve(self) -> None:
+        from unittest.mock import call, patch
+
+        from unbake.layout import header_step
+        from unbake.typemap import solver
+
+        for absent, runs in (([], []), (["common/data.h"], [call("p", "h")])):
+            with (
+                self.subTest(absent=absent),
+                patch.object(header_step, "missing", return_value=absent),
+                patch.object(header_step, "run") as run,
+                patch.object(solver, "solve") as solve,
+            ):
+                steps.STEPS["types"].run("p", "h")
+                self.assertEqual(run.call_args_list, runs)
+                solve.assert_called_once_with("p", "h")
