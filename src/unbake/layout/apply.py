@@ -22,9 +22,9 @@ def spelled(text: str) -> set[str]:
     return set(re.findall(r"\b[A-Za-z_]\w*\b", code))
 
 
-def _local_names(text: str) -> set[str]:
+def _local_names(source: Path, text: str) -> set[str]:
     """Names the source declares itself before its first use of them; a later declaration needs the header."""
-    first = redeclarations.declared(text)
+    first = redeclarations.declared(source, text)
     code = re.sub(r"/\*.*?\*/|//[^\n]*", lambda m: " " * len(m[0]), text, flags=re.S)
     code = re.sub(r"^[ \t]*#[ \t]*include[^\n]*", lambda m: " " * len(m[0]), code, flags=re.M)
     used: dict[str, int] = {}
@@ -33,12 +33,14 @@ def _local_names(text: str) -> set[str]:
     return {name for name, start in first.items() if used.get(name, start) >= start}
 
 
-def rewrite(text: str, member: str, ownership: map.Map, lookup: dict[str, Any], *, previous: set[str]) -> str:
+def rewrite(
+    source: Path, text: str, member: str, ownership: map.Map, lookup: dict[str, Any], *, previous: set[str]
+) -> str:
     owner = ownership.owners.get(member)
     if owner is None:
         raise Held("layout", f"layout.member.{member}: source has no group")
     # A header is imported only for names the source does not already declare itself.
-    tokens = spelled(text) - _local_names(text)
+    tokens = spelled(text) - _local_names(source, text)
     homes = {owner.header} | {lookup["symbols"][name] for name in tokens if name in lookup["symbols"]}
     homes.update(home for name in tokens for home in lookup.get("type_headers", {}).get(name, ()))
     includes = "".join(f'#include "{home}"\n' for home in sorted(homes))
@@ -116,7 +118,7 @@ def source(
                     lookup["symbols"][symbol] = name
     ownership = ownership or map.load(project)
     previous = set(index.load(project)["headers"]) if previous is None else previous
-    text = rewrite(text, member, ownership, lookup, previous=previous)
+    text = rewrite(project.src / f"{member}.c", text, member, ownership, lookup, previous=previous)
     bodies = imported(text, project.include[0], outputs)
     text, _ = redeclarations.privatize_tags(text, bodies, member)
     return redeclarations.strip(text, bodies, disagreements)

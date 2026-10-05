@@ -334,7 +334,8 @@ def _render(
         local: dict[str, list[str]] = {}
         for start, end in redeclarations.spans(text):
             for variant in redeclarations.variants(text[start:end]):
-                for name in header_declarations(variant).declared | header_declarations(variant).typedefs:
+                parsed = redeclarations.parse(source_path, variant)
+                for name in parsed.declared | parsed.typedefs:
                     local.setdefault(name, []).append(variant)
         definitions = set()
         for match in signature.finditer(declaration_source(text)):

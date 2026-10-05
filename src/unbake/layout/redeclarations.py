@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
+from pathlib import Path
 
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
@@ -124,14 +125,30 @@ def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
     return _signature(left, items).replace("()", "(void)") == _signature(right, items).replace("()", "(void)")
 
 
-def declared(text: str) -> dict[str, int]:
-    """Each name a source declares at file scope, in any version branch, with the offset of its first declaration."""
-    from unbake.cdecl import declarations
+_DECLARATOR = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\)\s*)*[\[(;=,]")
+_KEYWORDS = frozenset(
+    "auto char const double enum extern float inline int long register short signed static struct typedef union"
+    " unsigned void volatile".split()
+)
 
+
+def parse(source: Path, variant: str) -> cdecl.Declarations:
+    """One version branch of a source's file-scope declaration; a refusal names the source and the symbol."""
+    try:
+        return declarations(variant)
+    except Held as error:
+        names = [m[1] for m in _DECLARATOR.finditer(variant) if m[1] not in _KEYWORDS]
+        symbol = names[0] if names else variant.strip().splitlines()[0]
+        detail = error.reason.split(":", 1)[-1].strip()
+        raise Held(error.phase, f"{error.key}: {source}: {symbol}: {detail}") from error
+
+
+def declared(source: Path, text: str) -> dict[str, int]:
+    """Each name SOURCE declares at file scope, in any version branch, with the offset of its first declaration."""
     first: dict[str, int] = {}
     for start, end in spans(text):
         for variant in variants(text[start:end]):
-            for name in declarations(variant).declared:
+            for name in parse(source, variant).declared:
                 first.setdefault(name, start)
     return first
 

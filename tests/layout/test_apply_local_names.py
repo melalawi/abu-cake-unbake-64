@@ -2,8 +2,10 @@
 
 import pickle
 import unittest
+from pathlib import Path
 
 from unbake.config import Held, Unfinished
+from unbake.layout import redeclarations
 from unbake.layout.apply import _local_names
 
 
@@ -24,7 +26,7 @@ class LocalNamesTests(unittest.TestCase):
             ),
         ):
             with self.subTest(name):
-                self.assertEqual(_local_names(text) & {"D_1"}, expected)
+                self.assertEqual(_local_names(Path("src/f.c"), text) & {"D_1"}, expected)
 
 
 class HeldPickleTests(unittest.TestCase):
@@ -36,3 +38,10 @@ class HeldPickleTests(unittest.TestCase):
                     (type(back), back.phase, back.reason, back.next_action, back.args),
                     (type(held), held.phase, held.reason, held.next_action, held.args),
                 )
+
+
+class DeclarationRefusalTests(unittest.TestCase):
+    def test_refusal_names_source_and_symbol(self) -> None:
+        with self.assertRaises(Held) as caught:
+            redeclarations.parse(Path("src/func_1.c"), "extern int D_1 D_2;")
+        self.assertIn("src/func_1.c: D_2:", caught.exception.reason)
