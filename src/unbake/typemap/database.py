@@ -332,6 +332,16 @@ def _render(
             declarations_by_name[name] = (
                 prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype
             )
+    # A (void) prototype refuses the arguments mapped callers pass (K&R calls): any header spelling of such a
+    # function, rendered or carried, declares no parameter list instead.
+    passed = unprototyped_calls(value["functions"])
+    for name in passed & declarations_by_name.keys():
+        declarations_by_name[name] = without_void(declarations_by_name[name], {name})
+    for name in value.get("published_declarations", {}):
+        path = root / name
+        if path in components:
+            components[path] = without_void(components[path], passed)
+            rendered[path] = without_void(rendered[path], passed)
     for name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
             declarations_by_name[name] = session.rewrite(record["declaration"], replacements, reserved)
@@ -428,6 +438,24 @@ def _render(
     value["declaration_headers"] = dict(layout.index["symbols"])
     value["shared_aliases"] = replacements
     return outputs
+
+
+def unprototyped_calls(functions: dict[str, Any]) -> set[str]:
+    """Functions whose mapped callers pass arguments the callee's (void) list cannot accept."""
+    return {
+        name
+        for name, record in functions.items()
+        if record.get("abi", {}).get("caller_arguments")
+        and re.search(r"\(\s*void\s*\)\s*;\s*$", record["prototype"] or "")
+    }
+
+
+def without_void(text: str, names: set[str]) -> str:
+    """TEXT with each declaration of NAMES spelled `name()` instead of `name(void)`."""
+    if not names:
+        return text
+    pattern = r"\b(" + "|".join(sorted(map(re.escape, names))) + r")\s*\(\s*void\s*\)"
+    return re.sub(pattern, r"\1()", text)
 
 
 def one_declaration(declarations_by_name: dict[str, str], carried: dict[Path, set[str]]) -> None:
