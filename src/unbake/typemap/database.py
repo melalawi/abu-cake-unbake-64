@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import inputs, pool, tui
+from unbake import effort, inputs, pool, tui
 from unbake.config import Held, Host, Project
 from unbake.typemap import header_names, regeneration, storage, types_db
 
@@ -753,6 +753,7 @@ def validate_headers(
             content_key = version + ":" + input_key
             if content_key not in validated and not certificates.contains(content_key):
                 pending[content_key] = closure, text
+        effort.count("validation.rows", len(pending), len(rows))
         if pending:
             pending_by_version[version] = pending
     # Total jobs ~ workers: a version with more pending rows than one worker's share is split into chunks.

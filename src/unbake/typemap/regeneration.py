@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from unbake import atomic as atomic_files
-from unbake import inputs
+from unbake import effort, inputs
 from unbake.cache import Cache, key, memo
 from unbake.config import Host, Project
 from unbake.layout import headers
@@ -286,7 +286,13 @@ class Session:
                 atomic_files.copyfile(rendered, output, durable=False)
 
             self.cache.produce("typemap-render", stored_key, same)
-        return {self.project.root / p: data.encode() for p, data in result["outputs"].items()}
+        outputs = {self.project.root / p: data.encode() for p, data in result["outputs"].items()}
+        effort.count(
+            "render.headers",
+            sum(path.is_file() and path.read_bytes() == data for path, data in outputs.items()),
+            len(outputs),
+        )
+        return outputs
 
 
 def validation_inputs(
