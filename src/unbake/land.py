@@ -11,6 +11,7 @@ against the staged copy (layout.header_step.validate) before the write.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -111,12 +112,29 @@ def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
     return _git(project, "rev-parse", "HEAD").strip(), functions
 
 
-def chosen_compiler(project: Project, function: str) -> str:
-    """The compiler of the newest exact attempt; compare records it (compilers.candidates)."""
-    exact = [row for row in attempts.read(project, function) if row.exact]
-    if not exact:
-        raise Held("land", f"land.not_exact: {function}: no exact compare attempt; run compare first")
-    return exact[-1].compiler or project.compiler_reference(function)
+def exact_attempt(project: Project, function: str, file: Path) -> attempts.Attempt:
+    """The newest compare of FILE's current bytes, which must be exact; refuse in words that say what to do."""
+    from unbake.decomp import checks
+
+    digest = hashlib.sha256(file.read_bytes()).hexdigest()
+    found = [row for row in attempts.read(project, function) if row.sha256 == digest]
+    if not found:
+        raise Held(
+            "land",
+            f"land.not_compared: {function} was not compared since its last edit. Run: unbake compare {file}",
+        )
+    attempt = found[-1]
+    if attempt.exact:
+        return attempt
+    version, row = min(attempt.versions.items(), key=lambda item: item[1]["percent"])
+    if row["percent"] < 100:
+        raise Held(
+            "land",
+            f"land.not_exact: {function} matches only {attempt.best_percent:.2f}% (lowest version {version}). "
+            "Publish needs 100% in every version",
+        )
+    lines = [checks.plain(finding) for finding in checks.unmarked(file)]
+    raise Held("land", f"land.rules: {function} matches 100% but breaks the source rules: {'; '.join(lines)}")
 
 
 def _with_compiler(project: Project, function: str, ident: str) -> Project:
@@ -153,7 +171,11 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
             runner.place(project, host, obj, version, row, placed, score=False)
             linked = runner.link(project, host, placed, version, row, work, file)
         if linked != split.words(project, row):
-            raise Held("land", f"land.mismatch: {function} {version}: linked bytes differ from the ROM row")
+            raise Held(
+                "land",
+                f"land.mismatch: {function} compares exact but the {version} ROM built with it differs. "
+                f"The tree changed since the compare. Run: unbake compare {project.work / function / f'{function}.c'}",
+            )
     changed = {
         project.include[-1] / name: text.encode()
         for name, text in headers.items()
@@ -197,7 +219,7 @@ def land(project: Project, host: Host, file: Path) -> str:
 
     function = compare.function_of(file)
     message = subject(project, function)
-    ident = chosen_compiler(project, function)
+    ident = exact_attempt(project, function, file).compiler or project.compiler_reference(function)
     project = _with_compiler(project, function, ident)
     folded = fold_apply.fold(project, host, function, file.read_text())
     headers = {**fold_apply.private_headers(project, function), **folded.headers}

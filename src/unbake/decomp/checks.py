@@ -441,6 +441,34 @@ RULES = [
 ]
 
 
+# Rules a FAKEMATCH comment never waives. Volatile stays waivable (an open decision).
+UNWAIVABLE = frozenset(
+    {"inline-asm", "raw-gfx", "local-gbi-macro", "local-type-copy", "invented-struct", "resident-storage"}
+)
+
+# One plain sentence per rule id a finding can carry.
+SENTENCE = {
+    "inline-asm": "inline assembly is never allowed",
+    "volatile-storage": "volatile storage is not allowed here",
+    "raw-offset": "a raw byte offset is used instead of a typed field",
+    "local-include": "a local include is not allowed",
+    "tool-comment": "a tool comment is left in the source",
+    "file-version-guard": "a version guard is not allowed in a source file",
+    "empty-loop": "an empty loop needs a FAKEMATCH reason",
+    "resident-storage": "resident storage is declared in the function file",
+    "raw-gfx": "a raw display list word is used instead of a GBI macro",
+    "local-gbi-macro": "a GBI macro is redefined locally",
+    "local-type-copy": "a shared type is copied into the file",
+    "invented-struct": "an invented struct name is used",
+    "symbol-alias": "a symbol is aliased to a raw address",
+}
+
+
+def plain(finding: GuardFinding) -> str:
+    """A finding as a sentence a person can act on."""
+    return f"line {finding.line}: {SENTENCE[finding.rule]} ({finding.text})"
+
+
 def run(source: str | Path) -> list[GuardFinding]:
     """Inspect source text or a file, retaining marked findings as accepted evidence."""
     if isinstance(source, Path):
@@ -459,9 +487,7 @@ def run(source: str | Path) -> list[GuardFinding]:
             f.rule,
             f.line,
             f.text,
-            None
-            if f.rule in {"raw-gfx", "local-gbi-macro", "local-type-copy", "invented-struct", "resident-storage"}
-            else reason,
+            None if f.rule in UNWAIVABLE else reason,
         )
         for f in sorted(findings, key=lambda f: (f.line, f.rule))
     ]

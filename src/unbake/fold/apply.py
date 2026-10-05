@@ -96,7 +96,10 @@ def fold(project: Project, host: Host, function: str, text: str) -> Folded:
         raise Held("fold", f"fold.source: {function}: fold produced no source")
     blockers = [finding for finding in checks.run(folded) if finding.fakematch is None]
     if blockers:
-        raise Held("fold", "fold.source_rules: " + "; ".join(checks.message(finding) for finding in blockers))
+        raise Held(
+            "fold",
+            f"fold.source_rules: {function} breaks the source rules: " + "; ".join(checks.plain(f) for f in blockers),
+        )
     return Folded(function, folded, headers, tuple(split_edits), tuple(learned))
 
 

@@ -132,21 +132,34 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
 
 
 def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
-    """A landed function measured again from src/ against the current headers (no attempt is recorded)."""
-    from unbake import config
+    """A landed function measured again as the unit it lives in (merge-units may have moved it): the unit is built
+    with the current headers and must equal the ROM row in every holding version, and break no source rule."""
+    from unbake import config, runner
+    from unbake.decomp import checks
+    from unbake.layout import split
     from unbake.work import compare
 
     root, host, function = spec
+    project = config.load(root)
     try:
-        measured = compare.measure(config.load(root), host, root / "src" / f"{function}.c")
+        for version in split.holding_versions(project, function):
+            row = compare.row_of(project, function, version)
+            data = runner.build_unit(project, host, Path(row.path).name, version)
+            if data != split.words(project, row):
+                return {
+                    "exact": False,
+                    "best_percent": None,
+                    "diagnostic": f"{function} no longer builds identical in {version} (unit {row.path})",
+                }
+            if checks.unmarked(project.src / f"{row.path}.c"):
+                return {
+                    "exact": False,
+                    "best_percent": None,
+                    "diagnostic": f"{function}: its unit {row.path} breaks the source rules",
+                }
     except Held as error:
         return {"exact": False, "best_percent": None, "diagnostic": error.reason}
-    return {
-        "exact": measured.exact,
-        "best_percent": measured.best_percent,
-        "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
-        or next((f"precondition: {line}" for line in measured.preconditions), ""),
-    }
+    return {"exact": True, "best_percent": 100.0, "diagnostic": ""}
 
 
 # ---- read-only entry points ----

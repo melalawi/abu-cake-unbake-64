@@ -24,6 +24,8 @@ class Compared:
     preconditions: list[str] = field(default_factory=list)
     seconds: float = 0.0
     compiler: str = ""
+    # The preconditions in plain words (the raw messages stay in preconditions for the JSON document).
+    rule_lines: list[str] = field(default_factory=list)
 
     @property
     def identical_everywhere(self) -> bool:
@@ -56,7 +58,7 @@ class Compared:
 
     def lines(self) -> list[str]:
         output = [line for result in self.compares.values() for line in result.lines]
-        output.extend(f"precondition: {line}" for line in self.preconditions)
+        output.extend(f"rule broken: {line}" for line in self.rule_lines)
         output.append(
             f"{self.function}: {'EXACT in every version' if self.exact else f'best {self.best_percent:.2f}%'}"
         )
@@ -104,7 +106,9 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
     selected = versions or split.holding_versions(project, function)
     view = view_for(project, file, function)
     content = file.read_bytes()
-    preconditions = [checks.message(finding) for finding in checks.run(content.decode()) if finding.fakematch is None]
+    broken = [finding for finding in checks.run(content.decode()) if finding.fakematch is None]
+    preconditions = [checks.message(finding) for finding in broken]
+    rule_lines = [checks.plain(finding) for finding in broken]
     results: dict[str, Compare] = {}
     for version in selected:
         row = row_of(project, function, version)
@@ -130,7 +134,7 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
         results[version] = result
     digest = hashlib.sha256(content).hexdigest()
     compiler = view.compiler_reference(function)
-    return Compared(function, file, digest, results, preconditions, time.monotonic() - started, compiler)
+    return Compared(function, file, digest, results, preconditions, time.monotonic() - started, compiler, rule_lines)
 
 
 def compare(project: Project, host: Host, file: Path) -> Compared:
