@@ -134,7 +134,7 @@ def infer(
     def bodies() -> dict[str, Any]:
         # Sharded mappings decode a complete body on each lookup; decode once, only on a cache miss.
         if not decoded:
-            decoded.update(mapped.items())
+            decoded.update(mapped.read(list(mapped)) if isinstance(mapped, shards.Functions) else mapped.items())
         return {**facts, "functions": decoded}
 
     def versions(name: str) -> list[str]:
@@ -763,7 +763,7 @@ def _installed(project: Project, cache: Cache | None, row: dict[str, Any]) -> bo
     entry = None if cache is None else cache.get("types-constraints", row["sha256"])
     if entry is None or inputs.digest(entry) != row["sha256"]:
         return False
-    atomic_files.copyfile(entry, path)
+    atomic_files.copyfile(entry, path, durable=False)
     return True
 
 

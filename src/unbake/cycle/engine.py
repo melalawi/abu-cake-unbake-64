@@ -188,6 +188,10 @@ def choose(project: Project, host: Host, pick: int | None, functions: tuple[str,
     return ui.pick(order)
 
 
+# The derived steps a cycle needs current: settled at its start and again at its end.
+CYCLE_STEPS = ("resident", "extract", "types", "headers", "buildfiles")
+
+
 def run(
     project: Project,
     host: Host,
@@ -228,14 +232,18 @@ def run(
         atomic_files.text(state_path(project), json.dumps(state, sort_keys=True, default=list) + "\n")
 
     emitter.listeners.append(save_state)
-    steps.ensure(
-        project,
-        host,
-        ["resident", "extract", "types", "headers", "buildfiles"],
-        report=lambda done: emitter.emit(
-            "step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3)
-        ),
-    )
+
+    def settle() -> None:
+        steps.ensure(
+            project,
+            host,
+            CYCLE_STEPS,
+            report=lambda done: emitter.emit(
+                "step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3)
+            ),
+        )
+
+    settle()
     emitter.emit(
         "cycle.start",
         project=str(project.root),
@@ -497,6 +505,9 @@ def run(
                 )
                 if payload:
                     unpushed.clear()
+    if exit_code != 130:
+        # Lands and merges changed step inputs; settle them now so the next cycle drafts at once.
+        settle()
     held = [name for name, row in rows.items() if row.stage in ("held", "failed")]
     carry = [name for name, row in rows.items() if row.stage not in ("landed", "held", "failed")]
     if exit_code == 0 and (held or unpushed or carry):

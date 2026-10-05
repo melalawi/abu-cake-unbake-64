@@ -673,7 +673,7 @@ def validate_headers(
                     if str(path).startswith(prefix):
                         staged = staged_root / str(path)[len(prefix) :]
                         staged.parent.mkdir(parents=True, exist_ok=True)
-                        atomic_files.write(staged, contents[path])
+                        atomic_files.write(staged, contents[path], durable=False)
             staged_project = replace(project, work_include=tuple(roots))
             source = scratch / "context.c"
             generated = selected.intersection(outputs)
@@ -685,7 +685,8 @@ def validate_headers(
             entry_points.extend(sorted(selected - covered))
             atomic_files.text(
                 source,
-                "".join(
+                durable=False,
+                content="".join(
                     f'#include "{str(path)[len(str(root)) + 1 :]}"\n'
                     for path in entry_points
                     for root in project.include
@@ -693,7 +694,7 @@ def validate_headers(
                 ),
             )
             assembly = scratch / "validate.s"
-            atomic_files.text(assembly, ".text\nglabel __unbake_validate_context\n jr $ra\n nop\n")
+            atomic_files.text(assembly, ".text\nglabel __unbake_validate_context\n jr $ra\n nop\n", durable=False)
             try:
                 if policy is None:
                     expanded = "\n".join(declarations.clean(contents[path].decode()) for path in sorted(selected))
@@ -704,7 +705,7 @@ def validate_headers(
                 if context_key not in validated:
                     if policy is not None and getattr(policy, "m2c", None):
                         context = scratch / "expanded.c"
-                        atomic_files.text(context, context_text)
+                        atomic_files.text(context, context_text, durable=False)
                         run_tool(
                             [
                                 str(policy.m2c),
@@ -728,6 +729,6 @@ def validate_headers(
                 raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
 
     def complete(path: Path) -> None:
-        atomic_files.write(path, b"validated\n")
+        atomic_files.fresh(path, b"validated\n")
 
     cache.produce("typemap-validation", bundle_key, complete)

@@ -44,6 +44,29 @@ class Functions(Mapping[str, dict[str, Any]]):
             body.update(item["versions"][version])
         return {"aliases": item["aliases"], "versions": versions}
 
+    def read(self, names: list[str]) -> dict[str, dict[str, Any]]:
+        """Complete items of NAMES, in that order, over one connection (equal to item-by-item lookup)."""
+        wanted = set(names)
+        bodies: dict[str, dict[str, Any]] = {name: {} for name in names}
+        try:
+            with closing(sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
+                connection.execute("PRAGMA cache_size=-2048")
+                rows = connection.execute("SELECT name, version, body FROM functions ORDER BY name, version")
+                for name, version, body in rows:
+                    if name in wanted:
+                        bodies[name][version] = json.loads(zlib.decompress(body))
+        except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
+            raise Held("solve", f"map.shards: {self.path}: {error}") from error
+        items = {}
+        for name in names:
+            item, versions = self.inventory[name], bodies[name]
+            if set(versions) != set(item["versions"]):
+                raise Held("solve", f"map.shards: missing containing version for {name}")
+            for version, body in versions.items():
+                body.update(item["versions"][version])
+            items[name] = {"aliases": item["aliases"], "versions": versions}
+        return items
+
     def version(self, name: str, version: str) -> dict[str, Any]:
         """Read one containing body without decompressing its other versions."""
         try:

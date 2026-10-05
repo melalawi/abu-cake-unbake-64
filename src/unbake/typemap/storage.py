@@ -22,11 +22,11 @@ def encoded(value: object) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def write(path: Path, content: bytes) -> None:
+def write(path: Path, content: bytes, *, durable: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise Held("solve", f"types.database: generated path is a symlink: {path}")
-    atomic_files.write(path, content)
+    atomic_files.write(path, content, durable=durable)
 
 
 def read(path: Path, key: str) -> dict[str, Any]:
@@ -138,7 +138,8 @@ class FactLog:
         self.stream.close()
         digest_ = inputs.digest(self.temporary)
         path = self.temporary.parent / ("constraints-" + digest_ + ".jsonl")
-        atomic_files.publish(self.temporary, path)
+        # The shard is re-derivable from the map; its loss costs a recompute, never a wrong answer.
+        atomic_files.publish(self.temporary, path, durable=False)
         return {"kind": "shard", "path": str(path.relative_to(root)), "sha256": digest_, "count": self.count}
 
     def close(self) -> None:

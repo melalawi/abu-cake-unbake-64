@@ -47,8 +47,11 @@ def stream(
     errors: str | None = None,
     newline: str | None = None,
     permissions: int | None = None,
+    durable: bool = True,
 ) -> Iterator[IO[Any]]:
-    """Write privately; append under a stable side lock and publish on success."""
+    """Write privately; append under a stable side lock and publish on success.
+
+    durable=False skips fsync: for re-derivable output (caches, scratch), whose loss only costs a recompute."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
@@ -57,18 +60,19 @@ def stream(
             fcntl.flock(lock, fcntl.LOCK_EX)
         if permissions is None:
             permissions = path.stat().st_mode & 0o777 if path.exists() else 0o644
-        with staging(path) as temporary:
+        with staging(path, durable=durable) as temporary:
             if ("a" in mode or "+" in mode) and path.exists():
                 shutil.copyfile(path, temporary)
             with temporary.open(mode, encoding=encoding, errors=errors, newline=newline) as output:
                 yield output
                 output.flush()
-                os.fsync(output.fileno())
+                if durable:
+                    os.fsync(output.fileno())
             temporary.chmod(permissions)
 
 
-def write(path: Path, content: bytes | bytearray, *, mode: int | None = None) -> None:
-    with stream(path, "wb", permissions=mode) as output:
+def write(path: Path, content: bytes | bytearray, *, mode: int | None = None, durable: bool = True) -> None:
+    with stream(path, "wb", permissions=mode, durable=durable) as output:
         output.write(content)
 
 
@@ -79,14 +83,20 @@ def fresh(path: Path, content: bytes) -> None:
 
 
 def text(
-    path: Path, content: str, encoding: str | None = None, errors: str | None = None, newline: str | None = None
+    path: Path,
+    content: str,
+    encoding: str | None = None,
+    errors: str | None = None,
+    newline: str | None = None,
+    *,
+    durable: bool = True,
 ) -> int:
-    with stream(path, encoding=encoding, errors=errors, newline=newline) as output:
+    with stream(path, encoding=encoding, errors=errors, newline=newline, durable=durable) as output:
         return int(output.write(content))
 
 
-def copyfile(source: Path, destination: Path, *, follow_symlinks: bool = True) -> Path:
-    with staging(destination) as temporary:
+def copyfile(source: Path, destination: Path, *, follow_symlinks: bool = True, durable: bool = True) -> Path:
+    with staging(destination, durable=durable) as temporary:
         shutil.copyfile(source, temporary, follow_symlinks=follow_symlinks)
     return destination
 

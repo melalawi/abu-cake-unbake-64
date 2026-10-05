@@ -23,7 +23,7 @@ from unbake.typemap import header_names, split, storage
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
     def load() -> bytes:
         def make(output: Path) -> None:
-            atomic_files.write(output, storage.encoded(compute()))
+            atomic_files.fresh(output, storage.encoded(compute()))
 
         return cache.produce(kind, content_key, make).read_bytes()
 
@@ -57,7 +57,7 @@ class Certificates:
         self.contains("")
         self.directory.mkdir(parents=True, exist_ok=True)
         content = storage.encoded(sorted(keys))
-        storage.write(self.directory / (storage.digest(content) + ".json"), content)
+        storage.write(self.directory / (storage.digest(content) + ".json"), content, durable=False)
         if self.known is None:
             self.known = set()
         self.known.update(keys)
@@ -153,7 +153,7 @@ class Session:
         content_key = key(self.environment, path.relative_to(self.project.include[0]).as_posix(), text)
 
         def make(output: Path) -> None:
-            atomic_files.write(output, split.guarded(path.relative_to(self.project.include[0]), text))
+            atomic_files.fresh(output, split.guarded(path.relative_to(self.project.include[0]), text))
 
         return memo(
             "typemap-guarded",
@@ -250,7 +250,7 @@ class Session:
         result = artifact(self.cache, "typemap-render", content_key, make)
         state_content = storage.encoded({"projection": projection, "content_key": content_key})
         if not state.is_file() or state.read_bytes() != state_content:
-            storage.write(state, state_content)
+            storage.write(state, state_content, durable=False)
         value.update({field: result[field] for field in ("declaration_headers", "shared_aliases")})
         self.reserved = set(result["reserved"])
         return {Path(p): data.encode() for p, data in result["outputs"].items()}

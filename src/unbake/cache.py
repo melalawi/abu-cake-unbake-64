@@ -82,7 +82,7 @@ class Cache:
             if not src.is_file():
                 raise Held("cache", f"src {src}: expected file")
             path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_files.copyfile(src, path)
+            atomic_files.copyfile(src, path, durable=False)
             return path
         except OSError as error:
             raise Held("cache", f"{path} from src {src}: {error}") from error
