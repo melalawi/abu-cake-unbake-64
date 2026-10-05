@@ -82,6 +82,22 @@ def whole_body(assembly: str, function: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def instruction_indexes(lines: list[str], function: str) -> list[int]:
+    """Line numbers of the instructions after the function label, in order."""
+    start = 0
+    for number, line in enumerate(lines):
+        if re.fullmatch(rf"\s*(?:glabel\s+{re.escape(function)}|{re.escape(function)}:)\s*", line):
+            start = number + 1
+            break
+    found = []
+    for number in range(start, len(lines)):
+        code = re.sub(r"/\*.*?\*/", "", lines[number]).split("#", 1)[0].split("//", 1)[0].strip()
+        label = re.fullmatch(r"\S+:", code) or re.match(r"(?:glabel|endlabel|nonmatching)\b", code)
+        if code and not code.startswith(".") and not label:
+            found.append(number)
+    return found
+
+
 def jump_tables(project: Project, version: str, function: str, assembly: str) -> str:
     """Supply ROM-backed local jump tables omitted by text-only extraction."""
     from unbake.decomp.rom import function_span, project_reader, symbol_values
@@ -95,22 +111,30 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
     if span is None:
         raise Held("m2c", f"{function}: missing split placement in VERSION {version}")
     read_memory = project_reader(project, version)
-    tables = []
-    targets = set()
-    for name in sorted(names):
-        if re.search(rf"^\s*(?:glabel\s+{re.escape(name)}|{re.escape(name)}:)\s*$", assembly, re.M):
-            continue
+    addresses = {}
+    for name in names:
         address = values.get(name)
         if address is None:
             generated = re.fullmatch(r"jtbl_([0-9A-Fa-f]{8})", name)
             if generated is None:
                 raise Held("m2c", f"{name}: jump table address is missing")
             address = int(generated[1], 16)
+        addresses[name] = address
+    # A table ends where the next table begins, not only at an out-of-span word.
+    ordered = sorted(addresses.values())
+    tables = []
+    targets = set()
+    for name in sorted(names, key=addresses.__getitem__):
+        if re.search(rf"^\s*(?:glabel\s+{re.escape(name)}|{re.escape(name)}:)\s*$", assembly, re.M):
+            continue
+        address = addresses[name]
+        following = [other for other in ordered if other > address]
         entries = []
         # A table entry must identify an instruction in the complete split unit.
         mapping = read_memory.span(address, 4)
-        for offset in range(0, min(span.size * 4, mapping.end - address), 4):
-            target = read_memory.table_entry(address + offset)
+        limit = min(address + span.size * 4, mapping.end, *following[:1])
+        for entry in range(address, limit, 4):
+            target = read_memory.table_entry(entry)
             if not span.address <= target < span.address + span.size or target % 4:
                 break
             entries.append(f".word .L{target:08X}")
@@ -118,18 +142,20 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
         if not entries:
             raise Held("m2c", f"{name}: no local jump table entries at 0x{address:08X}")
         tables.append(f"glabel {name}\n" + "\n".join(entries))
+    lines = assembly.split("\n")
+    instructions = instruction_indexes(lines, function)
+    inserts: dict[int, str] = {}
     for target in sorted(targets):
         label = f".L{target:08X}"
         if re.search(rf"^\s*{re.escape(label)}:\s*$", assembly, re.M):
             continue
-        instruction = re.compile(rf"^(\s*/\*\s*[0-9A-Fa-f]+\s+{target:08X}\s+[^\n]+)$", re.M | re.I)
-
-        def add_label(match: re.Match[str], label: str = label) -> str:
-            return label + ":\n" + match[0]
-
-        assembly, count = instruction.subn(add_label, assembly)
-        if count != 1:
-            raise Held("m2c", f"{function}: jump table target 0x{target:08X} requires one instruction, found {count}")
+        index = (target - span.address) // 4
+        if index >= len(instructions):
+            raise Held("m2c", f"{function}: jump table target 0x{target:08X} is past the function's last instruction")
+        inserts[instructions[index]] = label + ":"
+    for number in sorted(inserts, reverse=True):
+        lines.insert(number, inserts[number])
+    assembly = "\n".join(lines)
     return assembly + ("\n.section .rodata\n" + "\n".join(tables) + "\n" if tables else "")
 
 
