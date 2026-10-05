@@ -18,7 +18,7 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 
 
 def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) -> dict[str, Any]:

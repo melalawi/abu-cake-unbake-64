@@ -210,3 +210,18 @@ class PublishedContractsTests(unittest.TestCase):
         carrier = prototype("getter", record, {})["prototype"]
         self.assertEqual(carrier, "int (*getter(void))[4];")
         declarations.extract(carrier, {})
+
+
+class OneDeclarationTests(unittest.TestCase):
+    def test_a_carried_declaration_replaces_the_solver_prototype_of_the_same_symbol(self):
+        from unbake.config import Held
+        from unbake.layout import redeclarations
+        from unbake.typemap import database
+
+        carried = "extern s32 func_80204620_de(void *arg0);\n"
+        solver = {"func_80204620_de": "extern int func_80204620_de(void * arg0);", "other": "extern void other(void);"}
+        with self.assertRaisesRegex(Held, "layout.redeclaration.func_80204620_de: shared conflict"):
+            redeclarations.strip("", [carried, solver["func_80204620_de"] + "\n"])
+        database.one_declaration(solver, {Path("include/.published_x.h"): {"func_80204620_de"}})
+        self.assertEqual(solver, {"other": "extern void other(void);"})
+        self.assertEqual(redeclarations.strip("", [carried, *(text + "\n" for text in solver.values())]), "")

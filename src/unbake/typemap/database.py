@@ -394,6 +394,9 @@ def _render(
     # An authored provider is already imported through the graph.
     for name in authored_declarations:
         declarations_by_name.pop(name, None)
+    one_declaration(
+        declarations_by_name, {path: names for path, names in retained_contracts.items() if path in components}
+    )
     ownership = map.load(project)
     segments = symbol_segments(project)
     fixed_homes = {
@@ -410,6 +413,15 @@ def _render(
     value["declaration_headers"] = dict(layout.index["symbols"])
     value["shared_aliases"] = replacements
     return outputs
+
+
+def one_declaration(declarations_by_name: dict[str, str], carried: dict[Path, set[str]]) -> None:
+    """One declaration per symbol: a published declaration that is still carried (it agrees with any
+    definition, see the source loop above) replaces the solver's prototype for the same symbol, whatever
+    either spells."""
+    for names in carried.values():
+        for name in names:
+            declarations_by_name.pop(name, None)
 
 
 def symbol_segments(project: Project) -> dict[str, str]:
