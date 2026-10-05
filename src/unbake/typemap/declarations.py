@@ -54,6 +54,39 @@ def _outer_guard(text: str) -> str | None:
     return guard[1] if depth == 0 else None
 
 
+BOUNDARY = _BOUNDARY
+
+
+def cleaned_unit(text: str) -> str:
+    """A preprocessed text as a whole-unit extraction parses it: line markers kept, bodies blanked."""
+    return _declaration_unit(_unit_clean("published", text, line_markers=True))
+
+
+def unit_tree(cleaned: str) -> Any:
+    """The parse of a cleaned unit, resumed after a prefix shared with a recent unit."""
+    return _tree(cleaned, {})
+
+
+def node_type(node: Any) -> str:
+    return _type(node)
+
+
+def resolver(aliases: dict[str, str]) -> Callable[[str], str]:
+    """canonical() bound to ALIASES, remembered per alias environment."""
+    return _canonical_in(aliases)
+
+
+def layout_rows(cleaned: str, aliases: dict[str, str]) -> tuple[dict[str, Any], list[str], dict[str, int]]:
+    """Layout records of a cleaned unit (no provenance), its layout refusal if any, and the line (from 0) where
+    each record's aggregate is defined."""
+    import bisect
+
+    layout_source = _unit_clean("layouts", cleaned, line_markers=False)
+    rows, unknown, starts = unit_layouts.mentioned(layout_source, aliases)
+    breaks = [index for index, char in enumerate(layout_source) if char == "\n"]
+    return rows, unknown, {name: bisect.bisect_left(breaks, start) for name, start in starts.items()}
+
+
 def _declaration_unit(source: str) -> str:
     """_unit_bodies_blanked, once per text, resumed after the header prefix shared with recent units."""
     return memo(
@@ -254,10 +287,12 @@ def _preprocess(project: Project, command: list[str], source: str) -> str:
     return str(result.stdout)
 
 
-def source_unit(project: Project, policy: Host | None, version: str, source: Path) -> str:
+def source_unit(
+    project: Project, policy: Host | None, version: str, source: Path, *, line_markers: bool = False
+) -> str:
     """One source preprocessed with only its own includes, split by the source boundary."""
     return _headers(
-        project, policy, version, {}, source, line_markers=False, ordered=[], raw=True, include_generated=False
+        project, policy, version, {}, source, line_markers=line_markers, ordered=[], raw=True, include_generated=False
     )
 
 
@@ -541,13 +576,37 @@ def extract(
 
         Homes().visit(tree)
         result["authored_structs"] = sorted(authored_names)
-    for node in tree.ext:
+    for kind, name, row in declaration_rows(
+        tree.ext, provenance, resolve, definitions=definitions, owned_source=owned_source, contracts=_contracts
+    ):
+        result[kind][name] = row
+    if not complete_layout:
+        rows, unknown = _layout_records(source, provenance, aliases)
+        if _prefix is not None and (unknown or rows):
+            raise _FullDeclarationUnit
+        for name, row in rows.items():
+            result["structs"][name] = row
+        result["unknown"].extend(unknown)
+    return result
+
+
+def declaration_rows(
+    nodes: list[Any],
+    provenance: dict[str, Any],
+    resolve: Callable[[str], str],
+    *,
+    definitions: bool,
+    owned_source: Path | None,
+    contracts: bool,
+) -> Iterator[tuple[str, str, dict[str, Any]]]:
+    """(kind, name, record) of each file-scope function, global and array declaration, in node order."""
+    for node in nodes:
         definition = isinstance(node, c_ast.FuncDef)
         declaration = node.decl if definition else node
         if not isinstance(declaration, c_ast.Decl) or not declaration.name:
             continue
         if isinstance(declaration.type, c_ast.FuncDecl):
-            if "static" in declaration.storage or (definitions and not definition and not _contracts):
+            if "static" in declaration.storage or (definitions and not definition and not contracts):
                 continue
             params: list[dict[str, Any]] = []
             variadic = False
@@ -558,31 +617,26 @@ def extract(
                         variadic = True
                     elif _type(param.type) != "void":
                         params.append({"name": param.name or f"arg{len(params)}", "type": _type(param.type)})
-            known_arity = arguments is not None
-            result["functions"][declaration.name] = {
-                "return": _type(declaration.type.type),
-                "params": params,
-                "variadic": variadic,
-                "arity_known": known_arity,
-                "prototype": _prototype(declaration),
-                "registers": _registers(params, resolve),
-                "provenance": provenance,
-            }
+            yield (
+                "functions",
+                declaration.name,
+                {
+                    "return": _type(declaration.type.type),
+                    "params": params,
+                    "variadic": variadic,
+                    "arity_known": arguments is not None,
+                    "prototype": _prototype(declaration),
+                    "registers": _registers(params, resolve),
+                    "provenance": provenance,
+                },
+            )
         elif "static" not in declaration.storage and (
-            _contracts or not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
+            contracts or not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
         ):
             type_, extern, array = _global(declaration)
-            result["globals"][declaration.name] = {"type": type_, "provenance": provenance, "declaration": extern}
+            yield "globals", declaration.name, {"type": type_, "provenance": provenance, "declaration": extern}
             if array is not None:
-                result["arrays"][declaration.name] = {"type": array[0], "extent": array[1], "provenance": provenance}
-    if not complete_layout:
-        rows, unknown = _layout_records(source, provenance, aliases)
-        if _prefix is not None and (unknown or rows):
-            raise _FullDeclarationUnit
-        for name, row in rows.items():
-            result["structs"][name] = row
-        result["unknown"].extend(unknown)
-    return result
+                yield "arrays", declaration.name, {"type": array[0], "extent": array[1], "provenance": provenance}
 
 
 def _layout_records(
@@ -609,31 +663,33 @@ def _layout_records(
 def _portable_signatures(seed: dict[str, Any], shared_aliases: dict[str, str]) -> list[str]:
     """A generated header cannot refer to a typedef private to one C source."""
     local = {name: type_ for name, type_ in seed["aliases"].items() if shared_aliases.get(name) != type_}
-    rewritten: list[str] = []
     if not local:
-        return rewritten
-    for name, record in seed["functions"].items():
-        types = [record["return"], *(param["type"] for param in record["params"])]
-        expanded = [canonical(type_, local) for type_ in types]
-        if expanded == types:
-            continue
-        params = [declarator(type_, param["name"]) for type_, param in zip(expanded[1:], record["params"], strict=True)]
-        if record["variadic"]:
-            params.append("...")
-        arguments = ", ".join(params) or ("void" if record["arity_known"] else "")
-        storage_class = re.match(r"(?:(?:extern|static|inline)\s+)+", record["prototype"])
-        prefix = "" if storage_class is None else storage_class[0]
-        record["prototype"] = prefix + declarator(expanded[0], name + "(" + arguments + ")") + ";"
-        rewritten.append(record["prototype"])
-        # Width placeholders remain semantic unknowns even though their header
-        # carrier uses the actual declared machine-width type.
-        if not unknown(types[0]):
-            record["return"] = expanded[0]
-        record["params"] = [
-            {**param, "type": type_ if unknown(param["type"]) else expanded_type}
-            for param, type_, expanded_type in zip(record["params"], types[1:], expanded[1:], strict=True)
-        ]
-    return rewritten
+        return []
+    return [prototype for name, record in seed["functions"].items() if (prototype := portable(name, record, local))]
+
+
+def portable(name: str, record: dict[str, Any], local: dict[str, str]) -> str | None:
+    """Spell RECORD's signature through LOCAL typedefs expanded (in place); its new prototype, or None if unchanged."""
+    types = [record["return"], *(param["type"] for param in record["params"])]
+    expanded = [canonical(type_, local) for type_ in types]
+    if expanded == types:
+        return None
+    params = [declarator(type_, param["name"]) for type_, param in zip(expanded[1:], record["params"], strict=True)]
+    if record["variadic"]:
+        params.append("...")
+    arguments = ", ".join(params) or ("void" if record["arity_known"] else "")
+    storage_class = re.match(r"(?:(?:extern|static|inline)\s+)+", record["prototype"])
+    prefix = "" if storage_class is None else storage_class[0]
+    record["prototype"] = prefix + declarator(expanded[0], name + "(" + arguments + ")") + ";"
+    # Width placeholders remain semantic unknowns even though their header
+    # carrier uses the actual declared machine-width type.
+    if not unknown(types[0]):
+        record["return"] = expanded[0]
+    record["params"] = [
+        {**param, "type": type_ if unknown(param["type"]) else expanded_type}
+        for param, type_, expanded_type in zip(record["params"], types[1:], expanded[1:], strict=True)
+    ]
+    return str(record["prototype"])
 
 
 PREFIX_MEMO = 4

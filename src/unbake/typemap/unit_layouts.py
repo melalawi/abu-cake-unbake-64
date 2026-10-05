@@ -173,6 +173,12 @@ def _results(
 
 def records(source: str, aliases: dict[str, str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """Layout records (without provenance) of a cleaned unit, and the layout refusal if any."""
+    rows, unknown, _ = mentioned(source, aliases)
+    return rows, unknown
+
+
+def mentioned(source: str, aliases: dict[str, str]) -> tuple[dict[str, dict[str, Any]], list[str], dict[str, int]]:
+    """records(), with the offset where the unit first names each recorded aggregate (records follow it)."""
 
     clean = prefixes.concatenated("layouts.declaration_source", source, declaration_source)
 
@@ -196,17 +202,20 @@ def records(source: str, aliases: dict[str, str]) -> tuple[dict[str, dict[str, A
         reads = {name: aliases.get(name) for name in names}
         return _State(parser.tokens, types, aggregates, declared, snapshot, cache, rows, reads)
 
-    def finish(state: _State | None, text: str, start: int) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    def finish(
+        state: _State | None, text: str, start: int
+    ) -> tuple[dict[str, dict[str, Any]], list[str], dict[str, int]]:
         parser = _parser(state, text, clean, start, len(text))
         rows: dict[str, dict[str, Any]] = {}
         try:
             parser.declare(len(parser.tokens))
             _, results, refusal = _results(state, parser, text, aliases)
         except Held as error:
-            return rows, ["types.layout: " + error.reason]
+            return rows, ["types.layout: " + error.reason], {}
+        starts = {item.name: item.start for item in parser.aggregates if item.name}
         for _, layout, row in results:
             assert row is not None
             rows[layout.name] = row
-        return rows, [] if refusal is None else ["types.layout: " + refusal.reason]
+        return rows, [] if refusal is None else ["types.layout: " + refusal.reason], starts
 
     return prefixes.resumed("layouts", source, advance, finish)

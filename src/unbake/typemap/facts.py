@@ -1,13 +1,17 @@
-"""Per-source declaration facts, cached by content key.
+"""Per-source declaration facts: a cached source layer joined to a header layer on every solve.
 
-A published source's facts depend only on its bytes, its include closure, the
-preprocessor command and SCHEMA. Each (source, version) pair is extracted once
-and then read back from the shared cache. Large shared values (struct templates,
-typedef maps) are stored once by digest and interned on load, so many sources
-that include the same headers share one object.
+A published unit's facts are assembled (typemap.layers) from two cached parts:
 
-A worker takes every task of a source together. Versions whose preprocessed unit
-is the same text are extracted once and stamped with each task's provenance.
+- its source part, keyed on the source's bytes, its authored headers' bytes, the preprocessor command and
+  only the interface of its generated headers (their directives and typedefs, which change how the source
+  parses and how its types resolve), and on the header layouts its own layouts read;
+- one header part per header and version, keyed on the bytes of the header and its include closure.
+
+A land that changes a generated header's declarations or layouts so re-extracts no source: the solve
+assembles every unit again from the new header parts, which costs no parse. A unit the layers cannot
+represent exactly keeps the whole-unit extraction, keyed on every byte of its include closure.
+
+Large shared values (struct templates, typedef maps) are stored once by digest and interned on load.
 """
 
 from __future__ import annotations
@@ -17,7 +21,8 @@ import hashlib
 import itertools
 import json
 import re
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +30,19 @@ from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
-from unbake.typemap import declarations, storage
+from unbake.typemap import declarations, layers, storage
 
 FACTS = "facts"
 SHARED = "facts-shared"
+SOURCE = "facts-source"
+HEADER = "facts-header"
 # Bump when the facts extract() produces change for the same inputs. Keys never digest the tool's code.
-SCHEMA = 1
+SCHEMA = 2
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # At most this many sources per worker job: neighbours in include order share their header expansion.
 SOURCES_PER_JOB = 24
+# Header parts of one version per job: headers in path order share their own include expansions.
+HEADERS_PER_JOB = 16
 # At least this many jobs per worker, so a small fill still spreads over every worker.
 JOBS_PER_WORKER = 4
 # Placeholders for the provenance fields that differ between tasks sharing one unit text.
@@ -56,6 +65,8 @@ class Snapshot:
         self._edges: dict[Path, tuple[Path, ...]] = {}
         self._closures: dict[tuple[Path, ...], tuple[Path, ...]] = {}
         self._digests: dict[Path, str] = {}
+        self._interfaces: dict[Path, str] = {}
+        self._generated: frozenset[Path] | None = None
 
     def edges(self, path: Path) -> tuple[Path, ...]:
         found = self._edges.get(path)
@@ -89,29 +100,86 @@ class Snapshot:
             found = self._digests[path] = inputs.digest(path)
         return found
 
+    def generated(self) -> frozenset[Path]:
+        if self._generated is None:
+            from unbake.layout import index
+
+            self._generated = frozenset(index.headers(self.project))
+        return self._generated
+
+    def interface(self, path: Path) -> str:
+        """A generated header's directives and typedefs: what a source's own facts read of it."""
+        found = self._interfaces.get(path)
+        if found is None:
+            found = self._interfaces[path] = hashlib.sha256(interface(path.read_text()).encode()).hexdigest()
+        return found
+
+
+def interface(text: str) -> str:
+    """The preprocessor directives and typedef statements of a header, one per line, in order."""
+    from unbake.cdecl import declaration_source
+
+    code = declaration_source(text)
+    found = [line.strip() for line in re.findall(r"^[ \t]*#.*$", text, re.M)]
+    depth = 0
+    start = None
+    for match in re.finditer(r"\btypedef\b|[{};]", code):
+        token = match[0]
+        if token == "typedef" and depth == 0 and start is None:
+            start = match.start()
+        elif token == "{":
+            depth += 1
+        elif token == "}":
+            depth -= 1
+        elif token == ";" and depth == 0 and start is not None:
+            found.append(" ".join(code[start : match.end()].split()))
+            start = None
+    return "\n".join(found)
+
 
 def _forced(project: Project, command: list[str]) -> list[Path]:
     forced = [project.root / value for flag, value in itertools.pairwise(command) if flag == "-include"]
     return [path for path in forced if path.is_file()]
 
 
-def _command(project: Project, policy: Host | None, version: str) -> list[str]:
+def _command(project: Project, policy: Host | None, version: str, *, marked: bool = False) -> list[str]:
     if policy is None:
         return ["in-memory", version, *project.version(version).macros]
-    command = declarations._cpp_command(project, policy, version, extra=True, line_markers=False)
+    command = declarations._cpp_command(project, policy, version, extra=True, line_markers=marked)
     return [part.replace(str(project.root), ".") for part in command]
 
 
 def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snapshot) -> str:
+    """The whole-unit facts of one task: every byte of the include closure counts."""
     function, source, version = task
     command = _command(project, policy, version)
     roots = (source, *_forced(project, command))
     parts: list[str | bytes] = [FACTS, str(SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
-    # Generated headers count by their bytes too: a source's consumed contracts are read from them, and facts
-    # kept across a header that dropped a declaration would drop it from every later solution.
     for path in snapshot.closure(roots):
+        parts.extend((storage.relative(project, path), snapshot.digest(path)))
+    return key(*parts)
+
+
+def unit_key(project: Project, policy: Host | None, source: Path, version: str, snapshot: Snapshot) -> str:
+    """A source part: the source's bytes, authored headers' bytes and generated headers' interface only."""
+    command = _command(project, policy, version, marked=True)
+    roots = (source, *_forced(project, command))
+    parts: list[str | bytes] = [SOURCE, str(SCHEMA), "unit", version, json.dumps(command)]
+    parts.extend((storage.relative(project, source), source.read_bytes()))
+    generated = snapshot.generated()
+    for path in snapshot.closure(roots):
+        state = "interface " + snapshot.interface(path) if path in generated else snapshot.digest(path)
+        parts.extend((storage.relative(project, path), state))
+    return key(*parts)
+
+
+def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Snapshot) -> str:
+    command = _command(project, policy, version, marked=True)
+    roots = (header, *_forced(project, command))
+    parts: list[str | bytes] = [HEADER, str(SCHEMA), version, json.dumps(command), storage.relative(project, header)]
+    for path in (header, *snapshot.closure(roots)):
         parts.extend((storage.relative(project, path), snapshot.digest(path)))
     return key(*parts)
 
@@ -138,6 +206,7 @@ class Store:
     def __init__(self, cache: Cache | None) -> None:
         self.cache = cache
         self.memory: dict[str, Any] = {}
+        self.documents: dict[tuple[str, str], Any] = {}
         self.shared: dict[str, Any] = {}
         self.written: dict[int, tuple[Any, str]] = {}
 
@@ -210,6 +279,33 @@ class Store:
             path = self.cache.get(FACTS, content_key)
             rows = None if path is None else _load(path)
         return None if rows is None else [self.decode(row) for row in rows]
+
+    def raw(self, content_key: str) -> bytes | None:
+        """A whole-unit entry's encoded bytes."""
+        if self.cache is None:
+            rows = self.memory.get(content_key)
+            return None if rows is None else json.dumps(rows, separators=(",", ":")).encode()
+        path = self.cache.get(FACTS, content_key)
+        return None if path is None else path.read_bytes()
+
+    def json_path(self, kind: str, content_key: str) -> Path | None:
+        if self.cache is None:
+            return Path(content_key) if (kind, content_key) in self.documents else None
+        return self.cache.get(kind, content_key)
+
+    def json(self, kind: str, content_key: str) -> Any:
+        """A layer part (KIND is SOURCE or HEADER), or None."""
+        if self.cache is None:
+            return self.documents.get((kind, content_key))
+        path = self.cache.get(kind, content_key)
+        return None if path is None else _load(path)
+
+    def put_json(self, kind: str, content_key: str, value: Any) -> None:
+        if self.cache is None:
+            self.documents[(kind, content_key)] = value
+        else:
+            data = json.dumps(value, separators=(",", ":")).encode()
+            self.cache.produce(kind, content_key, functools.partial(_write, data=data))
 
     def text(
         self, text: str, provenance: dict[str, Any], authored: set[Path], compute: Callable[[], dict[str, Any]]
@@ -290,56 +386,161 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
     return result
 
 
-def _check_keys(project: Project, host: Host | None, group: list[tuple[str, Task]]) -> None:
-    """The inputs a key was computed from are the inputs extracted: a source edited mid-solve is refused."""
-    snapshot = Snapshot(project)
-    for content_key, task in group:
-        if source_key(project, host, task, snapshot) != content_key:
-            raise Held("solve", f"facts.inputs: {storage.relative(project, task[1])} changed during the solve; rerun")
-
-
-def _fill(project: Project, host: Host | None, output: Store, group: list[tuple[str, Task]]) -> None:
-    _check_keys(project, host, group)
-    encoded = source_facts(project, host, output, [task for _, task in group])
-    _check_keys(project, host, group)
-    for (content_key, _), data in zip(group, encoded, strict=True):
-        output.put_encoded(content_key, data)
-
-
-def _job(job: tuple[Project, Host, list[list[tuple[str, Task]]]]) -> None:
-    """Worker body: extract each source's missing tasks straight into the shared cache."""
-    project, host, sources = job
-    output = store(host)
-    for group in sources:
-        _fill(project, host, output, group)
-
-
 def _include_order(source: Path) -> tuple[tuple[str, ...], str]:
     """Sources whose include lines match sit together, so their header expansions are shared."""
     return tuple(name for _, name in _includes(source, inputs.signature(source))), str(source)
 
 
-def compute(project: Project, host: Host | None, output: Store, misses: list[tuple[str, Task]]) -> None:
-    """Fill the store for missing tasks; worker processes share the cache on disk."""
-    groups: dict[Path, list[tuple[str, Task]]] = {}
-    for miss in sorted(misses, key=lambda miss: (miss[1][2], miss[1][0])):
-        groups.setdefault(miss[1][1], []).append(miss)
-    ordered = [groups[source] for source in sorted(groups, key=_include_order)]
-    if output.cache is None or host is None:
-        for group in ordered:
-            _fill(project, host, output, group)
-        return
-    from unbake import pool
+def _headers(project: Project) -> list[Path]:
+    return sorted({path.resolve() for root in project.include for path in Path(root).rglob("*.h")})
 
-    workers = pool.Pool.from_host(host).size
-    size = max(1, min(SOURCES_PER_JOB, -(-len(ordered) // (workers * JOBS_PER_WORKER))))
-    jobs = [(project, host, ordered[start : start + size]) for start in range(0, len(ordered), size)]
-    pool.run(host, _job, jobs)
+
+class _Parts(Mapping[str, dict[str, Any]]):
+    """One version's header parts by line-marker path, read from the store on first use."""
+
+    def __init__(self, output: Store, keys: dict[str, str]) -> None:
+        self.output, self.content = output, keys
+        self.loaded: dict[str, dict[str, Any]] = {}
+
+    def __getitem__(self, name: str) -> dict[str, Any]:
+        found = self.loaded.get(name)
+        if found is None:
+            found = self.output.json(HEADER, self.content[name])
+            if found is None:
+                raise Held("solve", f"facts.headers: missing header part {self.content[name]} for {name}")
+            self.loaded[name] = found
+        return found
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.content)
+
+    def __len__(self) -> int:
+        return len(self.content)
+
+    def __contains__(self, name: object) -> bool:
+        return name in self.content
+
+
+def _header_part(project: Project, host: Host | None, version: str, header: Path) -> dict[str, Any]:
+    text = declarations.source_unit(project, host, version, header, line_markers=True)
+    try:
+        return layers.header_part(text, header)
+    except Held as error:
+        # A header that does not parse alone leaves its includers to whole-unit extraction.
+        return {"refused": True, "reason": error.reason}
+
+
+def _header_job(job: tuple[Project, Host | None, str, list[tuple[str, Path]]]) -> int:
+    """Worker body: one version's missing header parts, straight into the shared cache."""
+    project, host, version, headers = job
+    output = store(host)
+    for content_key, header in headers:
+        output.put_json(HEADER, content_key, _header_part(project, host, version, header))
+    return len(headers)
+
+
+def _source_tasks(
+    project: Project,
+    host: Host | None,
+    output: Store,
+    parts: dict[str, _Parts],
+    contexts: dict[str, layers.Context],
+    group: list[tuple[int, str, Task]],
+    counts: dict[str, int],
+) -> list[tuple[int, bytes]]:
+    """Encoded facts of every task of one source and version: its source part joined to its header parts."""
+    _, content_key, (_, source, version) = group[0]
+    placeholder = _provenance(project, _FUNCTION, _VERSION, source)
+    text: str | None = None
+
+    def extracted() -> dict[str, Any] | None:
+        nonlocal text
+        if text is None:
+            text = declarations.source_unit(project, host, version, source, line_markers=True)
+        counts["sources"] += 1
+        found = layers.source_part(text, source, parts[version], placeholder)
+        if unit_key(project, host, source, version, Snapshot(project)) != content_key:
+            raise Held("solve", f"facts.inputs: {storage.relative(project, source)} changed during the solve; rerun")
+        return found
+
+    stub = output.json(SOURCE, content_key)
+    part = None
+    if stub is None:
+        part = extracted()
+        stub = {"wide": True} if part is None else {"runs": part["runs"], "named": part["named"]}
+        output.put_json(SOURCE, content_key, stub)
+    if stub.get("wide"):
+        return _whole_tasks(project, host, output, group, counts)
+    context = contexts.get(version)
+    if context is None:
+        context = contexts[version] = layers.Context(parts[version])
+    depends = layers.dependencies(context, stub["runs"], source, stub["named"])
+    part_key = key(SOURCE, content_key, json.dumps(depends, sort_keys=True))
+    if part is None:
+        part = output.json(SOURCE, part_key)
+    if part is None:
+        part = extracted()
+        if part is None:
+            raise Held("solve", f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun")
+    output.put_json(SOURCE, part_key, part)
+    source_text = source.read_text()
+    result = []
+    for index, _, (function, _, _) in group:
+        stamped = _provenance(project, function, version, source)
+
+        def provenance(kind: str, row: dict[str, Any] = stamped) -> dict[str, Any]:
+            return {**row, "kind": kind}
+
+        consumed, definition = layers.assemble(context, part, source, source_text, provenance)
+        result.append((index, output.encoded([consumed, _owned(definition, function)])))
+    return result
+
+
+def _whole_tasks(
+    project: Project, host: Host | None, output: Store, group: list[tuple[int, str, Task]], counts: dict[str, int]
+) -> list[tuple[int, bytes]]:
+    """Whole-unit facts of a source the layers cannot represent, keyed on every byte of its includes."""
+    snapshot = Snapshot(project)
+    keyed = [(index, source_key(project, host, task, snapshot), task) for index, _, task in group]
+    missing = [(content_key, task) for _, content_key, task in keyed if not output.has(content_key)]
+    if missing:
+        counts["whole"] += 1
+        encoded = source_facts(project, host, output, [task for _, task in missing])
+        for (content_key, task), data in zip(missing, encoded, strict=True):
+            if source_key(project, host, task, Snapshot(project)) != content_key:
+                raise Held("solve", f"facts.inputs: {storage.relative(project, task[1])} changed during the solve")
+            output.put_encoded(content_key, data)
+    result: list[tuple[int, bytes]] = []
+    for index, content_key, _ in keyed:
+        entry = output.raw(content_key)
+        if entry is None:
+            raise Held("solve", f"facts.{content_key}: missing after extraction")
+        result.append((index, entry))
+    return result
+
+
+def _unit_job(
+    job: tuple[Project, Host | None, dict[str, dict[str, str]], list[list[tuple[int, str, Task]]]],
+) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
+    """Worker body: encoded facts of each task of its sources, extracting only missing source parts."""
+    project, host, header_keys, groups = job
+    output = store(host)
+    parts = {version: _Parts(output, keys) for version, keys in header_keys.items()}
+    contexts: dict[str, layers.Context] = {}
+    counts: dict[str, int] = {"sources": 0, "whole": 0}
+    result = []
+    for group in groups:
+        result.extend(_source_tasks(project, host, output, parts, contexts, group, counts))
+    return result, counts
 
 
 def published_keys(project: Project, policy: Host | None) -> list[str]:
+    """Each task's source-part key: what the solve's facts depend on besides the header layer."""
     snapshot = Snapshot(project)
-    return [source_key(project, policy, task, snapshot) for task in declarations.published_sources(project)]
+    return [
+        unit_key(project, policy, source, version, snapshot)
+        for _, source, version in declarations.published_sources(project)
+    ]
 
 
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
@@ -347,12 +548,47 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     tasks = declarations.published_sources(project)
     if len(tasks) != len(keys):
         raise Held("solve", "facts.keys: published sources changed during the solve")
-    misses = [(content_key, task) for content_key, task in zip(keys, tasks, strict=True) if not output.has(content_key)]
-    compute(project, policy, output, misses)
+    snapshot = Snapshot(project)
+    versions = sorted({version for _, _, version in tasks})
+    header_keys: dict[str, dict[str, str]] = {version: {} for version in versions}
+    missing_headers: dict[str, list[tuple[str, Path]]] = {version: [] for version in versions}
+    if policy is not None:
+        for version in versions:
+            for header in _headers(project):
+                content_key = header_key(project, policy, header, version, snapshot)
+                header_keys[version][layers.path(str(header))] = content_key
+                if output.json_path(HEADER, content_key) is None:
+                    missing_headers[version].append((content_key, header))
+    groups: dict[tuple[Path, str], list[tuple[int, str, Task]]] = {}
+    for index, (content_key, task) in enumerate(zip(keys, tasks, strict=True)):
+        groups.setdefault((task[1], task[2]), []).append((index, content_key, task))
+    ordered = [groups[group] for group in sorted(groups, key=lambda group: (_include_order(group[0]), group[1]))]
+    from unbake import pool
+
+    header_jobs = [
+        (project, policy, version, headers[start : start + HEADERS_PER_JOB])
+        for version, headers in missing_headers.items()
+        for start in range(0, len(headers), HEADERS_PER_JOB)
+    ]
+    if policy is None or output.cache is None:
+        results = [_unit_job((project, policy, header_keys, ordered))]
+    else:
+        pool.run(policy, _header_job, header_jobs)
+        workers = pool.Pool.from_host(policy).size
+        size = max(1, min(SOURCES_PER_JOB, -(-len(ordered) // (workers * JOBS_PER_WORKER))))
+        jobs = [(project, policy, header_keys, ordered[start : start + size]) for start in range(0, len(ordered), size)]
+        results = pool.run(policy, _unit_job, jobs)
+    encoded: dict[int, bytes] = {}
+    counts = {"sources": 0, "whole": 0}
+    for found, spent in results:
+        encoded.update(found)
+        for name, value in spent.items():
+            counts[name] += value
+    sys.stderr.write(
+        f"facts: {counts['sources']} of {len(groups)} source units extracted, {counts['whole']} whole, "
+        f"{sum(map(len, missing_headers.values()))} header parts\n"
+    )
     seeds: list[dict[str, Any]] = []
-    for content_key in keys:
-        rows = output.get(content_key)
-        if rows is None:
-            raise Held("solve", f"facts.{content_key}: missing after extraction")
-        seeds.extend(rows)
+    for index in range(len(tasks)):
+        seeds.extend(output.decode(row) for row in json.loads(encoded[index]))
     return seeds

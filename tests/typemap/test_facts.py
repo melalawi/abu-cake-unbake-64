@@ -66,3 +66,51 @@ class SourceKeyTests(TempCase):
 
     def test_key_names_the_version(self) -> None:
         self.assertNotEqual(self.key("us"), self.key("eu"))
+
+
+class UnitKeyTests(SourceKeyTests):
+    """A source part keys on generated headers' interface only: a land that changes their declarations,
+    layouts or (void) spellings (the second types pass) re-extracts no source."""
+
+    def key(self, version: str = "us") -> str:  # type: ignore[override]
+        return facts.unit_key(self.project, self.host, self.source, version, facts.Snapshot(self.project))
+
+    def test_generated_header_changes(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include" / "used.h"
+        original = used.read_text()
+        cases = [
+            # (label, generated header text, key changes)
+            ("a declaration added", original + "extern int added;\n", False),
+            ("a prototype respelled (void)", original + "extern void f(void);\n", False),
+            ("a layout changed", original + "struct Shape { int a; };\n", False),
+            ("a comment", original + "/* typedef long Commented; */\n", False),
+            ("a typedef added", original + "typedef long Used2;\n", True),
+            ("a typedef retargeted", original.replace("typedef int Used;", "typedef long Used;"), True),
+            ("a directive added", original + "#define USED 1\n", True),
+            ("a typedef of an aggregate body", original + "typedef struct { int a; } Anon;\n", True),
+        ]
+        with patch.object(index, "headers", return_value=frozenset({used})):
+            base = self.key()
+            for label, text, changes in cases:
+                with self.subTest(label):
+                    used.write_text(text)
+                    self.assertEqual(self.key() != base, changes)
+                    used.write_text(original)
+            self.assertEqual(self.key(), base)
+
+    def test_generated_header_bytes_stay_in_the_key(self) -> None:
+        """Overridden: generated header bytes are the header layer's input, not the source part's."""
+
+    def test_interface_lists_directives_and_typedefs(self) -> None:
+        text = (
+            "#ifndef GUARD\n#define GUARD\n/* typedef int Hidden; */\nextern int value;\n"
+            "typedef struct Pair {\n    int a;\n} Pair;\nstruct Body { int b; };\n#endif\n"
+        )
+        self.assertEqual(
+            facts.interface(text).split("\n"),
+            ["#ifndef GUARD", "#define GUARD", "#endif", "typedef struct Pair { int a; } Pair;"],
+        )

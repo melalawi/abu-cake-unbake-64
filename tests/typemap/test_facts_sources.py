@@ -35,24 +35,19 @@ class SourceFactsTests(TempCase):
                     self.assertEqual(data, store.encoded(facts.extract(self.project, None, task)))
         self.assertNotIn(b"\\u0000", b"".join(stamped))
 
-    def test_merge_order_does_not_depend_on_extraction_order(self) -> None:
-        tasks = [(f, self.source, v) for v in ("eu", "jp", "us") for f in ("alpha", "beta")]
-        snapshot = facts.Snapshot(self.project)
-        misses = [(facts.source_key(self.project, None, task, snapshot), task) for task in tasks]
-        results = []
-        with patch.object(declarations, "source_unit", self.units):
-            for order in (misses, list(reversed(misses))):
-                store = facts.Store(None)
-                facts.compute(self.project, None, store, order)
-                results.append([store.memory[content_key] for content_key, _ in misses])
-        self.assertEqual(results[0], results[1])
-
     def test_a_source_edited_after_its_key_is_refused(self) -> None:
+        project = SimpleNamespace(
+            root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
+        )
         task = ("alpha", self.source, "us")
-        stale = facts.source_key(self.project, None, task, facts.Snapshot(self.project))
+        stale = facts.unit_key(project, None, self.source, "us", facts.Snapshot(project))
         self.source.write_text(self.source.read_text() + "int gamma;\n")
-        with patch.object(declarations, "source_unit", self.units), self.assertRaises(facts.Held) as raised:
-            facts.compute(self.project, None, facts.Store(None), [(stale, task)])
+        with (
+            patch.object(declarations, "source_unit", lambda *args, **named: self.units(*args)),
+            patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
+            self.assertRaises(facts.Held) as raised,
+        ):
+            facts._unit_job((project, None, {"us": {}}, [[(0, stale, task)]]))
         self.assertIn("facts.inputs: src/alpha.c changed during the solve", str(raised.exception))
 
     def test_source_key_follows_schema_not_tool_code(self) -> None:
