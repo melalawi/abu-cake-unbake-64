@@ -18,8 +18,8 @@ from unbake.search import BUILTINS
 
 @dataclass
 class Ladder:
-    # method -> the compare percent after it ran, or why it did not run
-    tried: dict[str, float | str] = field(default_factory=dict)
+    # method -> the compare percent after it ran
+    tried: dict[str, float] = field(default_factory=dict)
     best: float = 0.0
     # The method whose search or whose adopted text's compare is outstanding.
     method: str = ""
@@ -57,9 +57,7 @@ def write_trouble(project: Project, host: Host, function: str, file: Path, ladde
         assembly = target_assembly(project, host, function)
     except Held as error:
         assembly = f"unavailable: {error.reason}"
-    methods = "\n".join(
-        f"| {name} | {value if isinstance(value, str) else f'{value:.2f}%'} |" for name, value in ladder.tried.items()
-    )
+    methods = "\n".join(f"| {name} | {value:.2f}% |" for name, value in ladder.tried.items())
     path = file.with_name("TROUBLE.md")
     atomic_files.text(
         path,

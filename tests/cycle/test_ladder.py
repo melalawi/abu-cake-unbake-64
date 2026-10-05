@@ -19,9 +19,8 @@ class LadderTests(unittest.TestCase):
             current.tried[method] = 0.0
         self.assertEqual(tuple(seen), BUILTINS)
 
-    def test_a_failed_method_is_tried_once(self) -> None:
-        current = ladder.Ladder(tried={"registers": "failed: broke"})
-        self.assertEqual(current.next_method(), "order")
+    def test_a_method_already_scored_is_skipped(self) -> None:
+        self.assertEqual(ladder.Ladder(tried={"registers": 50.0}).next_method(), "order")
 
     def test_only_a_strictly_higher_percent_is_a_gain(self) -> None:
         current = ladder.Ladder(best=60.0)
@@ -49,14 +48,14 @@ class TroubleTests(TempCase):
         return path.read_text()
 
     def test_it_holds_the_target_the_best_c_the_first_difference_and_each_method(self) -> None:
-        text = self.write({"registers": 70.0, "order": "failed: no beam"})
+        text = self.write({"registers": 70.0, "order": 71.0})
         for part in (
             "Best compare so far: 72.50%",
             "glabel f",
             "int f(void) { return 1; }",
             "first divergence: word 3",
             "| registers | 70.00% |",
-            "| order | failed: no beam |",
+            "| order | 71.00% |",
         ):
             self.assertIn(part, text)
         self.assertNotIn("permute", text)

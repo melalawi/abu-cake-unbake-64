@@ -518,9 +518,16 @@ def run(
                 **({} if result["ok"] else {"diagnostic": result["diagnostic"]}),
             )
             if not result["ok"]:
-                current.tried[method] = f"failed: {result['diagnostic']}"
+                # A method that errors is a tool gap, never a plateau: the row holds with the method's reason.
                 current.method = ""
-                search_next(row)
+                row.stage, row.diagnostic = "held", f"search.{method}: {result['diagnostic']}"
+                emitter.emit(
+                    "fn.held",
+                    function=row.function,
+                    key=result["key"],
+                    reason=row.diagnostic,
+                    next=next_words("search-variants", row.file, "--method", method),
+                )
                 return
             file, best = Path(row.file), Path(result["best_file"])
             if best.read_bytes() == file.read_bytes():

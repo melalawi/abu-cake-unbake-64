@@ -101,7 +101,8 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
         generators: list[Any] = [Permuter(version, target, float(seconds))]
     else:
         generators = methods.methods(method)
-    result = run(project, host, file, generators, out, float(seconds))
+    # A draft under build/work/FUNC sees its own private headers first, as compare does.
+    result = run(compare.view_for(project, file, function), host, file, generators, out, float(seconds))
     best = file.with_name(f"{function}.best.c")
     atomic_files.copyfile(result.source, best)
     return Searched(function, best, result.fuzzy, result.trial.exact, result.steps)

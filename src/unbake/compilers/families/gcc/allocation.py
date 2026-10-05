@@ -62,8 +62,7 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         if refs < 1 or live < 1:
             raise Held("explain", f"dumps.lreg.pseudo.{number}.references/live_length: expected positive values")
         usage[number] = (refs, live)
-    if not usage:
-        raise Held("explain", "dumps.lreg.usage: missing Register usage rows")
+    # A function that allocates no pseudo register has no usage rows (nor dispositions): an empty allocation.
     dispositions = {}
     section = re.search(r"^;; Register dispositions:\s*\n([^;]*)", global_text, re.M)
     if section is None:

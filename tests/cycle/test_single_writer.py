@@ -304,16 +304,16 @@ class SingleWriterTests(TempCase):
         self.assertEqual(run.names("fn.creative"), [])
         self.assertEqual(self.methods(run), ["registers"])
 
-    def test_a_method_that_fails_is_recorded_and_the_ladder_goes_on(self) -> None:
+    def test_a_method_that_errors_holds_the_row_with_its_reason(self) -> None:
         def failing(n: int, text: str, method: str) -> dict:
             return {"ok": False, "key": "search", "diagnostic": f"{method} broke", "seconds": 0.0}
 
         run = self.cycle(land_steps=[[]], search=failing)
-        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
-        self.assertEqual(
-            run.names("fn.creative", "beta")[0]["methods"],
-            {name: f"failed: {name} broke" for name in ("registers", "order", "permute")},
-        )
+        self.assertEqual(self.methods(run), ["registers"])  # no method after the one that errored
+        self.assertEqual(run.names("fn.creative"), [])
+        held = run.names("fn.held", "beta")[0]
+        self.assertEqual(held["reason"], "search.registers: registers broke")
+        self.assertEqual(run.result.data["held"], ["beta"])
 
     def test_a_search_started_before_the_land_runs_after_the_steps(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
