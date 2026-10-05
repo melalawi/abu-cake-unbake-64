@@ -132,6 +132,19 @@ def _executor(size: int, memory_worker_bytes: int) -> ProcessPoolExecutor:
     )
 
 
+def _cpu() -> float:
+    own, children = resource.getrusage(resource.RUSAGE_SELF), resource.getrusage(resource.RUSAGE_CHILDREN)
+    return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
+
+
+def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float]:
+    """Worker body: the task's result and the CPU it and the tools it ran spent (effort ledger)."""
+    fn, item = task
+    start = _cpu()
+    result = fn(item)
+    return result, _cpu() - start
+
+
 class Pool:
     def __init__(self, workers: int, memory_total_bytes: int, memory_parent_bytes: int, memory_worker_bytes: int):
         self.size = admitted(workers, memory_total_bytes, memory_parent_bytes, memory_worker_bytes)
@@ -201,33 +214,61 @@ class Pool:
             return self._fresh(executor).submit(fn, item)
 
     def submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
-        """One task; a broken pool is replaced first. The caller retries a crashed task at most once."""
-        return self._submit(fn, item)
+        """One task; a broken pool is replaced first. The caller retries a crashed task at most once. Its CPU is
+        charged to fn (effort); cancelling the returned future cancels the task."""
+        from unbake import effort
+
+        inner = self._submit(_measured, (fn, item))
+        outer: Future[R] = Future()
+
+        def finished(done: Future[tuple[R, float]]) -> None:
+            if done.cancelled():
+                outer.cancel()
+                return
+            error = done.exception()
+            if error is not None:
+                outer.set_exception(error)
+                return
+            result, seconds = done.result()
+            effort.charge(effort.name_of(fn), seconds)
+            outer.set_result(result)
+
+        outer.add_done_callback(lambda done: inner.cancel() if done.cancelled() else None)
+        inner.add_done_callback(finished)
+        return outer
 
     def map(self, fn: Callable[[T], R], items: Sequence[T]) -> Iterator[R]:
-        """Results in item order; at most `size` tasks in flight."""
-        pending: deque[tuple[T, Future[R], int]] = deque()
+        """Results in item order; at most `size` tasks in flight. Each task's CPU is charged to fn (effort)."""
+        from unbake import effort
+
+        name = effort.name_of(fn)
+
+        def submit(item: T) -> Future[tuple[R, float]]:
+            return self._submit(_measured, (fn, item))
+
+        pending: deque[tuple[T, Future[tuple[R, float]], int]] = deque()
         source = iter(items)
         for item in source:
-            pending.append((item, self._submit(fn, item), 0))
+            pending.append((item, submit(item), 0))
             if len(pending) >= self.size:
                 break
         while pending:
             item, future, attempt = pending.popleft()
             try:
-                result = future.result()
+                result, seconds = future.result()
             except (BrokenProcessPool, MemoryError) as error:
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 if attempt:
                     raise TaskFailed(failure, item) from error
                 if isinstance(error, BrokenProcessPool):
                     self._fresh()
-                    pending = deque((i, self._submit(fn, i), a) for i, _, a in pending)
-                pending.appendleft((item, self._submit(fn, item), 1))
+                    pending = deque((i, submit(i), a) for i, _, a in pending)
+                pending.appendleft((item, submit(item), 1))
                 continue
+            effort.charge(name, seconds)
             yield result
             for item in source:
-                pending.append((item, self._submit(fn, item), 0))
+                pending.append((item, submit(item), 0))
                 break
 
 

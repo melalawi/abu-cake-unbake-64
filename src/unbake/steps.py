@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import effort
 from unbake.cache import key
 from unbake.config import Held, Host, Project
 
@@ -95,13 +96,23 @@ class StepResult:
     trigger: str
     ran: bool
     seconds: float
+    cpu_seconds: float = 0.0
 
     def document(self) -> dict[str, Any]:
-        return {"step": self.step, "trigger": self.trigger, "ran": self.ran, "seconds": round(self.seconds, 3)}
+        return {
+            "step": self.step,
+            "trigger": self.trigger,
+            "ran": self.ran,
+            "seconds": round(self.seconds, 3),
+            "cpu_seconds": round(self.cpu_seconds, 3),
+        }
 
     def line(self) -> str:
-        state = f"ran in {self.seconds:.1f} s" if self.ran else "unchanged"
-        return f"{self.step}: {state} ({self.trigger})"
+        if not self.ran:
+            return f"{self.step}: unchanged ({self.trigger})"
+        percent = 100 * self.cpu_seconds / self.seconds if self.seconds > 0 else 0.0
+        spent = f"{self.cpu_seconds:.1f} cpu-s ({percent:.0f}%)"
+        return f"{self.step}: ran in {self.seconds:.1f} s, {spent} ({self.trigger})"
 
 
 @dataclass(frozen=True)
@@ -402,6 +413,7 @@ def _ensure(
         for name in steps:
             step = STEPS[name]
             started = time.monotonic()
+            spent = effort.mark()
             current = step.key(project, host)
             same = recorded(project, name) == current
             changed = altered(project, name) if same and step.outputs is not None else []
@@ -430,7 +442,7 @@ def _ensure(
                 None if step.outputs is None else _digests(project, step.outputs(project)),
             )
             command.running(None)
-            result = StepResult(name, trigger, True, time.monotonic() - started)
+            result = StepResult(name, trigger, True, time.monotonic() - started, effort.since(spent).cpu)
             results = [row for row in results if row.step != name or row.ran]
             results.append(result)
             ran.append(name)

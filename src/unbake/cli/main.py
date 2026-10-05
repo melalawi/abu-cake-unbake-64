@@ -121,12 +121,17 @@ def _where(error: BaseException) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from unbake import effort
+
     stdout = sys.stdout
+    started = effort.mark()
     try:
         with redirect_stdout(sys.stderr):
             result = _run(argv, stdout)
     except Exception as error:
         result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}"), "unbake next")
+    # Every command ends with what it cost: wall, CPU of this process, its tools and its pool work by function.
+    print(effort.since(started).line(), file=sys.stderr)
     code = emit(result, stdout, sys.stderr)
     return 130 if result.key == "interrupted" else code
 
