@@ -108,6 +108,28 @@ def validate_edges(root: Path, edges: dict[Path, set[Path]], authored: set[Path]
                 raise Held("layout", f"layout.includes: downward include {path} -> {dep}")
 
 
+def one_home(parsed: dict[Path, Any], homes: dict[Path, Path], root: Path, authored: set[Path]) -> None:
+    """Every generated type definition has one home: a typedef name or a struct/union body that two declaration
+    components define is refused by name (the units that spell it must name it apart, never share it silently)."""
+    definers: dict[tuple[str, str], list[Path]] = {}
+    for path, row in parsed.items():
+        if path in authored:
+            continue
+        for name in row.typedefs:
+            definers.setdefault(("typedef", name), []).append(path)
+        for name in row.tags:
+            definers.setdefault(("struct", name), []).append(path)
+    refused = []
+    for (kind, name), paths in sorted(definers.items()):
+        if len(paths) < 2:
+            continue
+        places = sorted({homes.get(path, path).relative_to(root).as_posix() for path in paths})
+        where = " and ".join(places) if len(places) > 1 else f"{places[0]} twice"
+        refused.append(f"{kind} {name} would be defined in {where}")
+    if refused:
+        raise Held("headers", "headers.type_home: " + "; ".join(refused))
+
+
 class Layout:
     """One component per declaration home; pointer cycles share a guarded cluster."""
 
@@ -304,6 +326,7 @@ class Layout:
         for number, name in names.items():
             for path in self.groups[number]:
                 self.homes[path] = root / name
+        one_home(self.parsed, self.homes, root, authored)
         bodies: dict[Path, list[str]] = {}
         edges: dict[Path, set[Path]] = {}
         for group in ownership.groups:

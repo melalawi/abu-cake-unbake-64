@@ -128,3 +128,35 @@ class DeclarationHomeTests(unittest.TestCase):
         # A type's recorded home that is still a module header keeps providing it; a vanished one is not recreated.
         self.assertIn(f'#include "{home(result, "Inner")}"', result.headers[ROOT / G["gc"]].decode())
         self.assertNotIn(ROOT / "main/old.h", result.headers)
+
+
+class OneHomeTests(unittest.TestCase):
+    def test_a_layout_two_units_share_has_one_home_their_headers_include(self) -> None:
+        with patch.object(headers, "SHARED_MIN_BYTES", 1):
+            result = layout(
+                {"Shared": "typedef struct Shared { int a; } Shared;"},
+                {"a": "void a(void) { Shared s; }", "b": "void b(void) { Shared s; }"},
+            )
+        home_header = home(result, "Shared")
+        self.assertEqual(home_header, shared_name(key("ga", "gb")))
+        defining = [p for p, data in result.headers.items() if b"struct Shared {" in data]
+        self.assertEqual([p.relative_to(ROOT).as_posix() for p in defining], [home_header])
+        self.assertEqual(result.index["type_headers"]["Shared"], [home_header])
+
+    def test_one_name_from_two_components_is_refused_naming_its_home(self) -> None:
+        for label, types, sources, expected in [
+            (
+                "same tag, different layouts, both modules",
+                {"A": "struct Unit { int a; };", "B": "struct Unit { char b[8]; };"},
+                {"a": "void a(void) { struct Unit u; }", "b": "void b(void) { struct Unit u; }"},
+                r"struct Unit would be defined in common/types_[0-9a-f]{12}\.h twice",
+            ),
+            (
+                "same typedef twice in one module",
+                {"A": "typedef int Count;", "B": "typedef int Count;"},
+                {"a": "void a(void) { Count c; }"},
+                "typedef Count would be defined in main/ga.h twice",
+            ),
+        ]:
+            with self.subTest(label), self.assertRaisesRegex(Exception, "headers.type_home: " + expected):
+                layout(types, sources)
