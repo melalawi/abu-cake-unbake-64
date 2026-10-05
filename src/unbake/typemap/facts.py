@@ -68,6 +68,7 @@ class Snapshot:
         self._closures: dict[tuple[Path, ...], tuple[Path, ...]] = {}
         self._digests: dict[Path, str] = {}
         self._interfaces: dict[Path, str] = {}
+        self._shapes: dict[Path, str] = {}
         self._generated: frozenset[Path] | None = None
 
     def edges(self, path: Path) -> tuple[Path, ...]:
@@ -116,6 +117,14 @@ class Snapshot:
             found = self._interfaces[path] = hashlib.sha256(interface(path.read_text()).encode()).hexdigest()
         return found
 
+    def shape(self, path: Path) -> str:
+        """A generated header's directives, typedefs and aggregate definitions: what another header's part reads
+        of it (its own layouts embed included aggregates and size arrays by included enumerators)."""
+        found = self._shapes.get(path)
+        if found is None:
+            found = self._shapes[path] = hashlib.sha256(shape(path.read_text()).encode()).hexdigest()
+        return found
+
 
 def interface(text: str) -> str:
     """The preprocessor directives and typedef statements of a header, one per line, in order."""
@@ -136,6 +145,31 @@ def interface(text: str) -> str:
         elif token == ";" and depth == 0 and start is not None:
             found.append(" ".join(code[start : match.end()].split()))
             start = None
+    return "\n".join(found)
+
+
+def shape(text: str) -> str:
+    """interface() and every file-scope aggregate definition (struct, union, enum body), one per line, in order:
+    a header's facts read no more of the headers it includes. Externs and prototypes are left out, so a publish
+    that changes only declarations changes no includer's shape."""
+    from unbake.cdecl import declaration_source
+
+    code = declaration_source(text)
+    found = [interface(text)]
+    depth = 0
+    start = 0
+    aggregate = False
+    for match in re.finditer(r"[{};]", code):
+        token = match[0]
+        if token == "{":
+            aggregate |= depth == 0
+            depth += 1
+        elif token == "}":
+            depth -= 1
+        elif depth == 0:
+            if aggregate:
+                found.append(" ".join(code[start : match.end()].split()))
+            start, aggregate = match.end(), False
     return "\n".join(found)
 
 
@@ -178,11 +212,16 @@ def unit_key(project: Project, policy: Host | None, source: Path, version: str, 
 
 
 def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Snapshot) -> str:
+    """A header part: the header's bytes, authored includes' bytes, generated includes' shape only (unit_key's
+    scheme, reading aggregate definitions too)."""
     command = _command(project, policy, version, marked=True)
     roots = (header, *_forced(project, command))
     parts: list[str | bytes] = [HEADER, str(SCHEMA), version, json.dumps(command), storage.relative(project, header)]
-    for path in (header, *snapshot.closure(roots)):
-        parts.extend((storage.relative(project, path), snapshot.digest(path)))
+    parts.extend(("self", snapshot.digest(header)))
+    generated = snapshot.generated()
+    for path in snapshot.closure(roots):
+        state = "shape " + snapshot.shape(path) if path in generated and path != header else snapshot.digest(path)
+        parts.extend((storage.relative(project, path), state))
     return key(*parts)
 
 
@@ -409,6 +448,7 @@ class _Parts(Mapping[str, dict[str, Any]]):
     def __init__(self, output: Store, keys: dict[str, str]) -> None:
         self.output, self.content = output, keys
         self.loaded: dict[str, dict[str, Any]] = {}
+        self.identities: dict[str, str] = {}
 
     def __getitem__(self, name: str) -> dict[str, Any]:
         found = self.loaded.get(name)
@@ -420,8 +460,18 @@ class _Parts(Mapping[str, dict[str, Any]]):
         return found
 
     def identity(self, name: str) -> str:
-        """What the part of NAME holds: two versions whose parts hold the same give a unit the same facts."""
-        return key(json.dumps(self[name], sort_keys=True))
+        """What the part of NAME holds: two versions whose parts hold the same give a unit the same facts. Once per
+        part: the stored bytes' digest (a large header's part is megabytes; hashing it per source cost thousands
+        of worker CPU-seconds on RW)."""
+        found = self.identities.get(name)
+        if found is None:
+            stored = self.output.json_path(HEADER, self.content[name])
+            if stored is not None and stored.is_file():
+                found = inputs.digest(stored)
+            else:
+                found = key(json.dumps(self[name], sort_keys=True))
+            self.identities[name] = found
+        return found
 
     def __iter__(self) -> Iterator[str]:
         return iter(self.content)

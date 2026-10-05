@@ -911,4 +911,25 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     from unbake.typemap.database import publish
 
     publish(project, result, previous, policy=policy)
+    changes(previous, types_db.summary(database))
     return result
+
+
+def changes(previous: dict[str, Any], current: dict[str, Any], *, shown: int = 10) -> dict[str, Any]:
+    """What this solve changed against the last one, per kind: a count and the first names (a JSON event on
+    stderr). A fixed point needs a pass that changes nothing; a later pass changing names an earlier pass did not
+    is oscillation, visible here."""
+    import sys
+
+    found: dict[str, Any] = {}
+    for kind in sorted(set(previous) | set(current)):
+        before, after = previous.get(kind, {}), current.get(kind, {})
+        names = sorted(
+            name
+            for name in set(before) | set(after)
+            if (before.get(name) or {}).get("semantic_sha256") != (after.get(name) or {}).get("semantic_sha256")
+        )
+        if names:
+            found[kind] = {"count": len(names), "first": names[:shown]}
+    print(json.dumps({"event": "types.changes", "kinds": found}, sort_keys=True), file=sys.stderr, flush=True)
+    return found

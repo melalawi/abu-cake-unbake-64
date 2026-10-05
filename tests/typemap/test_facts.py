@@ -114,3 +114,52 @@ class UnitKeyTests(SourceKeyTests):
             facts.interface(text).split("\n"),
             ["#ifndef GUARD", "#define GUARD", "#endif", "typedef struct Pair { int a; } Pair;"],
         )
+
+
+class HeaderKeyTests(SourceKeyTests):
+    """A header part keys on its own bytes and its generated includes' shape: a publish that changes only their
+    declarations re-extracts no part of a header that includes them."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.header = self.root / "include" / "consumer.h"
+        self.header.write_text('#include "used.h"\nstruct Holder { Used u; };\n')
+
+    def key(self, version: str = "us") -> str:  # type: ignore[override]
+        return facts.header_key(self.project, self.host, self.header, version, facts.Snapshot(self.project))
+
+    def test_key_changes_with_its_inputs_only(self) -> None:
+        """Overridden: the source's bytes are no input of a header part."""
+
+    def test_generated_include_changes(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include" / "used.h"
+        original = used.read_text()
+        cases = [
+            ("a declaration added", original + "extern int added;\n", False),
+            ("a prototype respelled (void)", original + "extern void f(void);\n", False),
+            ("a comment", original + "/* struct Gone { int a; }; */\n", False),
+            ("an aggregate defined (a by-value field reads it)", original + "struct Shape { int a; };\n", True),
+            ("an enumerator (an array extent reads it)", original + "enum { COUNT = 4 };\n", True),
+            ("a typedef retargeted", original.replace("typedef int Used;", "typedef long Used;"), True),
+            ("a directive added", original + "#define USED 1\n", True),
+        ]
+        with patch.object(index, "headers", return_value=frozenset({used, self.header})):
+            base = self.key()
+            for label, text, changes in cases:
+                with self.subTest(label):
+                    used.write_text(text)
+                    self.assertEqual(self.key() != base, changes)
+                    used.write_text(original)
+            self.assertEqual(self.key(), base)
+            self.header.write_text(self.header.read_text() + "extern int own;\n")
+            self.assertNotEqual(self.key(), base)  # its own bytes always count, generated or not
+
+    def test_shape_keeps_aggregates_and_drops_declarations(self) -> None:
+        text = "extern int value;\nstruct Body { int b; };\nint f(int);\nenum E { A, B };\ntypedef int T;\n"
+        self.assertEqual(
+            facts.shape(text).split("\n"), ["typedef int T;", "struct Body { int b; };", "enum E { A, B };"]
+        )

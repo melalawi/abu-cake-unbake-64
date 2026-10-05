@@ -167,6 +167,10 @@ class Effort:
             "main_rss_bytes": self.main_rss,
             "worker_rss_bytes": self.worker_rss,
             "counts": {name: list(value) for name, value in sorted(self.counts.items())},
+            "pool": {
+                name: [round(seconds, 3), tasks]
+                for name, (seconds, tasks) in sorted(self.pool.items(), key=lambda item: -item[1][0])[:TOP]
+            },
             "external_cpu_seconds": round(self.external, 3),
             "external_cores": round(self.external_cores, 2),
         }

@@ -35,3 +35,25 @@ class SharedValueTests(TempCase):
             for _ in range(2):  # a refusal is never remembered as a value
                 with self.assertRaisesRegex(Held, "facts.shared: missing " + "0" * 64):
                     facts.Store(Cache(self.root / "cache")).decode(missing)
+
+
+class SolveChangesTests(TempCase):
+    def test_changes_name_what_moved_and_nothing_else(self) -> None:
+        import io
+        import json
+        from unittest.mock import patch
+
+        from unbake.typemap import solver
+
+        before = {"globals": {"a": {"semantic_sha256": "1"}, "b": {"semantic_sha256": "2"}}, "functions": {}}
+        after = {
+            "globals": {"a": {"semantic_sha256": "1"}, "b": {"semantic_sha256": "3"}, "c": {"semantic_sha256": "4"}}
+        }
+        stream = io.StringIO()
+        with patch("sys.stderr", stream):
+            found = solver.changes(before, after, shown=1)
+            same = solver.changes(after, after)
+        self.assertEqual(found, {"globals": {"count": 2, "first": ["b"]}})
+        self.assertEqual(same, {})
+        events = [json.loads(line) for line in stream.getvalue().splitlines()]
+        self.assertEqual([event["event"] for event in events], ["types.changes", "types.changes"])
