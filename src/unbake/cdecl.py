@@ -707,9 +707,7 @@ _MARKER = re.compile(r'^[ \t]*#[ \t]*(?:line[ \t]+)?(\d+)(?:[ \t]+"((?:\\.|[^"\\
 def resume_marker(text: str, start: int) -> str:
     """A line marker that gives text[start:] the coordinates it has inside TEXT: the file of the last marker before
     START (none when there is none) and START's line. A resumed parse keeps every node where a whole parse puts it."""
-    found = None
-    for found in _MARKER.finditer(text, 0, start):
-        pass
+    found = next(reversed(list(_MARKER.finditer(text, 0, start))), None)
     if found is None:
         return f"# {text.count(chr(10), 0, start) + 1}\n"
     line = int(found[1]) + text.count("\n", found.end() + 1, start)
