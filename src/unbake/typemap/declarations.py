@@ -836,7 +836,9 @@ def _declared_job(job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> 
     from unbake.typemap import facts
 
     project, policy, text, provenance, authored = job
-    facts.store(project, policy).text(text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored))
+    facts.store(project, policy).text(
+        text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored)
+    )
 
 
 def _version_text(job: tuple[Project, Host | None, str, dict[Path, str], Path | None, list[Path]]) -> str:

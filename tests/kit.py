@@ -64,7 +64,12 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
             "memory_parent_bytes": 1_000,
             "memory_worker_bytes": 2_000,
         },
-        "cache": {"root": str(directory / "cache"), "max_bytes": 1_000, "trim_to_bytes": 500, "memory_bytes": 100},
+        "cache": {
+            "machine_root": str(directory / "cache"),
+            "max_bytes": 1_000,
+            "trim_to_bytes": 500,
+            "memory_bytes": 100,
+        },
         "tools": tools,
         "setup": {
             "version_jobs": 2,

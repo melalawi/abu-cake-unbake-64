@@ -159,7 +159,7 @@ class FixtureCase(unittest.TestCase):
             if found:
                 (host_bin / name).symlink_to(found)
         tools["path"] = [str(self.bin), str(host_bin)]
-        values["cache"]["root"] = str(self.base / "cache")
+        values["cache"]["machine_root"] = str(self.base / "cache")
         values["cache"]["max_bytes"], values["cache"]["trim_to_bytes"] = 10**8, 10**7
         values["publish"].update(branch="main")
         lines = []

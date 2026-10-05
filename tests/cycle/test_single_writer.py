@@ -24,6 +24,13 @@ class Run(SimpleNamespace):
 
 
 class SingleWriterTests(TempCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # These cases are about the ladder's mechanics, not which methods the tool ships.
+        patcher = patch.object(ladder, "BUILTINS", ("registers", "order", "permute"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def cycle(
         self,
         *,
@@ -39,7 +46,9 @@ class SingleWriterTests(TempCase):
         None for the file as it is, "SKIP" for a method with no mutation to propose.
         A beta text spelling "better" scores 10 points more each time, "worse" 10 less, "EXACT" is exact.
         The run ends when beta needs a creative edit."""
-        project = SimpleNamespace(root=self.root, build=self.root / "build", work=self.root / "work", versions=("us",))
+        project = SimpleNamespace(
+            root=self.root, build=self.root / "build", work=self.root / "work", cache=self.root, versions=("us",)
+        )
         host = SimpleNamespace(
             cycle_debounce_ms=100,
             cycle_search_seconds=1,
@@ -48,7 +57,6 @@ class SingleWriterTests(TempCase):
             memory_total_bytes=4,
             memory_parent_bytes=1,
             memory_worker_bytes=1,
-            cache_root=self.root,
         )
         log: list[str] = []  # writes and task runs, in order
         pending: list[Future] = []  # tasks the pool has queued but not run

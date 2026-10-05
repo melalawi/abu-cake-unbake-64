@@ -8,7 +8,6 @@ import math
 import os
 import re
 import shlex
-import signal
 import subprocess
 import sys
 import tarfile

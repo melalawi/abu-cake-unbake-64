@@ -20,9 +20,14 @@ class LadderTests(unittest.TestCase):
         self.assertEqual(tuple(seen), BUILTINS)
 
     def test_a_method_already_scored_or_skipped_is_not_run_again(self) -> None:
-        self.assertEqual(ladder.Ladder(tried={"registers": 50.0}).next_method(), "order")
-        self.assertEqual(ladder.Ladder(skipped={"registers": "n/a"}, tried={"order": 1.0}).next_method(), "permute")
-        self.assertIsNone(ladder.Ladder(skipped={"registers": "n/a", "order": "n/a", "permute": "n/a"}).next_method())
+        self.assertEqual(ladder.Ladder(tried={"types": 50.0}).next_method(), "registers")
+        self.assertEqual(ladder.Ladder(tried={"types": 50.0, "registers": 50.0}).next_method(), "order")
+        self.assertEqual(
+            ladder.Ladder(skipped={"types": "n/a", "registers": "n/a"}, tried={"order": 1.0}).next_method(), "permute"
+        )
+        self.assertIsNone(
+            ladder.Ladder(skipped={"types": "n/a", "registers": "n/a", "order": "n/a", "permute": "n/a"}).next_method()
+        )
 
     def test_only_a_strictly_higher_percent_is_a_gain(self) -> None:
         current = ladder.Ladder(best=60.0)

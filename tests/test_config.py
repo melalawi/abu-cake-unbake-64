@@ -19,7 +19,7 @@ BAD_VALUES = {
 }
 SAMPLE_KEY = {
     "int": "resources.cores",
-    "path": "cache.root",
+    "path": "cache.machine_root",
     "dirs": "tools.path",
     "fraction": "setup.same_game_similarity",
     "hex64": "tools.permuter_sha256",

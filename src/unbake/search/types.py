@@ -13,15 +13,15 @@ from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
 _MASK = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.S)
-_SPELLING = re.compile(
-    r"\b(?:(?:unsigned|signed)\s+)?(?:long\s+long|char|short|int|long)\b|\b[su](?:8|16|32|64)\b"
-)
+_SPELLING = re.compile(r"\b(?:(?:unsigned|signed)\s+)?(?:long\s+long|char|short|int|long)\b|\b[su](?:8|16|32|64)\b")
 _WIDTHS = {"8": "16", "16": "8 32", "32": "16"}
 _WORDS = {"char": "8", "short": "16", "int": "32"}
 
 
 def _blank(match: re.Match[str]) -> str:
-    return re.sub(r"[^\n]", " ", match[0])
+    """A comment becomes spaces; a literal keeps its quotes and loses its text."""
+    quote = match[0][0] if match[0][0] in "\"'" else ""
+    return quote + re.sub(r"[^\n]", " ", match[0][1:-1] if quote else match[0]) + quote
 
 
 def _function_span(masked: str, name: str) -> tuple[int, int] | None:
@@ -49,12 +49,10 @@ def _singles(spelling: str) -> list[str]:
     short = re.fullmatch(r"([su])(8|16|32|64)", spelling)
     if short:
         sign, width = short.groups()
-        flipped = [f"{'u' if sign == 's' else 's'}{width}"]
-        return flipped + [f"{sign}{wide}" for wide in _WIDTHS.get(width, "").split()]
+        return [f"{'u' if sign == 's' else 's'}{width}"] + [f"{sign}{wide}" for wide in _WIDTHS.get(width, "").split()]
     prefix = spelling.split()[0] if spelling.split()[0] in ("unsigned", "signed") else ""
     base = spelling.removeprefix(prefix).strip()
-    flipped = f"{'signed' if prefix == 'unsigned' else 'unsigned'} {base}"
-    result = [flipped]
+    result = [f"{'signed' if prefix == 'unsigned' else 'unsigned'} {base}"]
     width = _WORDS.get(base)
     if width:
         for wide in _WIDTHS[width].split():

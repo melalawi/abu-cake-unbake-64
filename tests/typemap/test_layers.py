@@ -62,7 +62,7 @@ def layered(headers: list[tuple[str, str]], body: str, function: str) -> tuple[o
     if part is None:
         return None
     consumed, definition = layers.assemble(
-        layers.Context(parts), part, SOURCE, body, lambda kind: {**provenance, "kind": kind}
+        layers.Context(parts), part, SOURCE, body, lambda kind: {**provenance, "kind": kind}, frozenset()
     )
     return normal(consumed), normal(facts._owned(definition, function))
 
@@ -142,7 +142,9 @@ class LayeredFactsTests(unittest.TestCase):
         )
         part = layers.source_part(marked, SOURCE, parts, {})
         assert part is not None
-        _, definition = layers.assemble(layers.Context(parts), part, SOURCE, "", lambda kind: {"kind": kind})
+        _, definition = layers.assemble(
+            layers.Context(parts), part, SOURCE, "", lambda kind: {"kind": kind}, frozenset()
+        )
         self.assertEqual(list(definition["aliases"]), ["s32", "f32"])
         self.assertEqual(list(definition["structs"]), ["Outer"])
 
@@ -174,7 +176,9 @@ class StaleFactsTests(unittest.TestCase):
         if part is None:
             part = layers.source_part(marked, SOURCE, parts, {})
         assert part is not None
-        consumed, _ = layers.assemble(layers.Context(parts), part, SOURCE, body, lambda kind: {"kind": kind})
+        consumed, _ = layers.assemble(
+            layers.Context(parts), part, SOURCE, body, lambda kind: {"kind": kind}, frozenset()
+        )
         return set(consumed["globals"]), part
 
     def test_a_dropped_declaration_returns_without_extracting_the_source_again(self) -> None:
@@ -195,3 +199,35 @@ class StaleFactsTests(unittest.TestCase):
                 # against the header that declares it again.
                 self.assertEqual(self.consumed(dropped, body, part)[0], without)
                 self.assertEqual(self.consumed(declared, body, part)[0], with_declaration)
+
+
+class GeneratedEvidenceTests(unittest.TestCase):
+    """A header the solver wrote is its own output: it never returns as published evidence."""
+
+    GEN = (
+        "/r/include/generated.h",
+        "\ntypedef short s16;\nextern s16 g_x;\nstruct A { s16 f; };\ntypedef struct A A;\n",
+    )
+    BODY = "struct B { struct A inner; };\nvoid alpha(void) { g_x = 1; struct A a; }\n"
+
+    def assembled(self, header: tuple[str, str], generated: frozenset[str]) -> tuple[dict, dict]:
+        headers = [header]
+        parts = header_parts(headers)
+        marked, _ = unit(headers, self.BODY)
+        part = layers.source_part(marked, SOURCE, parts, {})
+        assert part is not None
+        return layers.assemble(layers.Context(parts), part, SOURCE, self.BODY, lambda kind: {"kind": kind}, generated)
+
+    def test_a_generated_header_yields_no_published_seed(self) -> None:
+        consumed, _ = self.assembled(self.GEN, frozenset({layers.path(self.GEN[0])}))
+        self.assertEqual(set(consumed["globals"]), set())
+        self.assertNotIn("A", consumed["structs"])
+
+    def test_the_same_declarations_in_an_authored_header_still_are(self) -> None:
+        consumed, _ = self.assembled(self.GEN, frozenset({"/r/include/other.h"}))
+        self.assertIn("g_x", consumed["globals"])
+        self.assertIn("A", consumed["structs"])
+
+    def test_the_definition_seed_still_sees_the_generated_struct_size(self) -> None:
+        _, definition = self.assembled(self.GEN, frozenset({layers.path(self.GEN[0])}))
+        self.assertEqual(definition["structs"]["B"]["size"], 2)
