@@ -206,6 +206,8 @@ def infer(
     for name, record in facts["globals"].items():
         for version, placement in record["versions"].items():
             addresses[version][placement["address"]].append(name)
+    # canonical() under the one solve-wide alias map, once per spelling: thousands of seeds repeat each type.
+    resolve = _Canonical().bound(aliases)
     for seed in seeds:
         for name, signature in seed["functions"].items():
             for param, reg in zip(signature["params"], signature["registers"], strict=True):
@@ -214,22 +216,22 @@ def infer(
                     if not declarations.unknown(param["type"]):
                         declared.seed(
                             f"param:{name}:{reg}",
-                            declarations.canonical(param["type"], aliases),
+                            resolve(param["type"]),
                             signature["provenance"],
                         )
-            type_ = declarations.canonical(signature["return"], aliases)
+            type_ = resolve(signature["return"])
             register = "f0" if type_ in ("float", "double") else "r2"
             declared.use(f"result:{name}:{register}", name)
             if type_ != "void" and not declarations.unknown(signature["return"]):
                 declared.seed(f"result:{name}:{register}", type_, signature["provenance"])
         for name, record in seed["globals"].items():
-            type_ = declarations.canonical(record["type"], aliases)
+            type_ = resolve(record["type"])
             declared.use("global:" + name)
             if not declarations.unknown(record["type"]):
                 declared.seed("global:" + name, type_, record["provenance"])
                 declared.seed("address:" + name, type_ + " *", record["provenance"])
     declared_returns = {
-        name: "f0" if declarations.canonical(record["return"], aliases) in ("float", "double") else "r2"
+        name: "f0" if resolve(record["return"]) in ("float", "double") else "r2"
         for name, record in functions.items()
         if record["return"] != "void"
         and not declarations.unknown(record["return"])
@@ -306,7 +308,7 @@ def infer(
             ):
                 graph.seed(
                     f"field:{origin}:{offset}",
-                    declarations.canonical(members[0]["type"], aliases),
+                    resolve(members[0]["type"]),
                     record["provenance"],
                 )
     graph.close()
@@ -487,7 +489,7 @@ def infer(
                     {"state": "known", "type": param["type"], "provenance": [signature["provenance"]], "users": [name]},
                 )
                 params.append({"name": param["name"], "register": reg, "node": node, **state})
-            register = "f0" if declarations.canonical(signature["return"], aliases) in ("float", "double") else "r2"
+            register = "f0" if resolve(signature["return"]) in ("float", "double") else "r2"
             returned = (
                 {"state": "known", "type": "void", "provenance": [signature["provenance"]], "users": [name]}
                 if signature["return"] == "void"
@@ -644,7 +646,7 @@ def infer(
         if record["provenance"].get("kind") in ("published", "proven"):
             output_globals[name].update(
                 state="conflict" if record.get("declaration_conflict") else "known",
-                type=declarations.canonical(record["type"], aliases),
+                type=resolve(record["type"]),
                 declaration=record["declaration"],
             )
     output_structs = dict(inferred_structs)

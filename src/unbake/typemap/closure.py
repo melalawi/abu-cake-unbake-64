@@ -36,6 +36,9 @@ class Constraints:
         self.machine_seeds: dict[str, dict[str, set[tuple[Any, ...]]]] = defaultdict(lambda: defaultdict(set))
         self.users: dict[str, set[str]] = defaultdict(set)
         self.facts: list[dict[str, Any]] = []
+        # The keys of each (node, type) seed list: thousands of units seed one global, and a list scan per seed
+        # was quadratic in them.
+        self._seen: dict[tuple[str, str], set[str]] = defaultdict(set)
 
     def record(self, fact: dict[str, Any]) -> None:
         if self.log is None:
@@ -72,8 +75,12 @@ class Constraints:
             if key in self.machine_seeds[node][type_]:
                 return
             self.machine_seeds[node][type_].add(key)
-        elif evidence in self.seeds[node][type_]:
-            return
+        else:
+            seen = self._seen[(node, type_)]
+            identity = _identity(evidence)
+            if identity in seen:
+                return
+            seen.add(identity)
         self.seeds[node][type_].append(evidence)
 
     def root(self, node: str) -> str:
@@ -92,6 +99,11 @@ class Constraints:
         for node in sorted(self.parents):
             groups.setdefault(self.root(node), []).append(node)
         return list(groups.values())
+
+
+def _identity(evidence: dict[str, Any]) -> str:
+    """Equal evidence, equal identity (evidence holds JSON values only)."""
+    return json.dumps(evidence, sort_keys=True)
 
 
 def _machine_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -385,6 +397,7 @@ class Closure:
         self.seeds = machine.seeds
         self.users = machine.users
         self.dirty: set[int] = set()
+        self._seen: dict[tuple[str, str], set[str]] = {}
         self.conflicting = {index for index, record in enumerate(self.records) if record["state"] == "conflict"}
         for node in declared.parents:
             self.use(node)
@@ -416,11 +429,13 @@ class Closure:
         rows = self.seeds.setdefault(node, {}).setdefault(type_, [])
         if evidence.get("kind") == "machine":
             evidence = _machine_evidence(evidence)
-            key = tuple(sorted(evidence.items()))
-            if any(row.get("kind") == "machine" and tuple(sorted(row.items())) == key for row in rows):
-                return
-        elif evidence in rows:
+        seen = self._seen.get((node, type_))
+        if seen is None:
+            seen = self._seen[(node, type_)] = {_identity(row) for row in rows}
+        identity = _identity(evidence)
+        if identity in seen:
             return
+        seen.add(identity)
         rows.append(evidence)
         self.dirty.add(self.group[node])
 
