@@ -7,6 +7,7 @@ from pathlib import Path
 from unbake.config import Held, Unfinished
 from unbake.layout import redeclarations
 from unbake.layout.apply import _local_names
+from unbake.typemap.database import source_private
 
 
 class LocalNamesTests(unittest.TestCase):
@@ -45,3 +46,14 @@ class DeclarationRefusalTests(unittest.TestCase):
         with self.assertRaises(Held) as caught:
             redeclarations.parse(Path("src/func_1.c"), "extern int D_1 D_2;")
         self.assertIn("src/func_1.c: D_2:", caught.exception.reason)
+
+
+class SourcePrivateTests(unittest.TestCase):
+    def test_declarations_spelling_source_only_types_stay_local(self) -> None:
+        for name, declaration, expected in (
+            ("source typedef", "extern Handler D_1;", True),
+            ("source tag", "extern struct Local *D_1;", True),
+            ("header types only", "extern s32 D_1;", False),
+        ):
+            with self.subTest(name):
+                self.assertEqual(source_private(declaration, {"Local"}, {"Handler"}), expected)

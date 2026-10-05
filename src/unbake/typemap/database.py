@@ -109,6 +109,17 @@ def _semantic(value: Any) -> Any:
     return value
 
 
+def source_private(declaration: str, tags: set[str], typedefs: set[str]) -> bool:
+    """True when DECLARATION spells a tag or typedef that only a source defines, so it cannot move to a header."""
+    from unbake.cdecl import declaration_source
+
+    code = declaration_source(declaration)
+    return bool(
+        tags & set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", code))
+        or typedefs & set(re.findall(r"\b[A-Za-z_]\w*\b", code))
+    )
+
+
 def _render(
     project: Project, value: dict[str, Any], policy: Host | None, session: regeneration.Session
 ) -> dict[Path, bytes | Path]:
@@ -330,11 +341,13 @@ def _render(
         root / path: header_declarations(text).declared
         for path, text in value.get("published_declarations", {}).items()
     }
+    source_typedefs: set[str] = set()
     for source_path, text in session.sources.items():
         local: dict[str, list[str]] = {}
         for start, end in redeclarations.spans(text):
             for variant in redeclarations.variants(text[start:end]):
                 parsed = redeclarations.parse(source_path, variant)
+                source_typedefs |= parsed.typedefs
                 for name in parsed.declared | parsed.typedefs:
                     local.setdefault(name, []).append(variant)
         definitions = set()
@@ -366,8 +379,11 @@ def _render(
     # A source-private tag is not a shared prototype-scope type. Publishing an
     # otherwise equal entry prototype can create a distinct parameter tag before
     # the source's own definition, or import its complete definition twice.
+    # Likewise a typedef only a source defines: a shared declaration spelling it cannot parse before that source.
+    header_typedefs = authored_aliases.union(*(header_declarations(text).typedefs for text in components.values()))
+    source_owned_typedefs = source_typedefs - header_typedefs
     for name, declaration in list(declarations_by_name.items()):
-        if source_owned_tags & set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", declaration_source(declaration))):
+        if source_private(declaration, source_owned_tags, source_owned_typedefs):
             declarations_by_name.pop(name)
     for path in retained_contracts:
         if path in components and source_owned_tags & set(
