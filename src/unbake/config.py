@@ -27,10 +27,19 @@ def _held(kind: type[Held], args: tuple[Any, ...], state: dict[str, Any]) -> Hel
 
 
 class Held(Exception):
-    def __init__(self, phase: str, reason: str, *, next_action: str | None = None) -> None:
+    def __init__(
+        self,
+        phase: str,
+        reason: str,
+        *,
+        next_action: str | None = None,
+        failures: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         self.phase = phase
         self.reason = reason
         self.next_action = next_action
+        # Every (key, reason) when one refusal gathers several (all units a check found, not only the first).
+        self.failures = failures
         super().__init__(reason)
 
     def __reduce__(self) -> tuple[Any, ...]:

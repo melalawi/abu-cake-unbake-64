@@ -103,7 +103,8 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
         with guard:
             return verb.run(context)  # type: ignore[no-any-return]
     except Held as error:
-        return Result.held(verb.NAME, error, error.next_action or guidance.after(context, error))
+        data = {"failures": [{"key": k, "reason": r} for k, r in error.failures]} if error.failures else None
+        return Result.held(verb.NAME, error, error.next_action or guidance.after(context, error), data)
     except Exception as error:  # nothing unexpected reaches the terminal raw: it is a refusal with a key and a Next
         unexpected = Held(verb.NAME, f"{verb.NAME}.unexpected: {_where(error)}")
         return Result.held(verb.NAME, unexpected, guidance.after(context, unexpected))

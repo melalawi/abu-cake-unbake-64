@@ -139,3 +139,23 @@ class HistoryRenameTests(TempCase):
         self.assertIsNone(attempts.renamed_summary(project, {"func_X": "func_Y"}))  # type: ignore[arg-type]
         renamed = json.loads(attempts.renamed_summary(project, {"func_A": "func_B"}) or b"")  # type: ignore[arg-type]
         self.assertEqual(renamed["functions"], {"func_B": row})
+
+
+class HeaderCompileFailureTests(TempCase):
+    def test_each_unit_reports_its_own_refusal_and_all_travel_together(self) -> None:
+        import pickle
+
+        from unbake import runner
+
+        refusal = Held("compile", "compile.func_802450CC_de: src/func_802450CC_de.c: `D_800CB420_de' undeclared")
+        for label, effect, expected in [
+            ("compiles", None, None),
+            ("refused", refusal, ("compile.func_802450CC_de", f"VERSION de: {refusal.reason}")),
+        ]:
+            with self.subTest(label), patch.object(runner, "compile_unit", side_effect=effect):
+                job = (SimpleNamespace(), SimpleNamespace(), Path("u.c"), "de", "func_802450CC_de")
+                self.assertEqual(header_step._compile(job), expected)  # type: ignore[arg-type]
+        gathered = Held(
+            "compile", "compile.headers: 2 unit compiles fail", failures=(("compile.a", "x"), ("compile.b", "y"))
+        )
+        self.assertEqual(pickle.loads(pickle.dumps(gathered)).failures, gathered.failures)

@@ -105,12 +105,16 @@ def uses(text: str) -> set[str]:
     return spelled - only_defined
 
 
-def _compile(job: tuple[Project, Host, Path, str, str]) -> None:
-    """Worker body: compile one staged unit for one version."""
+def _compile(job: tuple[Project, Host, Path, str, str]) -> tuple[str, str] | None:
+    """Worker body: compile one staged unit for one version; its refusal's (key, reason), or None."""
     from unbake import runner
 
     view, host, file, version, unit = job
-    runner.compile_unit(view, host, file, version, unit=unit)
+    try:
+        runner.compile_unit(view, host, file, version, unit=unit)
+    except Held as error:
+        return error.key, f"VERSION {version}: {error.reason}"
+    return None
 
 
 def validate(
@@ -166,7 +170,16 @@ def validate(
                 for version in split.holding_versions(project, source.stem, owners)
             )
             compiled.append(source.stem)
-        pool.run(host, _compile, jobs)
+        # Every unit compiles; all that fail are refused together, not one per run.
+        failures = tuple(failure for failure in pool.run(host, _compile, jobs) if failure is not None)
+        if failures:
+            reason = failures[0][1]
+            raise Held(
+                "compile",
+                f"compile.headers: {len(failures)} unit compiles fail against the regenerated headers "
+                f"({', '.join(sorted({k.removeprefix('compile.') for k, _ in failures}))}); first: {reason}",
+                failures=failures,
+            )
         proofs = sorted((disagreements or {}).items())
         matched = pool.run(
             host,

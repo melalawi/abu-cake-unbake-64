@@ -50,20 +50,19 @@ class SourceKeyTests(TempCase):
                 path.write_text(original)
                 self.assertEqual(self.key(), base)
 
-    def test_generated_header_bytes_leave_the_key(self) -> None:
-        """The solve writes generated headers: their bytes in the key reran it after every publish."""
+    def test_generated_header_bytes_stay_in_the_key(self) -> None:
+        """Consumed contracts are read from generated headers: facts kept across a changed one go stale."""
         from unittest.mock import patch
 
         from unbake.layout import index
 
         used = self.root / "include" / "used.h"
-        for generated, changes in ((frozenset(), True), (frozenset({used}), False)):
-            with self.subTest(generated=bool(generated)), patch.object(index, "headers", return_value=generated):
-                base = self.key()
-                original = used.read_text()
-                used.write_text(original + "typedef long Used2;\n")
-                self.assertEqual(self.key() != base, changes)
-                used.write_text(original)
+        with patch.object(index, "headers", return_value=frozenset({used})):
+            base = self.key()
+            original = used.read_text()
+            used.write_text(original + "typedef long Used2;\n")
+            self.assertNotEqual(self.key(), base)
+            used.write_text(original)
 
     def test_key_names_the_version(self) -> None:
         self.assertNotEqual(self.key("us"), self.key("eu"))
