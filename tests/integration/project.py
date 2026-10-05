@@ -1,4 +1,4 @@
-"""A tiny fixture project with fake tool scripts, a real git repo and a local bare remote.
+"""A tiny fixture project with fake tool scripts, a real git repo.
 
 The fake tools stand in for the cross toolchain: cpp passes text through, the compiler emits the three
 instruction words of `return N;`, as/n64link/objcopy copy bytes and ld (any --oformat) concatenates its inputs in
@@ -95,13 +95,13 @@ def run(command: list[str], cwd: Path, **kwargs) -> subprocess.CompletedProcess:
 
 
 class FixtureCase(unittest.TestCase):
-    """self.root is a committed project; self.remote a bare repo; self.unbake(...) runs the CLI."""
+    """self.root is a committed project; self.unbake(...) runs the CLI."""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         base = Path(directory.name).resolve()
-        self.base, self.root, self.remote = base, base / "project", base / "remote.git"
+        self.base, self.root = base, base / "project"
         shutil.copytree(FIXTURE, self.root, ignore=shutil.ignore_patterns("__pycache__", "__init__.py", "make_rom.py"))
         make_rom.write_roms(self.root)
         self.install_tools()
@@ -161,7 +161,7 @@ class FixtureCase(unittest.TestCase):
         tools["path"] = [str(self.bin), str(host_bin)]
         values["cache"]["root"] = str(self.base / "cache")
         values["cache"]["max_bytes"], values["cache"]["trim_to_bytes"] = 10**8, 10**7
-        values["publish"].update(remote=str(self.remote), branch="main")
+        values["publish"].update(branch="main")
         lines = []
         for section, table in values.items():
             lines.append(f"[{section}]")
@@ -170,11 +170,9 @@ class FixtureCase(unittest.TestCase):
         self.host_file.write_text("\n".join(lines) + "\n")
 
     def init_git(self) -> None:
-        run(["git", "init", "--bare", "-b", "main", str(self.remote)], self.base)
         run(["git", "init", "-b", "main"], self.root)
         for key, value in (("user.name", "Mo"), ("user.email", "mo@example.com")):
             run(["git", "config", key, value], self.root)
-        run(["git", "remote", "add", "origin", str(self.remote)], self.root)
         run(["git", "add", "-A"], self.root)
         run(["git", "commit", "-qm", "Fixture"], self.root)
 
@@ -191,6 +189,6 @@ class FixtureCase(unittest.TestCase):
         lines = [json.loads(line) for line in done.stdout.splitlines()]
         return done.returncode, lines, done.stderr
 
-    def remote_subjects(self) -> list[str]:
-        out = run(["git", "--git-dir", str(self.remote), "log", "--format=%s", "main"], self.base).stdout
-        return out.splitlines()
+    def subjects(self) -> list[str]:
+        """Commit subjects of the project, newest first."""
+        return run(["git", "log", "--format=%s"], self.root).stdout.splitlines()

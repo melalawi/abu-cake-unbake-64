@@ -7,7 +7,7 @@ import unittest
 from unbake.cycle import events
 
 REQUIRED = {
-    "cycle.start": "project versions functions workers cores memory_total_bytes cache_root stop remote branch",
+    "cycle.start": "project versions functions workers cores memory_total_bytes cache_root stop",
     "fn.queued": "function bytes versions carryover best_percent",
     "fn.draft.start": "function",
     "fn.draft.done": "function ok file seconds",
@@ -22,7 +22,6 @@ REQUIRED = {
     "fn.land_failed": "function versions diagnostic returned_to_worker",
     "fn.committed": "function commit message",
     "cycle.committed": "commit message functions",
-    "fn.pushed": "commits remote branch ok",
     "fn.held": "function key reason next",
     "fn.failed": "function key reason next",
     "worker.crash": "pid function task signal retried",
@@ -30,7 +29,7 @@ REQUIRED = {
     "step.run": "step trigger seconds",
     "steps.held": "key reason",
     "fn.recheck": "function exact best_percent",
-    "cycle.end": "landed landed_bytes unpushed held carryovers exit next",
+    "cycle.end": "landed landed_bytes held carryovers exit next",
 }
 
 

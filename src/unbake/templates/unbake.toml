@@ -68,8 +68,6 @@
 # search_seconds = 60              # one search method's time for a function the draft left short
 
 [publish]
-# remote = "origin"
 # branch = "main"
 # author_name = "Your Name"
 # author_email = "you@example.com"
-# credential_env = "GIT_TOKEN"     # or credential_helper = "store"

@@ -501,7 +501,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
 # ---------------------------------------------------------------------------
 # Host configuration: unbake.toml.
 
-Kind = Literal["int", "path", "exe", "dirs", "fraction", "hex64", "text", "envname"]
+Kind = Literal["int", "path", "exe", "dirs", "fraction", "hex64", "text"]
 
 HOST_KEYS: dict[str, dict[str, Kind]] = {
     "resources": {
@@ -559,12 +559,9 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "search_seconds": "int",
     },
     "publish": {
-        "remote": "text",
         "branch": "text",
         "author_name": "text",
         "author_email": "text",
-        "credential_env": "envname",
-        "credential_helper": "text",
     },
 }
 
@@ -580,7 +577,7 @@ _BUILDFILES = (*_BINUTILS, "publish.branch")
 # Every command that runs steps checks them against the budgets.
 _BUDGETS = tuple(f"budgets.{name}" for name in HOST_KEYS["budgets"])
 _COMPARE = (*_RESOURCES, *_CACHE, *_BUILDFILES, *_BUDGETS)
-_PUBLISH = ("publish.remote", "publish.branch", "publish.author_name", "publish.author_email", "publish.credential")
+_PUBLISH = ("publish.branch", "publish.author_name", "publish.author_email")
 _SETUP = (
     *_RESOURCES,
     *_CACHE,
@@ -595,7 +592,7 @@ _SETUP = (
     "setup.symbol_similarity_margin",
 )
 
-# The host keys each command needs. "publish.credential" means exactly one of the two credential keys.
+# The host keys each command needs.
 NEEDS: dict[str, tuple[str, ...]] = {
     "init": (),
     "setup": _SETUP,
@@ -691,10 +688,7 @@ class Host:
 
     def require(self, keys: Iterable[str]) -> None:
         for dotted in keys:
-            if dotted == "publish.credential":
-                self.credential()
-            else:
-                self.get(dotted)
+            self.get(dotted)
         self._cross_checks(set(keys))
 
     def require_command(self, command: str) -> None:
@@ -746,11 +740,6 @@ class Host:
             return _digest(value, 64, label)
         if kind == "text":
             return _text(value, label)
-        if kind == "envname":
-            text = _text(value, label)
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
-                raise Held("config", f"{label}: expected environment variable name")
-            return text
         if kind == "dirs":
             if not isinstance(value, list) or not value:
                 raise Held("config", f"{label}: expected list of absolute directories")
@@ -765,14 +754,6 @@ class Host:
         if kind == "exe" and (not path.is_file() or not os.access(path, os.X_OK)):
             raise Held("config", f"{label}: missing executable {path}")
         return path
-
-    def credential(self) -> tuple[str, str]:
-        """("env", NAME) or ("helper", COMMAND): exactly one of the two keys."""
-        present = [key for key in ("credential_env", "credential_helper") if self.has("publish." + key)]
-        if len(present) != 1:
-            raise Held("config", "unbake.toml [publish]: set exactly one of credential_env, credential_helper")
-        key = present[0]
-        return ("env" if key == "credential_env" else "helper"), self.get("publish." + key)
 
     # Typed accessors, one per key.
     cores = property(lambda self: self.get("resources.cores"))
@@ -809,7 +790,6 @@ class Host:
     cycle_min_history = property(lambda self: self.get("cycle.min_history"))
     cycle_debounce_ms = property(lambda self: self.get("cycle.debounce_ms"))
     cycle_search_seconds = property(lambda self: self.get("cycle.search_seconds"))
-    publish_remote = property(lambda self: self.get("publish.remote"))
     publish_branch = property(lambda self: self.get("publish.branch"))
     publish_author_name = property(lambda self: self.get("publish.author_name"))
     publish_author_email = property(lambda self: self.get("publish.author_email"))

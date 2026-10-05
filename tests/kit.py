@@ -77,11 +77,9 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
         "cycle": {"min_bytes": 16, "max_bytes": 4096, "min_history": 3, "debounce_ms": 200, "search_seconds": 5},
         "budgets": dict(BUDGETS),
         "publish": {
-            "remote": "origin",
             "branch": "main",
             "author_name": "Mo",
             "author_email": "mo@example.com",
-            "credential_env": "UNBAKE_TOKEN",
         },
     }
 

@@ -49,8 +49,6 @@ class SingleWriterTests(TempCase):
             memory_parent_bytes=1,
             memory_worker_bytes=1,
             cache_root=self.root,
-            publish_remote="",
-            publish_branch="",
         )
         log: list[str] = []  # writes and task runs, in order
         pending: list[Future] = []  # tasks the pool has queued but not run
@@ -211,7 +209,6 @@ class SingleWriterTests(TempCase):
                 pick=2,
                 functions=(),
                 stop=None,
-                push=False,
                 events=stream,
                 next_words=lambda *words: " ".join(words),
             )

@@ -16,7 +16,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     for name, required, optional in (
         (
             "cycle.start",
-            "project versions functions workers cores memory_total_bytes cache_root stop remote branch",
+            "project versions functions workers cores memory_total_bytes cache_root stop",
             "",
         ),
         ("fn.queued", "function bytes versions carryover best_percent", ""),
@@ -33,7 +33,6 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("fn.land_failed", "function versions diagnostic returned_to_worker", ""),
         ("fn.committed", "function commit message", ""),
         ("cycle.committed", "commit message functions", ""),
-        ("fn.pushed", "commits remote branch ok", "error"),
         ("fn.held", "function key reason next", ""),
         ("fn.failed", "function key reason next", ""),
         ("worker.crash", "pid function task signal retried", ""),
@@ -41,7 +40,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("step.run", "step trigger seconds", "cpu_percent main_rss_bytes worker_rss_bytes findings"),
         ("steps.held", "key reason", ""),
         ("fn.recheck", "function exact best_percent", "diagnostic"),
-        ("cycle.end", "landed landed_bytes unpushed held carryovers exit next", ""),
+        ("cycle.end", "landed landed_bytes held carryovers exit next", ""),
     )
 }
 

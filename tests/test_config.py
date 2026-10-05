@@ -16,7 +16,6 @@ BAD_VALUES = {
     "fraction": [0, 1.5, "half"],
     "hex64": ["abc", "g" * 64],
     "text": ["", "  "],
-    "envname": ["1BAD", "has space"],
 }
 SAMPLE_KEY = {
     "int": "resources.cores",
@@ -24,8 +23,7 @@ SAMPLE_KEY = {
     "dirs": "tools.path",
     "fraction": "setup.same_game_similarity",
     "hex64": "tools.permuter_sha256",
-    "text": "publish.remote",
-    "envname": "publish.credential_env",
+    "text": "publish.branch",
 }
 
 
@@ -106,7 +104,7 @@ class HostRefusalTests(TempCase):
         self.values = host_values(self.root)
 
     def test_missing_value_names_key_and_command(self) -> None:
-        for command, dotted in [("compare", "tools.n64link"), ("check", "tools.make"), ("publish", "publish.remote")]:
+        for command, dotted in [("compare", "tools.n64link"), ("check", "tools.make"), ("publish", "publish.branch")]:
             with self.subTest(command=command, key=dotted):
                 host = Host.from_values(edited(self.values, dotted), command)
                 section, key = dotted.split(".")
@@ -168,16 +166,10 @@ class HostRefusalTests(TempCase):
             values = edited(self.values, "resources.memory_worker_bytes", 7_000)
             Host.from_values(values, "compare").require(memory)
 
-    def test_publish_needs_exactly_one_credential(self) -> None:
-        expected = "unbake.toml [publish]: set exactly one of credential_env, credential_helper"
-        both = edited(self.values, "publish.credential_helper", "git credential fill")
-        neither = edited(self.values, "publish.credential_env")
-        for label, values in [("both", both), ("neither", neither)]:
-            with self.subTest(label), self.assertRaises(Held) as raised:
-                Host.from_values(values, "publish").require_command("publish")
-            self.assertEqual(raised.exception.reason, expected)
-        helper = edited(neither, "publish.credential_helper", "git credential fill")
-        Host.from_values(helper, "publish").require_command("publish")
+    def test_the_retired_push_keys_are_unknown(self) -> None:
+        for key in ("remote", "credential_env", "credential_helper"):
+            with self.subTest(key), self.assertRaisesRegex(Held, rf"\[publish\]\.{key}: unknown key"):
+                Host.from_values({"publish": {key: "x"}}, "publish")
 
     def test_from_values_refuses_unknown_names(self) -> None:
         with self.assertRaisesRegex(Held, r"\[cache\]\.bogus: unknown key"):

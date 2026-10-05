@@ -14,7 +14,7 @@ HELP = "Work a round: pick, draft, compare on every save, land each exact functi
 DESCRIPTION = """\
 Work one round on several functions at once. Each picked function gets a draft in
 build/work/FUNC/FUNC.c. Every time you save that file it is compared again by itself. A function that
-is exact in every version is landed (ROM proof, commit, push) within seconds, while the others keep going.
+is exact in every version is landed (ROM proof and commit) within seconds, while the others keep going.
 A published unit that breaks a source rule is a candidate too: its draft is its own src/ text, and once it is
 exact and clean it lands again as "Clean UNIT".
 At the end the attempt history is folded into attempts.json and committed as "Record attempts: FUNC, ..."
@@ -35,12 +35,12 @@ Stop conditions: all-landed, idle:SECONDS (no save or land for that long), after
 Events: every line has v, seq, t and event, one of cycle.start, fn.queued, fn.draft.start,
 fn.draft.done, fn.edit, fn.compare.start, fn.compare.done (per-version percentages and the first
 difference), fn.exact, fn.landed, fn.land_failed, fn.committed, cycle.committed (attempts or generated
-files), fn.pushed, fn.held, fn.failed, step.run (types, headers and build files brought current before the first
+files), fn.held, fn.failed, step.run (types, headers and build files brought current before the first
 draft and after each land; drafts and compares that read the older tree are done again), steps.held (a step
 refused: the cycle stops), fn.recheck (a landed function measured again after its land's steps) and
 cycle.end (what landed and the next command).
 
-Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed, is unpushed, a step
+Exit codes: 0 everything picked landed; 1 something was held or failed, is carried over, a step
 refused (cycle.steps) or a land no longer matches after its steps (cycle.regressed); 130 interrupted.
 """
 PROJECT = "ready"
@@ -63,7 +63,6 @@ def register(parser: argparse.ArgumentParser) -> None:
     choose.add_argument("--list", action="store_true", help="Print ranked candidates as JSON lines and exit.")
     choose.add_argument("--status", action="store_true", help="Print the running or last cycle's state.")
     parser.add_argument("--stop", type=stop, metavar="CONDITION", help="all-landed, idle:SECONDS or after:MINUTES.")
-    parser.add_argument("--no-push", action="store_true", help="Land and commit, but do not push.")
 
 
 def run(context: Context) -> Result:
@@ -94,7 +93,6 @@ def run(context: Context) -> Result:
         pick=args.pick,
         functions=functions,
         stop=args.stop,
-        push=not args.no_push,
         events=context.stdout,
         next_words=lambda *words: context.cmd(*words),
     )

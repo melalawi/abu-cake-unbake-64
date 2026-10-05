@@ -1,7 +1,7 @@
 """The cycle coordinator: pick, draft and compare in worker processes, land each exact function.
 
 One thread owns all shared state, writes the project tree and waits on one queue. Messages come from worker
-futures (draft and compare results), the file watcher (saved drafts), the push thread and, on a terminal, the
+futures (draft and compare results), the file watcher (saved drafts) and, on a terminal, the
 key reader. Workers only read the tree. An exact function lands once the pool has drained: then the lands and
 the steps they change run on this thread, and every task that read the tree before is done again. Nothing
 polls: the only timed wait is the stop condition's own deadline.
@@ -268,7 +268,6 @@ def run(
     pick: int | None,
     functions: tuple[str, ...],
     stop: str | None,
-    push: bool,
     events: TextIO,
     next_words: Callable[..., str],
 ) -> Result:
@@ -333,12 +332,8 @@ def run(
         memory_total_bytes=host.memory_total_bytes,
         cache_root=str(host.cache_root),
         stop=stopper.condition,
-        remote=host.publish_remote if push else "",
-        branch=host.publish_branch if push else "",
     )
-    unpushed: list[str] = []
     landed: list[str] = []
-    pusher = land.Pusher(project, host, lambda ok: inbox.put(("pushed", ok))) if push else None
     # The task each row has in the pool; its result is read only while it is still the row's task.
     inflight: dict[str, tuple[Future[dict[str, Any]], Task]] = {}
     # Tasks held back while a land waits for the pool to drain; they start after the land's steps.
@@ -464,9 +459,6 @@ def run(
                 retried=(row.function, row.sha256) in retried,
             )
             emitter.emit("fn.committed", function=row.function, commit=commit, message=message)
-            unpushed.append(commit)
-            if pusher is not None:
-                pusher.request()
 
         def search_next(row: Row) -> None:
             """The next method of the ladder, else the function needs a creative edit."""
@@ -653,8 +645,6 @@ def run(
                     row.stage = "comparing"
                     emitter.emit("fn.compare.start", function=row.function, sha256=sha)
                     submit(row.function, Task("compare", row.file))
-                elif kind == "pushed":
-                    _pushed(payload, unpushed, emitter, host)
                 elif kind == "key":
                     _key(payload, rows, start, emitter, next_words)
                 elif kind == "quit":
@@ -680,35 +670,20 @@ def run(
     if recorded is not None:
         commit, functions = recorded
         emitter.emit("cycle.committed", commit=commit, message="Record attempts", functions=list(functions))
-        unpushed.append(commit)
     if exit_code != 130:
         # Commit what the steps wrote so the tree is left clean.
         settled = land.commit_generated(project, host, before, "Refresh generated files")
         if settled is not None:
             emitter.emit("cycle.committed", commit=settled, message="Refresh generated files", functions=[])
-            unpushed.append(settled)
-    if pusher is not None:
-        pusher.wait()
-        if unpushed:
-            pusher.request()
-            pusher.wait()
-        while True:
-            try:
-                kind, payload = inbox.get_nowait()
-            except queue.Empty:
-                break
-            if kind == "pushed":
-                _pushed(payload, unpushed, emitter, host)
     held = [name for name, row in rows.items() if row.stage in ("held", "failed")]
     carry = [name for name, row in rows.items() if row.stage not in ("landed", "held", "failed")]
-    if exit_code == 0 and (held or unpushed or carry or steps_error or regressed):
+    if exit_code == 0 and (held or carry or steps_error or regressed):
         exit_code = 1
     following = next_words("cycle", "--pick", str(max(1, len(rows))), "--stop", stopper.condition)
     emitter.emit(
         "cycle.end",
         landed=landed,
         landed_bytes=sum(rows[name].bytes for name in landed),
-        unpushed=list(unpushed),
         held=held,
         carryovers=carry,
         exit=exit_code,
@@ -720,13 +695,12 @@ def run(
     )
     data = {
         "landed": landed,
-        "unpushed": unpushed,
         "held": held,
         "carryovers": carry,
         "regressed": regressed,
         "exit": exit_code,
     }
-    lines = [f"landed {len(landed)}; held {len(held)}; carried over {len(carry)}; unpushed {len(unpushed)}"]
+    lines = [f"landed {len(landed)}; held {len(held)}; carried over {len(carry)}"]
     if steps_error:
         lines.append(f"steps: {steps_error}")
     lines.extend(
@@ -822,19 +796,6 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
         return "exact"
     row.stage = "waiting for edit"
     return "short" if row.best_percent < 100 else ""
-
-
-def _pushed(ok: bool, unpushed: list[str], emitter: Emitter, host: Host) -> None:
-    emitter.emit(
-        "fn.pushed",
-        commits=list(unpushed),
-        remote=host.publish_remote,
-        branch=host.publish_branch,
-        ok=bool(ok),
-        **({} if ok else {"error": "git push failed"}),
-    )
-    if ok:
-        unpushed.clear()
 
 
 def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:

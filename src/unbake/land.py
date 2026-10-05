@@ -1,4 +1,4 @@
-"""land(F): fold, prove every holding version against the ROM, write, commit "Match F", push in the background.
+"""land(F): fold, prove every holding version against the ROM, write, commit "Match F".
 
 An already published unit lands the same way (its row edits are a no-op) and commits "Clean F".
 
@@ -11,11 +11,9 @@ against the staged copy (layout.header_step.validate) before the write.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import tempfile
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -35,16 +33,13 @@ class Landed:
     landed: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
-    pushed: bool | None = None
 
     def document(self) -> dict[str, Any]:
-        return {"landed": self.landed, "commits": self.commits, "failed": self.failed, "pushed": self.pushed}
+        return {"landed": self.landed, "commits": self.commits, "failed": self.failed}
 
     def lines(self) -> list[str]:
         out = [f"landed {name} ({commit[:12]})" for name, commit in zip(self.landed, self.commits, strict=True)]
         out += [f"not landed {name}: {reason}" for name, reason in self.failed.items()]
-        if self.pushed is not None:
-            out.append("pushed" if self.pushed else "push failed; the commits stay local and the next land retries")
         return out
 
 
@@ -313,65 +308,7 @@ def land_original(project: Project, host: Host, function: str) -> str:
     return _git(project, "rev-parse", "HEAD").strip()
 
 
-def push_commits(project: Project, host: Host) -> bool:
-    """git push <remote> HEAD:<branch> with the configured credential; never raises."""
-    kind, value = host.credential()
-    if kind == "env":
-        if value not in os.environ:
-            return False
-        helper = f'!f() {{ echo username=x-access-token; echo "password=${value}"; }}; f'
-    else:
-        helper = value
-    result = subprocess.run(
-        [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            f"credential.helper={helper}",
-            "push",
-            "-q",
-            host.publish_remote,
-            f"HEAD:{host.publish_branch}",
-        ],
-        cwd=project.root,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-class Pusher:
-    """One background push thread. A request during a push makes one more push afterwards (all commits so far)."""
-
-    def __init__(self, project: Project, host: Host, report: Callable[[bool], None]) -> None:
-        self.project, self.host, self.report = project, host, report
-        self.lock = threading.Lock()
-        self.pending = False
-        self.thread: threading.Thread | None = None
-
-    def request(self) -> None:
-        with self.lock:
-            self.pending = True
-            if self.thread is None or not self.thread.is_alive():
-                self.thread = threading.Thread(target=self._loop, name="push", daemon=True)
-                self.thread.start()
-
-    def _loop(self) -> None:
-        while True:
-            with self.lock:
-                if not self.pending:
-                    return
-                self.pending = False
-            self.report(push_commits(self.project, self.host))
-
-    def wait(self) -> None:
-        thread = self.thread
-        if thread is not None:
-            thread.join()
-
-
-def publish(project: Project, host: Host, files: list[Path], *, push: bool, originals: tuple[str, ...] = ()) -> Landed:
+def publish(project: Project, host: Host, files: list[Path], *, originals: tuple[str, ...] = ()) -> Landed:
     """`unbake publish FILE... [--original NAME...]`: land each draft file, then each original-asm function, in
     turn; one failure does not stop the others."""
     from unbake import config
@@ -395,6 +332,4 @@ def publish(project: Project, host: Host, files: list[Path], *, push: bool, orig
         result.landed.append(name)
         result.commits.append(commit)
         steps.ensure(config.load(project.root), host, ["merge-units"])
-    if push and result.commits:
-        result.pushed = push_commits(project, host)
     return result

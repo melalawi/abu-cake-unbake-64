@@ -54,7 +54,7 @@ unbake cycle                                         # pick, draft, compare on s
 unbake cycle --pick 5 --stop idle:900 > events.jsonl
 ```
 
-A function that is exact in every version lands at once with a ROM proof, a commit and a push.
+A function that is exact in every version lands at once with a ROM proof and a commit.
 Run `unbake next` for the next step and `unbake --help` for every verb.
 Every command prints one JSON object on stdout. Human text goes to stderr.
 

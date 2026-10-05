@@ -42,16 +42,15 @@ class ProjectFlowTests(FixtureCase):
         self.assertEqual(code, 0, stderr)
         self.assertFalse(lines[-1]["data"]["exact"])
 
-    def test_publish_lands_one_function_with_a_commit_on_the_remote(self) -> None:
+    def test_publish_lands_one_function_with_a_local_commit(self) -> None:
         path = self.work("alpha", EXACT.format(name="alpha", value=1))
         code, lines, stderr = self.unbake("publish", str(path))
         self.assertEqual((code, lines[-1]["status"]), (0, "ok"), stderr)
         data = lines[-1]["data"]
         self.assertEqual(data["landed"], ["alpha"])
         self.assertEqual(len(data["commits"]), 1)
-        self.assertTrue(data["pushed"])
         self.assertTrue((self.root / "src" / "alpha.c").is_file())
-        self.assertEqual(self.remote_subjects()[0], "Match alpha")
+        self.assertEqual(self.subjects()[0], "Match alpha")
         self.assertEqual(run(["git", "status", "--porcelain"], self.root).stdout.strip(), "")
 
     def test_publish_of_a_mismatch_writes_and_commits_nothing(self) -> None:
@@ -61,19 +60,18 @@ class ProjectFlowTests(FixtureCase):
         self.assertEqual(lines[-1]["status"], "held" if code == 1 else lines[-1]["status"])
         self.assertNotEqual(code, 0)
         self.assertEqual(run(["git", "rev-parse", "HEAD"], self.root).stdout, before)
-        self.assertEqual(self.remote_subjects(), [])
+        self.assertEqual(self.subjects(), ["Fixture"])
         self.assertEqual(list(self.root.glob("build/*/*.new")), [])
 
-    def test_cycle_lands_commits_and_pushes_a_carryover(self) -> None:
+    def test_cycle_lands_and_commits_a_carryover(self) -> None:
         self.work("gamma", EXACT.format(name="gamma", value=3))
         code, lines, stderr = self.unbake("cycle", "--functions", "gamma", "--stop", "all-landed")
         self.assertEqual(code, 0, stderr)
         names = [line["event"] for line in lines]
         self.assertTrue(all(line["v"] == 1 for line in lines))
         self.assertEqual([line["seq"] for line in lines], sorted(line["seq"] for line in lines))
-        for event in ("cycle.start", "fn.landed", "fn.committed", "fn.pushed", "cycle.end"):
+        for event in ("cycle.start", "fn.landed", "fn.committed", "cycle.end"):
             self.assertIn(event, names)
         self.assertLess(names.index("fn.landed"), names.index("fn.committed"))
-        self.assertLess(names.index("fn.committed"), names.index("fn.pushed"))
         self.assertEqual(lines[-1]["exit"], 0)
-        self.assertEqual(self.remote_subjects()[0], "Match gamma")
+        self.assertEqual(self.subjects()[0], "Match gamma")

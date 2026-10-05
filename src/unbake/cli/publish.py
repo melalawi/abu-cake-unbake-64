@@ -1,4 +1,4 @@
-"""publish: land exact functions: ROM proof, write, commit and push."""
+"""publish: land exact functions: ROM proof, write, and commit."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from unbake.cli.args import Context
 from unbake.cli.output import Result
 
 NAME = "publish"
-HELP = "Land exact FILEs: prove the ROMs, write src/, commit and push."
+HELP = "Land exact FILEs: prove the ROMs, write src/ and commit."
 DESCRIPTION = """\
 Land each file whose function is exact in every version. For each one: build the ROM of every
 holding version with the new C, compare it with the original, and only then write src/FUNC.c,
-update layout.toml, commit "Match FUNC" and push. A file that does not prove is not written.
+update layout.toml and commit "Match FUNC". A file that does not prove is not written.
 
   unbake publish build/work/func_80012345/func_80012345.c
   unbake publish build/work/a/a.c build/work/b/b.c
@@ -21,8 +21,6 @@ update layout.toml, commit "Match FUNC" and push. A file that does not prove is 
 
 --original lands an original-asm function (one no configured compiler emits from C) as byte-exact
 src/FUNC.s, records its rule in unbake-original-asm.json and commits "Original asm FUNC".
-
-Pushing needs [publish] in unbake.toml (remote, branch, author, credential).
 """
 PROJECT = "ready"
 
@@ -36,7 +34,6 @@ def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--original", action="append", default=[], metavar="FUNC", help="Land an original-asm function as src/FUNC.s."
     )
-    parser.add_argument("--no-push", action="store_true", help="Commit but leave pushing to a later run.")
 
 
 def run(context: Context) -> Result:
@@ -49,7 +46,6 @@ def run(context: Context) -> Result:
         context.project(),
         context.require_host(),
         [path.resolve() for path in context.args.files],
-        push=not context.args.no_push,
         originals=tuple(context.args.original),
     )
     following = context.cmd("next")

@@ -45,7 +45,7 @@ unbake publish FILE
 `cycle` picks functions, writes drafts and compares each draft every time you save it.
 `draft` writes `build/work/FUNCTION/FUNCTION.c` with the shared type context.
 `compare` compiles the file and compares it with every version that holds the function.
-A function exact in every version lands with a ROM proof, a commit and a push.
+A function exact in every version lands with a ROM proof and a commit.
 `publish` lands an exact file by hand.
 Source must pass the checks.
 
