@@ -1,4 +1,4 @@
-"""The human side of `unbake cycle`: the pick screen (questionary) and the board (Rich), both on stderr.
+"""The board of `unbake cycle` (Rich), on the console the progress rows share.
 
 The board redraws on events only. A key-reader thread turns keys into coordinator messages:
 r compare again, d redraft, h hold or release, e open the file in $VISUAL/$EDITOR, q quit, arrows select.
@@ -16,8 +16,8 @@ import time
 import tty
 from typing import TYPE_CHECKING, Any
 
-from unbake.config import Held, Project
-from unbake.cycle import rank
+from unbake.config import Project
+from unbake.tui import output
 
 if TYPE_CHECKING:
     from unbake.cycle.engine import Row
@@ -25,40 +25,18 @@ if TYPE_CHECKING:
 HELP = "↑↓ select · enter details · e edit · r compare again · d redraft · h hold/release · q quit · ? help"
 
 
-def _label(row: rank.Candidate) -> str:
-    mark = "↻ " if row.carryover else "  "
-    best = f"best {row.best_percent:.1f}%" if row.best_percent is not None else "new"
-    return f"{mark}{row.function}  {row.bytes} B  {best}  [{' '.join(row.versions)}]"
-
-
-def pick(order: list[rank.Candidate]) -> list[rank.Candidate]:
-    import questionary
-
-    if not order:
-        return []
-    auto = min(5, len(order))
-    choices = [questionary.Choice(f"auto {auto}", value="auto", checked=True)]
-    choices += [questionary.Choice(_label(row), value=row.function) for row in order[:200]]
-    answer = questionary.checkbox("Pick functions (bytes per minute)", choices=choices, qmark="?").unsafe_ask()
-    if not answer:
-        raise Held("cycle", "cycle.pick: nothing picked")
-    if "auto" in answer:
-        return order[:auto]
-    chosen = set(answer)
-    return [row for row in order if row.function in chosen]
 
 
 class Board:
     """Rich Live board on stderr; keys go to the coordinator's inbox as ("key", (action, function))."""
 
     def __init__(self, project: Project, rows: dict[str, Row], inbox: queue.Queue[tuple[str, Any]]) -> None:
-        from rich.console import Console
         from rich.live import Live
 
         self.project, self.rows, self.inbox = project, rows, inbox
         self.selected = 0
         self.detail = ""
-        self.console = Console(file=sys.stderr)
+        self.console = output.console()
         self.live = Live(self.render(), console=self.console, auto_refresh=False, transient=False)
         self.live.start()
         self.stopped = threading.Event()

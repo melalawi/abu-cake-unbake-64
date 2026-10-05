@@ -31,11 +31,11 @@ class Parser(argparse.ArgumentParser):
         raise Held("usage", f"usage: {self.prog}: {message}")
 
     def print_help(self, file: Any = None) -> None:
-        sys.stderr.write(self.format_help())
+        tui.write(self.format_help())
 
     def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
         if message:
-            sys.stderr.write(message)
+            tui.write(message)
         raise HelpRequested(self.format_help())
 
 

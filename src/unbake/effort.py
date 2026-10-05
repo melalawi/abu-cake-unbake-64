@@ -1,8 +1,8 @@
 """Effort of one command or step: wall time, CPU of this process, its tools and its pool work by function, the
 peak resident memory of this process and of its workers, and counts a step reports (facts extracted of all).
 
-The pool charges each task's worker CPU and peak RSS to its function (pool.run); a command reports the totals on
-stderr when it ends, and each step reports its own share. A step opens a memory window (window()), so its peak is
+The pool charges each task's worker CPU and peak RSS to its function (pool.run); a command reports the totals in its
+result when it ends, and each step reports its own share. A step opens a memory window (window()), so its peak is
 its own; a mark taken before several windows sees the highest of them."""
 
 from __future__ import annotations
@@ -71,12 +71,23 @@ def window() -> None:
         _reset_peak()
 
 
-def charge(name: str, seconds: float, rss: int = 0) -> None:
+def charge(name: str, seconds: float, rss: int = 0, counts: dict[str, tuple[int, int]] | None = None) -> None:
+    """One pool task's CPU, peak resident bytes and the counts it added (the worker's, merged into this ledger)."""
     with _lock:
         row = _ledger.setdefault(name, [0.0, 0])
         row[0] += seconds
         row[1] += 1
         _windows[-1][1] = max(_windows[-1][1], rss)
+        for kind, (done, total) in (counts or {}).items():
+            added = _counts.setdefault(kind, [0, 0])
+            added[0] += done
+            added[1] += total
+
+
+def counted() -> dict[str, tuple[int, int]]:
+    """This process's counts so far, by name."""
+    with _lock:
+        return {name: (row[0], row[1]) for name, row in _counts.items()}
 
 
 def count(name: str, done: int, total: int) -> None:
@@ -143,18 +154,6 @@ class Effort:
     @property
     def percent(self) -> float:
         return 100 * self.cpu / self.wall if self.wall > 0 else 0.0
-
-    def line(self) -> str:
-        pooled = sum(seconds for seconds, _ in self.pool.values())
-        text = (
-            f"effort: {self.wall:.1f} s wall, {self.cpu:.1f} cpu-s ({self.percent:.0f}%): main {self.main:.1f}, "
-            f"tools {self.tools:.1f}, pool {pooled:.1f}; peak RSS main {self.main_rss / MB:.0f} MB, "
-            f"worker {self.worker_rss / MB:.0f} MB; other processes {self.external_cores:.1f} cores"
-        )
-        top = sorted(self.pool.items(), key=lambda item: -item[1][0])[:TOP]
-        if top:
-            text += " [" + ", ".join(f"{name} {seconds:.1f} x{tasks}" for name, (seconds, tasks) in top) + "]"
-        return text
 
     def document(self) -> dict[str, object]:
         return {

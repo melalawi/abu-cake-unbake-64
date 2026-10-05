@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from unbake import tui
+
 import ast
-import sys
+import re
 from pathlib import Path
 
 # Lock files need stable inodes and hold no project data.
@@ -21,6 +23,21 @@ _STATE: dict[str, set[str]] = {
     # A kernel control write: resets this process's peak RSS counter; no file is written.
     "effort.py": {'os.open("/proc/self/clear_refs", os.O_WRONLY)'},
 }
+
+
+# Human text goes through unbake.tui: the process's error stream is named only there.
+_STREAM = re.compile(r"\bsys\.std" + r"err\b|\bstd" + r"err\.write\b")
+
+
+def stream_violations(path: Path, content: str) -> list[str]:
+    """Lines that write to the process's error stream themselves (anywhere but the tui package)."""
+    if path.as_posix().startswith("tui/"):
+        return []
+    return [
+        f"{path.as_posix()}:{number}: write human text through unbake.tui: {line.strip()}"
+        for number, line in enumerate(content.splitlines(), 1)
+        if _STREAM.search(line)
+    ]
 
 
 def violations(path: Path, content: str) -> list[str]:
@@ -102,10 +119,15 @@ def violations(path: Path, content: str) -> list[str]:
 def main() -> int:
     root = Path(__file__).parents[1]
     errors = [
-        error for path in sorted(root.rglob("*.py")) for error in violations(path.relative_to(root), path.read_text())
+        error
+        for path in sorted(root.rglob("*.py"))
+        for error in (
+            *violations(path.relative_to(root), path.read_text()),
+            *stream_violations(path.relative_to(root), path.read_text()),
+        )
     ]
     for error in errors:
-        print(error, file=sys.stderr)
+        tui.line(error)
     return int(bool(errors))
 
 

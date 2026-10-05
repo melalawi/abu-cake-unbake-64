@@ -8,6 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
+from unbake import tui
 from unbake.config import Held
 
 EXIT = {"ok": 0, "held": 1}
@@ -23,6 +24,8 @@ class Result:
     data: dict[str, Any] = field(default_factory=dict)
     next: str | None = None
     receipts: tuple[str, ...] = ()
+    # What the command cost (effort.Effort.document), set by main before the result is printed.
+    effort: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def ok(cls, command: str, data: dict[str, Any], receipts: list[str] | tuple[str, ...], next_: str | None) -> Result:
@@ -42,6 +45,7 @@ class Result:
             "data": self.data,
             "next": self.next,
             "receipts": [_RENDERED.sub("", line) for line in self.receipts],
+            "effort": self.effort,
         }
 
 
@@ -60,7 +64,7 @@ def human(result: Result, stream: TextIO) -> None:
 def emit(result: Result, stdout: TextIO | None = None, stderr: TextIO | None = None) -> int:
     """Write the JSON document to stdout and the human text to stderr; return the exit code."""
     out = sys.stdout if stdout is None else stdout
-    err = sys.stderr if stderr is None else stderr
+    err = tui.stderr() if stderr is None else stderr
     human(result, err)
     out.write(json.dumps(result.document(), sort_keys=True) + "\n")
     out.flush()

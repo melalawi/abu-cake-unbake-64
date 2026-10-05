@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import sys
-from contextlib import nullcontext, redirect_stdout
+from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import TextIO
@@ -123,20 +123,20 @@ def _where(error: BaseException) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from unbake import effort
+    from unbake import effort, tui
 
     stdout = sys.stdout
     started = effort.mark()
+    tui.start(tui.stderr(), tui.interactive())
     try:
-        with redirect_stdout(sys.stderr):
-            result = _run(argv, stdout)
+        result = _run(argv, stdout)
     except Exception as error:
         result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}"), "unbake next")
-    code = emit(result, stdout, sys.stderr)
-    # Every command ends with what it cost: wall, CPU of this process, its tools and its pool work by function.
-    spent = effort.since(started)
-    print(spent.line(), file=sys.stderr)
-    print(json.dumps({"event": "command.effort", "command": result.command, **spent.document()}), file=sys.stderr)
+    finally:
+        tui.stop()
+    # Every result says what the command cost: wall, CPU of this process, its tools and its pool work by function.
+    result = replace(result, effort=effort.since(started).document())
+    code = emit(result, stdout, tui.stderr())
     return 130 if result.key == "interrupted" else code
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unbake import tui
+
 import csv
 import hashlib
 import json
@@ -220,20 +222,16 @@ def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bo
     atomic_files.text(
         directory / "symbol-proposal.json", json.dumps(report, separators=(",", ":"), sort_keys=True) + "\n"
     )
-    print(
+    tui.line(
         f"OK(setup): symbol items {report['old_items']} -> {report['new_items']}; "
         f"{len(report['placements'])} placement names change; "
         f"data objects {report['data_symbols']['unified']}, "
         f"data renames {report['data_symbols']['rename_count']}, "
-        f"contradictions {report['data_symbols']['contradictions_by_reason']}",
-        file=sys.stderr,
+        f"contradictions {report['data_symbols']['contradictions_by_reason']}"
     )
     if confirm is None:
-        print(
-            f"OK(setup): review build/setup/symbol-proposal.json; setup --replan-symbols --confirm {token}",
-            file=sys.stderr,
-        )
-        print(f"next: unbake setup --redo-symbol-matching --confirm {token}", file=sys.stderr)
+        tui.line(f"OK(setup): review build/setup/symbol-proposal.json; setup --replan-symbols --confirm {token}")
+        tui.line(f"next: unbake setup --redo-symbol-matching --confirm {token}")
         return ["symbol proposal ready; executable boundaries retained"]
     if confirm != token:
         raise Held("setup", "setup.symbol_proposal_stale: symbol proposal or project inputs changed")

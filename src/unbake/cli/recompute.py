@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from unbake.cli.args import Context
 from unbake.cli.output import Result
@@ -43,12 +42,7 @@ def run(context: Context) -> Result:
     if unknown:
         raise Held("recompute", f"recompute.steps: unknown {', '.join(unknown)}; steps are {', '.join(steps.NAMES)}")
     names = steps.NAMES if context.args.all else named
-    # Each step's line goes to stderr as it finishes, so a hold in a later step still shows the earlier ones.
-    ran = steps.recompute(
-        context.project(),
-        context.require_host(),
-        names,
-        report=lambda row: print(row.line(), file=sys.stderr, flush=True),
-    )
+    ran = steps.recompute(context.project(), context.require_host(), names)
     data = {"steps": [row.document() for row in ran]}
-    return Result.ok(NAME, data, [row.line() for row in ran], context.cmd("next"))
+    findings = [f"OVER {finding}" for row in ran for finding in row.findings]
+    return Result.ok(NAME, data, [*findings, *(note for row in ran for note in row.contended)], context.cmd("next"))

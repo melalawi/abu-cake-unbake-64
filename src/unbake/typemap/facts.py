@@ -751,10 +751,6 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     from unbake import effort
 
     effort.count("facts", counts["sources"], len(groups))
-    sys.stderr.write(
-        f"facts: {counts['sources']} of {len(groups)} source units extracted, {counts['whole']} whole, "
-        f"{sum(map(len, missing_headers.values()))} header parts\n"
-    )
     seeds: list[dict[str, Any]] = []
     for index in range(len(tasks)):
         seeds.extend(output.decode(row) for row in json.loads(encoded[index]))

@@ -9,15 +9,14 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import effort
+from unbake import effort, tui
 from unbake.cache import key
 from unbake.config import Held, Host, Project
 
@@ -89,6 +88,8 @@ class StepResult:
     findings: tuple[str, ...] = ()
     # Wall-time misses while other processes held the host busy: reported, never a failure.
     contended: tuple[str, ...] = ()
+    # What the step changed, by kind (the types step: the answers that differ from the last solve).
+    changes: dict[str, Any] = field(default_factory=dict)
 
     def document(self) -> dict[str, Any]:
         return {
@@ -99,28 +100,19 @@ class StepResult:
             **(self.spent.document() if self.spent is not None else {}),
             "findings": list(self.findings),
             "contended": list(self.contended),
+            **({"changes": self.changes} if self.changes else {}),
         }
-
-    def line(self) -> str:
-        text = f"{self.step}: unchanged ({self.trigger})"
-        if self.ran and self.spent is not None:
-            spent = self.spent
-            text = (
-                f"{self.step}: ran in {self.seconds:.1f} s, {spent.cpu:.1f} cpu-s ({spent.percent:.0f}%), "
-                f"peak RSS main {spent.main_rss / effort.MB:.0f} MB, worker {spent.worker_rss / effort.MB:.0f} MB "
-                f"({self.trigger})"
-            )
-        return "".join(
-            [text, *(f"\n  OVER {finding}" for finding in self.findings), *(f"\n  {note}" for note in self.contended)]
-        )
 
 
 @dataclass(frozen=True)
 class Step:
     name: str
+    # What a person reads while the step runs.
+    label: str
     trigger: str
     key: Callable[[Project, Host], str]
-    run: Callable[[Project, Host], None]
+    # Returns what it changed by kind (the types step), else None.
+    run: Callable[[Project, Host], dict[str, Any] | None]
     needs: tuple[str, ...] = ()
     # The files the step writes; a recorded one that goes missing or changes makes the step run again.
     outputs: Callable[[Project], Iterable[Path]] | None = None
@@ -157,7 +149,7 @@ def _types_key(project: Project, host: Host) -> str:
     return solver.input_key(project, host)
 
 
-def _types(project: Project, host: Host) -> None:
+def _types(project: Project, host: Host) -> dict[str, Any]:
     from unbake.layout import header_step
     from unbake.typemap import solver
 
@@ -165,7 +157,8 @@ def _types(project: Project, host: Host) -> None:
     # regenerated from the recorded solution.
     if header_step.missing(project):
         header_step.run(project, host)
-    solver.solve(project, host)
+    changes: dict[str, Any] = solver.solve(project, host)["changes"]
+    return changes
 
 
 def _headers_key(project: Project, host: Host) -> str:
@@ -278,28 +271,30 @@ def _merge_units(project: Project, host: Host) -> None:
 STEPS: dict[str, Step] = {
     step.name: step
     for step in (
-        Step("extract", "ROM sha1 or split rows changed", _extract_key, _extract),
+        Step("extract", "Splitting the ROMs into code and data", "ROM sha1 or split rows changed", _extract_key, _extract),
         Step(
             "rom-facts",
+            "Reading what each function's assembly does",
             "interval or symbol rows changed (infers default modules)",
             _rom_facts_key,
             _rom_facts,
             ("extract",),
         ),
-        Step("types", "a published source's facts changed", _types_key, _types, ("rom-facts",)),
+        Step("types", "Working out C types for functions, globals and structs", "a published source's facts changed", _types_key, _types, ("rom-facts",)),
         Step(
             "headers",
+            "Updating the shared headers in include/",
             "layout.toml or the type solution changed",
             _headers_key,
             _headers,
             ("types",),
             _headers_outputs,
         ),
-        Step("buildfiles", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
-        Step("progress", "a land or a boundary edit", _progress_key, _progress),
-        Step("resident", "a published source changed (resident constant blocks are deleted)", _resident_key, _resident),
-        Step("merge-units", "a land made a run of matched members", _merge_units_key, _merge_units),
-        Step("trim-cache", "the cache passed [cache].max_bytes", _trim_key, _trim),
+        Step("buildfiles", "Regenerating the Makefile", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
+        Step("progress", "Updating the progress numbers", "a land or a boundary edit", _progress_key, _progress),
+        Step("resident", "Removing data blocks that published C now owns", "a published source changed (resident constant blocks are deleted)", _resident_key, _resident),
+        Step("merge-units", "Joining finished neighbouring files", "a land made a run of matched members", _merge_units_key, _merge_units),
+        Step("trim-cache", "Trimming the cache", "the cache passed [cache].max_bytes", _trim_key, _trim),
     )
 }
 NAMES: tuple[str, ...] = tuple(STEPS)
@@ -440,8 +435,17 @@ def _ensure(
                 continue
             trigger = f"an output is missing or changed: {', '.join(changed)}" if changed else step.trigger
             command.running(name)
+            changes: dict[str, Any] = {}
             try:
-                step.run(project, host)
+                with tui.task(step.label) as shown:
+                    changes = step.run(project, host) or {}
+                    if name == "types":
+                        count = sum(kind["count"] for kind in changes.values())
+                        shown.note = (
+                            f"; changed {count} answers, so it runs once more to check them"
+                            if count
+                            else "; nothing changed"
+                        )
             except Held:
                 raise
             except Exception as error:
@@ -467,8 +471,8 @@ def _ensure(
                 time.monotonic() - started,
                 used,
                 tuple(effort.step_findings(name, used, host)),
+                changes=changes,
             )
-            _event({"event": "step.effort", **result.document()})
             results = [row for row in results if row.step != name or row.ran]
             results.append(result)
             ran.append(name)
@@ -481,17 +485,11 @@ def _ensure(
     )
 
 
-def _event(document: dict[str, Any]) -> None:
-    """A step's or chain's effort as one JSON line on stderr (stdout carries only the command's result)."""
-    print(json.dumps(document, sort_keys=True), file=sys.stderr, flush=True)
-
-
 def _checked(host: Host, results: list[StepResult], chain: effort.Mark, *, force: bool) -> list[StepResult]:
     """The chain's cost against the host's [budgets]: findings go on its last result and in its event."""
     used = effort.since(chain)
     kind = "recompute" if force else "changed" if any(row.ran for row in results) else "unchanged"
     findings, notes = effort.chain_findings(kind, used, host)
-    _event({"event": "steps.effort", "kind": kind, **used.document(), "findings": findings, "contended": notes})
     if (findings or notes) and results:
         last = results[-1]
         results[-1] = replace(last, findings=(*last.findings, *findings), contended=tuple(notes))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unbake import tui
+
 import re
 import sys
 from pathlib import Path
@@ -136,16 +138,6 @@ def _draft(
     atomic_files.text(
         context, preprocess_context(context, project, policy, v, function) + "\n" + examples_context, encoding="utf-8"
     )
-    print(
-        "similar context used: "
-        + (
-            ", ".join(
-                f"{item.function} (distance={item.distance:.6f}, edits={item.edit_distance})" for item in examples
-            )
-            or "none"
-        ),
-        file=sys.stderr,
-    )
     assembly = work / (function + ".s")
     body = whole_body(canonical_entry(project, v, function, address, assembly_text, generation=extracted), function)
     registers = [
@@ -271,7 +263,7 @@ def _draft(
     if "abi" in commands.headers:
         includes += gbi.install_audio(project)
     for item in commands.raw:
-        print(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}", file=sys.stderr)
+        tui.line(f"GBI(raw): {function}:{item.line}: {item.command}: {item.reason}")
     content = (
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
         f"{includes.rstrip()}\n\n{signatures}\n\n{output.rstrip()}\n"

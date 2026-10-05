@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unbake import tui
+
 import hashlib
 import json
 import math
@@ -279,14 +281,14 @@ def run(
     mutations = evaluated - 1
     if mutations == 0 and time.monotonic() < deadline - mutation_seconds:
         # The methods proposed nothing for this source with budget to spare: the start is the best they have.
-        print("no mutation proposed; the starting source is the best", file=sys.stderr)
+        tui.line("no mutation proposed; the starting source is the best")
     elif mutations == 0:
         if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
             raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
-        print("external permuter ran; no improving candidates emitted", file=sys.stderr)
-    print(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s", file=sys.stderr)
+        tui.line("external permuter ran; no improving candidates emitted")
+    tui.line(f"evaluated {mutations} mutations; mutation budget {budget_seconds:g}s")
     if best.trial.identical_everywhere:
-        print(f"IDENTICAL {best.trial.function}: {best.path}", file=sys.stderr)
+        tui.verdict("cracked", f"IDENTICAL {best.trial.function}: {best.path}")
     else:
-        print(f"best {best.score} words; next_command: {best.trial.next_command}", file=sys.stderr)
+        tui.line(f"best so far: {best.score} words differ. Next: {best.trial.next_command}")
     return SearchResult(best.path, best.trial, best.score, best.fuzzy, evaluated, steps)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unbake import tui
+
 import hashlib
 import json
 import os
@@ -377,7 +379,7 @@ def prepare_setup(
     from unbake.compilers import propose as compiler_proposal
 
     for line in compilers.receipt(proposal):
-        print(f"OK(setup): {line}", file=sys.stderr)
+        tui.line(f"OK(setup): {line}")
     compilers.confirm_proposal(project, census, layout, proposal, policy, confirm=confirm)
     accepted_path = project.build / "setup/proposal.json"
     accepted_sha256 = compiler_files.sha(accepted_path)

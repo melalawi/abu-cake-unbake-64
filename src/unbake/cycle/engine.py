@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import queue
-import sys
 import threading
 import time
 from collections.abc import Callable
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from unbake import atomic as atomic_files
+from unbake import tui
 from unbake.cli.output import Result
 from unbake.config import Held, Host, Project
 from unbake.cycle import ladder, rank
@@ -175,7 +175,49 @@ def emit_row(stream: TextIO, row: rank.Candidate) -> None:
 
 
 def interactive() -> bool:
-    return sys.stdin.isatty() and sys.stderr.isatty()
+    return tui.interactive()
+
+
+def narrate(record: dict[str, Any]) -> None:
+    """One plain sentence per event a person follows (the cycle's listener for both the board and the log)."""
+    function = record.get("function", "")
+    match record["event"]:
+        case "fn.queued":
+            tui.line(f"{function} ({record['bytes']} bytes, {', '.join(record['versions'])}): queued")
+        case "fn.draft.done":
+            tui.line(
+                f"{function}: first draft compiles"
+                if record["ok"]
+                else f"{function}: draft failed: {record.get('diagnostic', '')}"
+            )
+        case "fn.compare.done":
+            percent = record["best_percent"]
+            tui.line(
+                f"{function}: {percent}% of bytes match"
+                if percent is not None
+                else f"{function}: compare refused: {record.get('diagnostic', '')}"
+            )
+        case "fn.search.start":
+            tui.line(f"{function}: trying {record['method']} changes")
+        case "fn.exact":
+            tui.verdict("cracked", f"{function}: byte-identical in every version")
+        case "fn.creative":
+            tui.verdict(
+                "creative",
+                f"{function}: best {record['best_percent']}%, mechanical tries ran out; notes in {record['trouble']}",
+            )
+        case "fn.landed":
+            tui.line(f"{function}: landed ({record['bytes']} bytes)")
+        case "fn.committed":
+            tui.line(f"{function}: committed {record['commit'][:7]}")
+        case "fn.held" | "fn.failed":
+            tui.line(f"{function}: stopped: {record['reason']}")
+            tui.line(f"  Next: {record['next']}")
+        case "cycle.end":
+            tui.line(
+                f"Cycle done: {len(record['landed'])} landed ({record['landed_bytes']} bytes), "
+                f"{len(record['held'])} stopped, {len(record['carryovers'])} carried over"
+            )
 
 
 # ---- the run ----
@@ -237,9 +279,9 @@ def choose(project: Project, host: Host, pick: int | None, functions: tuple[str,
         return [by_name[name] for name in functions]
     if pick is not None:
         return order[:pick]
-    from unbake.cycle import ui
+    from unbake.tui import pick
 
-    return ui.pick(order)
+    return pick.pick(order)
 
 
 # The tree a draft reads: brought current on this thread before the first draft (choose reads only the split,
@@ -281,24 +323,18 @@ def run(
     if not picked:
         raise Held("cycle", "cycle.pick: nothing to work on (no candidates in the size window)")
     started += steps.ensure(project, host, DRAFT_STEPS)
-    if not interactive():
-        print(
-            "→ "
-            + next_words(
-                "cycle", "--functions", ",".join(row.function for row in picked), "--stop", stop or "all-landed"
-            ),
-            file=sys.stderr,
-        )
+    tui.line(f"Cycle on {len(picked)} functions: {', '.join(row.function for row in picked)}")
     emitter = Emitter(events)
     rows = {c.function: Row(c.function, c.bytes, c.versions, c.carryover, best_percent=c.best_percent) for c in picked}
     inbox: queue.Queue[tuple[str, Any]] = queue.Queue()
     stopper = Stop(stop)
     board = None
     if interactive():
-        from unbake.cycle import ui
+        from unbake.tui import board as board_view
 
-        board = ui.Board(project, rows, inbox)
+        board = board_view.Board(project, rows, inbox)
         emitter.listeners.append(board.on_event)
+    emitter.listeners.append(narrate)
 
     def save_state(_: dict[str, Any] | None = None) -> None:
         state = {"running": True, "rows": [asdict(row) for row in rows.values()]}
@@ -307,13 +343,13 @@ def run(
     emitter.listeners.append(save_state)
 
     def report(done: Any) -> None:
-        spent = done.spent.document() if done.spent is not None else {}
         emitter.emit(
             "step.run",
             step=done.step,
             trigger=done.trigger,
             seconds=round(done.seconds, 3),
-            **{name: spent[name] for name in ("cpu_percent", "main_rss_bytes", "worker_rss_bytes") if name in spent},
+            **(done.spent.document() if done.spent is not None else {}),
+            **({"changes": done.changes} if done.changes else {}),
             **({"findings": list(done.findings)} if done.findings else {}),
         )
 

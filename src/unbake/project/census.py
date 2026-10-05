@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unbake import tui
+
 import hashlib
 import json
 import sys
@@ -180,16 +182,14 @@ def run(
     matrix = rom.similarity_matrix(cartridges, inventories)
     for item in cartridges:
         label = names[item.path]
-        print(
+        tui.line(
             f"OK(setup): ROM {item.path.name}: VERSION {label} title={item.header.title!r} "
             f"code={item.header.category + item.header.game_code + item.header.region} "
-            f"revision={item.header.revision} CIC={item.header.cic} sha1={item.sha1}",
-            file=sys.stderr,
+            f"revision={item.header.revision} CIC={item.header.cic} sha1={item.sha1}"
         )
-        print(
+        tui.line(
             f"OK(setup): same-game {label}: "
-            + " ".join(f"{names[other.path]}={matrix[item, other]:.6f}" for other in cartridges),
-            file=sys.stderr,
+            + " ".join(f"{names[other.path]}={matrix[item, other]:.6f}" for other in cartridges)
         )
     selected = naming_version(versions, names_from)
     manifest = project.build / "setup/roms.json"
