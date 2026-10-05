@@ -248,22 +248,36 @@ def ensure(
 ) -> list[StepResult]:
     """Run each named step (and the steps it needs) whose input key changed; forcing reruns only the named.
 
+    A step can write another's input (merge-units rewrites the split extract and rom-facts read), so the
+    steps pass again until none ran: the command leaves every recorded key equal to its current key, and
+    the next command reruns nothing. A key that still changes after one pass per step is refused by name.
     report hears each step that ran as soon as it finishes, so a long chain is not silent."""
     requested = set(names := list(names))
-    results = []
-    for name in order(names):
-        step = STEPS[name]
-        started = time.monotonic()
-        current = step.key(project, host)
-        if not (force and name in requested) and recorded(project, name) == current:
-            results.append(StepResult(name, step.trigger, False, 0.0))
-            continue
-        step.run(project, host)
-        record(project, name, step.key(project, host) if name in ("resident", "headers", "buildfiles") else current)
-        results.append(StepResult(name, step.trigger, True, time.monotonic() - started))
-        if report is not None:
-            report(results[-1])
-    return results
+    steps = order(names)
+    results: list[StepResult] = []
+    for attempt in range(len(steps) + 1):
+        ran = []
+        for name in steps:
+            step = STEPS[name]
+            started = time.monotonic()
+            current = step.key(project, host)
+            if not (force and attempt == 0 and name in requested) and recorded(project, name) == current:
+                if attempt == 0:
+                    results.append(StepResult(name, step.trigger, False, 0.0))
+                continue
+            step.run(project, host)
+            record(project, name, step.key(project, host) if name in ("resident", "headers", "buildfiles") else current)
+            result = StepResult(name, step.trigger, True, time.monotonic() - started)
+            results = [row for row in results if row.step != name or row.ran]
+            results.append(result)
+            ran.append(name)
+            if report is not None:
+                report(result)
+        if not ran:
+            return results
+    raise Held(
+        "steps", f"steps.{ran[0]}: input key changes on every run ({', '.join(ran)}); a step rewrites its inputs"
+    )
 
 
 def recompute(project: Project, host: Host, names: Iterable[str]) -> list[StepResult]:

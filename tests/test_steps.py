@@ -67,3 +67,44 @@ class StepOrderTests(TempCase):
         with self.assertRaises(Held) as raised:
             steps.order(["map"])
         self.assertIn("steps.map", str(raised.exception))
+
+
+class SettleTests(TempCase):
+    """ensure passes again while a step wrote another step's input, and refuses a key that never settles."""
+
+    def run_steps(self, writes: dict[str, str], *, churn: bool = False) -> list[list[str]]:
+        from unittest.mock import patch
+
+        project = SimpleNamespace(build=self.root / "build")
+        inputs = {"a": 0, "b": 0}
+
+        def step(name: str) -> steps.Step:
+            def run(project: object, host: object) -> None:
+                if name in writes:
+                    inputs[writes[name]] += 1
+                if churn:
+                    inputs[name] += 1
+
+            return steps.Step(name, name, lambda project, host: str(inputs[name]), run)
+
+        table = {"a": step("a"), "b": step("b")}
+        commands = []
+        with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a", "b"]):
+            for _ in range(2):
+                commands.append([row.step for row in steps.ensure(project, None, ["a", "b"]) if row.ran])
+        return commands
+
+    def test_a_later_step_writing_an_earlier_input_settles_in_the_same_command(self) -> None:
+        for label, writes, first in [
+            ("no writes", {}, ["a", "b"]),
+            ("b writes a's input", {"b": "a"}, ["a", "b", "a"]),
+        ]:
+            with self.subTest(label):
+                (self.root / "build").mkdir(exist_ok=True)
+                (self.root / "build" / "steps.json").unlink(missing_ok=True)
+                self.assertEqual(self.run_steps(writes), [first, []])
+
+    def test_a_step_rewriting_its_own_input_every_run_is_refused_by_name(self) -> None:
+        with self.assertRaises(Held) as raised:
+            self.run_steps({}, churn=True)
+        self.assertIn("steps.a: input key changes on every run", str(raised.exception))
