@@ -51,5 +51,6 @@ def run(context: Context) -> Result:
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)
     if done.failed:
-        return Result(NAME, "held", "land.mismatch", done.document(), following, tuple(done.lines()))
+        key = next(iter(done.failed.values())).split(":", 1)[0]
+        return Result(NAME, "held", key, done.document(), following, tuple(done.lines()))
     return result
