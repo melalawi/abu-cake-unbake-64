@@ -17,7 +17,7 @@ SHAPES = {
 EMITTED = emitters(SHAPES.values())
 EPILOGUE = "8fbf0014 27bd0018 03e00008 00000000"
 FRAMED = "27bdffe8 afbf0014 0c000000 00000000 " + EPILOGUE
-OPCODE64 = "64840001 03e00008 00000000"
+OPCODE64 = "64840001 03e00008 00841021"
 # (words, VRAM start) -> (route, evidence fragment), for every adapter.
 SHARED = {
     "BT func_8008EC78_us filler": (("8ae3e172 aea18b2f " + FRAMED, 0x8008EC78), ("boundary", "8 bytes of alignment")),

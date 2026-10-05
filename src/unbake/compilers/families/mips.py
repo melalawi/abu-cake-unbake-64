@@ -45,6 +45,8 @@ O32_ENTRY_GPRS = frozenset({0, 4, 5, 6, 7, 28, 29, 31})
 O32_ENTRY_FPRS = frozenset({12, 13, 14, 15})
 # Every rule work.shape knows; a family leaves one out of Shape.rules when it does not hold for its compiler.
 RULES = frozenset({"filler", "frame", "call_ra", "isa", "entry_registers", "tail", "cop0", "fcsr", "kreg"})
+# Rules that hold only for an optimizing compiler: it writes no $zero and leaves no result unread.
+OPTIMIZING_RULES = frozenset({"zero_write", "dead_write"})
 # The original-asm rules (work.shape.original), a closed set: instructions no configured compiler emits from C.
 ORIGINAL_RULES = frozenset({"cop0", "fcsr", "isa", "kreg"})
 
@@ -69,6 +71,12 @@ def isa_level(compiler: str, cflags: tuple[str, ...]) -> int:
     return levels[-1]
 
 
+def optimizing(cflags: tuple[str, ...]) -> bool:
+    """The last -O flag asks for optimization (-O, -O1, -O2, -O3, -Os), not -O0 or none."""
+    levels = [flag for flag in cflags if re.fullmatch(r"-O[0-9s]?", flag)]
+    return bool(levels) and levels[-1] != "-O0"
+
+
 def emitters(shapes: Iterable[Shape]) -> Shape:
     """What any of SHAPES (every configured compiler) can emit, for the original-asm rules: the highest ISA level
     and only the rules every one of them switches on. Entry state, alignment and fragment size are not used."""
@@ -82,4 +90,5 @@ def emitters(shapes: Iterable[Shape]) -> Shape:
 
 def o32_shape(compiler: str, cflags: tuple[str, ...], *, object_alignment: int, fragment_bytes: int) -> Shape:
     """An O32 compiler's shape with every rule on; a family passes its own alignment and fragment size."""
-    return Shape(isa_level(compiler, cflags), O32_ENTRY_GPRS, O32_ENTRY_FPRS, object_alignment, fragment_bytes, RULES)
+    rules = RULES | OPTIMIZING_RULES if optimizing(cflags) else RULES
+    return Shape(isa_level(compiler, cflags), O32_ENTRY_GPRS, O32_ENTRY_FPRS, object_alignment, fragment_bytes, rules)

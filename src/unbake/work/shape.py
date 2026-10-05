@@ -256,7 +256,9 @@ def not_c(words: list[int], shape: Shape) -> str | None:
 
     Rules, each switchable per compiler: `frame` (allocated without a release or the reverse), `call_ra` (a call
     without saving ra), `isa` (an opcode above the compiler's ISA level), `entry_registers` (a register read
-    before anything sets it). A balanced frame or a longer body is a real function's shape and is never judged."""
+    before anything sets it). For an optimizing compiler also `zero_write` (any instruction but the canonical nop
+    writes $zero) and `dead_write` (a register written and never read before the return completes).
+    A balanced frame or a longer body is a real function's shape and is never judged."""
     adjusts = [((word & 0xFFFF) ^ 0x8000) - 0x8000 for word in words if word >> 16 == 0x27BD]
     allocated, released = any(value < 0 for value in adjusts), any(value > 0 for value in adjusts)
     if len(words) * 4 > shape.fragment_bytes or (allocated and released):
@@ -281,7 +283,48 @@ def not_c(words: list[int], shape: Shape) -> str | None:
                 return f"reads $f{min(freads - fprs)} before setting it"
             gprs |= writes
             fprs |= fwrites
+    if "zero_write" in shape.rules and any(word and 0 in _registers(word)[1] for word in words):
+        return "writes $zero"
+    if "dead_write" in shape.rules:
+        dead = _dead_write(words)
+        if dead:
+            return dead
     return None
+
+
+# Written and unread is normal for the results a caller reads and the registers a callee restores.
+_RESULT_GPRS = frozenset({2, 3, 29, 31})
+_CALLEE_SAVED = frozenset({*range(16, 24), 30})
+_RESULT_FPRS = frozenset({0, 2})
+
+
+def _dead_write(words: list[int]) -> str | None:
+    """A register an instruction writes that nothing reads before the body returns (the delay slot counts), or
+    None. Only a straight-line body is judged: a branch or jump before the final return can read it elsewhere.
+    Not judged: v0, v1, sp, ra, loads into s0-s7 and fp (a callee's restores) and f0, f2."""
+    if any(_transfers(word) for word in words[:-2]) or len(words) < 2:
+        return None
+    for index, word in enumerate(words):
+        _, writes, _, fwrites = _registers(word)
+        loaded = word >> 26 in range(32, 40)
+        for register in sorted(writes - {0} - _RESULT_GPRS - (_CALLEE_SAVED if loaded else set())):
+            if _unread(words[index + 1 :], register, fpr=False):
+                return f"writes ${register} and never reads it"
+        for register in sorted(fwrites - _RESULT_FPRS):
+            if _unread(words[index + 1 :], register, fpr=True):
+                return f"writes $f{register} and never reads it"
+    return None
+
+
+def _unread(rest: list[int], register: int, *, fpr: bool) -> bool:
+    """No instruction of REST reads REGISTER before one writes it again (the end of the body reads nothing)."""
+    for word in rest:
+        reads, writes, freads, fwrites = _registers(word)
+        if register in (freads if fpr else reads):
+            return False
+        if register in (fwrites if fpr else writes):
+            return True
+    return True
 
 
 def tail(previous: bytes, previous_address: int, data: bytes, shape: Shape, emitted: Shape) -> bool:
