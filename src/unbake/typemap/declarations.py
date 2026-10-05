@@ -484,14 +484,11 @@ def extract(
             elif target.startswith(("struct {", "union {", "enum ")):
                 overrides = True
         if overrides:
-            variants = _prefix.setdefault("layout_overrides", {})
-            selection = tuple(incoming.items())
-            if selection not in variants:
-                rows, unknown = _layout_records(_prefix["layout_source"] + source, {}, aliases)
-                if unknown:
-                    raise _FullDeclarationUnit
-                variants[selection] = rows
-            prefix_structs = variants[selection]
+            # The layouts of this unit's whole text: they include the unit's own (and, with an empty prefix, its
+            # headers'), so they are never shared with another unit that only spells the same typedefs.
+            prefix_structs, unknown = _layout_records(_prefix["layout_source"] + source, {}, aliases)
+            if unknown:
+                raise _FullDeclarationUnit
             complete_layout = True
         elif additions:
             variants = _prefix.setdefault("layout_aliases", {})
