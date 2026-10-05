@@ -1,6 +1,8 @@
 """Draft-side fixture: the shared project fixture with preprocessing and the layout map patched in process."""
 
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -60,3 +62,15 @@ def fixture(
     mapping.start()
     case.addCleanup(mapping.stop)
     return project, host, source
+
+
+@contextmanager
+def solved(database: dict) -> Iterator[Path]:
+    """A stand-in types.sqlite path whose rows are DATABASE's (kind -> name -> row), read by name as types_db does."""
+
+    def entries(_file, kind, names):
+        rows = database.get(kind, {})
+        return {name: rows[name] for name in set(names) if name in rows}
+
+    with patch("unbake.typemap.types_db.entries", entries):
+        yield Path("types.sqlite")

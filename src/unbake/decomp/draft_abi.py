@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+from pathlib import Path
 from typing import Any
 
 from unbake.cdecl import LayoutParser
@@ -19,15 +20,17 @@ def declarations(
     context: str,
     *,
     function: str | None = None,
-    database: dict[str, Any] | None = None,
+    types_path: Path | None = None,
 ) -> str:
     """Use one callee contract, preferring the whole-program transport proof."""
+    from unbake.typemap import types_db
     from unbake.typemap.abi_declarations import for_caller
 
     callees = set(re.findall(r"\b(?:jal|j)\s+([A-Za-z_]\w*)", assembly))
+    records = types_db.entries(types_path, "functions", callees) if types_path is not None else {}
     result: list[str] = []
     for name in sorted(callees):
-        record = database["functions"].get(name, {}) if database is not None else {}
+        record = records.get(name, {})
         carrier = (
             {"prototype": record["prototype"], "reasons": ["types.declaration: solved callee prototype"]}
             if record.get("state") == "known" and record.get("prototype")

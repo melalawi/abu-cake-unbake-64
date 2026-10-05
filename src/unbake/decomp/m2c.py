@@ -190,14 +190,15 @@ def _draft(
     )
     body = canonical_aliases(project, v, body, extracted)
     body = delay_slots(local_targets(body), function)
-    database = None
+    types_path = None
     if type_context and use_type_db:
-        from unbake.typemap import load
+        from unbake.typemap import types_db
 
-        database = load(original_project, allow_stale=True)
-        assert database is not None
+        types_path = types_db.path(original_project)
+        if not types_path.is_file():
+            raise Held("draft", f"types.database: {types_path} is missing; the types step builds it")
     signatures = draft_abi.declarations(
-        project, policy, v, body, context.read_text(), function=function, database=database
+        project, policy, v, body, context.read_text(), function=function, types_path=types_path
     )
     if signatures:
         with atomic_files.stream(context, "a") as stream:
@@ -236,8 +237,7 @@ def _draft(
     output = header_types(output, context.read_text())
     # Reject unsupported instructions/register reads before changing headers.
     output = lower(output, context.read_text(), allow_fields=True)
-    layouts = database["structs"] if database is not None else None
-    output, shared = share(project, function, output, context.read_text(), layouts=layouts)
+    output, shared = share(project, function, output, context.read_text(), types_path=types_path)
     selected = required_headers(
         {path: read_text(path, "m2c") for path, name in headers},
         output,

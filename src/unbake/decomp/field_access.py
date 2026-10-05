@@ -3,7 +3,6 @@
 import hashlib
 import re
 from pathlib import Path
-from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake.cdecl import LayoutParser
@@ -18,7 +17,7 @@ def share(
     output: str,
     context: str,
     *,
-    layouts: dict[str, Any] | None = None,
+    types_path: Path | None = None,
 ) -> tuple[str, Path | None]:
     """Use a declared base type or publish a measured storage view.
 
@@ -40,6 +39,9 @@ def share(
     nested = {}
     available = {record.name for record in records}
     parameters = {}
+    from unbake.typemap import types_db
+
+    layouts = types_db.entries(types_path, "structs", available) if types_path is not None else {}
     if layouts:
         from unbake.typemap import declarations
 
@@ -60,8 +62,8 @@ def share(
                 for param, register in zip(signature["params"], signature["registers"], strict=True)
                 if register is not None
             }
-    for name, layout in (layouts or {}).items():
-        if layout["state"] != "known" or name not in available or function not in layout.get("users", []):
+    for layout in layouts.values():
+        if layout["state"] != "known" or function not in layout.get("users", []):
             continue
         nested[layout.get("common_base", "")] = layout
         for origin in layout.get("base_nodes", [layout.get("common_base", "")]):

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from typing import cast
 
-from tests.decomp.support import fixture
+from tests.decomp.support import fixture, solved
 from unbake.config import Host
 from unbake.decomp.draft_abi import declarations
 from unbake.decomp.draft_fp import register_pairs
@@ -40,9 +40,10 @@ class DraftSignatureTests(unittest.TestCase):
                     }
                 }
             }
-            result = declarations(
-                project, cast(Host, policy), "us", "jal beta\nnop\n", "", function="alpha", database=database
-            )
+            with solved(database) as types_path:
+                result = declarations(
+                    project, cast(Host, policy), "us", "jal beta\nnop\n", "", function="alpha", types_path=types_path
+                )
             self.assertEqual(result.count("beta("), 1)
             self.assertIn("extern int beta(int);", result)
             self.assertIn("types.abi.declared", result)
@@ -56,15 +57,16 @@ class DraftSignatureTests(unittest.TestCase):
                 "abi": {"arity_known": True, "registers": registers, "missing": [], "conflicts": []},
             }
             database = {"functions": {"beta": record}}
-            result = declarations(
-                project,
-                cast(Host, policy),
-                "us",
-                "jal beta\n",
-                "int beta();",
-                function="alpha",
-                database=database,
-            )
+            with solved(database) as types_path:
+                result = declarations(
+                    project,
+                    cast(Host, policy),
+                    "us",
+                    "jal beta\n",
+                    "int beta();",
+                    function="alpha",
+                    types_path=types_path,
+                )
             self.assertIn("extern int beta(" + ", ".join(["int"] * 9) + ");", result)
             self.assertIn("types.abi.draft_words", result)
             self.assertEqual(record["abi_declaration"]["prototype"], "int beta();")
@@ -77,15 +79,10 @@ class DraftSignatureTests(unittest.TestCase):
             ):
                 with self.subTest(change=change):
                     incomplete = {**record, "abi": {**record["abi"], **change}}
-                    result = declarations(
-                        project,
-                        cast(Host, policy),
-                        "us",
-                        "jal beta\n",
-                        "",
-                        function="alpha",
-                        database={"functions": {"beta": incomplete}},
-                    )
+                    with solved({"functions": {"beta": incomplete}}) as types_path:
+                        result = declarations(
+                            project, cast(Host, policy), "us", "jal beta\n", "", function="alpha", types_path=types_path
+                        )
                     self.assertIn("extern int beta();", result)
                     self.assertNotIn("types.abi.draft_words", result)
 

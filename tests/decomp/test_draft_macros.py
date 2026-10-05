@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pycparser import c_parser  # type: ignore[import-untyped]
 
-from tests.decomp.support import fixture
+from tests.decomp.support import fixture, solved
 from unbake.config import Held
 from unbake.decomp.draft_context import required_headers
 from unbake.decomp.draft_macros import lower
@@ -83,33 +83,36 @@ class DraftMacroTests(unittest.TestCase):
             accesses = [{"function": "alpha", "opcode": 0x23, "width": 4, "signedness": True, "partial": False}]
             shape = observed("Shape_test", "global:source", {4: accesses}, {}, ["alpha", "beta"])
             context = "typedef int s32; extern int source;\n" + shape["declaration"]
-            output, shared = share(
-                project,
-                "alpha",
-                "s32 alpha(void) { s32 p; p = source; return M2C_FIELD(p, s32 *, 4); }",
-                context,
-                layouts={"Shape_test": shape},
-            )
+            with solved({"structs": {"Shape_test": shape}}) as types_path:
+                output, shared = share(
+                    project,
+                    "alpha",
+                    "s32 alpha(void) { s32 p; p = source; return M2C_FIELD(p, s32 *, 4); }",
+                    context,
+                    types_path=types_path,
+                )
             self.assertIsNone(shared)
             self.assertIn("((struct Shape_test *)(p))->field_4", output)
             self.assertNotIn("M2C_FIELD", output)
             c_parser.CParser().parse(context + output)
             self.assertFalse([finding for finding in run(output) if finding.rule == "raw-offset"])
-            changed, _ = share(
-                project,
-                "alpha",
-                "s32 alpha(void) { s32 p; p = source; p = 1; return M2C_FIELD(p, s32 *, 4); }",
-                context,
-                layouts={"Shape_test": shape},
-            )
+            with solved({"structs": {"Shape_test": shape}}) as types_path:
+                changed, _ = share(
+                    project,
+                    "alpha",
+                    "s32 alpha(void) { s32 p; p = source; p = 1; return M2C_FIELD(p, s32 *, 4); }",
+                    context,
+                    types_path=types_path,
+                )
             self.assertNotIn("->field_4", changed)
-            unrelated, _ = share(
-                project,
-                "gamma",
-                "s32 gamma(void) { return M2C_FIELD(source, s32 *, 4); }",
-                context,
-                layouts={"Shape_test": shape},
-            )
+            with solved({"structs": {"Shape_test": shape}}) as types_path:
+                unrelated, _ = share(
+                    project,
+                    "gamma",
+                    "s32 gamma(void) { return M2C_FIELD(source, s32 *, 4); }",
+                    context,
+                    types_path=types_path,
+                )
             self.assertNotIn("->field_4", unrelated)
 
     def test_nested_solved_source_and_opaque_storage_preserve_typed_lvalues(self) -> None:
@@ -122,13 +125,14 @@ class DraftMacroTests(unittest.TestCase):
             child = observed("Shape_child", "field:global:source:4", {8: [access]}, {}, ["alpha", "beta"])
             parent["base_nodes"] = ["global:source", "param:alpha:r4"]
             context = "typedef int s32; extern int source;\n" + parent["declaration"] + child["declaration"]
-            output, _ = share(
-                project,
-                "alpha",
-                "void alpha(s32 p) { M2C_FIELD(M2C_FIELD(p, s32 *, 4), s32 *, 8) = 7; }",
-                context,
-                layouts={"Shape_parent": parent, "Shape_child": child},
-            )
+            with solved({"structs": {"Shape_parent": parent, "Shape_child": child}}) as types_path:
+                output, _ = share(
+                    project,
+                    "alpha",
+                    "void alpha(s32 p) { M2C_FIELD(M2C_FIELD(p, s32 *, 4), s32 *, 8) = 7; }",
+                    context,
+                    types_path=types_path,
+                )
             self.assertIn("->unknown_4", output)
             self.assertIn("->unknown_8", output)
             self.assertNotIn("M2C_FIELD", output)

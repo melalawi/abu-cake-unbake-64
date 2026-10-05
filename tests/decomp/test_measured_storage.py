@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pycparser import c_parser  # type: ignore[import-untyped]
 
-from tests.decomp.support import fixture
+from tests.decomp.support import fixture, solved
 from unbake.config import Held
 from unbake.decomp import checks, measured_storage
 from unbake.decomp.draft_abi import declarations
@@ -98,7 +98,8 @@ class MeasuredStorageTests(unittest.TestCase):
 
     def test_explicit_solved_callee_prototype_precedes_unknown_transport(self):
         database = {"functions": {"beta": {"state": "known", "prototype": "extern int beta(int);"}}}
-        output = declarations(
-            self.project, self.policy, "us", "jal beta\nnop\n", "", function="alpha", database=database
-        )
+        with solved(database) as types_path:
+            output = declarations(
+                self.project, self.policy, "us", "jal beta\nnop\n", "", function="alpha", types_path=types_path
+            )
         self.assertIn("extern int beta(int);", output)
