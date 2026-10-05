@@ -322,7 +322,8 @@ def ensure(
 
     A step can write another's input (merge-units rewrites the split extract and rom-facts read), so the
     steps pass again until none ran: the command leaves every recorded key equal to its current key, and
-    the next command reruns nothing. A key that still changes after one pass per step is refused by name.
+    the next command reruns nothing. A key that still changes after one pass per step (and one more for
+    types, which reads the headers it writes) is refused by name.
     report hears each step that ran as soon as it finishes, so a long chain is not silent."""
     from unbake import journal
     from unbake.layout import header_step
@@ -402,7 +403,8 @@ def _ensure(
     damaged = [name for name in steps if STEPS[name].outputs is not None and altered(project, name)]
     steps = damaged + [name for name in steps if name not in damaged]
     results: list[StepResult] = []
-    for attempt in range(len(steps) + 1):
+    # One pass per step, and one more for a solve to read the headers it wrote.
+    for attempt in range(len(steps) + 2):
         ran = []
         for name in steps:
             step = STEPS[name]
@@ -427,11 +429,11 @@ def _ensure(
             record(
                 project,
                 name,
-                # These steps write their own inputs (types publishes the headers its source facts preprocess;
-                # extract applies shape edits to the split; rom-facts renders layout.toml): the key after the run
-                # is the one the next command sees.
+                # These steps write their own inputs (extract applies shape edits to the split; rom-facts renders
+                # layout.toml): the key after the run is the one the next command sees. Types records the key it
+                # read, so a solve that changed the generated headers runs again on them (solver._types_key).
                 step.key(project, host)
-                if name in ("extract", "rom-facts", "types", "resident", "headers", "buildfiles")
+                if name in ("extract", "rom-facts", "resident", "headers", "buildfiles")
                 else current,
                 None if step.outputs is None else _digests(project, step.outputs(project)),
             )

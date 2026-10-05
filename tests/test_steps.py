@@ -264,3 +264,61 @@ class BootstrapTests(TempCase):
                 steps.STEPS["types"].run("p", "h")
                 self.assertEqual(run.call_args_list, runs)
                 solve.assert_called_once_with("p", "h")
+
+
+class TypesFixedPointTests(TempCase):
+    """A solve reads the generated headers it writes: it settles only once it reads what it wrote."""
+
+    def solve_runs(self, solve: object) -> list[str]:
+        from unittest.mock import patch
+
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        header = self.root / "include" / "types.h"
+        header.parent.mkdir(exist_ok=True)
+        header.write_text("0")
+
+        def run(project: object, host: object) -> None:
+            header.write_text(solve(header.read_text()))  # type: ignore[operator]
+
+        table = {"types": steps.Step("types", "types", lambda project, host: header.read_text(), run)}
+        with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["types"]):
+            first = [row.step for row in steps.ensure(project, None, ["types"]) if row.ran]
+            again = [row.step for row in steps.ensure(project, None, ["types"]) if row.ran]
+        return [*first, "|", *again]
+
+    def test_a_solve_that_changed_its_headers_runs_once_more_on_them(self) -> None:
+        for label, solve, expected in [
+            ("headers already settled", lambda text: text, ["types", "|"]),
+            ("one change, then a fixed point", lambda text: "1", ["types", "types", "|"]),
+        ]:
+            with self.subTest(label):
+                (self.root / "build" / "steps.json").unlink(missing_ok=True)
+                self.assertEqual(self.solve_runs(solve), expected)
+
+    def test_a_solve_that_never_settles_is_refused_by_name(self) -> None:
+        with self.assertRaisesRegex(Held, "steps.types: input key changes on every run"):
+            self.solve_runs(lambda text: str(int(text) + 1))
+
+    def test_the_types_key_reads_generated_headers(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.typemap import solver
+
+        include = self.root / "include"
+        (include / "common").mkdir(parents=True)
+        (self.root / "config.toml").write_text("")
+        (self.root / "layout.toml").write_text("")
+        generated = include / "common" / "types_0123456789ab.h"
+        generated.write_text("typedef int A;\n")
+        project = SimpleNamespace(root=self.root, include=(include,), versions=())
+
+        def key() -> str:
+            with patch.object(solver, "SCHEMA", 1):
+                return solver._types_key(project, None, {"shard_sha256": "s"}, [])  # type: ignore[arg-type]
+
+        base = key()
+        (self.root / "build").mkdir(exist_ok=True)
+        (self.root / "build" / "steps.json").write_text("{}")
+        self.assertEqual(key(), base)  # outside the solve's inputs
+        generated.write_text("typedef long A;\n")
+        self.assertNotEqual(key(), base)
