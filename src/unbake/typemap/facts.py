@@ -28,7 +28,7 @@ from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import inputs
-from unbake.cache import Cache, key
+from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
 from unbake.typemap import declarations, layers, storage
 
@@ -43,6 +43,8 @@ _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 SOURCES_PER_JOB = 24
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
+# Shared alias maps and layout templates a process keeps between solves.
+SHARED_KEPT = 16384
 # At least this many jobs per worker, so a small fill still spreads over every worker.
 JOBS_PER_WORKER = 4
 # Placeholders for the provenance fields that differ between tasks sharing one unit text.
@@ -226,11 +228,17 @@ class Store:
     def _get_shared(self, digest: str) -> Any:
         value = self.shared.get(digest)
         if value is None:
-            if self.cache is None or (path := self.cache.get(SHARED, digest)) is None:
-                raise Held("solve", f"facts.shared: missing {digest}")
-            value = _load(path)
-            self.shared[digest] = value
+            value = self.shared[digest] = memo(
+                "facts.shared", digest, lambda: self._read_shared(digest), keep=SHARED_KEPT
+            )
         return value
+
+    def _read_shared(self, digest: str) -> Any:
+        """A shared value by its content digest: read once per process, so a cycle's later solves (one after each
+        land) reuse every alias map and layout template an earlier solve read. Seeds only read them."""
+        if self.cache is None or (path := self.cache.get(SHARED, digest)) is None:
+            raise Held("solve", f"facts.shared: missing {digest}")
+        return _load(path)
 
     def encode(self, seed: dict[str, Any]) -> dict[str, Any]:
         result = {}
