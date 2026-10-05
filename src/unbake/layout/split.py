@@ -445,6 +445,36 @@ def _functions(project: Project, v: str) -> list[Function]:
     return result
 
 
+def members(project: Project, v: str) -> list[Function]:
+    """Every function of VERSION v: the rows of split.functions, with each C row that a merge left holding more
+    than one function (inner `type: func` entries) split into one interval per function. The rows stay the
+    units the build links; this is the function view the map and the type solve read."""
+    result = []
+    for row in functions(project, v):
+        inner = sorted((offset, name) for name, offset in row.entries if offset > 0)
+        if row.kind != "c" or not inner:
+            result.append(row)
+            continue
+        starts = [(0, row.name), *inner]
+        for index, (offset, name) in enumerate(starts):
+            stop = starts[index + 1][0] if index + 1 < len(starts) else row.end - row.start
+            own = (name, *(alias for alias in row.aliases if index == 0 and alias != name))
+            result.append(
+                Function(
+                    v,
+                    name,
+                    row.start + offset,
+                    row.start + stop,
+                    row.address + offset,
+                    row.path,
+                    row.kind,
+                    own,
+                    tuple((alias, 0) for alias in own),
+                )
+            )
+    return result
+
+
 def replace_row(
     line: str, match: re.Match[str], *, start: str | None = None, kind: str | None = None, path: str | None = None
 ) -> str:

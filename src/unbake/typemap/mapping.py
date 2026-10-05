@@ -20,7 +20,7 @@ from unbake.typemap.mips import Analysis, control
 from unbake.work import inventory as plan
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 1
+SCHEMA = 2
 
 
 def map_program(project: Project) -> dict[str, Any]:
@@ -42,7 +42,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
         if hashlib.sha1(image).hexdigest() != cartridge.baserom_sha1:
             raise Held("map", f"map.rom_sha1.{version}: ROM differs from confirmed digest")
         images[version] = image
-        rows = split.functions(project, version)
+        rows = split.members(project, version)
         if not rows:
             raise Held("map", f"map.functions.{version}: no declared function intervals")
         inventory.extend(rows)
@@ -232,6 +232,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
     result = {
         **storage.identity(project),
         "inputs_sha256": pinned,
+        "map_schema": SCHEMA,
         "format": "sqlite-zlib-v1",
         "abi_analysis_sha256": analyzer,
         "shard": shard_path.name,
@@ -298,7 +299,8 @@ def refresh_map(project: Project) -> dict[str, Any]:
         relative = str(project.version(version).baserom.relative_to(project.root))
         if pinned.get(relative) != old_inputs.get(relative):
             raise Held("solve", f"map.rom_sha1.{version}: ROM changed; bootstrap map required")
-    if pinned == old_inputs:
+    # A map an older schema wrote is rebuilt; its unchanged instruction facts are reused by interval.
+    if pinned == old_inputs and result.get("map_schema") == SCHEMA:
         result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
         return result
     return _map(project, result)
