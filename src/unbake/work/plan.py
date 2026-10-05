@@ -143,6 +143,16 @@ def _published_rows(project: Project) -> dict[str, tuple[tuple[str, ...], split.
     return result
 
 
+def refusal(project: Project, name: str) -> str:
+    """The one reason a named function is not a candidate: published and clean, unknown, or not draftable."""
+    if name in _published_rows(project):
+        return "published and clean"
+    _, functions, _ = inventory.inventory(project)
+    if not any(name in (item.name, *item.aliases) for item in functions):
+        return "unknown function"
+    return "not draftable (excluded, original asm, or not one complete body in every version)"
+
+
 def history(project: Project) -> list[rank.History]:
     return [
         rank.History(function, summary.bytes, summary.exact, summary.minutes)

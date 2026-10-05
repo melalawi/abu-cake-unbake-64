@@ -292,17 +292,17 @@ class Stop:
 
 
 def choose(project: Project, host: Host, pick: int | None, functions: tuple[str, ...]) -> list[rank.Candidate]:
-    order = ranked(project, host)
+    from unbake.work import plan
+
     if functions:
-        by_name = {row.function: row for row in order}
+        # Named functions skip the [cycle] size window, which only narrows --pick and the picker.
+        by_name = {row.function: row for row in plan.candidates(project, host)}
         missing = [name for name in functions if name not in by_name]
         if missing:
-            raise Held(
-                "cycle",
-                f"cycle.functions: {', '.join(missing)}: "
-                "not candidates (published and clean, unknown or outside the size window)",
-            )
+            reasons = "; ".join(f"{name}: {plan.refusal(project, name)}" for name in missing)
+            raise Held("cycle", f"cycle.functions: not candidates: {reasons}")
         return [by_name[name] for name in functions]
+    order = ranked(project, host)
     if pick is not None:
         return order[:pick]
     from unbake.tui import pick as picker
