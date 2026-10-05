@@ -690,32 +690,40 @@ def validate_headers(
         inputs = closure if body.strip() else {path, *(dep for dep in closure if dep not in outputs)}
         rows.append((signature(str(path), inputs), closure, ""))
     rows.extend((signature(text, closure), closure, text) for text, closure in abi)
-    jobs: list[_Validation] = []
+    from unbake import pool
+
+    pending_by_version: dict[str, dict[str, tuple[set[Path], str]]] = {}
     for version in project.versions:
         pending: dict[str, tuple[set[Path], str]] = {}
         for input_key, closure, text in rows:
             content_key = version + ":" + input_key
             if content_key not in validated and not certificates.contains(content_key):
                 pending[content_key] = closure, text
-        if not pending:
-            continue
-        selected = {path for closure, _ in pending.values() for path in closure}
-        generated = selected.intersection(outputs)
-        jobs.append(
-            _Validation(
-                project,
-                policy,
-                version,
-                {path: contents[path] for path in selected},
-                {path: closures[path] for path in generated},
-                list(dict.fromkeys(text for _, text in pending.values() if text)),
-                frozenset(pending),
+        if pending:
+            pending_by_version[version] = pending
+    # Total jobs ~ workers: a version with more pending rows than one worker's share is split into chunks.
+    workers = pool.Pool.from_host(policy).size if policy is not None else 1
+    jobs: list[_Validation] = []
+    for version, pending in pending_by_version.items():
+        names = list(pending)
+        width = chunk_width(len(names), len(pending_by_version), workers)
+        for start in range(0, len(names), width):
+            part = {name: pending[name] for name in names[start : start + width]}
+            selected = {path for closure, _ in part.values() for path in closure}
+            generated = selected.intersection(outputs)
+            jobs.append(
+                _Validation(
+                    project,
+                    policy,
+                    version,
+                    {path: contents[path] for path in selected},
+                    {path: closures[path] for path in generated},
+                    list(dict.fromkeys(text for _, text in part.values() if text)),
+                    frozenset(part),
+                )
             )
-        )
-    # Each version's staged context is preprocessed and parsed on its own (cpp, m2c): one pool task per version.
-    # The parent records the certificates in version order; the first refused version is reported, as before.
-    from unbake import pool
-
+    # Each chunk's staged context is preprocessed and parsed on its own (cpp, m2c): one pool task per chunk.
+    # The parent records the certificates in job order; the first refused chunk is reported.
     project.build.mkdir(parents=True, exist_ok=True)
     parsed = pool.run(policy, _validate_version, jobs) if policy is not None else [_validate_version(j) for j in jobs]
     for job, context_key in zip(jobs, parsed, strict=True):
@@ -729,9 +737,14 @@ def validate_headers(
     cache.produce("typemap-validation", bundle_key, complete)
 
 
+def chunk_width(rows: int, versions: int, workers: int) -> int:
+    """Rows per validation job when each of VERSIONS versions has ROWS pending: about WORKERS jobs in all."""
+    return -(-rows // max(1, -(-workers // max(1, versions))))
+
+
 @dataclass(frozen=True)
 class _Validation:
-    """One version's pending validation: the staged header bytes it reads and the ABI texts it adds."""
+    """One chunk of a version's pending validation: the staged header bytes it reads and the ABI texts it adds."""
 
     project: Project
     policy: Host | None
