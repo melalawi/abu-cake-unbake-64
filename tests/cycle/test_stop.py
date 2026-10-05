@@ -34,6 +34,23 @@ class StopTests(unittest.TestCase):
             self.assertIsNone(idle.timeout(rows("landing", "waiting for edit")))
             self.assertTrue(after.reached(rows("comparing")))
 
+    def test_all_landed_ends_a_headless_run_when_nothing_is_in_flight(self) -> None:
+        cases = [
+            ("all landed", ("landed", "landed", "landed"), True),
+            ("landed, held and refused", ("landed", "held", "waiting for edit"), True),
+            ("one needs creative", ("landed", "needs creative"), True),
+            ("work in flight", ("landed", "comparing", "held"), False),
+            ("still queued", ("queued", "landed"), False),
+        ]
+        for name, stages, ended in cases:
+            with self.subTest(name):
+                self.assertEqual(engine.Stop("all-landed").reached(rows(*stages)), ended)
+
+    def test_all_landed_keeps_waiting_for_a_person_when_interactive(self) -> None:
+        stop = engine.Stop("all-landed", interactive=True)
+        self.assertFalse(stop.reached(rows("landed", "waiting for edit")))
+        self.assertTrue(stop.reached(rows("landed", "held", "failed")))
+
 
 if __name__ == "__main__":
     unittest.main()

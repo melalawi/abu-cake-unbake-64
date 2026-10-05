@@ -233,7 +233,9 @@ BUSY = frozenset({"drafting", "comparing", "searching", "landing"})
 class Stop:
     """idle:N counts only time when no function is drafting, comparing or landing; after:N is wall time."""
 
-    def __init__(self, condition: str | None) -> None:
+    def __init__(self, condition: str | None, interactive: bool = False) -> None:
+        # Without a person to edit files, all-landed ends once no work is left in flight (see reached).
+        self.interactive = interactive
         self.condition = condition or "all-landed"
         self.started = time.monotonic()
         self.activity = self.started
@@ -260,7 +262,11 @@ class Stop:
 
     def reached(self, rows: dict[str, Row]) -> bool:
         if self.condition == "all-landed":
-            return all(row.stage in ("landed", "held", "failed") for row in rows.values())
+            if self.interactive:
+                return all(row.stage in ("landed", "held", "failed") for row in rows.values())
+            # Nothing drafting, comparing, searching, landing or queued: every function is landed, stopped, or
+            # waiting for a person (refused land, needs creative). No one can edit a headless run's files.
+            return not any(row.stage in BUSY or row.stage == "queued" for row in rows.values())
         timeout = self.timeout(rows)
         return timeout is not None and timeout <= 0
 
@@ -327,7 +333,7 @@ def run(
     emitter = Emitter(events)
     rows = {c.function: Row(c.function, c.bytes, c.versions, c.carryover, best_percent=c.best_percent) for c in picked}
     inbox: queue.Queue[tuple[str, Any]] = queue.Queue()
-    stopper = Stop(stop)
+    stopper = Stop(stop, interactive())
     board = None
     if interactive():
         from unbake.tui import board as board_view
@@ -715,6 +721,9 @@ def run(
     carry = [name for name, row in rows.items() if row.stage not in ("landed", "held", "failed")]
     if exit_code == 0 and (held or carry or steps_error or regressed):
         exit_code = 1
+    for name, row in rows.items():
+        if row.stage != "landed":
+            tui.line(f"{name}: {row.stage}: {row.diagnostic or 'no diagnostic'}")
     following = next_words("cycle", "--pick", str(max(1, len(rows))), "--stop", stopper.condition)
     emitter.emit(
         "cycle.end",
