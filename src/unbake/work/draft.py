@@ -35,7 +35,7 @@ def published_seed(project: Project, function: str) -> str | None:
 
     That text is the draft of a published unit: landing it again republishes the unit once it is exact and clean.
     """
-    from unbake.decomp import checks, field_access, prelude
+    from unbake.decomp import checks, prelude
     from unbake.work import compare
 
     if not compare.published(project, function):
@@ -43,17 +43,7 @@ def published_seed(project: Project, function: str) -> str | None:
     source = project.src / f"{function}.c"
     if not checks.unmarked(source):
         raise Held("draft", f"draft.published: {function}: {source} is published and breaks no source rule")
-    text = prelude.fields(prelude.resolve(source.read_text()))
-    if "M2C_FIELD(" not in text:
-        return text
-    # Published helpers measure scalar storage, not aggregate identity. Avoid
-    # reparsing the entire solved context for these explicitly typed accesses.
-    local = draft_view(project, function)
-    text, shared = field_access.share(local, function, text, "")
-    if shared is not None:
-        relative = shared.relative_to(local.include[0]).as_posix()
-        text = f'#include "{relative}"\n' + text
-    return text
+    return prelude.fields(prelude.resolve(source.read_text()))
 
 
 def draft(project: Project, host: Host, function: str, *, replace: bool) -> Drafted:
@@ -73,6 +63,16 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
         if replace:
             shutil.rmtree(directory / "include", ignore_errors=True)
         (directory / "include").mkdir(parents=True, exist_ok=True)
+        if "M2C_FIELD(" in seed:
+            from unbake.decomp import field_access
+
+            # Generate the shared measured storage only after --replace has
+            # cleared stale private headers. Aggregate identity is unknown.
+            local = draft_view(project, function)
+            seed, shared = field_access.share(local, function, seed, "")
+            if shared is not None:
+                relative = shared.relative_to(local.include[0]).as_posix()
+                seed = f'#include "{relative}"\n' + seed
         atomic_files.text(file, seed, encoding="utf-8")
         return Drafted(function, file, versions)
     version = naming_version(project, versions)

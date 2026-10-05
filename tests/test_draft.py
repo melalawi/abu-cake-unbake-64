@@ -60,7 +60,12 @@ class DraftFileTests(ProjectCase):
             "return M2C_FIELD(p, s32 *, -4); }\n"
         )
         with patch.object(compare, "published", return_value=True):
-            text = draft.published_seed(self.project, "alpha")
+            private = self.project.work / "alpha/include"
+            private.mkdir(parents=True)
+            (private / "stale.h").write_text("stale")
+            made = draft.draft(self.project, self.host, "alpha", replace=True)
+            text = made.file.read_text()
+        self.assertFalse((private / "stale.h").exists())
         self.assertIsNotNone(text)
         self.assertNotIn("#define", text)
         self.assertNotIn("M2C_FIELD", text)
