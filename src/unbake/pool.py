@@ -4,20 +4,33 @@ Workers start from a fork server created before any project data is loaded, so t
 Each worker caps its own data segment at memory_worker_bytes (RLIMIT_DATA, inherited by the tools it
 runs). A task whose worker dies or runs out of memory is retried once in a fresh worker; a second
 failure raises TaskFailed naming worker.crash or worker.memory.
+
+Each worker leads its own process group, so the compilers and tools it starts share it. A worker thread
+waits on a pidfd of the process that owns the pool; when that process dies, even by SIGKILL, the worker kills
+the fork server and its own group. While a pool is open, SIGINT, SIGTERM and SIGHUP kill every worker group at
+once and then raise in the main thread (KeyboardInterrupt, or SystemExit 128+N); leaving the pool on an
+exception kills the groups instead of waiting for running tasks.
 """
 
 from __future__ import annotations
 
 import atexit
+import contextlib
 import multiprocessing
 import os
 import resource
+import select
 import shutil
+import signal
+import sys
 import tempfile
+import threading
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from pathlib import Path
+from types import FrameType
 from typing import Any, TypeVar
 
 from unbake.config import Held, Host
@@ -27,6 +40,7 @@ R = TypeVar("R")
 
 RECYCLE_AFTER = 64
 ITEM_SHOWN = 300
+SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 class TaskFailed(Held):
@@ -45,8 +59,45 @@ def admitted(workers: int, memory_total_bytes: int, memory_parent_bytes: int, me
     return max(1, min(workers, (memory_total_bytes - memory_parent_bytes) // memory_worker_bytes))
 
 
+def owner(server: int) -> int:
+    """The process that started the fork server `server`: the one that owns the pool."""
+    stat = Path(f"/proc/{server}/stat").read_text()
+    return int(stat.rsplit(")", 1)[1].split()[1])
+
+
+def _die_with_owner() -> None:
+    """Wait on the owner's pidfd in a thread; when it exits, kill the fork server and this group."""
+    server = os.getppid()
+
+    def orphaned(descriptor: int | None) -> None:
+        if descriptor is not None:
+            select.select([descriptor], [], [])
+        os.kill(server, signal.SIGKILL)
+        os.killpg(0, signal.SIGKILL)
+
+    try:
+        descriptor: int | None = os.pidfd_open(owner(server))
+    except (ProcessLookupError, FileNotFoundError):
+        descriptor = None
+    threading.Thread(target=orphaned, args=(descriptor,), name="owner", daemon=True).start()
+
+
 def _cap(memory_worker_bytes: int) -> None:
+    """Worker start: lead a new process group, die with the pool's owner, cap the data segment."""
+    os.setpgid(0, 0)
+    if sys.platform == "linux":
+        _die_with_owner()
     resource.setrlimit(resource.RLIMIT_DATA, (memory_worker_bytes, memory_worker_bytes))
+
+
+def kill_groups(pids: Sequence[int]) -> None:
+    """SIGKILL each worker's process group (the worker itself when its group does not exist yet)."""
+    for pid in pids:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
 
 
 # The fork server listens on a socket in multiprocessing's private temp dir; sun_path holds 107 bytes.
@@ -86,19 +137,47 @@ class Pool:
         self.size = admitted(workers, memory_total_bytes, memory_parent_bytes, memory_worker_bytes)
         self.memory_worker_bytes = memory_worker_bytes
         self._executor: ProcessPoolExecutor | None = None
+        self._handlers: dict[int, Any] = {}
+        self.killed = False
 
     @classmethod
     def from_host(cls, host: Host) -> Pool:
         return cls(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)
 
     def __enter__(self) -> Pool:
+        if threading.current_thread() is threading.main_thread():
+            self._handlers = {number: signal.signal(number, self._signalled) for number in SIGNALS}
+        atexit.register(self.kill)
         self._executor = _executor(self.size, self.memory_worker_bytes)
         return self
 
-    def __exit__(self, *exc: object) -> None:
-        if self._executor is not None:
-            self._executor.shutdown(cancel_futures=True)
+    def __exit__(self, kind: type[BaseException] | None, *exc: object) -> None:
+        try:
+            if kind is not None or self.killed:
+                self.kill()
+            elif self._executor is not None:
+                self._executor.shutdown(cancel_futures=True)
+        finally:
             self._executor = None
+            atexit.unregister(self.kill)
+            for number, previous in self._handlers.items():
+                signal.signal(number, previous)
+            self._handlers = {}
+
+    def kill(self) -> None:
+        """Kill every worker group now; queued and running tasks are dropped."""
+        executor = self._executor
+        if executor is None:
+            return
+        self.killed = True
+        kill_groups(list(executor._processes or {}))
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    def _signalled(self, number: int, _frame: FrameType | None) -> None:
+        self.kill()
+        if number == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise SystemExit(128 + number)
 
     def _fresh(self) -> ProcessPoolExecutor:
         if self._executor is not None:
