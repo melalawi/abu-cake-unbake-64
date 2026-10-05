@@ -72,8 +72,11 @@ def _die_with_owner() -> None:
     def orphaned(descriptor: int | None) -> None:
         if descriptor is not None:
             select.select([descriptor], [], [])
-        os.kill(server, signal.SIGKILL)
-        os.killpg(0, signal.SIGKILL)
+        # The server or the group may already be gone (an ordinary shutdown): nothing is left to kill.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(server, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(0, signal.SIGKILL)
 
     try:
         descriptor: int | None = os.pidfd_open(owner(server))

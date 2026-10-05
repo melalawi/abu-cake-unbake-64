@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import zlib
 from collections.abc import Iterator, Mapping
 from contextlib import closing
@@ -22,6 +23,22 @@ def pack(value: object) -> bytes:
 class Functions(Mapping[str, dict[str, Any]]):
     def __init__(self, path: Path, inventory: dict[str, Any]) -> None:
         self.path, self.inventory = path, inventory
+        # One read-only connection per thread for version(): a map refresh reads thousands of bodies one by one.
+        self._local = threading.local()
+
+    def _connection(self) -> sqlite3.Connection:
+        connection: sqlite3.Connection | None = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+            connection.execute("PRAGMA cache_size=-2048")
+            self._local.connection = connection
+        return connection
+
+    def __getstate__(self) -> dict[str, Any]:
+        return {"path": self.path, "inventory": self.inventory}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__init__(state["path"], state["inventory"])  # type: ignore[misc]
 
     def __len__(self) -> int:
         return len(self.inventory)
@@ -70,14 +87,14 @@ class Functions(Mapping[str, dict[str, Any]]):
     def version(self, name: str, version: str) -> dict[str, Any]:
         """Read one containing body without decompressing its other versions."""
         try:
-            with closing(sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
-                connection.execute("PRAGMA cache_size=-2048")
-                row = connection.execute(
-                    "SELECT body FROM functions WHERE name=? AND version=?", (name, version)
-                ).fetchone()
-                if row is None:
-                    raise Held("solve", f"map.shards: missing containing version for {name}: {version}")
-                body: dict[str, Any] = json.loads(zlib.decompress(row[0]))
+            row = (
+                self._connection()
+                .execute("SELECT body FROM functions WHERE name=? AND version=?", (name, version))
+                .fetchone()
+            )
+            if row is None:
+                raise Held("solve", f"map.shards: missing containing version for {name}: {version}")
+            body: dict[str, Any] = json.loads(zlib.decompress(row[0]))
         except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
             raise Held("solve", f"map.shards: {self.path}: {error}") from error
         body.update(self.inventory[name]["versions"][version])

@@ -79,6 +79,10 @@ class _Canonical:
 def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) -> dict[str, Any]:
     records: dict[str, Any] = {}
     meanings: dict[str, dict[str, Any]] = {}
+    # Per name, a spelling of its current meaning and the alias map it was read in: thousands of units consume one
+    # header contract spelled alike in one shared alias map, and the same spelling in the same map has the same
+    # meaning, so only a new spelling or map pays for canonical().
+    spellings: dict[str, tuple[dict[str, Any], dict[str, str]]] = {}
     environments = _Canonical()
     index = 0
     while index < len(seeds):
@@ -90,14 +94,19 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
-                if meanings[name] == _comparable(record, key, aliases, canonical):
+                spelled = spellings[name]
+                stripped = _stripped(record, key)
+                if (spelled[1] is aliases and spelled[0] == stripped) or (
+                    meanings[name] == _comparable(record, key, aliases, canonical)
+                ):
+                    spellings[name] = stripped, aliases
                     # The same type, maybe spelled through a typedef: no conflict. As for identical records,
                     # the incoming one is kept unless it ranks lower, so a published contract replaces a
                     # declared one (and the published-storage rule then keeps it in the header).
                     if _rank(record) >= _rank(previous):
                         records[name] = {**record, "declaration_conflict": bool(previous.get("declaration_conflict"))}
                     continue
-                old, new = _stripped(previous, key), _stripped(record, key)
+                old, new = _stripped(previous, key), stripped
                 if old != new:
                     ranks = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
                     old_rank = ranks.get(previous["provenance"].get("kind"), 1)
@@ -116,6 +125,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                         if new_rank > old_rank:
                             records[name] = {**record, "declaration_conflict": False}
                             meanings[name] = _comparable(record, key, aliases, canonical)
+                            spellings[name] = stripped, aliases
                         continue
                 if old != new:
                     graph.facts.append(
@@ -131,6 +141,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     continue
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
             meanings[name] = _comparable(record, key, aliases, canonical)
+            spellings[name] = _stripped(record, key), aliases
         shared = seed[key]
         if isinstance(shared, declarations.ProvenStructs) and len(graph.facts) == conflicts_before:
             # An uninterrupted run of identical layouts only replaces provenance.

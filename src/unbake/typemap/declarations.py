@@ -949,13 +949,24 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
         atomic_files.text(extra, "\n".join(supplemental))
         evidence: dict[str, dict[str, Any]] = {}
         evidence_texts = _version_texts(project, policy, contents, extra, ordered)
-        for version in project.versions:
-            provenance = {
+
+        def evidence_row(version: str) -> dict[str, Any]:
+            return {
                 "kind": "declared",
                 "version": version,
                 "source": "declaration_evidence",
                 "sha256": storage.digest(extra.read_bytes()),
             }
+
+        if policy is not None:
+            # Each distinct evidence text is extracted in the pool (under its first version's provenance, which the
+            # loop below asks for), never one after another in this process.
+            from unbake import pool
+
+            first = {text: evidence_row(version) for version, text in reversed(evidence_texts.items())}
+            pool.run(policy, _declared_job, [(policy, text, row, authored) for text, row in first.items()])
+        for version in project.versions:
+            provenance = evidence_row(version)
             # Evidence imports the generated context too. Preserve definition
             # homes so a canonical layout reused after a rename remains a
             # generated provider, with its split dependencies intact.
