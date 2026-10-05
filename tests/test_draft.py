@@ -69,6 +69,7 @@ class DraftFileTests(ProjectCase):
         self.assertIsNotNone(text)
         self.assertNotIn("#define", text)
         self.assertNotIn("M2C_FIELD", text)
+        self.assertLess(text.index('#include "types.h"'), text.index('#include "common/draft_fields_alpha.h"'))
         self.assertIn("->value", text)
         self.assertIn("[-1].value", text)
         header = self.project.work / "alpha/include/common/draft_fields_alpha.h"

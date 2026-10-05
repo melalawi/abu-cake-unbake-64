@@ -6,6 +6,7 @@ m2c's prelude typedefs resolved to the shared types they name.
 
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,7 +73,9 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
             seed, shared = field_access.share(local, function, seed, "")
             if shared is not None:
                 relative = shared.relative_to(local.include[0]).as_posix()
-                seed = f'#include "{relative}"\n' + seed
+                includes = list(re.finditer(r"^[ \t]*#[ \t]*include[^\n]*\n", seed, re.M))
+                boundary = includes[-1].end() if includes else 0
+                seed = seed[:boundary] + f'#include "{relative}"\n' + seed[boundary:]
         atomic_files.text(file, seed, encoding="utf-8")
         return Drafted(function, file, versions)
     version = naming_version(project, versions)
