@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake.cache import Cache, key
 from unbake.config import Held
 from unbake.decomp.gbi_source import invocations, macros, typedefs
@@ -476,7 +477,7 @@ def dirty(cache: Cache, sources: list[Path]) -> list[Path]:
     content_key = key(*(f"{path}\0{inputs.signature(path)}" for path in sources))
 
     def make(path: Path) -> None:
-        path.write_text(json.dumps([str(source) for source in sources if unmarked(source)]))
+        atomic_files.fresh(path, json.dumps([str(source) for source in sources if unmarked(source)]).encode())
 
     return [Path(name) for name in json.loads(cache.produce("source-findings", content_key, make).read_text())]
 
