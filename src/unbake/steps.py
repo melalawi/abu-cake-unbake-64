@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,9 @@ class StepResult:
     trigger: str
     ran: bool
     seconds: float
-    cpu_seconds: float = 0.0
+    spent: effort.Effort | None = None
+    # Budgets this step (or, on a chain's last result, the chain) went over, each named by its budget key.
+    findings: tuple[str, ...] = ()
 
     def document(self) -> dict[str, Any]:
         return {
@@ -91,15 +94,20 @@ class StepResult:
             "trigger": self.trigger,
             "ran": self.ran,
             "seconds": round(self.seconds, 3),
-            "cpu_seconds": round(self.cpu_seconds, 3),
+            **(self.spent.document() if self.spent is not None else {}),
+            "findings": list(self.findings),
         }
 
     def line(self) -> str:
-        if not self.ran:
-            return f"{self.step}: unchanged ({self.trigger})"
-        percent = 100 * self.cpu_seconds / self.seconds if self.seconds > 0 else 0.0
-        spent = f"{self.cpu_seconds:.1f} cpu-s ({percent:.0f}%)"
-        return f"{self.step}: ran in {self.seconds:.1f} s, {spent} ({self.trigger})"
+        text = f"{self.step}: unchanged ({self.trigger})"
+        if self.ran and self.spent is not None:
+            spent = self.spent
+            text = (
+                f"{self.step}: ran in {self.seconds:.1f} s, {spent.cpu:.1f} cpu-s ({spent.percent:.0f}%), "
+                f"peak RSS main {spent.main_rss / effort.MB:.0f} MB, worker {spent.worker_rss / effort.MB:.0f} MB "
+                f"({self.trigger})"
+            )
+        return "".join([text, *(f"\n  OVER {finding}" for finding in self.findings)])
 
 
 @dataclass(frozen=True)
@@ -403,12 +411,14 @@ def _ensure(
     damaged = [name for name in steps if STEPS[name].outputs is not None and altered(project, name)]
     steps = damaged + [name for name in steps if name not in damaged]
     results: list[StepResult] = []
+    chain = effort.mark()
     # One pass per step, and one more for a solve to read the headers it wrote.
     for attempt in range(len(steps) + 2):
         ran = []
         for name in steps:
             step = STEPS[name]
             started = time.monotonic()
+            effort.window()
             spent = effort.mark()
             current = step.key(project, host)
             same = recorded(project, name) == current
@@ -438,17 +448,43 @@ def _ensure(
                 None if step.outputs is None else _digests(project, step.outputs(project)),
             )
             command.running(None)
-            result = StepResult(name, trigger, True, time.monotonic() - started, effort.since(spent).cpu)
+            used = effort.since(spent)
+            result = StepResult(
+                name,
+                trigger,
+                True,
+                time.monotonic() - started,
+                used,
+                tuple(effort.step_findings(name, used, project.budgets)),
+            )
+            _event({"event": "step.effort", **result.document()})
             results = [row for row in results if row.step != name or row.ran]
             results.append(result)
             ran.append(name)
             if report is not None:
                 report(result)
         if not ran:
-            return results
+            return _checked(project, results, chain, force=force)
     raise Held(
         "steps", f"steps.{ran[0]}: input key changes on every run ({', '.join(ran)}); a step rewrites its inputs"
     )
+
+
+def _event(document: dict[str, Any]) -> None:
+    """A step's or chain's effort as one JSON line on stderr (stdout carries only the command's result)."""
+    print(json.dumps(document, sort_keys=True), file=sys.stderr, flush=True)
+
+
+def _checked(project: Project, results: list[StepResult], chain: effort.Mark, *, force: bool) -> list[StepResult]:
+    """The chain's cost against the project's budgets: findings go on its last result and in its event."""
+    used = effort.since(chain)
+    kind = "recompute" if force else "changed" if any(row.ran for row in results) else "unchanged"
+    findings = effort.chain_findings(kind, used, project.budgets)
+    _event({"event": "steps.effort", "kind": kind, **used.document(), "findings": findings})
+    if findings and results:
+        last = results[-1]
+        results[-1] = replace(last, findings=(*last.findings, *findings))
+    return results
 
 
 def recompute(

@@ -592,6 +592,9 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         encoded.update(found)
         for name, value in spent.items():
             counts[name] += value
+    from unbake import effort
+
+    effort.count("facts", counts["sources"], len(groups))
     sys.stderr.write(
         f"facts: {counts['sources']} of {len(groups)} source units extracted, {counts['whole']} whole, "
         f"{sum(map(len, missing_headers.values()))} header parts\n"

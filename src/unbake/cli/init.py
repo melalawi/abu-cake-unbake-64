@@ -16,8 +16,10 @@ Create a new project folder (a git repository) with config.toml, layout.toml and
 Example:
   unbake init MyGame --functions-per-header 32
 
-Then: put the ROM files in MyGame/roms/, set [build] asflags, cppflags and sn64_asflags in
-MyGame/config.toml, and run `unbake setup` inside MyGame.
+Then: put the ROM files in MyGame/roms/, set [build] asflags, cppflags and sn64_asflags and every
+[budgets] key (recompute_seconds, unchanged_seconds, changed_seconds, facts_miss_fraction, main_rss_bytes,
+worker_rss_bytes: what a step chain may cost; over budget is reported by name) in MyGame/config.toml, and
+run `unbake setup` inside MyGame.
 
 When no host config exists yet (--config FILE, $UNBAKE_CONFIG or ~/.config/unbake/unbake.toml),
 init writes the full example there with every value commented out. An existing file is never touched.

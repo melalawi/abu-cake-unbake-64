@@ -137,12 +137,15 @@ def _cpu() -> float:
     return own.ru_utime + own.ru_stime + children.ru_utime + children.ru_stime
 
 
-def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float]:
-    """Worker body: the task's result and the CPU it and the tools it ran spent (effort ledger)."""
+def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float, int]:
+    """Worker body: the task's result, the CPU it and the tools it ran spent and the worker's peak resident bytes
+    so far (effort ledger)."""
+    from unbake import effort
+
     fn, item = task
     start = _cpu()
     result = fn(item)
-    return result, _cpu() - start
+    return result, _cpu() - start, effort.resident_peak()
 
 
 class Pool:
@@ -218,7 +221,7 @@ class Pool:
         inner = self._submit(_measured, (fn, item))
         outer: Future[R] = Future()
 
-        def finished(done: Future[tuple[R, float]]) -> None:
+        def finished(done: Future[tuple[R, float, int]]) -> None:
             if done.cancelled():
                 outer.cancel()
                 return
@@ -226,8 +229,8 @@ class Pool:
             if error is not None:
                 outer.set_exception(error)
                 return
-            result, seconds = done.result()
-            effort.charge(effort.name_of(fn), seconds)
+            result, seconds, rss = done.result()
+            effort.charge(effort.name_of(fn), seconds, rss)
             outer.set_result(result)
 
         outer.add_done_callback(lambda done: inner.cancel() if done.cancelled() else None)
@@ -240,10 +243,10 @@ class Pool:
 
         name = effort.name_of(fn)
 
-        def submit(item: T) -> Future[tuple[R, float]]:
+        def submit(item: T) -> Future[tuple[R, float, int]]:
             return self._submit(_measured, (fn, item))
 
-        pending: deque[tuple[T, Future[tuple[R, float]], int]] = deque()
+        pending: deque[tuple[T, Future[tuple[R, float, int]], int]] = deque()
         source = iter(items)
         for item in source:
             pending.append((item, submit(item), 0))
@@ -252,7 +255,7 @@ class Pool:
         while pending:
             item, future, attempt = pending.popleft()
             try:
-                result, seconds = future.result()
+                result, seconds, rss = future.result()
             except (BrokenProcessPool, MemoryError) as error:
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 if attempt:
@@ -262,7 +265,7 @@ class Pool:
                     pending = deque((i, submit(i), a) for i, _, a in pending)
                 pending.appendleft((item, submit(item), 1))
                 continue
-            effort.charge(name, seconds)
+            effort.charge(name, seconds, rss)
             yield result
             for item in source:
                 pending.append((item, submit(item), 0))

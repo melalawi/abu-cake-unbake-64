@@ -63,7 +63,7 @@ class Unfinished(Held, NotImplementedError):
 # Project facts: config.toml with a fixed directory layout.
 
 SCHEMA_VERSION = 1
-CONFIG_SECTIONS = frozenset({"schema", "project", "compilers", "units", "version", "build"})
+CONFIG_SECTIONS = frozenset({"schema", "project", "compilers", "units", "version", "build", "budgets"})
 RETIRED_SECTIONS = ("paths", "workspace")
 BUILD_KEYS = frozenset({"asflags", "cppflags", "sn64_asflags", "resident_mappings"})
 
@@ -131,6 +131,38 @@ class Layout:
 
 
 @dataclass(frozen=True)
+class Budgets:
+    """[budgets]: what a step chain may cost on this project; over budget is a named finding (effort.findings)."""
+
+    recompute_seconds: float  # a forced chain (recompute)
+    unchanged_seconds: float  # an unforced chain in which no step ran
+    changed_seconds: float  # an unforced chain in which a step ran
+    facts_miss_fraction: float  # source units extracted of all, in an unforced solve
+    main_rss_bytes: int  # one step's peak resident memory of this process
+    worker_rss_bytes: int  # one step's peak resident memory of a pool worker
+
+
+BUDGET_KEYS = tuple(Budgets.__dataclass_fields__)
+
+
+def _budgets(path: Path, data: dict[str, Any]) -> Budgets:
+    table = _table(data, "budgets", f"{path} [budgets]")
+    unknown = sorted(set(table) - set(BUDGET_KEYS))
+    if unknown:
+        raise Held("config", f"{path} [budgets].{unknown[0]}: unknown key")
+    values: dict[str, Any] = {}
+    for name in BUDGET_KEYS:
+        label = _label(path, "budgets", name)
+        given = _required(table, name, label)
+        values[name] = (
+            _positive(given, label, integer=True) if name.endswith("_bytes") else _positive(given, label, integer=False)
+        )
+    if values["facts_miss_fraction"] > 1:
+        raise Held("config", f"{_label(path, 'budgets', 'facts_miss_fraction')}: expected at most 1")
+    return Budgets(**values)
+
+
+@dataclass(frozen=True)
 class Project:
     root: Path
     name: str
@@ -146,6 +178,7 @@ class Project:
     asflags: tuple[str, ...]
     cppflags: tuple[str, ...]
     sn64_asflags: tuple[str, ...]
+    budgets: Budgets
     resident_mappings: dict[str, tuple[ResidentMapping, ...]] = field(default_factory=dict)
     unit_flags: dict[str, tuple[str, ...]] = field(default_factory=dict)
     work_include: tuple[Path, ...] = ()
@@ -493,6 +526,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
         flags("asflags"),
         flags("cppflags"),
         flags("sn64_asflags"),
+        _budgets(path, data),
         _resident(path, build["resident_mappings"]) if "resident_mappings" in build else {},
         unit_flags,
     )
