@@ -7,8 +7,8 @@ lines, then their bodies in address order. It is proved like a land: in every ho
 `n64link place` link of the merged unit must equal the ROM bytes of the whole run.
 - Every run is proved independently in the shared worker pool; one writer then applies the results in layout
   order and makes one commit for the pass.
-- Pass: write the merged source, remove the others, drop them from the group, absorb their split rows into the
-  first row, mark the group `evidence = "proven"`.
+- Pass: write the merged source, remove the others, absorb their split rows into the first row, drop them from
+  the group (with their `only` marks and cuts) and mark the group `evidence = "proven"`, in one layout edit.
 - Fail: record every member after the first as a split cut, so the run is never tried again until someone
   removes the cut (the evidence changed).
 """
@@ -108,31 +108,18 @@ def prove(project: Project, host: Host, members: tuple[str, ...], source: str) -
     return True
 
 
-def _absorb_rows(project: Project, members: tuple[str, ...]) -> list[Path]:
-    """Remove the split rows of every member after the first, in each holding version."""
+def _absorb_rows(project: Project, starts: dict[str, set[int]]) -> list[Path]:
+    """Remove the code rows starting at `starts` (absorbed members), one rewrite per version."""
     changed = []
-    for version in split.holding_versions(project, members[0]):
+    for version, absorbed in starts.items():
         path = project.version(version).split
         text, lines, segments = split.layout(path)
-        lines = list(lines)
-        starts = {compare.row_of(project, member, version).start for member in members[1:]}
-        drop = {row.line for segment in segments for row in segment.rows if row.start in starts and row.kind == "c"}
+        drop = {row.line for segment in segments for row in segment.rows if row.start in absorbed and row.kind == "c"}
         after = "".join(line for index, line in enumerate(lines) if index not in drop)
         if after != text:
             atomic_files.text(path, after)
             changed.append(path)
     return changed
-
-
-def _group_update(project: Project, name: str, segment: str, **changes: object) -> Path:
-    value = layout_map.load(project)
-    groups = tuple(
-        replace(group, **changes) if (group.name, group.segment) == (name, segment) else group  # type: ignore[arg-type]
-        for group in value.groups
-    )
-    path = project.root / "layout.toml"
-    atomic_files.write(path, layout_map.encoded(replace(value, groups=groups)))
-    return path
 
 
 def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
@@ -178,27 +165,28 @@ def run(project: Project, host: Host) -> list[str]:
         backup.update({project.src / f"{m}.c": (project.src / f"{m}.c").read_bytes() for m in members})
     lines = []
     touched: list[Path] = [layout]
+    absorbed: dict[str, tuple[str, ...]] = {}
+    starts: dict[str, set[int]] = {}
+    cuts: list[str] = []
+    firsts: list[str] = []
     try:
-        for (stale, members), source, passed in zip(found, sources, proven, strict=True):
-            # An earlier run in this pass may have rewritten the group; update from what layout.toml holds now.
-            group = next(
-                g for g in layout_map.load(project).groups if (g.name, g.segment) == (stale.name, stale.segment)
-            )
+        for (group, members), source, passed in zip(found, sources, proven, strict=True):
             if not passed:
-                _group_update(
-                    project, group.name, group.segment, split=tuple(dict.fromkeys((*group.split, *members[1:])))
-                )
+                cuts += members[1:]
                 lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; recorded as split")
                 continue
+            for version in split.holding_versions(project, members[0]):
+                starts.setdefault(version, set()).update(compare.row_of(project, m, version).start for m in members[1:])
             atomic_files.text(project.src / f"{members[0]}.c", source)
             for member in members[1:]:
                 (project.src / f"{member}.c").unlink()
-            # The group drops the absorbed members while their rows still exist, so the layout stays valid.
-            kept = tuple(m for m in group.members if m not in members[1:])
-            _group_update(project, group.name, group.segment, members=kept, evidence="proven")
+            absorbed.update((member, ()) for member in members[1:])
+            firsts.append(members[0])
             touched += [project.src / f"{m}.c" for m in members]
-            touched += _absorb_rows(project, members)
             lines.append(f"merge {group.name} {members[0]}..{members[-1]}: proven")
+        touched += _absorb_rows(project, starts)
+        # One membership edit for the pass: absorbed members leave with their rows, refused runs become cuts.
+        layout_map.edit_members(project, absorbed, cuts=cuts, proven=firsts)
         touched += buildfiles.write(project_config.load(project.root), host)
         merged = sum(passed for passed in proven)
         _commit(

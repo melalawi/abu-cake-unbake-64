@@ -101,3 +101,34 @@ class SecondRunTests(ProjectCase):
         self.assertEqual(lines[1], "merge g gamma..gamma: refused; recorded as split")
         # Proofs run in the pool; the single writer commits the whole pass once.
         commit.assert_called_once()
+
+
+class VersionOnlyRunTests(ProjectCase):
+    versions = ("us", "eu")
+
+    def test_absorbed_version_only_members_take_their_marks_and_a_later_run_still_loads(self) -> None:
+        # RW hold: run 228 absorbed members with `only` marks; run 229 then refused `layout.only.<absorbed>`.
+        layout = self.project.root / "layout.toml"
+        marks = {"alpha": ("us",), "beta": ("us",)}
+        g = Group("g", "main", "default", ("alpha", "beta", "gamma"), only=marks, split=("beta",))
+        layout.write_bytes(layout_map.encoded(layout_map.Map(2, (g,))))
+        split_path = self.project.version("eu").split
+        split_path.write_text(
+            "".join(x for x in split_path.read_text().splitlines(True) if "alpha]" not in x and "beta]" not in x)
+        )
+        us = self.project.version("us").split
+        for name in ("alpha", "beta"):
+            (self.project.src / f"{name}.c").write_text(f"int {name}(void) {{ return 0; }}\n")
+            us.write_text(us.read_text().replace(f"asm, {name}]", f"c, {name}]"))
+        (self.project.src / "gamma.c").write_text("int gamma(void) { return 0; }\n")
+        project = config.load(self.project.root)
+        with (
+            mock.patch.object(merge_units, "runs", return_value=[(g, ("alpha", "beta")), (g, ("gamma",))]),
+            mock.patch.object(merge_units, "prove", return_value=True),
+            mock.patch.object(merge_units, "_commit"),
+            mock.patch("unbake.buildfiles.write", return_value=[]),
+            mock.patch("unbake.pool.run", side_effect=in_process),
+        ):
+            merge_units.run(project, self.host)
+        loaded = layout_map.load(config.load(self.project.root)).groups[0]
+        self.assertEqual((loaded.members, loaded.only, loaded.split), (("alpha", "gamma"), {"alpha": ("us",)}, ()))

@@ -4,6 +4,7 @@ names an edit rather than a command that reaches it again; a draft waits for the
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import patch
 
 from tests.kit import TempCase
@@ -49,6 +50,84 @@ class StaleMemberTests(TempCase):
         )
         with patch.object(layout_map, "catalog", return_value=MEMBERS):
             self.assertEqual(layout_map.stale(SimpleNamespace(root=self.root)), ("func_8020402C_de",))
+
+
+class RegroupTests(TempCase):
+    """Every membership edit keeps `only` marks and `split` cuts on members, and refuses a bad edit itself."""
+
+    VERSIONS = ("us", "de")
+    BASE: ClassVar[dict[str, tuple[int, tuple[str, ...]]]] = {
+        "a": (0x100, ("us", "de")),
+        "b": (0x104, ("us",)),
+        "c": (0x108, ("us", "de")),
+        "x": (0x200, ("us", "de")),
+    }
+
+    def layout(self, only: dict[str, list[str]] | None = None) -> dict[str, object]:
+        g = {"name": "g", "segment": "s", "evidence": "default", "members": ["a", "b", "c"]}
+        g |= {"only": only if only is not None else {"b": ["us"]}, "split": ["b"]}
+        return {
+            "schema": 1,
+            "cap": 32,
+            "group": [g, {"name": "h", "segment": "s", "evidence": "default", "members": ["x"]}],
+        }
+
+    def regroup(self, catalog: dict[str, tuple[int, tuple[str, ...]]], **edit: object) -> layout_map.Map:
+        members = {n: layout_map.Member(n, "s", address, held) for n, (address, held) in catalog.items()}
+        return layout_map.regroup(self.layout(edit.pop("only", None)), members, self.VERSIONS, **edit)  # type: ignore[arg-type]
+
+    def test_refusals(self) -> None:
+        without_b = {k: v for k, v in self.BASE.items() if k != "b"}
+        for label, catalog, edit, key in [
+            ("replacement names an absent member", self.BASE, {"replacements": {"zz": ()}}, "layout.member.zz"),
+            ("cut names an absent member", self.BASE, {"replacements": {}, "cuts": ["zz"]}, "layout.member.zz"),
+            ("proven names an absent member", self.BASE, {"replacements": {}, "proven": ["zz"]}, "layout.member.zz"),
+            ("rename onto another group's member", without_b, {"replacements": {"b": ("x",)}}, "layout.member.x"),
+            ("drop while the row still exists", self.BASE, {"replacements": {"b": ()}}, "layout.member.b"),
+            (
+                "a mark that never named a member is not hidden",
+                self.BASE,
+                {"replacements": {"c": ()}, "only": {"b": ["us"], "q": ["us"]}},
+                "layout.only.q",
+            ),
+        ]:
+            with self.subTest(label), self.assertRaises(Held) as caught:
+                self.regroup(dict(catalog), **edit)
+            self.assertEqual(caught.exception.key, key)
+
+    def test_edits(self) -> None:
+        without_b = {k: v for k, v in self.BASE.items() if k != "b"}
+        renamed = without_b | {"n": (0x104, ("us",))}
+        moved = self.BASE | {"c": (0x0F0, ("us", "de"))}
+        everywhere = self.BASE | {"b": (0x104, ("us", "de"))}
+        for label, catalog, edit, members, only, cuts, evidence in [
+            ("drop a version-only cut member", without_b, {"b": ()}, ("a", "c"), {}, (), "default"),
+            (
+                "rename a version-only member",
+                renamed,
+                {"b": ("n",)},
+                ("a", "n", "c"),
+                {"n": ("us",)},
+                ("n",),
+                "default",
+            ),
+            ("fold tail: now held everywhere", everywhere, {"b": ("b",)}, ("a", "b", "c"), {}, ("b",), "default"),
+            ("move keeps address order", moved, {"c": ("c",)}, ("c", "a", "b"), {"b": ("us",)}, ("b",), "default"),
+            ("untouched members keep marks", self.BASE, {}, ("a", "b", "c"), {"b": ("us",)}, ("b",), "default"),
+        ]:
+            with self.subTest(label):
+                g = self.regroup(dict(catalog), replacements=edit).groups[0]
+                self.assertEqual((g.members, g.only, g.split, g.evidence), (members, only, cuts, evidence))
+
+    def test_merge_pass_edit(self) -> None:
+        # The held RW pass: absorbed version-only members leave with their marks; refused runs become cuts.
+        catalog = {k: v for k, v in self.BASE.items() if k != "b"}
+        result = self.regroup(catalog, replacements={"b": ()}, cuts=["x"], proven=["a"])
+        g, h = result.groups
+        self.assertEqual((g.members, g.only, g.split, g.evidence), (("a", "c"), {}, (), "proven"))
+        self.assertEqual((h.split, h.evidence), (("x",), "default"))
+        empty = self.regroup({k: v for k, v in self.BASE.items() if k != "x"}, replacements={"x": ()})
+        self.assertEqual([group.name for group in empty.groups], ["g"])
 
 
 class LayoutHoldNextTests(TempCase):

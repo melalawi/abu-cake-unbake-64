@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
@@ -221,19 +222,24 @@ def stale(project: Project) -> tuple[str, ...]:
     return tuple(sorted({m for m in named if isinstance(m, str) and m not in members}))
 
 
+def _retain(group: dict[str, Any], names: list[str]) -> None:
+    """The one membership change: set a group's members; the `only` marks and `split` cuts of the members it
+    removes go with them (a mark that never named a member stays, so validation names it)."""
+    gone = set(group.get("members", ())) - set(names)
+    group["members"] = names
+    if isinstance(group.get("only"), dict):
+        group["only"] = {k: v for k, v in group["only"].items() if k not in gone}
+    if isinstance(group.get("split"), list):
+        group["split"] = [m for m in group["split"] if m not in gone]
+
+
 def _drop_stale_defaults(value: dict[str, Any], members: dict[str, Member]) -> None:
     """Drop names no split holds from `default` groups (inference plans their rows again); authored and proven
     groups keep them, so validation names the conflict."""
     kept = []
     for group in value.get("group", []):
         if isinstance(group, dict) and group.get("evidence") == "default" and isinstance(group.get("members"), list):
-            gone = {m for m in group["members"] if m not in members}
-            group["members"] = [m for m in group["members"] if m not in gone]
-            for mark in ("only",):
-                if isinstance(group.get(mark), dict):
-                    group[mark] = {k: v for k, v in group[mark].items() if k not in gone}
-            if isinstance(group.get("split"), list):
-                group["split"] = [m for m in group["split"] if m not in gone]
+            _retain(group, [m for m in group["members"] if m in members])
             if not group["members"]:
                 continue
         kept.append(group)
@@ -264,29 +270,52 @@ def ensure(project: Project) -> bool:
     return True
 
 
-def edit_members(project: Project, replacements: dict[str, tuple[str, ...]]) -> None:
-    """Apply explicit member edits while retaining authored groups, cuts and address order."""
-    target = project.root / "layout.toml"
-    value = tomllib.loads(target.read_text())
-    members = catalog(project)
+def regroup(
+    value: dict[str, Any],
+    members: dict[str, Member],
+    versions: tuple[str, ...],
+    replacements: dict[str, tuple[str, ...]],
+    cuts: Iterable[str] = (),
+    proven: Iterable[str] = (),
+) -> Map:
+    """Every membership edit of an existing layout: a member maps to its new names (a rename, a folded tail that
+    stays, a moved entry) or to () (dropped); `cuts` become split cut points; a group holding a `proven` name is
+    marked proven. Groups keep their authored rows and address order, `only` and `split` follow the members, and
+    the result is validated, so a bad edit is refused here and never by a later load."""
+    cuts, proven = set(cuts), set(proven)
     present = {name for group in value["group"] for name in group["members"]}
-    for name in replacements.keys() - present:
+    for name in sorted((replacements.keys() | cuts | proven) - present):
         refuse(f"member.{name}", "edit names an absent member")
+    everywhere = set(versions)
     for group in value["group"]:
-        selected = tuple(dict.fromkeys(child for name in group["members"] for child in replacements.get(name, (name,))))
+        selected = list(dict.fromkeys(child for name in group["members"] for child in replacements.get(name, (name,))))
         # A replacement can move a member (a boundary edit changes its address): keep address order, stably.
-        selected = tuple(sorted(selected, key=lambda name: members[name].address if name in members else 0))
-        marks = {name: versions for name, versions in group.get("only", {}).items() if name not in replacements}
+        selected.sort(key=lambda name: members[name].address if name in members else 0)
+        marks = {name: list(held) for name, held in group.get("only", {}).items() if name not in replacements}
         for name in group["members"]:
             for child in replacements.get(name, ()):
-                if child in members and set(members[child].versions) != set(project.versions):
+                if child in members and set(members[child].versions) != everywhere:
                     marks[child] = list(members[child].versions)
-        group["members"] = list(selected)
         group["only"] = marks
-        group["split"] = list(
-            dict.fromkeys(child for name in group.get("split", []) for child in replacements.get(name, (name,)))
-        )
+        mapped = (child for name in group.get("split", []) for child in replacements.get(name, (name,)))
+        group["split"] = list(dict.fromkeys((*mapped, *(name for name in group["members"] if name in cuts))))
+        if proven & set(group["members"]):
+            group["evidence"] = "proven"
+        _retain(group, selected)
     value["group"] = [group for group in value["group"] if group["members"]]
+    return validate(value, versions, members)
+
+
+def edit_members(
+    project: Project,
+    replacements: dict[str, tuple[str, ...]],
+    *,
+    cuts: Iterable[str] = (),
+    proven: Iterable[str] = (),
+) -> None:
+    """Apply one `regroup` to layout.toml in one write."""
     from unbake.typemap import storage
 
-    storage.write(target, encoded(validate(value, project.versions, members)))
+    target = project.root / "layout.toml"
+    value = tomllib.loads(target.read_text())
+    storage.write(target, encoded(regroup(value, catalog(project), project.versions, replacements, cuts, proven)))
