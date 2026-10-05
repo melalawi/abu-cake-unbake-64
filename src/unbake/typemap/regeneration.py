@@ -187,34 +187,43 @@ class Session:
             fixed_homes=fixed_homes,
         )
 
+    _PROJECTED = {
+        "structs": (
+            "state",
+            "partial",
+            "generated",
+            "declaration",
+            "aliases",
+            "type",
+            "typedefs",
+            "reason",
+            "common_base",
+        ),
+        "functions": ("state", "prototype"),
+        "globals": ("state", "declaration"),
+        "arrays": ("state", "partial", "type"),
+    }
+    _CARRIED = ("typedefs", "declaration_evidence", "published_declarations", "published_homes")
+
+    def _content_key(self, value: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """The render key: the session's inputs and the fields of the solution the render reads."""
+        projection: dict[str, Any] = {
+            kind: {name: {k: row[k] for k in keys if k in row} for name, row in value[kind].items()}
+            for kind, keys in self._PROJECTED.items()
+        }
+        projection.update((field, value.get(field, {})) for field in self._CARRIED)
+        return key(self.inputs, storage.encoded(projection)), projection
+
     def render(
         self, value: dict[str, Any], compute: Callable[[], dict[Path, bytes | Path]]
     ) -> dict[Path, bytes | Path]:
-        fields = {
-            "structs": (
-                "state",
-                "partial",
-                "generated",
-                "declaration",
-                "aliases",
-                "type",
-                "typedefs",
-                "reason",
-                "common_base",
-            ),
-            "functions": ("state", "prototype"),
-            "globals": ("state", "declaration"),
-            "arrays": ("state", "partial", "type"),
-        }
-        projection: dict[str, Any] = {
-            kind: {name: {k: row[k] for k in keys if k in row} for name, row in value[kind].items()}
-            for kind, keys in fields.items()
-        }
-        projection["typedefs"] = value.get("typedefs", {})
-        projection["declaration_evidence"] = value.get("declaration_evidence", {})
-        projection["published_declarations"] = value.get("published_declarations", {})
-        projection["published_homes"] = value.get("published_homes", {})
-        content_key = key(self.inputs, storage.encoded(projection))
+        """The rendered headers of VALUE, computed once per solution.
+
+        Rendering records declaration evidence into VALUE, and VALUE is what the types step stores. The result is
+        therefore kept under the stored solution's key too: the headers step, which renders the stored solution
+        with the same inputs, gets the exact headers the types step validated and installed. A second render could
+        differ from the first and change every generated header the source facts are keyed on."""
+        content_key, projection = self._content_key(value)
         state = self.cache.path("typemap-render-state", self.inputs)
 
         def delta() -> Any:
@@ -253,6 +262,14 @@ class Session:
             storage.write(state, state_content, durable=False)
         value.update({field: result[field] for field in ("declaration_headers", "shared_aliases")})
         self.reserved = set(result["reserved"])
+        stored_key, _ = self._content_key(value)
+        if stored_key != content_key:
+            rendered = self.cache.path("typemap-render", content_key)
+
+            def same(output: Path) -> None:
+                atomic_files.copyfile(rendered, output, durable=False)
+
+            self.cache.produce("typemap-render", stored_key, same)
         return {Path(p): data.encode() for p, data in result["outputs"].items()}
 
 

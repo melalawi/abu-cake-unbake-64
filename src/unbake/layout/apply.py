@@ -180,9 +180,11 @@ def render(
     # top level and evidence map; every other record is only read.
     value = {**loaded, "declaration_evidence": dict(loaded.get("declaration_evidence", {}))}
     session = regeneration.Session(project, policy)
+    # The types step rendered and installed this solution's headers; with the same inputs the render is reused,
+    # so the headers it installs are byte for byte the ones the types step validated (and keyed its facts on).
     outputs = {
         path: data.read_bytes() if isinstance(data, Path) else data
-        for path, data in database._render(project, value, policy, session).items()
+        for path, data in session.render(value, lambda: database._render(project, value, policy, session)).items()
     }
     lookup = json.loads(outputs[index.path(project)])
     previous = set(index.load(project)["headers"])

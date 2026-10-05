@@ -455,5 +455,7 @@ def _ensure(
     )
 
 
-def recompute(project: Project, host: Host, names: Iterable[str]) -> list[StepResult]:
-    return ensure(project, host, names, force=True)
+def recompute(
+    project: Project, host: Host, names: Iterable[str], report: Callable[[StepResult], object] | None = None
+) -> list[StepResult]:
+    return ensure(project, host, names, force=True, report=report)

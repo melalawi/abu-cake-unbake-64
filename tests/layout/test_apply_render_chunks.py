@@ -26,7 +26,7 @@ class RenderChunkTests(unittest.TestCase):
     def render(self, texts: list[str], workers: int, collect: bool) -> tuple[dict, dict | None]:
         project = SimpleNamespace(build=ROOT / "build", src=ROOT / "src", include=(ROOT / "include",))
         sources = {ROOT / "src" / f"s{i:02}.c": text for i, text in enumerate(texts)}
-        session = SimpleNamespace(sources=sources, ownership="map")
+        session = SimpleNamespace(sources=sources, ownership="map", render=lambda value, compute: compute())
         index_path = ROOT / "build/layout/index.json"
         rendered = {ROOT / "include/a.h": b"int a;", index_path: json.dumps({"headers": {}}).encode()}
         policy = SimpleNamespace()
@@ -75,7 +75,11 @@ class RenderChunkTests(unittest.TestCase):
         with (
             patch.object(apply.map, "load"),
             patch.object(database, "load", return_value=loaded),
-            patch.object(regeneration, "Session", return_value=SimpleNamespace(sources={}, ownership=None)),
+            patch.object(
+                regeneration,
+                "Session",
+                return_value=SimpleNamespace(sources={}, ownership=None, render=lambda value, compute: compute()),
+            ),
             patch.object(database, "_render", side_effect=mutate),
             patch.object(apply.index, "load", return_value={"headers": {}}),
             patch.object(apply.index, "path", return_value=ROOT / "build/layout/index.json"),
