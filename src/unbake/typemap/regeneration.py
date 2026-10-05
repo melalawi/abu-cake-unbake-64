@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from unbake import atomic as atomic_files
 from unbake import inputs
@@ -187,7 +187,7 @@ class Session:
             fixed_homes=fixed_homes,
         )
 
-    _PROJECTED = {
+    _PROJECTED: ClassVar[dict[str, tuple[str, ...]]] = {
         "structs": (
             "state",
             "partial",
