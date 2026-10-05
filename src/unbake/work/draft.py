@@ -1,6 +1,7 @@
 """draft: write build/work/FUNC/FUNC.c from the function's assembly with m2c and the solved types.
 
-A published unit that breaks a source rule is drafted from its own src/ text instead (published_seed).
+A published unit that breaks a source rule is drafted from its own src/ text instead (published_seed), with
+m2c's prelude typedefs resolved to the shared types they name.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ def published_seed(project: Project, function: str) -> str | None:
 
     That text is the draft of a published unit: landing it again republishes the unit once it is exact and clean.
     """
-    from unbake.decomp import checks
+    from unbake.decomp import checks, prelude
     from unbake.work import compare
 
     if not compare.published(project, function):
@@ -42,7 +43,7 @@ def published_seed(project: Project, function: str) -> str | None:
     source = project.src / f"{function}.c"
     if not checks.unmarked(source):
         raise Held("draft", f"draft.published: {function}: {source} is published and breaks no source rule")
-    return source.read_text()
+    return prelude.resolve(source.read_text())
 
 
 def draft(project: Project, host: Host, function: str, *, replace: bool) -> Drafted:
