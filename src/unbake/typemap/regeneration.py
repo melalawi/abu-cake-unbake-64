@@ -131,9 +131,7 @@ class Session:
                 "tags": {storage.relative(self.project, p): sorted(v) for p, v in self.consumer_tags.items()},
             }
 
-        value = artifact(
-            self.cache, "typemap-source-names", key(str(SOURCE_NAMES_SCHEMA), self.inputs), compute
-        )
+        value = artifact(self.cache, "typemap-source-names", key(str(SOURCE_NAMES_SCHEMA), self.inputs), compute)
         consumers.update({self.project.root / p: set(names) for p, names in value["consumers"].items()})
         self.consumer_tags.update({self.project.root / p: set(tags) for p, tags in value["tags"].items()})
         self.reserved = set(value["names"])
@@ -266,8 +264,12 @@ class Session:
                 "declaration_headers": value["declaration_headers"],
                 "shared_aliases": value["shared_aliases"],
                 "reserved": sorted(self.reserved),
-                "consumers": {storage.relative(self.project, p): sorted(names) for p, names in self.consumer_names.items()},
-                "consumer_tags": {storage.relative(self.project, p): sorted(tags) for p, tags in self.consumer_tags.items()},
+                "consumers": {
+                    storage.relative(self.project, p): sorted(names) for p, names in self.consumer_names.items()
+                },
+                "consumer_tags": {
+                    storage.relative(self.project, p): sorted(tags) for p, tags in self.consumer_tags.items()
+                },
             }
 
         result = artifact(self.cache, "typemap-render", content_key, make)

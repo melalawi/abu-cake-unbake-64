@@ -22,18 +22,15 @@ from unbake.work import inventory as plan
 SCHEMA = 2
 
 
-JOBS_PER_WORKER = 4
-
-
-def _analyses(job: tuple[dict[int, str], dict[int, list[str]], list[tuple[str, str, int, int, bytes]]]) -> list[Any]:
-    """Pool worker: the instruction analysis of each function of one VERSION's chunk."""
-    targets, symbols, rows = job
-    return [
-        Analysis(
-            canonical, version, address, start, [word for (word,) in struct.iter_unpack(">I", body)], targets, symbols
-        ).run()
-        for canonical, version, address, start, body in rows
-    ]
+def _analysis(
+    shared: dict[str, tuple[dict[int, str], dict[int, list[str]]]], row: tuple[str, str, int, int, bytes]
+) -> Any:
+    """Pool worker: the instruction analysis of one function; SHARED holds each version's targets and symbols."""
+    canonical, version, address, start, body = row
+    targets, symbols = shared[version]
+    return Analysis(
+        canonical, version, address, start, [word for (word,) in struct.iter_unpack(">I", body)], targets, symbols
+    ).run()
 
 
 def map_program(project: Project, host: Host) -> dict[str, Any]:
@@ -185,28 +182,23 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
                     analysis = candidate
                     retained = True
             decided.append((row, canonical, body, words, analysis, retained))
-        # Instruction analysis of every rescanned function runs in the worker pool, chunked per VERSION so each
-        # job ships that version's targets and symbols once.
+        # Instruction analysis of every rescanned function runs in the worker pool; the workers load each
+        # version's targets and symbols once.
         missing: dict[str, list[int]] = {}
         for index, (row, _, _, _, analysis, _) in enumerate(decided):
             if analysis is None:
                 missing.setdefault(row.version, []).append(index)
-        jobs, owners = [], []
-        size = max(1, -(-sum(map(len, missing.values())) // (pool.Pool.from_host(host).size * JOBS_PER_WORKER)))
-        for version, indices in missing.items():
-            for start in range(0, len(indices), size):
-                chunk = indices[start : start + size]
-                rows_ = [
-                    (decided[i][1], version, decided[i][0].address, decided[i][0].start, decided[i][2]) for i in chunk
-                ]
-                jobs.append((targets[version], symbols[version], rows_))
-                owners.append(chunk)
-        for chunk, results in zip(owners, pool.run(host, _analyses, jobs), strict=True):
-            for index, analysis in zip(chunk, results, strict=True):
-                row, canonical, body, _, _, retained = decided[index]
-                words = [word for (word,) in struct.iter_unpack(">I", body)]
-                decided[index] = (row, canonical, body, words, analysis, retained)
-        rescanned = sum(map(len, missing.values()))
+        owners = [index for indices in missing.values() for index in indices]
+        rows_ = [
+            (decided[i][1], decided[i][0].version, decided[i][0].address, decided[i][0].start, decided[i][2])
+            for i in owners
+        ]
+        shared = {version: (targets[version], symbols[version]) for version in missing}
+        for index, analysis in zip(owners, pool.run(host, _analysis, rows_, shared), strict=True):
+            row, canonical, body, _, _, retained = decided[index]
+            words = [word for (word,) in struct.iter_unpack(">I", body)]
+            decided[index] = (row, canonical, body, words, analysis, retained)
+        rescanned = len(owners)
         reused = len(decided) - rescanned
         for row, canonical, body, words, found, retained in decided:
             assert found is not None

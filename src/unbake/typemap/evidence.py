@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
+
+from unbake import pool, tui
+from unbake.typemap import shards
+
+if TYPE_CHECKING:
+    from unbake.config import Host
 
 ARGUMENTS = ("r4", "r5", "r6", "r7", "f12", "f14")
 
@@ -52,37 +59,25 @@ def stack_argument(memory: dict[str, Any], function: str) -> str | None:
     return None
 
 
-def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
-    """Forwarded entry arguments count as inputs, including tail calls."""
-    # Callee entry reads bound possible stack argument slots. Repeated ABI
-    # passes need entry forwarding and return liveness, not complete spill maps.
-    stack_aliases = {
-        (name, version): {
-            f"stack{access['base']['origins'][0]['offset'] + access['offset']}": canonical
-            for access in body["memory"]
-            if access["direction"] == "read" and (canonical := stack_argument(access, name)) is not None
+def _summaries(
+    functions: Mapping[str, dict[str, Any]], names: list[str]
+) -> list[tuple[str, dict[str, dict[str, str]], dict[str, set[str]], dict[str, Any]]]:
+    """Pool worker: for each of NAMES, its stack aliases and entry inputs by version and its call summary, read
+    from the bodies of those functions only."""
+    found = []
+    for name, item in shards.bodies(functions, names).items():
+        stack_aliases = {
+            version: {
+                f"stack{access['base']['origins'][0]['offset'] + access['offset']}": canonical
+                for access in body["memory"]
+                if access["direction"] == "read" and (canonical := stack_argument(access, name)) is not None
+            }
+            for version, body in item["versions"].items()
         }
-        for name, item in facts["functions"].items()
-        for version, body in item["versions"].items()
-    }
-    inputs = {
-        (name, version): {
-            stack_aliases[name, version].get(reg, reg) for reg in body["register_inputs"] if argument(reg)
+        inputs = {
+            version: {stack_aliases[version].get(reg, reg) for reg in body["register_inputs"] if argument(reg)}
+            for version, body in item["versions"].items()
         }
-        for name, item in facts["functions"].items()
-        for version, body in item["versions"].items()
-    }
-    slots = set(ARGUMENTS) | {reg for regs in inputs.values() for reg in regs}
-    slots.update(
-        reg
-        for item in facts["functions"].values()
-        for body in item["versions"].values()
-        for call in body["calls"]
-        for reg in call["arguments"]
-        if argument(reg)
-    )
-    summaries = {}
-    for name, item in facts["functions"].items():
         versions = {}
         for version, body in item["versions"].items():
             calls_ = []
@@ -104,7 +99,7 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
                                 ],
                             }
                             for reg, value in call["arguments"].items()
-                            if reg in slots
+                            if argument(reg)
                         },
                         "return_register_use": {
                             reg: bool(uses)
@@ -115,12 +110,41 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
                 )
             versions[version] = {
                 "address": body["address"],
-                "register_inputs": sorted(inputs[name, version]),
+                "register_inputs": sorted(inputs[version]),
                 "register_outputs": [reg for reg in body["register_outputs"] if reg in ("r2", "f0")],
                 "calls": calls_,
                 "returns": [{"values": {reg: row["values"][reg] for reg in ("r2", "f0")}} for row in body["returns"]],
             }
-        summaries[name] = {"versions": versions}
+        found.append((name, stack_aliases, inputs, {"versions": versions}))
+    return found
+
+
+def abi(
+    functions: Mapping[str, dict[str, Any]], declared_returns: dict[str, str] | None = None, host: Host | None = None
+) -> dict[str, dict[str, Any]]:
+    """Forwarded entry arguments count as inputs, including tail calls.
+
+    The per-body part (stack aliases, entry inputs, call summaries) runs per piece of the functions in the worker
+    pool, each reading only its own bodies; the fixed points below run here over the summaries."""
+    # Callee entry reads bound possible stack argument slots. Repeated ABI
+    # passes need entry forwarding and return liveness, not complete spill maps.
+    names = list(functions)
+    with tui.task("Finding each function's arguments and return value", len(names)):
+        pieces = shards.chunks(names, pool.workers(host) if host is not None else 1)
+        done = (
+            pool.run(host, _summaries, pieces, functions)
+            if host is not None
+            else [_summaries(functions, piece) for piece in pieces]
+        )
+    stack_aliases: dict[tuple[str, str], dict[str, str]] = {}
+    inputs: dict[tuple[str, str], set[str]] = {}
+    summaries: dict[str, Any] = {}
+    for piece in done:
+        for name, aliases, entry_inputs, summary in piece:
+            for version in summary["versions"]:
+                stack_aliases[name, version] = aliases[version]
+                inputs[name, version] = entry_inputs[version]
+            summaries[name] = summary
     facts = {"functions": summaries}
     calls: dict[str, list[dict[str, Any]]] = {}
     for item in facts["functions"].values():

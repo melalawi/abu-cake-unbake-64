@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import inputs
+from unbake import inputs, pool, tui
 from unbake.config import Held, Host, Project
 from unbake.typemap import header_names, regeneration, storage, types_db
 
@@ -335,13 +335,14 @@ def _render(
     # A (void) prototype refuses the arguments mapped callers pass (K&R calls): any header spelling of such a
     # function, rendered or carried, declares no parameter list instead.
     passed = unprototyped_calls(value["functions"])
+    void_pattern = void_calls(passed)
     for name in passed & declarations_by_name.keys():
-        declarations_by_name[name] = without_void(declarations_by_name[name], {name})
+        declarations_by_name[name] = without_void(declarations_by_name[name], void_pattern)
     for name in value.get("published_declarations", {}):
         path = root / name
         if path in components:
-            components[path] = without_void(components[path], passed)
-            rendered[path] = without_void(rendered[path], passed)
+            components[path] = without_void(components[path], void_pattern)
+            rendered[path] = without_void(rendered[path], void_pattern)
     for name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
             declarations_by_name[name] = session.rewrite(record["declaration"], replacements, reserved)
@@ -353,10 +354,6 @@ def _render(
     # Equal declarations may still be shared and stripped by layout apply.
     from unbake.layout import redeclarations
 
-    signature = re.compile(
-        r"(?P<prototype>^[ \t]*(?:[A-Za-z_]\w*[\s*]+)+(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*)\{",
-        re.M,
-    )
     retained_contracts = {
         root / path: header_declarations(text).declared
         for path, text in value.get("published_declarations", {}).items()
@@ -369,38 +366,29 @@ def _render(
     for path, names in retained_contracts.items():
         for name in names:
             contracts_by_name[name].append(path)
-    for source_path, text in session.sources.items():
-        local: dict[str, list[str]] = {}
-        for start, end in redeclarations.spans(text):
-            for variant in redeclarations.variants(text[start:end]):
-                parsed = redeclarations.parse(source_path, variant)
-                source_typedefs |= parsed.typedefs
-                for name in parsed.declared | parsed.typedefs:
-                    local.setdefault(name, []).append(variant)
-        definitions = set()
-        for match in signature.finditer(declaration_source(text)):
-            definitions.add(match["name"])
-            local.setdefault(match["name"], []).append(match["prototype"].strip() + ";")
-        local_aliases = {**value.get("typedefs", {}), **replacements, **redeclarations.aliases([text])}
-        for name in local.keys() & declarations_by_name.keys():
-            if (name != source_path.stem or name in definitions) and any(
-                not redeclarations.equivalent(variant, declarations_by_name[name], local_aliases)
-                for variant in local[name]
-            ):
-                declarations_by_name.pop(name)
-        # Installed generated declarations are dependencies, not owners of a
-        # source-local or defined contract. Conflicting local views stay local;
-        # inference already records their disagreement as declaration evidence.
-        # A published declaration of a name this source defines yields to the definition when they disagree.
-        for path in dict.fromkeys(path for name in local for path in contracts_by_name.get(name, ())):
-            if path in components and any(
-                not redeclarations.equivalent(variant, components[path], local_aliases)
-                for name in local.keys() & retained_contracts[path]
-                if path not in published_homes or name in definitions
-                for variant in local[name]
-            ):
-                components.pop(path)
-                rendered.pop(path, None)
+    shared = _Drops(
+        declarations_by_name,
+        components,
+        contracts_by_name,
+        retained_contracts,
+        published_homes,
+        value.get("typedefs", {}),
+        replacements,
+    )
+    items = list(session.sources.items())
+    decisions = (
+        [_source_drops(shared, item) for item in items]
+        if policy is None
+        else pool.run(policy, _source_drops, items, shared)
+    )
+    # Each decision read the original values, so the order they are applied in does not matter.
+    for typedefs, names, paths in decisions:
+        source_typedefs |= typedefs
+        for name in names:
+            declarations_by_name.pop(name, None)
+        for path in paths:
+            components.pop(path, None)
+            rendered.pop(path, None)
     # A source-private tag is not a shared prototype-scope type. Publishing an
     # otherwise equal entry prototype can create a distinct parameter tag before
     # the source's own definition, or import its complete definition twice.
@@ -440,6 +428,67 @@ def _render(
     return outputs
 
 
+_SIGNATURE = re.compile(
+    r"(?P<prototype>^[ \t]*(?:[A-Za-z_]\w*[\s*]+)+(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*)\{",
+    re.M,
+)
+
+
+@dataclass(frozen=True)
+class _Drops:
+    """What every source is checked against: the rendered declarations and the contracts other headers retain."""
+
+    declarations_by_name: dict[str, str]
+    components: dict[Path, str]
+    contracts_by_name: dict[str, list[Path]]
+    retained_contracts: dict[Path, set[str]]
+    published_homes: set[Path]
+    typedefs: dict[str, str]
+    replacements: dict[str, str]
+
+
+def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set[str], set[Path]]:
+    """Pool worker: one source's typedefs, the generated declarations it owns locally (names to drop) and the
+    retained contracts it disagrees with (paths to drop). Mutates nothing."""
+    from unbake.cdecl import declaration_source
+    from unbake.layout import redeclarations
+
+    source_path, text = item
+    source_typedefs: set[str] = set()
+    drop_names: set[str] = set()
+    drop_paths: set[Path] = set()
+    local: dict[str, list[str]] = {}
+    for start, end in redeclarations.spans(text):
+        for variant in redeclarations.variants(text[start:end]):
+            parsed = redeclarations.parse(source_path, variant)
+            source_typedefs |= parsed.typedefs
+            for name in parsed.declared | parsed.typedefs:
+                local.setdefault(name, []).append(variant)
+    definitions = set()
+    for match in _SIGNATURE.finditer(declaration_source(text)):
+        definitions.add(match["name"])
+        local.setdefault(match["name"], []).append(match["prototype"].strip() + ";")
+    local_aliases = {**shared.typedefs, **shared.replacements, **redeclarations.aliases([text])}
+    for name in local.keys() & shared.declarations_by_name.keys():
+        if (name != source_path.stem or name in definitions) and any(
+            not redeclarations.equivalent(variant, shared.declarations_by_name[name], local_aliases)
+            for variant in local[name]
+        ):
+            drop_names.add(name)
+    # Installed generated declarations are dependencies, not owners of a source-local or defined contract.
+    # Conflicting local views stay local; inference already records their disagreement as declaration evidence.
+    # A published declaration of a name this source defines yields to the definition when they disagree.
+    for path in dict.fromkeys(path for name in local for path in shared.contracts_by_name.get(name, ())):
+        if path in shared.components and any(
+            not redeclarations.equivalent(variant, shared.components[path], local_aliases)
+            for name in local.keys() & shared.retained_contracts[path]
+            if path not in shared.published_homes or name in definitions
+            for variant in local[name]
+        ):
+            drop_paths.add(path)
+    return source_typedefs, drop_names, drop_paths
+
+
 def unprototyped_calls(functions: dict[str, Any]) -> set[str]:
     """Functions whose mapped callers pass arguments the callee's (void) list cannot accept."""
     return {
@@ -450,12 +499,16 @@ def unprototyped_calls(functions: dict[str, Any]) -> set[str]:
     }
 
 
-def without_void(text: str, names: set[str]) -> str:
-    """TEXT with each declaration of NAMES spelled `name()` instead of `name(void)`."""
+def void_calls(names: set[str]) -> re.Pattern[str] | None:
+    """The pattern of every `name(void)` of NAMES (compiled once for a render), or None when there are no names."""
     if not names:
-        return text
-    pattern = r"\b(" + "|".join(sorted(map(re.escape, names))) + r")\s*\(\s*void\s*\)"
-    return re.sub(pattern, r"\1()", text)
+        return None
+    return re.compile(r"\b(" + "|".join(sorted(map(re.escape, names))) + r")\s*\(\s*void\s*\)")
+
+
+def without_void(text: str, pattern: re.Pattern[str] | None) -> str:
+    """TEXT with each declaration the pattern names spelled `name()` instead of `name(void)`."""
+    return text if pattern is None else pattern.sub(r"\1()", text)
 
 
 def one_declaration(declarations_by_name: dict[str, str], carried: dict[Path, set[str]]) -> None:
@@ -491,7 +544,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
     session = regeneration.Session(project, policy)
-    outputs = session.render(value, lambda: _render(project, value, policy, session))
+    with tui.task("Writing the shared headers", len(session.sources)):
+        outputs = session.render(value, lambda: _render(project, value, policy, session))
     replacements = value["shared_aliases"]
     reserved = session.reserved
     abi_context = "\n".join(
@@ -702,11 +756,11 @@ def validate_headers(
         if pending:
             pending_by_version[version] = pending
     # Total jobs ~ workers: a version with more pending rows than one worker's share is split into chunks.
-    workers = pool.Pool.from_host(policy).size if policy is not None else 1
+    workers = pool.workers(policy) if policy is not None else 1
     jobs: list[_Validation] = []
     for version, pending in pending_by_version.items():
         names = list(pending)
-        width = chunk_width(len(names), len(pending_by_version), workers)
+        width = pool.width(len(names) * len(pending_by_version), workers, 1)
         for start in range(0, len(names), width):
             part = {name: pending[name] for name in names[start : start + width]}
             selected = {path for closure, _ in part.values() for path in closure}
@@ -725,7 +779,10 @@ def validate_headers(
     # Each chunk's staged context is preprocessed and parsed on its own (cpp, m2c): one pool task per chunk.
     # The parent records the certificates in job order; the first refused chunk is reported.
     project.build.mkdir(parents=True, exist_ok=True)
-    parsed = pool.run(policy, _validate_version, jobs) if policy is not None else [_validate_version(j) for j in jobs]
+    with tui.task("Test-compiling the shared headers", len(jobs)):
+        parsed = (
+            pool.run(policy, _validate_version, jobs) if policy is not None else [_validate_version(j) for j in jobs]
+        )
     for job, context_key in zip(jobs, parsed, strict=True):
         validated.add(context_key)
         certificates.add(set(job.pending))
@@ -735,11 +792,6 @@ def validate_headers(
         atomic_files.fresh(path, b"validated\n")
 
     cache.produce("typemap-validation", bundle_key, complete)
-
-
-def chunk_width(rows: int, versions: int, workers: int) -> int:
-    """Rows per validation job when each of VERSIONS versions has ROWS pending: about WORKERS jobs in all."""
-    return -(-rows // max(1, -(-workers // max(1, versions))))
 
 
 @dataclass(frozen=True)

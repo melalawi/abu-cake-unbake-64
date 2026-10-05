@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import re
-import sys
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import tui
 from unbake.config import Held, Host, Project
 from unbake.decomp import draft_abi, gbi, measured_storage, similar
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns

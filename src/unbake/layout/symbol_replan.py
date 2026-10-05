@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import csv
 import hashlib
 import json
 import re
-import sys
 import tempfile
 from collections import defaultdict
 from dataclasses import replace
@@ -18,6 +15,7 @@ from typing import Any, cast
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
+from unbake import tui
 from unbake.config import Held, Host, Project, SymbolPolicy
 from unbake.layout import planner, port, split, symbol_identity
 from unbake.layout.symbol_identity import similarity_distribution

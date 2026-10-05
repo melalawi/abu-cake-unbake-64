@@ -15,6 +15,9 @@ from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.config import Held
 
+# Names per `WHERE name IN (...)` read (SQLite's variable limit is far above this).
+READ_BATCH = 500
+
 
 def pack(value: object) -> bytes:
     return zlib.compress(json.dumps(value, separators=(",", ":")).encode(), 1)
@@ -63,14 +66,21 @@ class Functions(Mapping[str, dict[str, Any]]):
 
     def read(self, names: list[str]) -> dict[str, dict[str, Any]]:
         """Complete items of NAMES, in that order, over one connection (equal to item-by-item lookup)."""
-        wanted = set(names)
         bodies: dict[str, dict[str, Any]] = {name: {} for name in names}
         try:
             with closing(sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
                 connection.execute("PRAGMA cache_size=-2048")
-                rows = connection.execute("SELECT name, version, body FROM functions ORDER BY name, version")
-                for name, version, body in rows:
-                    if name in wanted:
+                for start in range(0, len(names), READ_BATCH):
+                    batch = names[start : start + READ_BATCH]
+                    rows = connection.execute(
+                        (
+                            "SELECT name, version, body FROM functions WHERE name IN ("
+                            + ",".join("?" * len(batch))
+                            + ") ORDER BY name, version"
+                        ),
+                        batch,
+                    )
+                    for name, version, body in rows:
                         bodies[name][version] = json.loads(zlib.decompress(body))
         except (OSError, ValueError, zlib.error, sqlite3.Error) as error:
             raise Held("solve", f"map.shards: {self.path}: {error}") from error
@@ -99,6 +109,21 @@ class Functions(Mapping[str, dict[str, Any]]):
             raise Held("solve", f"map.shards: {self.path}: {error}") from error
         body.update(self.inventory[name]["versions"][version])
         return body
+
+
+def bodies(functions: Mapping[str, dict[str, Any]], names: list[str]) -> dict[str, dict[str, Any]]:
+    """The complete items of NAMES: one batched read of a shard, else lookups in the mapping."""
+    if isinstance(functions, Functions):
+        return functions.read(names)
+    return {name: functions[name] for name in names}
+
+
+def chunks(names: list[str], workers: int) -> list[list[str]]:
+    """NAMES in order, in pieces a worker reads in one batch: about a few pieces per worker."""
+    from unbake import pool
+
+    size = pool.width(len(names), workers)
+    return [names[start : start + size] for start in range(0, len(names), size)]
 
 
 class Writer:

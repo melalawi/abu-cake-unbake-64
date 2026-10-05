@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import hashlib
 import json
-import sys
 import tempfile
 from pathlib import Path
 from typing import cast
@@ -14,7 +11,7 @@ from typing import cast
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import config
+from unbake import config, tui
 from unbake.compilers import files as compiler_files
 from unbake.compilers import propose as compiler_proposal
 from unbake.config import Held, Host, PendingProject

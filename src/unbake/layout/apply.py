@@ -141,39 +141,33 @@ def source(
 
 
 # At least this many source chunks per worker, so uneven sources still spread over every worker.
-CHUNKS_PER_WORKER = 4
-
-
 @dataclass(frozen=True)
 class _Rewrite:
-    """One chunk of sources to rewrite against the rendered headers (a pool task)."""
+    """What every source is rewritten against: the rendered headers (shared by the pool's workers)."""
 
     project: Project
     headers: dict[Path, bytes]
     ownership: map.Map
     lookup: dict[str, Any]
     previous: set[str]
-    items: list[tuple[Path, str]]
     collect: bool
 
 
-def _rewrite(job: _Rewrite) -> list[tuple[bytes, dict[str, tuple[str, str]] | None]]:
-    """Worker body: each source's rewritten bytes and, when collected, its removed differing declarations."""
-    rows = []
-    for path, text in job.items:
-        found: dict[str, tuple[str, str]] | None = {} if job.collect else None
-        data = source(
-            job.project,
-            text,
-            path.stem,
-            job.headers,
-            ownership=job.ownership,
-            lookup=job.lookup,
-            previous=job.previous,
-            disagreements=found,
-        ).encode()
-        rows.append((data, found))
-    return rows
+def _rewrite(job: _Rewrite, item: tuple[Path, str]) -> tuple[bytes, dict[str, tuple[str, str]] | None]:
+    """Worker body: one source's rewritten bytes and, when collected, its removed differing declarations."""
+    path, text = item
+    found: dict[str, tuple[str, str]] | None = {} if job.collect else None
+    data = source(
+        job.project,
+        text,
+        path.stem,
+        job.headers,
+        ownership=job.ownership,
+        lookup=job.lookup,
+        previous=job.previous,
+        disagreements=found,
+    ).encode()
+    return data, found
 
 
 def render(
@@ -204,27 +198,14 @@ def render(
     lookup = json.loads(outputs[index.path(project)])
     previous = set(index.load(project)["headers"])
     # Each source is rewritten on its own: its imports read only include/ (generated outputs or files), never
-    # another source. The sources go to the worker pool in chunks that carry the shared views once.
+    # another source. The sources go to the worker pool; the shared views are loaded once per worker.
     headers = {path: data for path, data in outputs.items() if path.suffix != ".c"}
     items = list(session.sources.items())
-    size = max(1, -(-len(items) // (pool.Pool.from_host(policy).size * CHUNKS_PER_WORKER)))
-    jobs = [
-        _Rewrite(
-            project,
-            headers,
-            session.ownership,
-            lookup,
-            previous,
-            items[start : start + size],
-            disagreements is not None,
-        )
-        for start in range(0, len(items), size)
-    ]
-    for job, rows in zip(jobs, pool.run(policy, _rewrite, jobs), strict=True):
-        for (path, _), (data, found) in zip(job.items, rows, strict=True):
-            outputs[path] = data
-            if found and disagreements is not None:
-                disagreements[path] = found
+    shared = _Rewrite(project, headers, session.ownership, lookup, previous, disagreements is not None)
+    for (path, _), (data, found) in zip(items, pool.run(policy, _rewrite, items, shared), strict=True):
+        outputs[path] = data
+        if found and disagreements is not None:
+            disagreements[path] = found
     return outputs
 
 

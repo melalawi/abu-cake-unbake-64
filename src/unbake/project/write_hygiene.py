@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import ast
 import re
 from pathlib import Path
+
+from unbake import tui
 
 # Lock files need stable inodes and hold no project data.
 _LOCKS = {

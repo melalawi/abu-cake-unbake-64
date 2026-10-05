@@ -5,6 +5,7 @@ from __future__ import annotations
 from unbake.config import Held
 from unbake.cycle import rank
 
+
 def _label(row: rank.Candidate) -> str:
     mark = "↻ " if row.carryover else "  "
     best = f"best {row.best_percent:.1f}%" if row.best_percent is not None else "new"
@@ -26,5 +27,3 @@ def pick(order: list[rank.Candidate]) -> list[rank.Candidate]:
         return order[:auto]
     chosen = set(answer)
     return [row for row in order if row.function in chosen]
-
-

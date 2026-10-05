@@ -106,5 +106,3 @@ def each(items: Sequence[T], label: str) -> Iterator[T]:
         for item in items:
             yield item
             opened.advance()
-
-

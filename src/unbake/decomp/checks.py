@@ -484,7 +484,8 @@ def dirty(project: Project, cache: Cache, sources: list[Path], host: Host) -> li
 
     named = [storage.relative(project, path) for path in sources]
     content_key = key(
-        str(SOURCE_FINDINGS_SCHEMA), *(f"{name}\0{inputs.signature(path)}" for name, path in zip(named, sources, strict=True))
+        str(SOURCE_FINDINGS_SCHEMA),
+        *(f"{name}\0{inputs.signature(path)}" for name, path in zip(named, sources, strict=True)),
     )
 
     def make(path: Path) -> None:

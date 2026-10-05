@@ -25,8 +25,6 @@ if TYPE_CHECKING:
 HELP = "↑↓ select · enter details · e edit · r compare again · d redraft · h hold/release · q quit · ? help"
 
 
-
-
 class Board:
     """Rich Live board on stderr; keys go to the coordinator's inbox as ("key", (action, function))."""
 

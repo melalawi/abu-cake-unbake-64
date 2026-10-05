@@ -285,9 +285,9 @@ def choose(project: Project, host: Host, pick: int | None, functions: tuple[str,
         return [by_name[name] for name in functions]
     if pick is not None:
         return order[:pick]
-    from unbake.tui import pick
+    from unbake.tui import pick as picker
 
-    return pick.pick(order)
+    return picker.pick(order)
 
 
 # The tree a draft reads: brought current on this thread before the first draft (choose reads only the split,

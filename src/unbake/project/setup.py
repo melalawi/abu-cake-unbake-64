@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import hashlib
 import json
 import os
-import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -15,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from unbake import atomic as atomic_files
-from unbake import config
+from unbake import config, tui
 from unbake.compilers import files as compiler_files
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, PendingProject, Project

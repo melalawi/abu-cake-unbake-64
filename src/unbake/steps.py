@@ -271,7 +271,9 @@ def _merge_units(project: Project, host: Host) -> None:
 STEPS: dict[str, Step] = {
     step.name: step
     for step in (
-        Step("extract", "Splitting the ROMs into code and data", "ROM sha1 or split rows changed", _extract_key, _extract),
+        Step(
+            "extract", "Splitting the ROMs into code and data", "ROM sha1 or split rows changed", _extract_key, _extract
+        ),
         Step(
             "rom-facts",
             "Reading what each function's assembly does",
@@ -280,7 +282,14 @@ STEPS: dict[str, Step] = {
             _rom_facts,
             ("extract",),
         ),
-        Step("types", "Working out C types for functions, globals and structs", "a published source's facts changed", _types_key, _types, ("rom-facts",)),
+        Step(
+            "types",
+            "Working out C types for functions, globals and structs",
+            "a published source's facts changed",
+            _types_key,
+            _types,
+            ("rom-facts",),
+        ),
         Step(
             "headers",
             "Updating the shared headers in include/",
@@ -290,10 +299,28 @@ STEPS: dict[str, Step] = {
             ("types",),
             _headers_outputs,
         ),
-        Step("buildfiles", "Regenerating the Makefile", "layout, units, compilers or build flags changed", _buildfiles_key, _buildfiles),
+        Step(
+            "buildfiles",
+            "Regenerating the Makefile",
+            "layout, units, compilers or build flags changed",
+            _buildfiles_key,
+            _buildfiles,
+        ),
         Step("progress", "Updating the progress numbers", "a land or a boundary edit", _progress_key, _progress),
-        Step("resident", "Removing data blocks that published C now owns", "a published source changed (resident constant blocks are deleted)", _resident_key, _resident),
-        Step("merge-units", "Joining finished neighbouring files", "a land made a run of matched members", _merge_units_key, _merge_units),
+        Step(
+            "resident",
+            "Removing data blocks that published C now owns",
+            "a published source changed (resident constant blocks are deleted)",
+            _resident_key,
+            _resident,
+        ),
+        Step(
+            "merge-units",
+            "Joining finished neighbouring files",
+            "a land made a run of matched members",
+            _merge_units_key,
+            _merge_units,
+        ),
         Step("trim-cache", "Trimming the cache", "the cache passed [cache].max_bytes", _trim_key, _trim),
     )
 }

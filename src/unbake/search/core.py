@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import hashlib
 import json
 import math
 import re
 import subprocess
-import sys
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -17,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 from unbake import atomic as atomic_files
+from unbake import tui
 from unbake.compilers.ranking import measured_candidate_rank
 from unbake.config import Held, Host, Project
 from unbake.decomp import explain

@@ -27,16 +27,14 @@ class Action:
 
 
 Verdict = tuple["Shape", "Shape", tuple[tuple[bytes, int], ...], tuple[tuple[bytes, int, bytes], ...]]
-JOBS_PER_WORKER = 4
 
 
-def _drafters(job: list[Verdict]) -> list[bool]:
-    """Pool worker: per group, every version's words classify as drafter and none continues the row before it."""
-    return [
-        all(shape.classify(body, address, target, emitted)[0] == "drafter" for body, address in bodies)
-        and not any(shape.tail(previous, address, body, target, emitted) for previous, address, body in tails)
-        for target, emitted, bodies, tails in job
-    ]
+def _drafter(verdict: Verdict) -> bool:
+    """Pool worker: every version's words of one group classify as drafter and none continues the row before it."""
+    target, emitted, bodies, tails = verdict
+    return all(shape.classify(body, address, target, emitted)[0] == "drafter" for body, address in bodies) and not any(
+        shape.tail(previous, address, body, target, emitted) for previous, address, body in tails
+    )
 
 
 def candidates(project: Project, host: Host) -> list[rank.Candidate]:
@@ -79,9 +77,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
                 tuple(tails),
             )
         )
-    size = max(1, -(-len(verdicts) // (pool.Pool.from_host(host).size * JOBS_PER_WORKER)))
-    chunks = [verdicts[start : start + size] for start in range(0, len(verdicts), size)]
-    drafters = [verdict for chunk in pool.run(host, _drafters, chunks) for verdict in chunk]
+    drafters = pool.run(host, _drafter, verdicts)
     result = []
     for (canonical, items), drafter in zip(picked, drafters, strict=True):
         if not drafter:
@@ -98,7 +94,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         )
     published = _published_rows(project)
     sources = [source for source in sorted(project.src.glob("*.c")) if source.stem in published]
-    for source in checks.dirty(Cache(project.cache), sources, host):
+    for source in checks.dirty(project, Cache(project.cache), sources, host):
         versions, row = published[source.stem]
         summary = history.get(source.stem)
         result.append(

@@ -18,6 +18,7 @@ import atexit
 import contextlib
 import multiprocessing
 import os
+import pickle
 import resource
 import select
 import shutil
@@ -25,6 +26,8 @@ import signal
 import sys
 import tempfile
 import threading
+import traceback
+import uuid
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
@@ -33,6 +36,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, TypeVar
 
+from unbake import atomic as atomic_files
 from unbake.config import Held, Host
 
 T = TypeVar("T")
@@ -149,36 +153,95 @@ class WorkerMemory(MemoryError):
     """A task ran out of memory; the one argument is the worker's peak resident bytes."""
 
 
-def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float, int]:
-    """Worker body: the task's result, the CPU it and the tools it ran spent and the worker's peak resident bytes
-    so far (effort ledger)."""
+def _where(error: BaseException) -> str:
+    """The innermost frame the tool owns (else the innermost frame) that raised ERROR, as file:line."""
+    frames = traceback.extract_tb(error.__traceback__)
+    owned = [frame for frame in frames if "/unbake/" in frame.filename]
+    chosen = owned or list(frames)
+    return f"{Path(chosen[-1].filename).name}:{chosen[-1].lineno}" if chosen else "an unknown place"
+
+
+def _named(fn: Callable[..., R], *arguments: Any) -> R:
+    """fn(*arguments) in a worker: a refusal passes as itself, a crash becomes a refusal naming the function, the
+    exception and where it was raised (the worker's traceback never reaches the user)."""
+    from unbake import effort
+
+    try:
+        return fn(*arguments)
+    except MemoryError:
+        raise WorkerMemory(effort.resident_peak()) from None
+    except Held:
+        raise
+    except Exception as error:
+        raise Held("pool", f"{effort.name_of(fn)}: {type(error).__name__} at {_where(error)}: {error}") from None
+
+
+def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R, float, int, dict[str, tuple[int, int]]]:
+    """Worker body: the task's result, the CPU it and the tools it ran spent, the worker's peak resident bytes so
+    far and the counts the task added (effort ledger)."""
     from unbake import effort
 
     fn, item = task
-    start = _cpu()
-    try:
-        result = fn(item)
-    except MemoryError:
-        raise WorkerMemory(effort.resident_peak()) from None
-    return result, _cpu() - start, effort.resident_peak()
+    start, before = _cpu(), effort.counted()
+    result = _named(fn, item)
+    added = {}
+    for name, (done, total) in effort.counted().items():
+        old_done, old_total = before.get(name, (0, 0))
+        if total != old_total or done != old_done:
+            added[name] = (done - old_done, total - old_total)
+    return result, _cpu() - start, effort.resident_peak(), added
 
 
-def _batch(job: tuple[Callable[[T], R], Sequence[T]]) -> list[R]:
-    fn, chunk = job
-    return [fn(item) for item in chunk]
+# The shared value of the last job a worker ran: (path, value). Jobs of one run carry the same path.
+_loaded: tuple[str, Any] | None = None
+
+
+def _shared_value(path: str) -> Any:
+    global _loaded
+    if _loaded is None or _loaded[0] != path:
+        _loaded = (path, pickle.loads(Path(path).read_bytes()))
+    return _loaded[1]
+
+
+def _batch(job: tuple[Callable[..., R], Sequence[T], str | None]) -> list[R]:
+    fn, chunk, path = job
+    if path is None:
+        return [_named(fn, item) for item in chunk]
+    shared = _shared_value(path)
+    return [_named(fn, shared, item) for item in chunk]
+
+
+def width(count: int, workers: int, per_worker: int = JOBS_PER_WORKER) -> int:
+    """Items per job so COUNT items make about WORKERS * PER_WORKER jobs, never an empty one."""
+    return max(1, -(-count // (workers * per_worker)))
 
 
 class Pool:
-    def __init__(self, workers: int, memory_total_bytes: int, memory_parent_bytes: int, memory_worker_bytes: int):
+    def __init__(
+        self,
+        workers: int,
+        memory_total_bytes: int,
+        memory_parent_bytes: int,
+        memory_worker_bytes: int,
+        scratch: Path | None = None,
+    ):
         self.size = admitted(workers, memory_total_bytes, memory_parent_bytes, memory_worker_bytes)
         self.memory_worker_bytes = memory_worker_bytes
+        # Where run() leaves a shared value for its workers (the host's machine cache root).
+        self.scratch = scratch
         self._executor: ProcessPoolExecutor | None = None
         self._handlers: dict[int, Any] = {}
         self.killed = False
 
     @classmethod
     def from_host(cls, host: Host) -> Pool:
-        return cls(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)
+        return cls(
+            host.workers,
+            host.memory_total_bytes,
+            host.memory_parent_bytes,
+            host.memory_worker_bytes,
+            host.cache_machine_root,
+        )
 
     def __enter__(self) -> Pool:
         if threading.current_thread() is threading.main_thread():
@@ -241,7 +304,7 @@ class Pool:
         inner = self._submit(_measured, (fn, item))
         outer: Future[R] = Future()
 
-        def finished(done: Future[tuple[R, float, int]]) -> None:
+        def finished(done: Future[tuple[R, float, int, dict[str, tuple[int, int]]]]) -> None:
             if done.cancelled():
                 outer.cancel()
                 return
@@ -249,21 +312,38 @@ class Pool:
             if error is not None:
                 outer.set_exception(error)
                 return
-            result, seconds, rss = done.result()
-            effort.charge(effort.name_of(fn), seconds, rss)
+            result, seconds, rss, counts = done.result()
+            effort.charge(effort.name_of(fn), seconds, rss, counts)
             outer.set_result(result)
 
         outer.add_done_callback(lambda done: inner.cancel() if done.cancelled() else None)
         inner.add_done_callback(finished)
         return outer
 
-    def run(self, fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
-        """fn over items, batched into jobs by the one sizing rule; results in item order, effort charged to fn."""
+    def run(self, fn: Callable[..., R], items: Sequence[T], shared: Any = None) -> list[R]:
+        """fn over items, batched into jobs by the one sizing rule; results in item order, effort charged to fn.
+
+        With SHARED, it is pickled once to a file and every job names the file: a worker loads it once and calls
+        fn(shared, item). The file is removed when run returns."""
         from unbake import effort
 
-        size = max(1, min(ITEMS_PER_JOB, -(-len(items) // (self.size * JOBS_PER_WORKER))))
-        jobs = [(fn, items[start : start + size]) for start in range(0, len(items), size)]
-        return [result for batch in self.map(_batch, jobs, charge=effort.name_of(fn)) for result in batch]
+        size = min(ITEMS_PER_JOB, width(len(items), self.size))
+        path: Path | None = None
+        if shared is not None:
+            if self.scratch is None:
+                raise Held("pool", "pool.shared: this pool has no scratch directory for a shared value")
+            self.scratch.mkdir(parents=True, exist_ok=True)
+            path = self.scratch / f"shared-{os.getpid()}-{uuid.uuid4().hex}.pickle"
+            atomic_files.fresh(path, pickle.dumps(shared, protocol=pickle.HIGHEST_PROTOCOL))
+        try:
+            jobs = [
+                (fn, items[start : start + size], None if path is None else str(path))
+                for start in range(0, len(items), size)
+            ]
+            return [result for batch in self.map(_batch, jobs, charge=effort.name_of(fn)) for result in batch]
+        finally:
+            if path is not None:
+                path.unlink(missing_ok=True)
 
     def map(self, fn: Callable[[T], R], items: Sequence[T], *, charge: str | None = None) -> Iterator[R]:
         """Results in item order; at most `size` tasks in flight. Each task's CPU is charged to charge, else fn."""
@@ -271,10 +351,10 @@ class Pool:
 
         name = charge or effort.name_of(fn)
 
-        def submit(item: T) -> Future[tuple[R, float, int]]:
+        def submit(item: T) -> Future[tuple[R, float, int, dict[str, tuple[int, int]]]]:
             return self._submit(_measured, (fn, item))
 
-        pending: deque[tuple[T, Future[tuple[R, float, int]], int]] = deque()
+        pending: deque[tuple[T, Future[tuple[R, float, int, dict[str, tuple[int, int]]]], int]] = deque()
         source = iter(items)
         for item in source:
             pending.append((item, submit(item), 0))
@@ -283,7 +363,7 @@ class Pool:
         while pending:
             item, future, attempt = pending.popleft()
             try:
-                result, seconds, rss = future.result()
+                result, seconds, rss, counts = future.result()
             except (BrokenProcessPool, MemoryError) as error:
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 if attempt:
@@ -296,7 +376,7 @@ class Pool:
                     pending = deque((i, submit(i), a) for i, _, a in pending)
                 pending.appendleft((item, submit(item), 1))
                 continue
-            effort.charge(name, seconds, rss)
+            effort.charge(name, seconds, rss, counts)
             yield result
             for item in source:
                 pending.append((item, submit(item), 0))
@@ -317,14 +397,20 @@ def sharing(pool: Pool) -> Iterator[None]:
         _shared = previous
 
 
-def run(host: Host, fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
-    """Run fn over items in the shared pool, else the host's pool; a single item runs in this process."""
+def run(host: Host, fn: Callable[..., R], items: Sequence[T], shared: Any = None) -> list[R]:
+    """Run fn over items in the shared pool, else the host's pool; a single item runs in this process.
+    With SHARED, fn takes it first: fn(shared, item)."""
     if len(items) < 2:
-        return [fn(item) for item in items]
+        return [fn(item) if shared is None else fn(shared, item) for item in items]
     if _shared is not None:
-        return _shared.run(fn, items)
+        return _shared.run(fn, items, shared)
     with Pool.from_host(host) as pool:
-        return pool.run(fn, items)
+        return pool.run(fn, items, shared)
+
+
+def workers(host: Host) -> int:
+    """How many workers the host's pool runs."""
+    return admitted(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)
 
 
 def describe(host: Host) -> dict[str, Any]:

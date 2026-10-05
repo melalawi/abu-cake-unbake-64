@@ -10,7 +10,7 @@ from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import cache as content_cache
-from unbake import inputs
+from unbake import inputs, tui
 from unbake.cache import Cache
 from unbake.config import Host, Project
 from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, shards, storage
@@ -87,6 +87,11 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
     # meaning, so only a new spelling or map pays for canonical().
     spellings: dict[str, tuple[dict[str, Any], dict[str, str]]] = {}
     environments = _Canonical()
+    # Per name, the record object last accepted and the alias map it came with (held, so the ids stay unique): a
+    # seed repeating that very object in that very map changes nothing, so it is skipped before any comparison.
+    accepted: dict[str, Any] = {}
+    last_object: dict[str, int] = {}
+    last_aliases: dict[str, int] = {}
     index = 0
     while index < len(seeds):
         seed = seeds[index]
@@ -97,12 +102,15 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
+                if last_object.get(name) == id(record) and last_aliases.get(name) == id(aliases):
+                    continue
                 spelled = spellings[name]
                 stripped = _stripped(record, key)
                 if (spelled[1] is aliases and spelled[0] == stripped) or (
                     meanings[name] == _comparable(record, key, aliases, canonical)
                 ):
                     spellings[name] = stripped, aliases
+                    accepted[name], last_object[name], last_aliases[name] = record, id(record), id(aliases)
                     # The same type, maybe spelled through a typedef: no conflict. As for identical records,
                     # the incoming one is kept unless it ranks lower, so a published contract replaces a
                     # declared one (and the published-storage rule then keeps it in the header).
@@ -129,6 +137,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                             records[name] = {**record, "declaration_conflict": False}
                             meanings[name] = _comparable(record, key, aliases, canonical)
                             spellings[name] = stripped, aliases
+                            accepted[name], last_object[name], last_aliases[name] = record, id(record), id(aliases)
                         continue
                 if old != new:
                     graph.facts.append(
@@ -145,6 +154,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
             meanings[name] = _comparable(record, key, aliases, canonical)
             spellings[name] = _stripped(record, key), aliases
+            accepted[name], last_object[name], last_aliases[name] = record, id(record), id(aliases)
         shared = seed[key]
         if isinstance(shared, declarations.ProvenStructs) and len(graph.facts) == conflicts_before:
             # An uninterrupted run of identical layouts only replaces provenance.
@@ -189,6 +199,7 @@ def infer(
     *,
     cache: Cache | None = None,
     shard_dir: Path | None = None,
+    policy: Host | None = None,
 ) -> dict[str, Any]:
     """Resolve every value-flow component from declared seeds over the map's machine graph.
 
@@ -197,18 +208,11 @@ def infer(
     """
     mapped = facts["functions"]
     inventory = getattr(mapped, "inventory", mapped)
-    decoded: dict[str, Any] = {}
-
-    def bodies() -> dict[str, Any]:
-        # Sharded mappings decode a complete body on each lookup; decode once, only on a cache miss.
-        if not decoded:
-            decoded.update(mapped.read(list(mapped)) if isinstance(mapped, shards.Functions) else mapped.items())
-        return {**facts, "functions": decoded}
 
     def versions(name: str) -> list[str]:
         if isinstance(mapped, shards.Functions):
             return sorted(inventory.get(name, {}).get("versions", {}))
-        return list((decoded if decoded else mapped).get(name, {}).get("versions", {}))
+        return list(mapped.get(name, {}).get("versions", {}))
 
     declared = Constraints()
     aliases = {name: type_ for values in _alias_maps(seeds) for name, type_ in values.items()}
@@ -256,7 +260,7 @@ def infer(
         cache,
         "types-abi",
         [str(ABI_SCHEMA), *map_parts, json.dumps(sorted(declared_returns.items()))],
-        lambda: evidence.abi(bodies(), declared_returns),
+        lambda: evidence.abi(mapped, declared_returns, policy),
     )
     # A previously inferred/declarative signature cannot truncate register use
     # seen in other callers. Published C contracts remain authoritative and the
@@ -293,13 +297,14 @@ def infer(
             json.dumps(sorted((name, row["registers"]) for name, row in signatures.items())),
             json.dumps(sorted((name, sorted(registers)) for name, registers in used.items())),
         ],
-        lambda log: closure.build(bodies(), signatures, used, addresses, log),
+        lambda log: closure.build(mapped, signatures, used, addresses, log, policy),
     )
-    graph = closure.Closure(machine, declared)
+    with tui.task("Choosing one type for each value"):
+        graph = closure.Closure(machine, declared)
+        graph.close()
     neighbours = machine.neighbours
     fields = machine.fields
     shared_fields = machine.shared_fields
-    graph.close()
     # Authored layouts override machine storage observations.
     layout_index = {name: record for name, record in structs.items()}
     for _name, record in structs.items():
@@ -427,7 +432,7 @@ def infer(
                 continue
         elif authority.startswith("return:"):
             _, caller, version, index, _reg = authority.split(":")
-            body = (decoded[caller] if caller in decoded else mapped[caller])["versions"][version]
+            body = mapped[caller]["versions"][version]
             callee = next(
                 (
                     call["callee"]
@@ -886,6 +891,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
         declarations.collect(project, policy, fact_keys),
         cache=None if policy is None else Cache(project.cache),
         shard_dir=project.build / "types",
+        policy=policy,
     )
     from unbake.typemap import declaration_evidence
 

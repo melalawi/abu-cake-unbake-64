@@ -363,7 +363,9 @@ class Context:
         name, start, stop = spans[-1]
         part = self.headers.get(name) if own is None or name in self.headers else own
         if part is None:
-            raise Held("solve", f"facts.headers: {name} is included by a source but has no header part for this version")
+            raise Held(
+                "solve", f"facts.headers: {name} is included by a source but has no header part for this version"
+            )
         # Copy on write: a span that adds nothing of a kind shares its base's object, so units of one header
         # list share one alias map and one layout template (encoded and merged once).
         found: dict[str, Any] = {}
@@ -416,8 +418,9 @@ def assemble(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The unit's consumed contracts and its whole definition seed (every function it defines).
 
-    OWN is the source's spelling. GENERATED names the headers the solver wrote (spelled): their declarations are the solver's own
-    output, so they never come back as consumed evidence. The definition seed keeps them, because a source's own
+    OWN is the source's spelling. GENERATED names the headers the solver wrote (spelled): their declarations are
+    the solver's own output, so they never come back as consumed evidence. The definition seed keeps them, because
+    a source's own
     layouts embed included structs by value.
 
     PROVENANCE(kind) gives the provenance of the "published" contracts and of the "proven" definitions.

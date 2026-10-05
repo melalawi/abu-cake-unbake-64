@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 import shlex
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn, Protocol, TextIO
 
-from unbake import config
+from unbake import config, tui
 from unbake.config import Held, Host, PendingProject, Project
 
 

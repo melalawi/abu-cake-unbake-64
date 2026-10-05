@@ -21,13 +21,12 @@ import hashlib
 import itertools
 import json
 import re
-import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from unbake import atomic as atomic_files
-from unbake import inputs
+from unbake import inputs, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
 from unbake.typemap import declarations, layers, storage
@@ -36,10 +35,12 @@ FACTS = "facts"
 SHARED = "facts-shared"
 SOURCE = "facts-source"
 HEADER = "facts-header"
+ASSEMBLED = "facts-assembled"
 # Bump a kind's number when the value it stores changes for the same inputs. Keys never digest the tool's code.
 FACTS_SCHEMA = 3
 SOURCE_SCHEMA = 4
 HEADER_SCHEMA = 3
+ASSEMBLED_SCHEMA = 1
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
@@ -290,7 +291,13 @@ def header_key(project: Project, policy: Host | None, header: Path, version: str
     scheme, keyed on the header's own identifiers)."""
     command = _command(project, policy, version, marked=True)
     roots = (header, *_forced(project, command))
-    parts: list[str | bytes] = [HEADER, str(HEADER_SCHEMA), version, json.dumps(command), storage.relative(project, header)]
+    parts: list[str | bytes] = [
+        HEADER,
+        str(HEADER_SCHEMA),
+        version,
+        json.dumps(command),
+        storage.relative(project, header),
+    ]
     parts.extend(("self", snapshot.digest(header)))
     closure = snapshot.closure(roots)
     names = set(_IDENTIFIER.findall(header.read_text(errors="replace")))
@@ -560,9 +567,7 @@ class _Parts(Mapping[str, dict[str, Any]]):
 
 def _spell(project: Project, host: Host | None) -> layers.Spell:
     """The spelling of line-marker paths the cache stores (every path of an in-memory run is the project's)."""
-    return functools.partial(
-        layers.spelling, project, project.root if host is None else host.cache_machine_root
-    )
+    return functools.partial(layers.spelling, project, project.root if host is None else host.cache_machine_root)
 
 
 def _header_part(project: Project, host: Host | None, version: str, header: Path) -> dict[str, Any]:
@@ -593,6 +598,7 @@ def _source_tasks(
     counts: dict[str, int],
     shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None],
     snapshot: Snapshot,
+    generated: frozenset[str],
 ) -> list[tuple[int, bytes]] | None:
     """Encoded facts of every task of one source and version: its source part joined to its header parts; None
     when the source needs whole-unit extraction.
@@ -631,15 +637,30 @@ def _source_tasks(
         context = contexts[version] = layers.Context(parts[version])
     depends = layers.dependencies(context, stub["runs"], own, stub["named"])
     part_key = key(SOURCE, content_key, json.dumps(depends, sort_keys=True))
+    # What the join of this source part and its header parts gives is cached whole: a warm solve reads it
+    # without assembling anything.
+    run_names = {name for name, _ in stub["runs"] if name != own}
+    assembled_key = key(
+        SOURCE,
+        str(ASSEMBLED_SCHEMA),
+        part_key,
+        json.dumps(sorted((name, parts[version].identity(name)) for name in run_names if name in parts[version])),
+        json.dumps(sorted(generated & run_names)),
+        json.dumps([function for _, _, (function, _, _) in group]),
+    )
+    stored = output.json(ASSEMBLED, assembled_key)
+    if stored is not None and len(stored) == len(group):
+        return [(index, row.encode()) for (index, _, _), row in zip(group, stored, strict=True)]
     if part is None:
         part = output.json(SOURCE, part_key)
-    if part is None:
-        part = extracted()
         if part is None:
-            raise Held("solve", f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun")
-    output.put_json(SOURCE, part_key, part)
+            part = extracted()
+            if part is None:
+                raise Held("solve", f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun")
+            output.put_json(SOURCE, part_key, part)
+    else:
+        output.put_json(SOURCE, part_key, part)
     source_text = source.read_text()
-    generated = frozenset(spell(str(header)) for header in snapshot.generated())
     result = []
     for index, _, (function, _, _) in group:
         stamped = _provenance(project, function, version, source)
@@ -649,6 +670,7 @@ def _source_tasks(
 
         consumed, definition = layers.assemble(context, part, own, source_text, provenance, generated)
         result.append((index, output.encoded([consumed, _owned(definition, function)])))
+    output.put_json(ASSEMBLED, assembled_key, [row.decode() for _, row in result])
     return result
 
 
@@ -676,28 +698,32 @@ def _whole_tasks(
     return result
 
 
-# The worker's header parts and layer contexts: the items of one pool job share their header_keys object.
-_session: tuple[dict[str, dict[str, str]], dict[str, _Parts], dict[str, layers.Context]] | None = None
+Shared = tuple[Project, Host | None, dict[str, dict[str, str]]]
+
+# The worker's header parts, layer contexts and generated header spellings, built once per shared value.
+_session: tuple[Shared, Store, dict[str, _Parts], dict[str, layers.Context], frozenset[str]] | None = None
 
 
 def _unit_job(
-    job: tuple[Project, Host | None, dict[str, dict[str, str]], list[list[tuple[int, str, Task]]]],
+    shared: Shared, versions: list[list[tuple[int, str, Task]]]
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
     """Worker body: encoded facts of each task of one source (with all its versions), extracting only missing
-    source parts, each distinct one once."""
+    source parts, each distinct one once. SHARED is the project, host and every version's header part keys."""
     global _session
-    project, host, header_keys, versions = job
-    output = store(project, host)
-    if _session is None or _session[0] is not header_keys:
-        _session = (header_keys, {version: _Parts(output, keys) for version, keys in header_keys.items()}, {})
-    _, parts, contexts = _session
+    project, host, header_keys = shared
+    if _session is None or _session[0] is not shared:
+        output = store(project, host)
+        generated = frozenset(_spell(project, host)(str(header)) for header in Snapshot(project).generated())
+        parts = {version: _Parts(output, keys) for version, keys in header_keys.items()}
+        _session = (shared, output, parts, {}, generated)
+    _, output, parts, contexts, generated = _session
     counts: dict[str, int] = {"sources": 0, "whole": 0}
     result = []
-    shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
+    sharing: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
     snapshot = Snapshot(project)
     whole: list[tuple[int, str, Task]] = []
     for group in versions:
-        found = _source_tasks(project, host, output, parts, contexts, group, counts, shared, snapshot)
+        found = _source_tasks(project, host, output, parts, contexts, group, counts, sharing, snapshot, generated)
         if found is None:
             whole.extend(group)
         else:
@@ -707,13 +733,27 @@ def _unit_job(
     return result, counts
 
 
+# The worker's include snapshot for published_keys, built once per shared value.
+_keying: tuple[tuple[Project, Host | None], Snapshot] | None = None
+
+
+def _unit_key_job(shared: tuple[Project, Host | None], task: Task) -> str:
+    """Worker body: one task's source-part key."""
+    global _keying
+    if _keying is None or _keying[0] is not shared:
+        _keying = (shared, Snapshot(shared[0]))
+    _, source, version = task
+    return unit_key(shared[0], shared[1], source, version, _keying[1])
+
+
 def published_keys(project: Project, policy: Host | None) -> list[str]:
     """Each task's source-part key: what the solve's facts depend on besides the header layer."""
-    snapshot = Snapshot(project)
-    return [
-        unit_key(project, policy, source, version, snapshot)
-        for _, source, version in declarations.published_sources(project)
-    ]
+    from unbake import pool
+
+    tasks = declarations.published_sources(project)
+    if policy is None:
+        return [_unit_key_job((project, policy), task) for task in tasks]
+    return pool.run(policy, _unit_key_job, tasks, (project, policy))
 
 
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
@@ -748,11 +788,13 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         for version, headers in missing_headers.items()
         for start in range(0, len(headers), HEADERS_PER_JOB)
     ]
+    shared = (project, policy, header_keys)
     if policy is None or output.cache is None:
-        results = [_unit_job((project, policy, header_keys, versions)) for versions in ordered]
+        results = [_unit_job(shared, versions) for versions in ordered]
     else:
-        pool.run(policy, _header_job, header_jobs)
-        results = pool.run(policy, _unit_job, [(project, policy, header_keys, versions) for versions in ordered])
+        with tui.task("Reading the C files", len(groups)):
+            pool.run(policy, _header_job, header_jobs)
+            results = pool.run(policy, _unit_job, ordered, shared)
     encoded: dict[int, bytes] = {}
     counts = {"sources": 0, "whole": 0}
     for found, spent in results:

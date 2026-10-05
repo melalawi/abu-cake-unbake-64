@@ -12,15 +12,16 @@ from __future__ import annotations
 import json
 import pickle
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import pool, tui
 from unbake.cache import Cache
-from unbake.config import Held
-from unbake.typemap import evidence, storage
+from unbake.config import Held, Host
+from unbake.typemap import evidence, shards, storage
 
 RANKS = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
 
@@ -180,61 +181,161 @@ def origin_node(value: dict[str, Any], addresses: dict[int, list[str]]) -> str |
     return "address:" + names[0] if len(names) == 1 else None
 
 
+class Recorder:
+    """The four writes a body makes to a Constraints, kept as (operation, arguments) to replay in the main process."""
+
+    def __init__(self) -> None:
+        self.ops: list[tuple[str, tuple[Any, ...]]] = []
+
+    def use(self, node: str, user: str | None = None) -> None:
+        self.ops.append(("use", (node, user)))
+
+    def seed(self, node: str, type_: str, evidence: dict[str, Any]) -> None:
+        # Only the fields a machine seed keeps travel back.
+        self.ops.append(
+            ("seed", (node, type_, _machine_evidence(evidence) if evidence.get("kind") == "machine" else evidence))
+        )
+
+    def connect(self, left: str, right: str, evidence: dict[str, Any]) -> None:
+        kept = {key: evidence[key] for key in ("function", "version", "instruction", "rom_offset") if key in evidence}
+        self.ops.append(("connect", (left, right, kept)))
+
+    def record(self, fact: dict[str, Any]) -> None:
+        self.ops.append(("record", (fact,)))
+
+
+def _plain(nested: dict[Any, Any]) -> dict[Any, Any]:
+    """A defaultdict tree as plain dicts (a lambda default factory cannot cross a process)."""
+    return {key: _plain(value) if isinstance(value, dict) else value for key, value in nested.items()}
+
+
+def _function_ops(
+    shared: tuple[Mapping[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, set[str]], dict[str, Any]],
+    names: list[str],
+) -> list[tuple[Any, ...]]:
+    """Pool worker: for each of NAMES, the writes its bodies make to the graph (as operations), the fields, memory
+    sources, forwarded values and neighbours they add, and their indexed-array candidates."""
+    functions, signatures, used, addresses = shared
+    found = []
+    for function, item in shards.bodies(functions, names).items():
+        graph = Recorder()
+        fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+        forwarded: dict[str, set[str]] = defaultdict(set)
+        memory_sources: dict[str, str] = {}
+        neighbour_edges: dict[str, set[str]] = defaultdict(set)
+        _function_body(
+            graph, function, item, signatures, used, addresses, neighbour_edges, fields, forwarded, memory_sources
+        )
+        found.append(
+            (
+                function,
+                graph.ops,
+                _plain(fields),
+                memory_sources,
+                dict(forwarded),
+                neighbour_edges,
+                _array_function(function, item, addresses),
+            )
+        )
+    return found
+
+
+def _function_body(
+    graph: Any,
+    function: str,
+    item: dict[str, Any],
+    signatures: dict[str, dict[str, Any]],
+    used: dict[str, set[str]],
+    addresses: dict[str, dict[int, list[str]]],
+    neighbours: dict[str, set[str]],
+    fields: dict[str, dict[int, list[dict[str, Any]]]],
+    forwarded: dict[str, set[str]],
+    memory_sources: dict[str, str],
+) -> None:
+    """The body of build's loop for one function, against a Constraints or a Recorder."""
+    for version, body in item["versions"].items():
+        for hint in body.get("value_types", []):
+            graph.seed(hint["node"], hint["type"], {"kind": "machine", **hint})
+        for reg in signatures[function]["registers"]:
+            graph.use(f"param:{function}:{reg}", function)
+        for call in body["calls"]:
+            callee = call["callee"]
+            if callee is None:
+                continue
+            neighbours[function].add(callee)
+            neighbours[callee].add(function)
+            callee_used = used.get(callee, set())
+            for reg, value in call["arguments"].items():
+                if reg not in callee_used:
+                    continue
+                node = origin_node(value, addresses[version])
+                formal = f"param:{callee}:{reg}"
+                forwarded[formal].add(node if node is not None else "unknown")
+                if node is not None:
+                    graph.connect(node, formal, call)
+                    graph.use(node, function)
+                    graph.use(formal, callee)
+            index = (call["instruction"] - body["address"]) // 4
+            if call.get("tail"):
+                for reg in ("r2", "f0"):
+                    graph.connect(f"result:{function}:{reg}", f"result:{callee}:{reg}", call)
+            for reg in ("r2", "r3", "f0", "f2"):
+                graph.connect(f"result:{callee}:{reg}", f"return:{function}:{version}:{index}:{reg}", call)
+        for returned in body["returns"]:
+            for reg, value in returned["values"].items():
+                node = origin_node(value, addresses[version])
+                result_node = f"result:{function}:{reg}"
+                graph.use(result_node, function)
+                if value.get("constant") is not None and reg == "r2":
+                    graph.seed(result_node, "int", {"kind": "machine", **returned})
+                if node is not None:
+                    graph.connect(result_node, node, returned)
+                    graph.use(node, function)
+        for memory in body["memory"]:
+            _access(graph, function, version, body, memory, addresses, fields, memory_sources)
+
+
 def build(
-    facts: dict[str, Any],
+    functions: Mapping[str, dict[str, Any]],
     signatures: dict[str, dict[str, Any]],
     used: dict[str, set[str]],
     addresses: dict[str, dict[int, list[str]]],
     log: storage.FactLog | None,
+    host: Host | None = None,
 ) -> Machine:
-    """Every value-flow edge, machine seed and access the map facts imply."""
+    """Every value-flow edge, machine seed and access the map facts imply.
+
+    Each function's body is read and walked in a worker, which records the writes it would make; this process
+    replays them into the graph function by function in map order, so the facts are written in the order a serial
+    walk writes them."""
     graph = Constraints(log)
     neighbours: dict[str, set[str]] = defaultdict(set)
     fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     forwarded: dict[str, set[str]] = defaultdict(set)
     memory_sources: dict[str, str] = {}
-    for function, item in facts["functions"].items():
-        for version, body in item["versions"].items():
-            for hint in body.get("value_types", []):
-                graph.seed(hint["node"], hint["type"], {"kind": "machine", **hint})
-            for reg in signatures[function]["registers"]:
-                graph.use(f"param:{function}:{reg}", function)
-            for call in body["calls"]:
-                callee = call["callee"]
-                if callee is None:
-                    continue
-                neighbours[function].add(callee)
-                neighbours[callee].add(function)
-                callee_used = used.get(callee, set())
-                for reg, value in call["arguments"].items():
-                    if reg not in callee_used:
-                        continue
-                    node = origin_node(value, addresses[version])
-                    formal = f"param:{callee}:{reg}"
-                    forwarded[formal].add(node if node is not None else "unknown")
-                    if node is not None:
-                        graph.connect(node, formal, call)
-                        graph.use(node, function)
-                        graph.use(formal, callee)
-                index = (call["instruction"] - body["address"]) // 4
-                if call.get("tail"):
-                    for reg in ("r2", "f0"):
-                        graph.connect(f"result:{function}:{reg}", f"result:{callee}:{reg}", call)
-                for reg in ("r2", "r3", "f0", "f2"):
-                    graph.connect(f"result:{callee}:{reg}", f"return:{function}:{version}:{index}:{reg}", call)
-            for returned in body["returns"]:
-                for reg, value in returned["values"].items():
-                    node = origin_node(value, addresses[version])
-                    result_node = f"result:{function}:{reg}"
-                    graph.use(result_node, function)
-                    if value.get("constant") is not None and reg == "r2":
-                        graph.seed(result_node, "int", {"kind": "machine", **returned})
-                    if node is not None:
-                        graph.connect(result_node, node, returned)
-                        graph.use(node, function)
-            for memory in body["memory"]:
-                _access(graph, function, version, body, memory, addresses, fields, memory_sources)
-
+    candidates: dict[str, dict[str, Any]] = {}
+    names = list(functions)
+    shared = (functions, signatures, used, addresses)
+    with tui.task("Following values between functions", len(names)):
+        pieces = shards.chunks(names, pool.workers(host) if host is not None else 1)
+        done = (
+            pool.run(host, _function_ops, pieces, shared)
+            if host is not None
+            else [_function_ops(shared, piece) for piece in pieces]
+        )
+    for piece in done:
+        for function, ops, local_fields, local_sources, local_forwarded, local_neighbours, arrays in piece:
+            for operation, arguments in ops:
+                getattr(graph, operation)(*arguments)
+            for origin, offsets in local_fields.items():
+                for offset, accesses in offsets.items():
+                    fields[origin][offset].extend(accesses)
+            memory_sources.update(local_sources)
+            for formal, nodes in local_forwarded.items():
+                forwarded[formal] |= nodes
+            for node, others in local_neighbours.items():
+                neighbours[node] |= others
+            _merge_arrays(candidates, function, arrays)
     base_cache: dict[str, str | None] = {}
 
     def common_base(origin: str, active: frozenset[str] = frozenset()) -> str | None:
@@ -280,7 +381,7 @@ def build(
         fields={origin: dict(offsets) for origin, offsets in fields.items()},
         shared_fields={origin: dict(offsets) for origin, offsets in shared_fields.items()},
         bases=bases,
-        arrays=_array_candidates(facts, addresses),
+        arrays=candidates,
         constraints=graph.facts,
     )
 
@@ -353,38 +454,48 @@ def _access(
     )
 
 
-def _array_candidates(facts: dict[str, Any], addresses: dict[str, dict[int, list[str]]]) -> dict[str, dict[str, Any]]:
-    """Every indexed anchor's observed strides and element representations, in map order."""
-    candidates: dict[str, dict[str, Any]] = {}
-    for function, item in facts["functions"].items():
-        for version, body in item["versions"].items():
-            for memory in body["memory"]:
-                indexed = memory.get("indexed")
-                if indexed is None:
-                    continue
-                names = addresses[version].get(indexed["anchor"], [])
-                key = names[0] if len(names) == 1 else f"address:{version}:{indexed['anchor']:08X}"
-                candidate = candidates.setdefault(
-                    key,
-                    {
-                        "state": "unknown",
-                        "type": None,
-                        "extent": None,
-                        "strides": [],
-                        "element_types": [],
-                        "users": [],
-                        "provenance": [],
-                    },
-                )
-                element = evidence.scalar(memory)
-                if element:
-                    candidate["element_types"] = sorted(set(candidate["element_types"]) | {element})
-                candidate["strides"] = sorted(set(candidate["strides"]) | {indexed["scale"]})
-                candidate["users"] = sorted(set(candidate["users"]) | {function})
-                candidate["provenance"].append(
-                    {"function": function, "version": version, "instruction": memory["instruction"], **indexed}
-                )
-    return candidates
+def _array_function(
+    function: str, item: dict[str, Any], addresses: dict[str, dict[int, list[str]]]
+) -> dict[str, dict[str, Any]]:
+    """One function's indexed anchors: strides, element representations and the accesses, by anchor key."""
+    found: dict[str, dict[str, Any]] = {}
+    for version, body in item["versions"].items():
+        for memory in body["memory"]:
+            indexed = memory.get("indexed")
+            if indexed is None:
+                continue
+            names = addresses[version].get(indexed["anchor"], [])
+            key = names[0] if len(names) == 1 else f"address:{version}:{indexed['anchor']:08X}"
+            candidate = found.setdefault(key, {"elements": set(), "strides": set(), "provenance": []})
+            element = evidence.scalar(memory)
+            if element:
+                candidate["elements"].add(element)
+            candidate["strides"].add(indexed["scale"])
+            candidate["provenance"].append(
+                {"function": function, "version": version, "instruction": memory["instruction"], **indexed}
+            )
+    return found
+
+
+def _merge_arrays(candidates: dict[str, dict[str, Any]], function: str, found: dict[str, dict[str, Any]]) -> None:
+    """Every indexed anchor's observed strides and element representations, merged in map order."""
+    for key, row in found.items():
+        candidate = candidates.setdefault(
+            key,
+            {
+                "state": "unknown",
+                "type": None,
+                "extent": None,
+                "strides": [],
+                "element_types": [],
+                "users": [],
+                "provenance": [],
+            },
+        )
+        candidate["element_types"] = sorted(set(candidate["element_types"]) | row["elements"])
+        candidate["strides"] = sorted(set(candidate["strides"]) | row["strides"])
+        candidate["users"] = sorted(set(candidate["users"]) | {function})
+        candidate["provenance"].extend(row["provenance"])
 
 
 class Closure:

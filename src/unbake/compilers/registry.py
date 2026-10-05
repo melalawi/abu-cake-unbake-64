@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import fcntl
 import os
 import platform
 import re
-import sys
 import tarfile
 import tempfile
 import tomllib
@@ -21,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unbake import atomic as atomic_files
+from unbake import tui
 from unbake.compilers import files as compiler_files
 from unbake.config import Held
 

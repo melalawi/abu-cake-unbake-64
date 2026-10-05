@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unbake import tui
-
 import hashlib
 import json
 import sys
@@ -13,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import tui
 from unbake.compilers import files as compiler_files
 from unbake.config import Held, Host, PendingProject
 from unbake.layout import split_analysis
