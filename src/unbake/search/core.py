@@ -277,7 +277,10 @@ def run(
             else:
                 break
     mutations = evaluated - 1
-    if mutations == 0:
+    if mutations == 0 and time.monotonic() < deadline - mutation_seconds:
+        # The methods proposed nothing for this source with budget to spare: the start is the best they have.
+        print("no mutation proposed; the starting source is the best", file=sys.stderr)
+    elif mutations == 0:
         if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
             raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
         print("external permuter ran; no improving candidates emitted", file=sys.stderr)
