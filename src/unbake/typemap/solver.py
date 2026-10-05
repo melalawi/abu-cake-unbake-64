@@ -867,6 +867,14 @@ def input_key(project: Project, host: Host | None) -> str:
     return _types_key(project, host, facts, source_facts.published_keys(project, host))
 
 
+def phase(text: str) -> None:
+    """One human progress line per long single-core phase of the types step."""
+    import sys
+
+    sys.stderr.write(f"types: {text}\n")
+    sys.stderr.flush()
+
+
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution."""
     from unbake.typemap import facts as source_facts
@@ -875,8 +883,10 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
 
     database = types_db.path(project)
     previous = types_db.summary(database) if database.is_file() else {}
+    phase("merging the map and the ABI")
     facts = refine(project, refresh_map(project, policy))
     fact_keys = source_facts.published_keys(project, policy)
+    phase("inferring types (single-core)")
     result = infer(
         project,
         facts,
@@ -899,6 +909,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
         for path, paths in homes.items()
     }
     revision = int(previous.get("revision", 0)) + 1
+    phase("rendering and publishing the solution (single-core)")
     result = {
         **storage.identity(project),
         "map_sha256": inputs.digest(project.build / "map/facts.json"),

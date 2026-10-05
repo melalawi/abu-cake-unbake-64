@@ -236,6 +236,16 @@ class CommandJournalTests(TempCase):
         self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), ("1", None))
         self.assertFalse(dead.path.exists())
 
+    def test_a_journal_not_named_for_a_process_is_refused_by_name(self) -> None:
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        journal = self.root / "build" / "steps.journal"
+        journal.mkdir(parents=True)
+        (journal / "notes.json").write_text("{}")
+        with self.assertRaises(Held) as raised:
+            steps.Command.stale(project)
+        self.assertIn("notes.json", raised.exception.reason)
+        self.assertIn("roll it back", raised.exception.reason)
+
 
 class BootstrapTests(TempCase):
     def test_listed_headers_that_do_not_exist_are_not_inputs(self) -> None:

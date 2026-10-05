@@ -376,6 +376,12 @@ class Command:
         directory = project.build / "steps.journal"
         found = []
         for path in sorted(directory.glob("*.json")) if directory.is_dir() else ():
+            if not path.stem.isdigit():
+                raise Held(
+                    "steps",
+                    f"steps.journal: {path} is not named for a process id; roll it back by moving it out of "
+                    "the journal directory, then rerun",
+                )
             pid = int(path.stem)
             try:
                 os.kill(pid, 0)
