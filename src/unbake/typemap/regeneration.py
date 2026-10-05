@@ -82,7 +82,7 @@ def environment(project: Project, policy: Host | None) -> str:
         *(path for path in sources),
         config,
         json.dumps(storage.relocatable(asdict(project), project.root), default=str, sort_keys=True),
-        json.dumps(vars(policy) if policy is not None else None, default=str, sort_keys=True),
+        json.dumps(policy.values if policy is not None else None, default=str, sort_keys=True),
         *tools,
     )
 

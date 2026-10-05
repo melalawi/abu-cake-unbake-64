@@ -87,7 +87,9 @@ class StableKeyTests(TempCase):
             (root / "config.toml").write_text("x")
             shape = make_dataclass("Shape", ["root", "src", "paths"])
             project = shape(root, root / "src", [root / "build"])
+            # The host's own provenance (the project override file it read) names the root; its values do not.
+            policy = SimpleNamespace(values={"a": {"b": 1}}, sources=(root / ".unbake" / "unbake.toml",))
             with patch.object(regeneration, "key", lambda *parts: "|".join(str(part) for part in parts[-2:])):
-                keys.append(regeneration.environment(project, None))  # type: ignore[arg-type]
+                keys.append(regeneration.environment(project, policy))  # type: ignore[arg-type]
             shutil.rmtree(root)
         self.assertEqual(keys[0], keys[1])
