@@ -88,11 +88,9 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
     # meaning, so only a new spelling or map pays for canonical().
     spellings: dict[str, tuple[dict[str, Any], dict[str, str]]] = {}
     environments = _Canonical()
-    # Per name, the record object last accepted and the alias map it came with (held, so the ids stay unique): a
+    # Per name, the record object last accepted and the alias map it came with (held, so the identities hold): a
     # seed repeating that very object in that very map changes nothing, so it is skipped before any comparison.
-    accepted: dict[str, Any] = {}
-    last_object: dict[str, int] = {}
-    last_aliases: dict[str, int] = {}
+    accepted: dict[str, tuple[Any, dict[str, str]]] = {}
     index = 0
     while index < len(seeds):
         seed = seeds[index]
@@ -108,9 +106,11 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
             # per-name copy, says whether this name was already merged in this alias map.
             origin = shared.template[name] if proven else shared[name]
             previous = records.get(name)
-            if previous is not None and last_object.get(name) == id(origin) and last_aliases.get(name) == id(aliases):
+            known = accepted.get(name)
+            if known is not None and known[0] is origin and known[1] is aliases:
                 # Same meaning as the accepted record: only a receipt (provenance) of equal or higher rank replaces it.
-                if proven and incoming_rank >= _rank(previous):
+                assert previous is not None
+                if proven and incoming_rank >= _RANKS.get(previous["provenance"].get("kind"), 1):
                     records[name] = {
                         **origin,
                         "provenance": shared.provenance,
@@ -125,7 +125,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     meanings[name] == _comparable(record, key, aliases, canonical)
                 ):
                     spellings[name] = stripped, aliases
-                    accepted[name], last_object[name], last_aliases[name] = origin, id(origin), id(aliases)
+                    accepted[name] = origin, aliases
                     # The same type, maybe spelled through a typedef: no conflict. As for identical records,
                     # the incoming one is kept unless it ranks lower, so a published contract replaces a
                     # declared one (and the published-storage rule then keeps it in the header).
@@ -152,7 +152,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                             records[name] = {**record, "declaration_conflict": False}
                             meanings[name] = _comparable(record, key, aliases, canonical)
                             spellings[name] = stripped, aliases
-                            accepted[name], last_object[name], last_aliases[name] = origin, id(origin), id(aliases)
+                            accepted[name] = origin, aliases
                         continue
                 if old != new:
                     graph.facts.append(
@@ -169,7 +169,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
             meanings[name] = _comparable(record, key, aliases, canonical)
             spellings[name] = _stripped(record, key), aliases
-            accepted[name], last_object[name], last_aliases[name] = origin, id(origin), id(aliases)
+            accepted[name] = origin, aliases
         if proven and len(graph.facts) == conflicts_before:
             # An uninterrupted run of identical layouts only replaces provenance.
             # Keep the first merge (confidence/conflict handling) and the last
