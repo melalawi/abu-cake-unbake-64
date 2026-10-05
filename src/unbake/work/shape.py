@@ -6,6 +6,8 @@ fragment size, which rules hold) comes from the compiler family's Shape (compile
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from unbake.config import Held
@@ -18,6 +20,19 @@ JR_RA, NOP = 0x03E00008, 0
 # MIPS III doubleword opcodes and SPECIAL functions; no -mips1/-mips2 compiler emits them.
 _MIPS3_OPS = frozenset({24, 25, 26, 27, 44, 45, 52, 55, 60, 63})
 _MIPS3_SPECIAL = frozenset({20, 22, 23, 28, 29, 30, 31, 44, 45, 46, 47, 56, 58, 59, 60, 62, 63})
+# COP0 moves (mfc0, dmfc0, mtc0, dmtc0) by rs, and CO functions (tlbr, tlbwi, tlbwr, tlbp, eret) by funct.
+_COP0_MOVES = {0: "mfc0", 1: "dmfc0", 4: "mtc0", 5: "dmtc0"}
+_COP0_CO = {1: "tlbr", 2: "tlbwi", 6: "tlbwr", 8: "tlbp", 24: "eret"}
+# COP1 fmt S, D, W, L functions that convert: round/trunc/ceil/floor (8-15) and cvt.* (32-37).
+_CONVERSIONS = frozenset({*range(8, 16), *range(32, 38)})
+
+
+@dataclass(frozen=True)
+class Original:
+    """Why a body is original asm: the rule that proved it (one of mips.ORIGINAL_RULES) and its word evidence."""
+
+    rule: str
+    evidence: str
 
 
 def for_compiler(compiler: Compiler) -> Shape:
@@ -27,29 +42,41 @@ def for_compiler(compiler: Compiler) -> Shape:
     return family_for(compiler.id).shape(compiler.id, compiler.cflags)
 
 
+def emitters(compilers: Iterable[Compiler]) -> Shape:
+    """What any configured compiler can emit (compilers.families.mips.emitters), for the original-asm rules."""
+    from unbake.compilers.families.mips import emitters as combined
+
+    return combined(for_compiler(compiler) for compiler in compilers)
+
+
 def words_of(data: bytes) -> list[int]:
     if not isinstance(data, bytes) or not data or len(data) % 4:
         raise Held("plan", "words: required nonempty complete big-endian words")
     return [item[0] for item in struct.iter_unpack(">I", data)]
 
 
-def classify(data: bytes, address: int, shape: Shape) -> tuple[str, str]:
-    """Return a route and its word evidence for the interval at VRAM ADDRESS; classification is a work hint."""
+def classify(data: bytes, address: int, shape: Shape, emitted: Shape) -> tuple[str, str]:
+    """Return a route and its word evidence for the interval at VRAM ADDRESS; classification is a work hint.
+
+    SHAPE is the function's own compiler; EMITTED is what any configured compiler emits (emitters), which alone
+    decides the `original` route: words no configured compiler can produce from C."""
     words = words_of(data)
     skip = filler(words, address, shape)
     if skip:
         return "boundary", f"{skip * 4} bytes of alignment filler before the function at +0x{skip * 4:X}"
-    returns = [index for index, word in enumerate(words) if word == JR_RA]
-    if len(returns) > 1:
-        return "boundary", f"{len(returns)} jr-ra instructions in one interval"
     if not any(words) or words[0] == 0:
         return "boundary", "leading padding"
     if len(words) >= 2 and all(0x80000000 <= word < 0xC0000000 and word % 4 == 0 for word in words):
         return "table", "aligned address table"
     if all(byte == 0 or 32 <= byte < 127 for byte in data) and any(32 <= byte < 127 for byte in data):
         return "table", "text data in a function interval"
-    if any(word >> 26 == 16 or word >> 26 == 47 for word in words):
-        return "asm", "privileged instruction"
+    found = original(words, emitted)
+    if found is not None:
+        return "original", f"{found.rule}: {found.evidence}"
+    # Original asm may leave twice (osInvalDCache); compiled code never does.
+    returns = [index for index, word in enumerate(words) if word == JR_RA]
+    if len(returns) > 1:
+        return "boundary", f"{len(returns)} jr-ra instructions in one interval"
     if returns:
         end = returns[0] + 2
         if end > len(words):
@@ -65,6 +92,74 @@ def classify(data: bytes, address: int, shape: Shape) -> tuple[str, str]:
     if any(word >> 26 == 0 and word & 63 == 8 for word in words):
         return "drafter", "indirect dispatch"
     return "merge", "no complete return or indirect dispatch"
+
+
+def _cop0(word: int) -> str | None:
+    """The COP0 or cache mnemonic WORD encodes; None for any other word (op 16 with another rs is not code)."""
+    op, rs = word >> 26, (word >> 21) & 31
+    if op == 47:
+        return "cache"
+    if op != 16:
+        return None
+    if rs in _COP0_MOVES:
+        return _COP0_MOVES[rs]
+    if rs == 16 and not (word >> 6) & 0x7FFFF:
+        return _COP0_CO.get(word & 63)
+    return None
+
+
+def _fcsr(word: int) -> str | None:
+    """cfc1 or ctc1 on $31 (the FCSR)."""
+    if word >> 26 != 17 or (word >> 11) & 31 != 31 or word & 0x7FF:
+        return None
+    return {2: "cfc1", 6: "ctc1"}.get((word >> 21) & 31)
+
+
+def _converts(word: int) -> bool:
+    return word >> 26 == 17 and (word >> 21) & 31 in (16, 17, 20, 21) and word & 63 in _CONVERSIONS
+
+
+def _kreg(word: int) -> bool:
+    """A GPR operand is k0 or k1 ($26, $27): reserved for the kernel, never allocated by a compiler."""
+    reads, writes, _, _ = _registers(word)
+    return bool((reads | writes) & {26, 27})
+
+
+def _returns(word: int) -> bool:
+    """jr (any register) or eret: every function and exception path leaves through one."""
+    return (word >> 26 == 0 and word & 0xFC1FFFFF == 8) or word == 0x42000018
+
+
+def original(words: list[int], emitted: Shape) -> Original | None:
+    """The original-asm rule WORDS prove against EMITTED (what any configured compiler emits), or None.
+
+    Only a body that leaves through jr or eret is judged, so mis-split data never qualifies. Rules, in order,
+    each only where every configured compiler's family switches it on:
+    `cop0`: a COP0 move, TLB op, eret or cache (other op-16 words are not code).
+    `fcsr`: cfc1/ctc1 on $31 with no float conversion in the body (compilers touch FCSR only around one).
+    `kreg`: k0 or k1 as an operand.
+    `isa`: an opcode above the highest configured -mipsN."""
+    if not any(_returns(word) for word in words):
+        return None
+    rules = emitted.rules
+    for index, word in enumerate(words):
+        name = _cop0(word) if "cop0" in rules else None
+        if name:
+            return Original("cop0", f"{name} at +0x{index * 4:X}")
+    if "fcsr" in rules and not any(_converts(word) for word in words):
+        for index, word in enumerate(words):
+            name = _fcsr(word)
+            if name:
+                return Original("fcsr", f"{name} $31 at +0x{index * 4:X} with no float conversion")
+    if "kreg" in rules:
+        for index, word in enumerate(words):
+            if _kreg(word):
+                return Original("kreg", f"k0/k1 operand at +0x{index * 4:X}")
+    if "isa" in rules and emitted.isa_level < 3:
+        for index, word in enumerate(words):
+            if word >> 26 in _MIPS3_OPS or (word >> 26 == 0 and word & 63 in _MIPS3_SPECIAL):
+                return Original("isa", f"64-bit opcode at +0x{index * 4:X} above -mips{emitted.isa_level}")
+    return None
 
 
 def _frame_open(word: int) -> bool:
@@ -182,14 +277,14 @@ def not_c(words: list[int], shape: Shape) -> str | None:
     return None
 
 
-def tail(previous: bytes, previous_address: int, data: bytes, shape: Shape) -> bool:
+def tail(previous: bytes, previous_address: int, data: bytes, shape: Shape, emitted: Shape) -> bool:
     """DATA continues the row before it: that row has no complete return and does not end in a jump (every
     compiled function ends with a jump or branch and its delay slot), and DATA opens no frame of its own and reads
     a register before setting it (a value the row before computed), so both are one function the split cut."""
     if "tail" not in shape.rules:
         return False
     words, before = words_of(data), words_of(previous)
-    if len(before) < 2 or _transfers(before[-2]) or classify(previous, previous_address, shape)[0] != "merge":
+    if len(before) < 2 or _transfers(before[-2]) or classify(previous, previous_address, shape, emitted)[0] != "merge":
         return False
     return not any(_frame_open(word) for word in words) and _reads_unset(words, shape)
 

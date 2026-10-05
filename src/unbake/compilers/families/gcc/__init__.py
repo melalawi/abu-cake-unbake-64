@@ -17,7 +17,11 @@ if TYPE_CHECKING:
 
 class Gcc:
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
-        """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments."""
+        """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments.
+
+        Original asm (probe: KMC 2.7.2 and SN64 2.8.1 at the games' flags, KMC at -mips1): GCC emits no COP0 or
+        cache instruction and never allocates k0/k1 (fixed registers); float-to-int is `trunc.w.*`, which gas
+        expands with cfc1/ctc1 $31 only at -mips1, beside the conversion. So `cop0`, `fcsr`, `kreg` and `isa` hold."""
         from unbake.compilers.families.mips import o32_shape
 
         return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64)

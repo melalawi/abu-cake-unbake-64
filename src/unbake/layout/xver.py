@@ -57,7 +57,7 @@ def _inventory(project: Any, version: str) -> list[Any]:
         for segment in segments
         if segment.fields.get("type") == "code"
         for row in segment.rows
-        if row.kind in ("asm", "c")
+        if row.kind in split.CODE_KINDS
     ]
     if not rows:
         raise Held("placement", f"VERSION {version} text rows: required")

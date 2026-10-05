@@ -123,8 +123,9 @@ def create(
         match = re.match(r"(\s*)- \[(0x[\da-fA-F]+), (\w+)\]", line)
         if match:
             indent, offset, kind = match.groups()
+            # hasm means landed original asm (decomp.original_asm); splat's entry row starts as plain asm.
             name = "entry" if kind == "hasm" else f"{kind}_{int(offset, 16):06X}"
-            line = f"{indent}- [{offset}, {kind}, {name}]"
+            line = f"{indent}- [{offset}, {'asm' if kind == 'hasm' else kind}, {name}]"
         if re.match(r"\s*- \{\s*type: bss,", line):
             continue
         named.append(line)

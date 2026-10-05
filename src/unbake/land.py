@@ -167,8 +167,8 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
     return list(versions)
 
 
-def _row_edits(project: Project, function: str, versions: list[str]) -> list[split.Edit]:
-    """asm -> c for F's row in every holding version, path = F."""
+def _row_edits(project: Project, function: str, versions: list[str], kind: str = "c") -> list[split.Edit]:
+    """asm -> KIND (c, or hasm for original asm) for F's row in every holding version, path = F."""
     edits = []
     for version in versions:
         row = compare.row_of(project, function, version)
@@ -177,9 +177,9 @@ def _row_edits(project: Project, function: str, versions: list[str]) -> list[spl
         lines = list(lines)
         for segment in segments:
             for candidate in segment.rows:
-                if candidate.start == row.start and candidate.kind in ("asm", "c"):
+                if candidate.start == row.start and candidate.kind in ("asm", "c", "hasm"):
                     lines[candidate.line] = split.replace_row(
-                        lines[candidate.line], candidate.match, kind="c", path=function
+                        lines[candidate.line], candidate.match, kind=kind, path=function
                     )
         after = "".join(lines)
         if after != text:
@@ -256,6 +256,60 @@ def land(project: Project, host: Host, file: Path) -> str:
     return _git(project, "rev-parse", "HEAD").strip()
 
 
+def land_original(project: Project, host: Host, function: str) -> str:
+    """Land one original-asm function as src/F.s; return the commit id. Every holding VERSION must prove the same
+    rule from its ROM bytes and give the same .s text, and that text must assemble and link to each ROM row."""
+    from unbake import config
+    from unbake.decomp import exclusions, original_asm
+    from unbake.report import progress
+
+    versions = list(split.holding_versions(project, function))
+    rows = [compare.row_of(project, function, version) for version in versions]
+    if any(row.kind != "asm" for row in rows):
+        raise Held("land", f"land.original_kind: {function}: only an unlanded asm row lands as original asm")
+    bodies = [split.words(project, row) for row in rows]
+    proofs = [original_asm.prove(project, row, data) for row, data in zip(rows, bodies, strict=True)]
+    if len({found.rule for found in proofs}) != 1:
+        raise Held("land", f"land.original_versions: {function}: versions prove different rules")
+    found = proofs[0]
+    texts = {original_asm.write_source(project, host, row, data, found) for row, data in zip(rows, bodies, strict=True)}
+    if len(texts) != 1:
+        raise Held("land", f"land.original_versions: {function}: versions need different .s text")
+    text = texts.pop()
+    records = original_asm.load(project)
+    records[function] = original_asm.Record(found.rule)
+    written: dict[Path, bytes | None] = {}
+
+    def put(path: Path, content: bytes) -> None:
+        if path not in written:
+            written[path] = path.read_bytes() if path.is_file() else None
+        atomic_files.write(path, content)
+
+    try:
+        put(project.src / f"{function}.s", text.encode())
+        put(project.root / original_asm.MANIFEST, original_asm.dumps(records).encode())
+        for edit in [
+            *exclusions.publication_edit(project, {function}),
+            *_row_edits(project, function, versions, "hasm"),
+        ]:
+            current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
+            put(Path(edit.path), (edit.after if current == edit.before else current).encode())
+        updated = config.load(project.root)
+        generated = buildfiles.write(updated, host)
+        steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
+        generated += progress.write(updated, host)
+        steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
+        _commit(project, host, sorted({*written, *generated}), f"Original asm {function}")
+    except BaseException:
+        for path, previous in written.items():
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                atomic_files.write(path, previous)
+        raise
+    return _git(project, "rev-parse", "HEAD").strip()
+
+
 def push_commits(project: Project, host: Host) -> bool:
     """git push <remote> HEAD:<branch> with the configured credential; never raises."""
     kind, value = host.credential()
@@ -314,19 +368,28 @@ class Pusher:
             thread.join()
 
 
-def publish(project: Project, host: Host, files: list[Path], *, push: bool) -> Landed:
-    """`unbake publish FILE...`: land each file in turn; one failure does not stop the others."""
+def publish(project: Project, host: Host, files: list[Path], *, push: bool, originals: tuple[str, ...] = ()) -> Landed:
+    """`unbake publish FILE... [--original NAME...]`: land each draft file, then each original-asm function, in
+    turn; one failure does not stop the others."""
     from unbake import config
 
     result = Landed()
-    for file in files:
+
+    def draft(file: Path) -> Callable[[Project], str]:
+        return lambda current: land(current, host, file)
+
+    def original(name: str) -> Callable[[Project], str]:
+        return lambda current: land_original(current, host, name)
+
+    work = [(file.stem, draft(file)) for file in files] + [(name, original(name)) for name in originals]
+    for name, action in work:
         current = config.load(project.root)
         try:
-            commit = land(current, host, file)
+            commit = action(current)
         except Held as error:
-            result.failed[file.stem] = error.reason
+            result.failed[name] = error.reason
             continue
-        result.landed.append(file.stem)
+        result.landed.append(name)
         result.commits.append(commit)
         steps.ensure(config.load(project.root), host, ["merge-units"])
     if push and result.commits:

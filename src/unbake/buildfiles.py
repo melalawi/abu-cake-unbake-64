@@ -1,7 +1,8 @@
 """The committed, Python-free build: Makefile, units.mk and per-version slices, symbols and link scripts.
 
 A version's ROM is the concatenation, in ROM order, of
-- one binary per published C unit (compile, `n64link place`, link alone at its address with symbols.ld), and
+- one binary per published C unit (compile, `n64link place`, link alone at its address with symbols.ld),
+- one binary per landed original-asm unit (hasm row: assemble src/<unit>.s, link alone at its address), and
 - raw ROM slices for every byte range between them (copied from the original ROM with dd).
 `make check` rebuilds every version and compares each ROM's sha1 with the original. The commands per unit come
 from compilers.drivers, the same templates the runner fills, so make and unbake never disagree.
@@ -45,12 +46,13 @@ MAKE_VALUES: dict[str, tuple[str, ...]] = {
 
 @dataclass(frozen=True)
 class Unit:
-    """One published C unit in one version: its row in the ROM."""
+    """One published unit in one version: its row in the ROM; kind c (src/NAME.c) or hasm (src/NAME.s)."""
 
     name: str
     address: int
     start: int
     size: int
+    kind: str = "c"
 
 
 def relative(project: Project, path: Path) -> str:
@@ -64,16 +66,20 @@ def words(values: tuple[str, ...] | list[str]) -> str:
     return " ".join(values)
 
 
+SOURCE_SUFFIX = {"c": ".c", "hasm": ".s"}
+
+
 def units(project: Project, version: str) -> list[Unit]:
-    """Published C rows of VERSION in ROM order; each must have src/<unit>.c."""
+    """Published C and original-asm rows of VERSION in ROM order; each must have src/<unit>.c or src/<unit>.s."""
     result = []
     for row in split.functions(project, version):
-        if row.kind != "c":
+        if row.kind not in SOURCE_SUFFIX:
             continue
         name = Path(row.path).name
-        if not (project.src / f"{name}.c").is_file():
-            raise Held("buildfiles", f"buildfiles.source: {version} row {name} has no src/{name}.c")
-        result.append(Unit(name, row.address, row.start, row.end - row.start))
+        suffix = SOURCE_SUFFIX[row.kind]
+        if not (project.src / f"{name}{suffix}").is_file():
+            raise Held("buildfiles", f"buildfiles.source: {version} row {name} has no src/{name}{suffix}")
+        result.append(Unit(name, row.address, row.start, row.end - row.start, row.kind))
     return sorted(result, key=lambda unit: unit.start)
 
 
@@ -152,7 +158,7 @@ def slices_mk(project: Project, version: str) -> str:
             lines.append(f"{version}.S.{cursor:08X} := {cursor} {unit.start - cursor}\n")
             pieces.append(f"{build}/slices/{cursor:08X}.bin")
         lines.append(f"{version}.U.{unit.name} := 0x{unit.address:X}:0x{unit.start:X}:0x{unit.size:X}\n")
-        pieces.append(f"{build}/units/{unit.name}.bin")
+        pieces.append(f"{build}/{'units' if unit.kind == 'c' else 'hasm'}/{unit.name}.bin")
         cursor = unit.start + unit.size
     if cursor > rom_size:
         raise Held("buildfiles", f"buildfiles.rom_size: {version} rows end past the ROM")
@@ -232,6 +238,10 @@ UNIT_BIN = read key < $< && \
   $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld $(TRIM) && \
   $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
   --oformat binary -o $@ $(@D)/$(*F).placed.o
+HASM_BIN = printf '%s\n' '$(VER) $(*F)'; \
+  $(AS) $(HASM_ASFLAGS) -o $(@D)/$(*F).o $< && \
+  $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
+  --oformat binary -o $@ $(@D)/$(*F).o
 SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none \
   skip=$(word 1,$($(VER).S.$(*F))) count=$(word 2,$($(VER).S.$(*F)))
 """
@@ -242,11 +252,13 @@ build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas
 	$$(Q)$$(UNIT_KEY)
 build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/units
 	$$(Q)$$(UNIT_BIN)
+build/$1/hasm/%.bin: src/%.s versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
+	$$(Q)$$(HASM_BIN)
 build/$1/slices/%.bin: $$($1.BASEROM) | build/$1/slices
 	$$(Q)$$(SLICE)
 build/$1/$$(NAME).z64: $$($1.PIECES)
 	$$(Q)printf '%s\n' '$1 rom'; cat $$($1.PIECES) > $$@
-build/$1/src build/$1/units build/$1/slices:
+build/$1/src build/$1/units build/$1/hasm build/$1/slices:
 	$$(Q)mkdir -p $$@
 endef
 $(foreach v,$(VERSIONS),$(eval $(call VERSION_RULES,$v)))
@@ -331,6 +343,7 @@ def makefile(project: Project, host: Host) -> str:
         f"INCLUDES := {words(includes)}\n",
         f"CPPFLAGS := {words(list(project.cppflags))}\n",
         f"SN64_ASFLAGS := {words(list(drivers.gnu_as_flags(project)))}\n",
+        f"HASM_ASFLAGS := {words(list(project.asflags))}\n",
         f"KIND := {default.kind}\n",
         f"CC := {relative(project, default.cc)}\n",
         f"CODEGEN := {words(c_codegen)}\n",
@@ -350,7 +363,8 @@ def makefile(project: Project, host: Host) -> str:
         "setup:\n",
         *(line + "\n" for line in setup_recipe(project)),
         "\t@sha256sum --quiet -c tools/compilers.sha256\n\n",
-        "clean:\n\trm -rf build/cas $(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/slices)\n\n",
+        "clean:\n\trm -rf build/cas "
+        "$(foreach v,$(VERSIONS),build/$v/src build/$v/units build/$v/hasm build/$v/slices)\n\n",
         "include $(foreach v,$(VERSIONS),versions/$v/slices.mk)\n",
         "include units.mk\n\n",
         *(_kind_recipes(kind) for kind in kinds),
@@ -428,7 +442,10 @@ def n64link_pin(host: Host) -> str:
 
 
 def generate(project: Project, host: Host) -> dict[Path, bytes]:
-    """Every build file, by path."""
+    """Every build file, by path; refused when an original-asm source or row lacks its proved record."""
+    from unbake.decomp import original_asm
+
+    original_asm.guard(project)
     files: dict[Path, str] = {
         project.root / "Makefile": makefile(project, host),
         project.root / "units.mk": units_mk(project),
@@ -462,6 +479,11 @@ def input_key(project: Project, host: Host) -> str:
         parts.extend([meta.split, meta.symbols, meta.baserom_sha1])
     # Contents, not just names: symbols.ld provides the address-named symbols these files spell.
     parts.extend(sorted(project.src.glob("*.c")))
+    parts.extend(sorted(project.src.glob("*.s")))
+    from unbake.decomp import original_asm
+
+    manifest = project.root / original_asm.MANIFEST
+    parts.append(manifest if manifest.is_file() else "no original asm")
     for include in project.include:
         parts.extend(sorted(include.rglob("*.h")))
     return cache.key(*parts)

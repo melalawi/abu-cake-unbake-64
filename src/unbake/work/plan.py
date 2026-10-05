@@ -32,6 +32,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
     result = []
     before = {(item.version, item.end): item for item in functions}
     shapes = {ident: shape.for_compiler(compiler) for ident, compiler in project.compilers.items()}
+    emitted = shape.emitters(project.compilers.values())
     for items in inventory.groups(functions, bodies):
         if all(item.kind == "c" for item in items):
             continue
@@ -40,12 +41,19 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         if aliases & excluded or any(item.kind == "c" for item in items):
             continue
         target = shapes[project.compiler_for(canonical.name).id]
-        if any(shape.classify(bodies[item.version, item.name], item.address, target)[0] != "drafter" for item in items):
+        if any(
+            shape.classify(bodies[item.version, item.name], item.address, target, emitted)[0] != "drafter"
+            for item in items
+        ):
             continue
         if any(
             (previous := before.get((item.version, item.start))) is not None
             and shape.tail(
-                bodies[item.version, previous.name], previous.address, bodies[item.version, item.name], target
+                bodies[item.version, previous.name],
+                previous.address,
+                bodies[item.version, item.name],
+                target,
+                emitted,
             )
             for item in items
         ):
@@ -79,6 +87,24 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
             )
         )
     return result
+
+
+def originals(project: Project) -> list[tuple[str, str]]:
+    """Unlanded original-asm functions as (name, rule evidence): asm in every holding version, one name, and an
+    original-asm route (work.shape.original) in each. They land as src/NAME.s, never as drafts."""
+    _, functions, bodies = inventory.inventory(project)
+    shapes = {ident: shape.for_compiler(compiler) for ident, compiler in project.compilers.items()}
+    emitted = shape.emitters(project.compilers.values())
+    result = []
+    for items in inventory.groups(functions, bodies):
+        names = {item.name for item in items}
+        if len(names) != 1 or any(item.kind != "asm" for item in items):
+            continue
+        target = shapes[project.compiler_for(items[0].name).id]
+        routes = [shape.classify(bodies[item.version, item.name], item.address, target, emitted) for item in items]
+        if all(route == "original" for route, _ in routes):
+            result.append((items[0].name, routes[0][1]))
+    return sorted(result)
 
 
 def _published_rows(project: Project) -> dict[str, tuple[tuple[str, ...], split.Function]]:
@@ -115,7 +141,8 @@ def ranked(project: Project, host: Host) -> list[rank.Candidate]:
 
 
 def next_action(project: Project, host: Host, *, undrafted: bool) -> Action:
-    """Continue existing work first (unless undrafted), then draft the best-ranked new function."""
+    """Continue existing work first (unless undrafted), then land an original-asm function, then draft the
+    best-ranked new function."""
     order = ranked(project, host)
     if not undrafted:
         for row in order:
@@ -128,6 +155,10 @@ def next_action(project: Project, host: Host, *, undrafted: bool) -> Action:
             best = f"{row.best_percent:.2f}%" if row.best_percent is not None else "not compared"
             reason = f"{row.function}: edit {file} (best {best}), then compare it"
             return Action(("compare", str(file)), reason, row.function)
+    landable = originals(project)
+    if landable:
+        name, evidence = landable[0]
+        return Action(("publish", "--original", name), f"{name}: original asm ({evidence}); land it as .s", name)
     for row in order:
         if row.carryover:
             continue

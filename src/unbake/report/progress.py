@@ -15,7 +15,9 @@ from unbake.report import files, readme_layout
 from unbake.report import units as report_units
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 1
+SCHEMA = 2
+# Row kinds that count as done, each its own objdiff progress category: matched C and original asm (.s).
+DONE = {"c": ("c", "Matched C", ".c"), "hasm": ("original_asm", "Original asm", ".s")}
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -274,7 +276,7 @@ def f32(value: float) -> float:
 
 def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
     size = row.end - row.start
-    matched = row.kind == "c"
+    matched = row.kind in DONE
     measures: dict[str, Any] = {
         "total_code": str(size),
         "matched_data_percent": 100.0,
@@ -301,7 +303,9 @@ def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
         )
     metadata: dict[str, Any] = {"complete": matched}
     if matched:
-        metadata["source_path"] = f"src/{row.path}.c"
+        category, _, suffix = DONE[row.kind]
+        metadata["source_path"] = f"src/{row.path}{suffix}"
+        metadata["progress_categories"] = [category]
     return {
         "name": row.name,
         "measures": measures,
@@ -323,14 +327,36 @@ def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
     }
     units = [_unit(row, best.get(row.name)) for row in rows]
     total = sum(row.end - row.start for row in rows)
-    matched_rows = [row for row in rows if row.kind == "c"]
+    matched_rows = [row for row in rows if row.kind in DONE]
     matched = sum(row.end - row.start for row in matched_rows)
     fuzzy_bytes = sum(
-        (row.end - row.start) * (100.0 if row.kind == "c" else best.get(row.name, 0.0)) / 100.0 for row in rows
+        (row.end - row.start) * (100.0 if row.kind in DONE else best.get(row.name, 0.0)) / 100.0 for row in rows
     )
 
     def share(part: float, whole: float) -> float:
         return f32(100.0 * part / whole) if whole else 0.0
+
+    categories = []
+    for kind, (ident, name, _) in DONE.items():
+        done = [row for row in rows if row.kind == kind]
+        size = sum(row.end - row.start for row in done)
+        categories.append(
+            {
+                "id": ident,
+                "name": name,
+                "measures": {
+                    "total_code": total,
+                    "matched_code": size,
+                    "matched_code_percent": share(size, total),
+                    "complete_code": size,
+                    "complete_code_percent": share(size, total),
+                    "total_functions": len(rows),
+                    "matched_functions": len(done),
+                    "total_units": len(rows),
+                    "complete_units": len(done),
+                },
+            }
+        )
 
     measures = {
         "fuzzy_match_percent": share(fuzzy_bytes, total),
@@ -348,7 +374,7 @@ def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
         "complete_units": len(matched_rows),
     }
     # Summary counters are native integers (what _native_counts reads back); unit rows keep objdiff's proto3 strings.
-    return {"measures": measures, "units": units, "version": 2}
+    return {"measures": measures, "units": units, "categories": categories, "version": 2}
 
 
 def findings(project: Project, policy: Host) -> list[str]:
@@ -416,7 +442,7 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
     reports = {name: reports[name] for name in descriptions}
     for version, document in reports.items():
         if "units" in document:
-            expected_units = [(row.name, row.kind == "c") for row in report_units.functions(project.version(version))]
+            expected_units = [(row.name, row.kind in DONE) for row in report_units.functions(project.version(version))]
             reported_units = [(unit["name"], unit.get("metadata", {}).get("complete")) for unit in document["units"]]
             if reported_units != expected_units:
                 raise Held("report", f"VERSION {version}: function rows changed; regenerate report")

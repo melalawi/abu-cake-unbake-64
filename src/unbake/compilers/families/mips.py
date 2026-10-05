@@ -44,7 +44,9 @@ def relocation_pairs(relocations: Iterable[Relocation]) -> list[tuple[Relocation
 O32_ENTRY_GPRS = frozenset({0, 4, 5, 6, 7, 28, 29, 31})
 O32_ENTRY_FPRS = frozenset({12, 13, 14, 15})
 # Every rule work.shape knows; a family leaves one out of Shape.rules when it does not hold for its compiler.
-RULES = frozenset({"filler", "frame", "call_ra", "isa", "entry_registers", "tail"})
+RULES = frozenset({"filler", "frame", "call_ra", "isa", "entry_registers", "tail", "cop0", "fcsr", "kreg"})
+# The original-asm rules (work.shape.original), a closed set: instructions no configured compiler emits from C.
+ORIGINAL_RULES = frozenset({"cop0", "fcsr", "isa", "kreg"})
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,17 @@ def isa_level(compiler: str, cflags: tuple[str, ...]) -> int:
     if not levels:
         raise Held("families", f"compilers.{compiler}.cflags: required -mipsN")
     return levels[-1]
+
+
+def emitters(shapes: Iterable[Shape]) -> Shape:
+    """What any of SHAPES (every configured compiler) can emit, for the original-asm rules: the highest ISA level
+    and only the rules every one of them switches on. Entry state, alignment and fragment size are not used."""
+    shapes = list(shapes)
+    if not shapes:
+        raise Held("families", "compilers: required at least one configured compiler")
+    first = shapes[0]
+    rules = frozenset.intersection(*(item.rules for item in shapes)) & ORIGINAL_RULES
+    return Shape(max(item.isa_level for item in shapes), first.entry_gprs, first.entry_fprs, 0, 0, rules)
 
 
 def o32_shape(compiler: str, cflags: tuple[str, ...], *, object_alignment: int, fragment_bytes: int) -> Shape:

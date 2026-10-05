@@ -17,7 +17,11 @@ if TYPE_CHECKING:
 
 class Ido:
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
-        """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments."""
+        """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments.
+
+        Original asm (probe: IDO 5.3 and 7.1 at -mips2): IDO emits no COP0 or cache instruction and never
+        allocates k0/k1; it touches FCSR only with cfc1/ctc1 $31 around a cvt.w.* conversion. So `cop0`, `fcsr`,
+        `kreg` and `isa` hold."""
         from unbake.compilers.families.mips import o32_shape
 
         return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64)

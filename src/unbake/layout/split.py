@@ -142,6 +142,8 @@ SYMBOL = re.compile(rf"^\s*(?P<name>[A-Za-z_]\w*)\s*=\s*(?P<address>{NUMBER})\s*
 
 
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Function rows: unmatched asm, published C, and landed original asm (hasm, decomp.original_asm).
+CODE_KINDS = ("asm", "c", "hasm")
 
 
 def name(value: object, label: str = "function") -> str:
@@ -414,7 +416,7 @@ def _functions(project: Project, v: str) -> list[Function]:
     result = []
     for segment in segments:
         for index, row in enumerate(segment.rows):
-            if row.kind not in ("asm", "c"):
+            if row.kind not in CODE_KINDS:
                 continue
             vram_address = address(row, version.split)
             stem = Path(row.path).name

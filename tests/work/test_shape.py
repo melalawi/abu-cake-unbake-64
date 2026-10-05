@@ -5,6 +5,7 @@ import unittest
 
 from unbake.compilers.families.gcc import Gcc
 from unbake.compilers.families.ido import Ido
+from unbake.compilers.families.mips import emitters
 from unbake.config import Held
 from unbake.work import shape
 
@@ -13,6 +14,7 @@ SHAPES = {
     "gcc-2.8.1-sn64": Gcc().shape("gcc-2.8.1-sn64", ("-G0", "-mips3", "-O2", "-mgp32", "-mfp64")),
     "ido-7.1": Ido().shape("ido-7.1", ("-c", "-G0", "-non_shared", "-mips2", "-O2")),
 }
+EMITTED = emitters(SHAPES.values())
 EPILOGUE = "8fbf0014 27bd0018 03e00008 00000000"
 FRAMED = "27bdffe8 afbf0014 0c000000 00000000 " + EPILOGUE
 OPCODE64 = "64840001 03e00008 00000000"
@@ -46,7 +48,7 @@ class ShapeRuleTests(unittest.TestCase):
         for ident, target in SHAPES.items():
             for name, ((text, address), (route, evidence)) in {**SHARED, "isa": PER_ADAPTER[ident]}.items():
                 with self.subTest(ident=ident, case=name):
-                    got = shape.classify(words(text), address, target)
+                    got = shape.classify(words(text), address, target, EMITTED)
                     self.assertEqual(got[0], route, got[1])
                     self.assertIn(evidence, got[1])
 
@@ -63,7 +65,7 @@ class ShapeRuleTests(unittest.TestCase):
             with self.subTest(rule):
                 target = dataclasses.replace(base, rules=base.rules - {rule})
                 (text, address), _ = SHARED[case]
-                self.assertEqual(shape.classify(words(text), address, target)[0], route)
+                self.assertEqual(shape.classify(words(text), address, target, EMITTED)[0], route)
 
     def test_adapter_fields_come_from_the_compiler_flags(self) -> None:
         cases = [
@@ -82,7 +84,7 @@ class ShapeRuleTests(unittest.TestCase):
     def test_a_frameless_row_after_a_body_with_no_return_is_its_tail(self) -> None:
         owner, cut = words("c4a20004 c4c00008 46001082"), words("46010002 46001081 03e00008 e4820008")
         target = SHAPES["gcc-2.8.1-sn64"]
-        self.assertTrue(shape.tail(owner, 0x80272018, cut, target))
-        self.assertFalse(shape.tail(words(EPILOGUE), 0x80272018, cut, target))
-        self.assertFalse(shape.tail(owner, 0x80272018, words(FRAMED), target))
-        self.assertFalse(shape.tail(owner, 0x80272018, cut, dataclasses.replace(target, rules=frozenset())))
+        self.assertTrue(shape.tail(owner, 0x80272018, cut, target, EMITTED))
+        self.assertFalse(shape.tail(words(EPILOGUE), 0x80272018, cut, target, EMITTED))
+        self.assertFalse(shape.tail(owner, 0x80272018, words(FRAMED), target, EMITTED))
+        self.assertFalse(shape.tail(owner, 0x80272018, cut, dataclasses.replace(target, rules=frozenset()), EMITTED))

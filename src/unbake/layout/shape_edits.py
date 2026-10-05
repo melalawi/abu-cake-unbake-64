@@ -62,6 +62,7 @@ def scan(job: tuple[Project, str]) -> Scan:
     _, symbols = split.symbols(config.symbols)
     segment_of = {row.start: id(segment) for segment in split.layout(config.split)[2] for row in segment.rows}
     targets = {ident: shape.for_compiler(compiler) for ident, compiler in project.compilers.items()}
+    emitted = shape.emitters(project.compilers.values())
     taken = {entry[0] for entry in symbols.values()}
     found, blocked = [], []
     for index, row in enumerate(rows):
@@ -76,7 +77,7 @@ def scan(job: tuple[Project, str]) -> Scan:
             and previous.kind == "asm"
             and previous.end == row.start
             and segment_of[previous.start] == segment_of[row.start]
-            and shape.tail(image[previous.start : previous.end], previous.address, data, target)
+            and shape.tail(image[previous.start : previous.end], previous.address, data, target, emitted)
         ):
             found.append(Finding(version, "tail", name, row.start, row.address, owner=Path(previous.path).name))
             continue

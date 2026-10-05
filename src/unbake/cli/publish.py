@@ -17,6 +17,10 @@ update layout.toml, commit "Match FUNC" and push. A file that does not prove is 
 
   unbake publish build/work/func_80012345/func_80012345.c
   unbake publish build/work/a/a.c build/work/b/b.c
+  unbake publish --original osInvalDCache
+
+--original lands an original-asm function (one no configured compiler emits from C) as byte-exact
+src/FUNC.s, records its rule in unbake-original-asm.json and commits "Original asm FUNC".
 
 Pushing needs [publish] in unbake.toml (remote, branch, author, credential).
 """
@@ -28,18 +32,25 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 
 def register(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("files", type=Path, nargs="+", metavar="FILE")
+    parser.add_argument("files", type=Path, nargs="*", metavar="FILE")
+    parser.add_argument(
+        "--original", action="append", default=[], metavar="FUNC", help="Land an original-asm function as src/FUNC.s."
+    )
     parser.add_argument("--no-push", action="store_true", help="Commit but leave pushing to a later run.")
 
 
 def run(context: Context) -> Result:
     from unbake import land
+    from unbake.config import Held
 
+    if not context.args.files and not context.args.original:
+        raise Held("publish", "publish: name a FILE or --original FUNC")
     done = land.publish(
         context.project(),
         context.require_host(),
         [path.resolve() for path in context.args.files],
         push=not context.args.no_push,
+        originals=tuple(context.args.original),
     )
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)

@@ -205,7 +205,8 @@ def _extract(project: Project, host: Host) -> None:
 def _progress_key(project: Project, host: Host) -> str:
     from unbake.report import progress
 
-    return key("progress", str(progress.SCHEMA), project.root / "layout.toml", *sorted(project.src.glob("*.c")))
+    sources = sorted([*project.src.glob("*.c"), *project.src.glob("*.s")])
+    return key("progress", str(progress.SCHEMA), project.root / "layout.toml", *sources)
 
 
 def _progress(project: Project, host: Host) -> None:

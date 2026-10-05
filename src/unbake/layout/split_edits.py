@@ -24,7 +24,7 @@ def align(project: Project, v: str, function: str, value: object) -> list[split.
         row
         for segment in segments
         for row in segment.rows
-        if row.kind in ("asm", "c") and Path(row.path).name == function
+        if row.kind in split.CODE_KINDS and Path(row.path).name == function
     ]
     if len(rows) != 1:
         raise Held("split", f"function {function}: align requires one text row in VERSION {v}")

@@ -1,7 +1,7 @@
 """The extract step: splat per version into the shared cache, for drafting, explaining and symbol tables.
 
 The build never uses this output (unmatched code is copied from the ROM). Splat runs with every
-C row turned back into assembly, so landing a function never changes the extraction key.
+C and original-asm row turned back into assembly, so landing a function never changes the extraction key.
 The unpacked directory holds asm/, include/, splat_symbols.csv and symbol-addresses.txt.
 """
 
@@ -24,7 +24,8 @@ from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
 
 _FINGERPRINT_PARTS = ("extract.py",)
-_C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)c(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)
+# A landed row (c, or hasm for original asm) goes back to asm for splat.
+_C_ROW = re.compile(r"^(\s*-\s*\[\s*(?:0[xX][\da-fA-F]+|\d+)\s*,\s*)(?:c|hasm)(\s*,\s*)([^,\]\n]+)([^\n]*\]\s*)$", re.M)
 _ALIGN = re.compile(
     r"^(\s*-\s*\[\s*(?:0x[\da-fA-F]+|\d+)\s*,\s*(?:asm|c)\s*,\s*[^,\]\n]+)"
     r",\s*\{\s*align:\s*(?:0x[\da-fA-F]+|\d+)\s*\}(\s*\]\s*)$",
@@ -38,7 +39,7 @@ def scalar(text: str) -> str:
 
 
 def assembly_rows(text: str) -> str:
-    """The split with every C row as assembly and no alignment annotations (splat's own syntax)."""
+    """The split with every C and hasm row as assembly and no alignment annotations (splat's own syntax)."""
     text = _ALIGN.sub(lambda match: match[1] + match[2], text)
     return _C_ROW.sub(lambda match: match[1] + "asm" + match[2] + match[3] + match[4], text)
 
