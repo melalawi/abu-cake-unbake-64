@@ -47,3 +47,25 @@ class DraftFileTests(ProjectCase):
             self.run_draft(refused)
         self.assertEqual(raised.exception.key, "alpha")
         self.assertFalse((self.project.work / "alpha" / "alpha.c").exists())
+
+    def test_published_offset_helpers_become_shared_fields_in_the_draft(self) -> None:
+        from unbake.work import compare
+
+        (self.project.src / "alpha.c").write_text(
+            '#include "types.h"\n'
+            "#define FIELD(p, t, o) (*(t *)((s8 *)(p) + (o)))\n"
+            "#define AT(t, p, o) (*(t *)((char *)(p) + (o)))\n"
+            "#define M2C_FIELD(p, t, o) (*(t)((u8 *)(p) + (o)))\n"
+            "s32 alpha(void *p) { FIELD(p, s32, 4) = AT(s32, p, 8); "
+            "return M2C_FIELD(p, s32 *, -4); }\n"
+        )
+        with patch.object(compare, "published", return_value=True):
+            text = draft.published_seed(self.project, "alpha")
+        self.assertIsNotNone(text)
+        self.assertNotIn("#define", text)
+        self.assertNotIn("M2C_FIELD", text)
+        self.assertIn("->value", text)
+        self.assertIn("[-1].value", text)
+        header = self.project.work / "alpha/include/common/draft_fields_alpha.h"
+        self.assertIn("padding[8]", header.read_text())
+        self.assertFalse((self.project.include[0] / "common/draft_fields_alpha.h").exists())

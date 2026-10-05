@@ -16,3 +16,49 @@ def resolve(text: str) -> str:
     text = _TYPEDEF.sub("", text)
     text = _USE.sub(lambda match: names.get(match[0], match[0]), text)
     return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def fields(text: str) -> str:
+    """Canonicalize local scalar offset helpers before shared field lowering.
+
+    Only the measured dereference shape is accepted. Other macros retain their
+    meaning and are left for the source guard to refuse.
+    """
+    from unbake.decomp.draft_macros import calls
+
+    helpers = {}
+    definition = re.compile(r"^\s*#\s*define\s+(\w+)\(([^\n)]*)\)\s+([^\n]+)$", re.M)
+    for match in definition.finditer(text):
+        params = [value.strip() for value in match[2].split(",")]
+        if len(params) != 3 or any(not re.fullmatch(r"[A-Za-z_]\w*", param) for param in params):
+            continue
+        body = re.sub(r"\s+", "", match[3])
+        for base, type_, offset in ((0, 1, 2), (1, 0, 2)):
+            b, t, o = params[base], params[type_], params[offset]
+            for byte in ("char", "s8", "u8"):
+                for pointer in (False, True):
+                    cast = t if pointer else t + "*"
+                    if body == f"(*({cast})(({byte}*)({b})+({o})))":
+                        helpers[match[1]] = (base, type_, offset, pointer)
+    if not helpers:
+        return text
+    text = definition.sub(lambda match: "" if match[1] in helpers else match[0], text)
+    for name, (base, type_, offset, pointer) in helpers.items():
+
+        def canonical(
+            args: list[str],
+            name: str = name,
+            base: int = base,
+            type_: int = type_,
+            offset: int = offset,
+            pointer: bool = pointer,
+        ) -> str:
+            if len(args) != 3:
+                from unbake.config import Held
+
+                raise Held("draft", f"unresolved {name}(" + ", ".join(args) + ")")
+            type_name = args[type_] if pointer else args[type_] + " *"
+            return f"M2C_FIELD({args[base]}, {type_name}, {args[offset]})"
+
+        text = calls(text, name, canonical)
+    return text

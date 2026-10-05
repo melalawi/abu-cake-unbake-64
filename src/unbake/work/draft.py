@@ -35,7 +35,7 @@ def published_seed(project: Project, function: str) -> str | None:
 
     That text is the draft of a published unit: landing it again republishes the unit once it is exact and clean.
     """
-    from unbake.decomp import checks, prelude
+    from unbake.decomp import checks, field_access, prelude
     from unbake.work import compare
 
     if not compare.published(project, function):
@@ -43,7 +43,17 @@ def published_seed(project: Project, function: str) -> str | None:
     source = project.src / f"{function}.c"
     if not checks.unmarked(source):
         raise Held("draft", f"draft.published: {function}: {source} is published and breaks no source rule")
-    return prelude.resolve(source.read_text())
+    text = prelude.fields(prelude.resolve(source.read_text()))
+    if "M2C_FIELD(" not in text:
+        return text
+    # Published helpers measure scalar storage, not aggregate identity. Avoid
+    # reparsing the entire solved context for these explicitly typed accesses.
+    local = draft_view(project, function)
+    text, shared = field_access.share(local, function, text, "")
+    if shared is not None:
+        relative = shared.relative_to(local.include[0]).as_posix()
+        text = f'#include "{relative}"\n' + text
+    return text
 
 
 def draft(project: Project, host: Host, function: str, *, replace: bool) -> Drafted:
