@@ -98,6 +98,6 @@ class Context:
         tokens = ["unbake"]
         if self.root is not None and not Path.cwd().resolve().is_relative_to(self.root):
             tokens += ["--project", str(self.root)]
-        if self.config_path is not None:
+        if self.config_path is not None and self.config_path != config.host_path(None):
             tokens += ["--config", str(self.config_path)]
         return shlex.join([*tokens, *(str(word) for word in words)])
