@@ -246,7 +246,8 @@ SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes stat
   skip=$(word 1,$($(VER).S.$(*F))) count=$(word 2,$($(VER).S.$(*F)))
 """
 
-# Every version's units, slices and ROM are targets of one make, so -jN spreads over all of them.
+# Every version's units, slices and ROM are targets of one make, so -jN spreads over all of them. A slice is named
+# by its start only, so it is cut again whenever slices.mk changes (a new unit can shorten it).
 VERSION_RULES = r"""define VERSION_RULES
 build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas
 	$$(Q)$$(UNIT_KEY)
@@ -254,7 +255,7 @@ build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(N
 	$$(Q)$$(UNIT_BIN)
 build/$1/hasm/%.bin: src/%.s versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
 	$$(Q)$$(HASM_BIN)
-build/$1/slices/%.bin: $$($1.BASEROM) | build/$1/slices
+build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk | build/$1/slices
 	$$(Q)$$(SLICE)
 build/$1/$$(NAME).z64: $$($1.PIECES)
 	$$(Q)printf '%s\n' '$1 rom'; cat $$($1.PIECES) > $$@

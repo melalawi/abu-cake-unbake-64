@@ -115,6 +115,7 @@ def _disassemble(host: Host, data: bytes, address: int, work: Path) -> list[str]
         [
             str(host.mips_objdump),
             "-D",
+            "-z",
             "-b",
             "binary",
             "-m",

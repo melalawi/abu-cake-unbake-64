@@ -55,6 +55,8 @@ NEAR_MISSES = {
     "mtc0 bits in a body with no return": "40846000 00000000 00000000",
     "cache bits in a body with no return": "bd010000 00000000",
     "k0 bits in a body with no return": "3c1a8000 275a0000",
+    "RW us func_8043C72C_us: one stray word naming k0 before compiled code": "6b540000 00803021 " + JR_RA,
+    "k1 read with no write (k1 set by the exception vector)": "03601025 " + JR_RA,
 }
 # (words, emitted) -> rule; each fires on exactly its instruction.
 POSITIVES = {
@@ -71,7 +73,7 @@ POSITIVES = {
     "RW de __osSetFpcCsr (cfc1; ctc1 $31)": ("4442f800 44c4f800 " + JR_RA, "fcsr"),
     "cfc1 $31 alone": ("4442f800 " + JR_RA, "fcsr"),
     "k0 jump target": ("3c1a8011 275a16a0 03400008 00000000", "kreg"),
-    "k1 read": ("03601025 " + JR_RA, "kreg"),
+    "k1 set then read": ("241b0001 03601025 " + JR_RA, "kreg"),
 }
 
 

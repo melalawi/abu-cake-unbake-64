@@ -119,10 +119,18 @@ def _converts(word: int) -> bool:
     return word >> 26 == 17 and (word >> 21) & 31 in (16, 17, 20, 21) and word & 63 in _CONVERSIONS
 
 
-def _kreg(word: int) -> bool:
-    """A GPR operand is k0 or k1 ($26, $27): reserved for the kernel, never allocated by a compiler."""
-    reads, writes, _, _ = _registers(word)
-    return bool((reads | writes) & {26, 27})
+def _kreg(words: list[int]) -> int | None:
+    """The index of the first read of k0 or k1 ($26, $27) that an earlier instruction in the body wrote, or None.
+
+    Compilers never allocate the kernel registers. A def-use pair is required, so one stray data word whose
+    fields happen to name $26 (a row cut a word early) is not enough."""
+    written: set[int] = set()
+    for index, word in enumerate(words):
+        reads, writes, _, _ = _registers(word)
+        if reads & written:
+            return index
+        written |= writes & {26, 27}
+    return None
 
 
 def _returns(word: int) -> bool:
@@ -137,7 +145,7 @@ def original(words: list[int], emitted: Shape) -> Original | None:
     each only where every configured compiler's family switches it on:
     `cop0`: a COP0 move, TLB op, eret or cache (other op-16 words are not code).
     `fcsr`: cfc1/ctc1 on $31 with no float conversion in the body (compilers touch FCSR only around one).
-    `kreg`: k0 or k1 as an operand.
+    `kreg`: k0 or k1 written, then read (a def-use pair, never one stray word).
     `isa`: an opcode above the highest configured -mipsN."""
     if not any(_returns(word) for word in words):
         return None
@@ -151,10 +159,9 @@ def original(words: list[int], emitted: Shape) -> Original | None:
             name = _fcsr(word)
             if name:
                 return Original("fcsr", f"{name} $31 at +0x{index * 4:X} with no float conversion")
-    if "kreg" in rules:
-        for index, word in enumerate(words):
-            if _kreg(word):
-                return Original("kreg", f"k0/k1 operand at +0x{index * 4:X}")
+    used = _kreg(words) if "kreg" in rules else None
+    if used is not None:
+        return Original("kreg", f"k0/k1 set and read at +0x{used * 4:X}")
     if "isa" in rules and emitted.isa_level < 3:
         for index, word in enumerate(words):
             if word >> 26 in _MIPS3_OPS or (word >> 26 == 0 and word & 63 in _MIPS3_SPECIAL):

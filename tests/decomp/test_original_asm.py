@@ -126,6 +126,8 @@ class BuildAndProgressTests(OriginalAsmCase):
         makefile = buildfiles.makefile(project, self.host)
         self.assertIn("build/$1/hasm/%.bin: src/%.s", makefile)
         self.assertIn("HASM_ASFLAGS := -EB -mips2 -G0", makefile)
+        # A new unit shortens the slice before it: slices are cut again when slices.mk changes.
+        self.assertIn("build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk", makefile)
 
     def test_original_asm_counts_as_done_in_its_own_category(self) -> None:
         rows = {
