@@ -28,6 +28,8 @@ def resolve(project: Project, host: Host, file: Path, configured: object) -> tup
         return Choice(own, "configured compiler is exact", (own,)), configured
     results: dict[str, Compared] = {}
     eliminated: dict[str, str] = {}
+    if isinstance(configured, Held) and configured.key == "link.undefined":
+        raise configured  # a symbol no version provides fails the same under every compiler
     if isinstance(configured, Held):
         eliminated[own] = configured.reason.splitlines()[0]
     elif isinstance(configured, Compared):

@@ -7,6 +7,7 @@ objects to build/<v>/src/UNIT.o (make keys its own under build/cas); drafts writ
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -43,7 +44,10 @@ def compile_unit(
         raise Held("compile", f"compile.source: {file}: missing file")
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host), non_matching=non_matching)
-    preprocessed = process.run_tool(list(commands.preprocess), project.root, "compile")
+    try:
+        preprocessed = process.run_tool(list(commands.preprocess), project.root, "compile")
+    except Held as error:
+        raise Held("compile", f"compile.{Path(unit).name}: {source}: {error.reason}") from error
     absolute_cc = str(project.compiler_for(unit).cc)
     compile_argv = [absolute_cc, *commands.compile[1:]]
     content_key = cache.key(
@@ -66,7 +70,10 @@ def compile_unit(
                 process.run_tool(list(commands.assemble), work, "compile")
             atomic_files.copyfile(work / f"{name}.o", destination)
 
-    cached = cache.Cache(host.cache_root).produce("object", content_key, make)
+    try:
+        cached = cache.Cache(host.cache_root).produce("object", content_key, make)
+    except Held as error:
+        raise Held("compile", f"compile.{name}: {source}: {error.reason}") from error
     output = object_path(project, version, unit, file)
     output.parent.mkdir(parents=True, exist_ok=True)
     if not output.is_file() or output.read_bytes() != cached.read_bytes():
@@ -117,27 +124,71 @@ def place(
     return [line[len(prefix) :] for line in result.stderr.splitlines() if line.startswith(prefix)]
 
 
-def link(project: Project, host: Host, placed: Path, version: str, row: split.Function, work: Path) -> bytes:
-    """Link the placed object alone at its address and return its .text bytes."""
+_PROVIDED = re.compile(r"^PROVIDE\((\w+) = ", re.M)
+
+
+def provided(path: Path) -> frozenset[str]:
+    """The names a version's symbols.ld provides."""
+    return cache.parsed("runner.provided", path, lambda: frozenset(_PROVIDED.findall(path.read_text())))
+
+
+def undefined(placed: Path) -> set[str]:
+    """The strong global symbols the placed object references but does not define."""
+    from unbake.objects import elf
+
+    return {
+        symbol["name"]
+        for symbols in elf.Object(placed).symbols.values()
+        for symbol in symbols
+        if symbol["section"] == 0 and symbol["name"] and symbol["info"] >> 4 == 1
+    }
+
+
+def derived_symbols(names: set[str], known: frozenset[str], version: str, source: Path) -> list[str]:
+    """--defsym for each missing address-named symbol at the address its name encodes (the rule symbols.ld
+    applies to published C); refused naming the source and every other missing symbol."""
+    from unbake import buildfiles
+
+    missing = sorted(names - known)
+    unknown = [name for name in missing if buildfiles.named_address(name) is None]
+    if unknown:
+        raise Held(
+            "link",
+            f"link.undefined: {source}: VERSION {version}: {', '.join(unknown)} "
+            f"in neither versions/{version}/symbols.ld nor an address name",
+        )
+    return [f"--defsym={name}=0x{buildfiles.named_address(name):08X}" for name in missing]
+
+
+def link(
+    project: Project, host: Host, placed: Path, version: str, row: split.Function, work: Path, source: Path
+) -> bytes:
+    """Link the placed object alone at its address and return its .text bytes; a link failure is a refusal
+    naming SOURCE."""
     elf = work / "unit.elf"
     binary = work / "unit.bin"
     script = project.root / "versions" / version / f"{project.name}.ld"
     if not script.is_file():
         raise Held("compile", f"build.link_script: {script} is missing; run unbake recompute buildfiles")
-    process.run_tool(
-        [
-            str(host.mips_ld),
-            "-EB",
-            "-T",
-            str(script),
-            f"--section-start=.text=0x{row.address:X}",
-            "-o",
-            str(elf),
-            str(placed),
-        ],
-        project.root,
-        "link",
-    )
+    derived = derived_symbols(undefined(placed), provided(symbols_file(project, version)), version, source)
+    try:
+        process.run_tool(
+            [
+                str(host.mips_ld),
+                "-EB",
+                "-T",
+                str(script),
+                f"--section-start=.text=0x{row.address:X}",
+                *derived,
+                "-o",
+                str(elf),
+                str(placed),
+            ],
+            project.root,
+            "link",
+        )
+    except Held as error:
+        raise Held("link", f"link.failed: {source}: VERSION {version}: {error.reason}") from error
     process.run_tool(
         [str(host.mips_objcopy), "-O", "binary", "-j", ".text", str(elf), str(binary)], project.root, "link"
     )
@@ -145,14 +196,14 @@ def link(project: Project, host: Host, placed: Path, version: str, row: split.Fu
 
 
 def link_function(
-    project: Project, host: Host, obj: Path, version: str, row: split.Function
+    project: Project, host: Host, obj: Path, version: str, row: split.Function, source: Path
 ) -> tuple[bytes, list[str]]:
     """Score mode: the unit's linked words even when some constants are unproved, with those problems."""
     with tempfile.TemporaryDirectory(prefix="link-") as temporary:
         work = Path(temporary)
         placed = work / "placed.o"
         problems = place(project, host, obj, version, row, placed, score=True)
-        return link(project, host, placed, version, row, work), problems
+        return link(project, host, placed, version, row, work, source), problems
 
 
 def build_unit(project: Project, host: Host, unit: str, version: str) -> bytes:
@@ -166,7 +217,7 @@ def build_unit(project: Project, host: Host, unit: str, version: str) -> bytes:
         work = Path(temporary)
         placed = work / "placed.o"
         place(project, host, obj, version, row, placed, score=False)
-        data = link(project, host, placed, version, row, work)
+        data = link(project, host, placed, version, row, work, project.src / f"{unit}.c")
     if len(data) != row.end - row.start:
         raise Held("build", f"build.size: {unit} {version}: 0x{len(data):X} bytes for a 0x{row.end - row.start:X} row")
     return data

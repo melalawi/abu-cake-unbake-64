@@ -92,22 +92,27 @@ class ReaderTests(ProjectCase):
             with self.subTest(value):
                 self.assertEqual(progress.f32(value), expected)
 
-    def test_record_commits_only_when_a_derived_file_changed(self) -> None:
-        for status, expected in (("", None), (" M attempts.json\n", "c0ffee")):
-            with self.subTest(status=status):
+    def test_record_commits_only_when_an_attempt_changed_the_history(self) -> None:
+        row = {"attempts": 1, "best": {"us": 50.0}}
+        for label, before, after, expected in [
+            ("reports moved, no attempt", {"beta": row}, {"beta": row}, None),
+            ("first attempt", {}, {"beta": row}, ("c0ffee", ("beta",))),
+            ("another attempt", {"beta": row}, {"beta": {**row, "attempts": 2}}, ("c0ffee", ("beta",))),
+        ]:
+            with self.subTest(label):
                 calls: list[tuple[str, ...]] = []
 
-                def git(project, *args, env=None, status=status, calls=calls):
+                def git(project, *args, env=None, calls=calls):
                     calls.append(args)
-                    return {"status": status, "rev-parse": "c0ffee\n"}.get(args[0], "")
+                    return {"rev-parse": "c0ffee\n"}.get(args[0], "")
 
-                written = [attempts.summary_path(self.project)]
                 with (
-                    patch("unbake.report.progress.write", return_value=written),
+                    patch("unbake.report.progress.write", return_value=[self.project.root / "README.md"]),
+                    patch.object(attempts, "committed_documents", side_effect=[before, after]),
                     patch.object(land, "_git", side_effect=git),
                 ):
                     self.assertEqual(land.record(self.project, self.host), expected)
                 commits = [args for args in calls if "commit" in args]
                 self.assertEqual(len(commits), 0 if expected is None else 1)
                 if commits:
-                    self.assertIn("Record attempts", commits[0])
+                    self.assertIn("Record attempts: beta", commits[0])

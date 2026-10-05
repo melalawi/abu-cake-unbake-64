@@ -21,6 +21,13 @@ def after(context: Context, error: Held) -> str:
         return "stop: wait for the other writer named above to finish"
     if key.endswith("config.toml") or ".toml [" in error.reason.split(":", 1)[0]:
         return "stop: fix the project config.toml value named above"
+    if key.startswith("compile."):
+        # The unit's own C or a header it includes does not compile: an edit fixes it, `next` would not.
+        return "stop: fix the C source named above (or the header the compiler names) so it compiles"
+    if key.startswith("layout."):
+        # The map step renders layout.toml from the current split before any command reads it; what still
+        # refuses is an authored or proven group, which only an edit changes. `next` would reach it again.
+        return "stop: fix the layout.toml group named above"
     if context.command == "next":
         return f"stop: {error.reason}"
     return context.cmd("next")

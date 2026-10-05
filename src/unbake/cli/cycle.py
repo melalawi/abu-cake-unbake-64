@@ -17,8 +17,9 @@ build/work/FUNC/FUNC.c. Every time you save that file it is compared again by it
 is exact in every version is landed (ROM proof, commit, push) within seconds, while the others keep going.
 A published unit that breaks a source rule is a candidate too: its draft is its own src/ text, and once it is
 exact and clean it lands again as "Clean UNIT".
-At the end the attempt history is folded into attempts.json and committed as "Record attempts" with the
-progress reports it moves, so fuzzy progress and the ranking survive a fresh clone.
+At the end the attempt history is folded into attempts.json and committed as "Record attempts: FUNC, ..."
+with the progress reports it moves (only when an attempt changed it), so fuzzy progress and the ranking
+survive a fresh clone.
 
 stdout carries one JSON event per line. With a terminal on stderr you also see a live board; without
 one, choose the functions and the stop condition with flags.
@@ -33,10 +34,11 @@ Stop conditions: all-landed, idle:SECONDS (no save or land for that long), after
 
 Events: every line has v, seq, t and event, one of cycle.start, fn.queued, fn.draft.start,
 fn.draft.done, fn.edit, fn.compare.start, fn.compare.done (per-version percentages and the first
-difference), fn.exact, fn.landed, fn.land_failed, fn.committed, fn.pushed, fn.held, fn.failed,
-step.run, types.refreshed (types, headers and build files refreshed behind the drafts; untouched
-drafts are drafted again and the rest compared again), fn.recheck (a function landed before that refresh,
-measured again against the new headers) and cycle.end (what landed and the next command).
+difference), fn.exact, fn.landed, fn.land_failed, fn.committed, cycle.committed (attempts or generated
+files), fn.pushed, fn.held, fn.failed, step.run, types.refreshed (types, headers and build files refreshed
+behind the drafts; untouched drafts are drafted again and the rest compared again), fn.recheck (a
+function landed before that refresh, measured again against the new headers) and cycle.end (what landed
+and the next command).
 
 Exit codes: 0 everything picked landed and was pushed; 1 something was held, failed, is unpushed or no
 longer matches after a refresh (cycle.regressed); 130 interrupted.

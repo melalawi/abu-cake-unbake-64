@@ -287,6 +287,18 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
                         name, next(v for v, candidate in item["versions"].items() if candidate is body), selected, value
                     ) or value.get("origins") == [{"id": f"param:{name}:{selected}", "offset": 0}]:
                         return_incomplete = True
+        supplied = [
+            {
+                reg
+                for reg, value in call["arguments"].items()
+                if value.get("defined", False)
+                and (
+                    value.get("origins") != [{"id": f"param:{call['function']}:{reg}", "offset": 0}]
+                    or reg in inputs.get((call["function"], call["version"]), set())
+                )
+            }
+            for call in calls.get(name, [])
+        ]
         output[name] = {
             "registers": sorted(regs),
             "caller_registers": sorted(caller_regs),
@@ -325,24 +337,9 @@ def abi(facts: dict[str, Any], declared_returns: dict[str, str] | None = None) -
                 for caller in {call["function"] for call in calls.get(name, [])}
             },
             "unproven_return_reads": sorted(used_returns - return_regs),
-            "argument_slots": sorted(
-                set.intersection(
-                    *(
-                        {
-                            reg
-                            for reg, value in call["arguments"].items()
-                            if value.get("defined", False)
-                            and (
-                                value.get("origins") != [{"id": f"param:{call['function']}:{reg}", "offset": 0}]
-                                or reg in inputs.get((call["function"], call["version"]), set())
-                            )
-                        }
-                        for call in calls[name]
-                    )
-                )
-            )
-            if calls.get(name)
-            else [],
+            "argument_slots": sorted(set.intersection(*supplied)) if supplied else [],
+            # Any caller's supplied argument: a declaration may not say (void) to a call that passes one.
+            "caller_arguments": sorted(set().union(*supplied)),
             "inputs": {version: sorted(inputs[name, version]) for version in item["versions"]},
         }
     # A tail call inherits the callee return ABI. Cycles with no evidenced exit

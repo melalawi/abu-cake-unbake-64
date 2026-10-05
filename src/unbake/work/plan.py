@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from unbake.cache import Cache
 from unbake.config import Host, Project
@@ -11,6 +12,9 @@ from unbake.cycle import rank
 from unbake.decomp import checks, exclusions
 from unbake.layout import split
 from unbake.work import attempts, inventory, shape
+
+if TYPE_CHECKING:
+    from unbake.compilers.families.mips import Shape
 
 M2C_KINDS = ("sn64", "ido")
 
@@ -22,45 +26,65 @@ class Action:
     function: str | None
 
 
+Verdict = tuple["Shape", "Shape", tuple[tuple[bytes, int], ...], tuple[tuple[bytes, int, bytes], ...]]
+JOBS_PER_WORKER = 4
+
+
+def _drafters(job: list[Verdict]) -> list[bool]:
+    """Pool worker: per group, every version's words classify as drafter and none continues the row before it."""
+    return [
+        all(shape.classify(body, address, target, emitted)[0] == "drafter" for body, address in bodies)
+        and not any(shape.tail(previous, address, body, target, emitted) for previous, address, body in tails)
+        for target, emitted, bodies, tails in job
+    ]
+
+
 def candidates(project: Project, host: Host) -> list[rank.Candidate]:
     """Units not yet exact and clean: unmatched functions m2c can draft (complete bodies, one name in every
-    version, not excluded), and published units that break a source rule (drafted from their src/ text)."""
+    version, not excluded), and published units that break a source rule (drafted from their src/ text).
+    The word rules run in the worker pool, in chunks of groups."""
+    from unbake import pool
+
     excluded = exclusions.load(project)
     _, functions, bodies = inventory.inventory(project)
     carry = {name for name in attempts.functions(project) if attempts.path(project, name).is_file()}
     history = attempts.summaries(project)
-    result = []
     before = {(item.version, item.end): item for item in functions}
     shapes = {ident: shape.for_compiler(compiler) for ident, compiler in project.compilers.items()}
     emitted = shape.emitters(project.compilers.values())
-    for items in inventory.groups(functions, bodies):
-        if all(item.kind == "c" for item in items):
-            continue
+    picked: list[tuple[split.Function, tuple[split.Function, ...]]] = []
+    verdicts: list[Verdict] = []
+    for group in inventory.groups(functions, bodies):
+        items = tuple(group)
         canonical = min(items, key=lambda item: project.versions.index(item.version))
         aliases = {name for item in items for name in (item.name, *item.aliases)}
         if aliases & excluded or any(item.kind == "c" for item in items):
             continue
-        target = shapes[project.compiler_for(canonical.name).id]
-        if any(
-            shape.classify(bodies[item.version, item.name], item.address, target, emitted)[0] != "drafter"
-            for item in items
-        ):
-            continue
-        if any(
-            (previous := before.get((item.version, item.start))) is not None
-            and shape.tail(
-                bodies[item.version, previous.name],
-                previous.address,
-                bodies[item.version, item.name],
-                target,
-                emitted,
-            )
-            for item in items
-        ):
-            continue
         if any(item.name != canonical.name for item in items):
             continue
-        if project.compiler_for(canonical.name).kind not in M2C_KINDS:
+        compiler = project.compiler_for(canonical.name)
+        if compiler.kind not in M2C_KINDS:
+            continue
+        tails = []
+        for item in items:
+            previous = before.get((item.version, item.start))
+            if previous is not None:
+                tails.append((bodies[item.version, previous.name], previous.address, bodies[item.version, item.name]))
+        picked.append((canonical, tuple(items)))
+        verdicts.append(
+            (
+                shapes[compiler.id],
+                emitted,
+                tuple((bodies[item.version, item.name], item.address) for item in items),
+                tuple(tails),
+            )
+        )
+    size = max(1, -(-len(verdicts) // (pool.Pool.from_host(host).size * JOBS_PER_WORKER)))
+    chunks = [verdicts[start : start + size] for start in range(0, len(verdicts), size)]
+    drafters = [verdict for chunk in pool.run(host, _drafters, chunks) for verdict in chunk]
+    result = []
+    for (canonical, items), drafter in zip(picked, drafters, strict=True):
+        if not drafter:
             continue
         summary = history.get(canonical.name)
         result.append(
@@ -74,7 +98,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         )
     published = _published_rows(project)
     sources = [source for source in sorted(project.src.glob("*.c")) if source.stem in published]
-    for source in checks.dirty(Cache(host.cache_root), sources):
+    for source in checks.dirty(Cache(host.cache_root), sources, host):
         versions, row = published[source.stem]
         summary = history.get(source.stem)
         result.append(

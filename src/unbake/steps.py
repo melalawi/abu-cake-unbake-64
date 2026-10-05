@@ -7,8 +7,6 @@ runs them. Read-only commands use whatever the last run produced.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 import threading
@@ -118,9 +116,16 @@ class Step:
 
 
 def _rom_facts_key(project: Project, host: Host) -> str:
+    from unbake.layout import map as layout_map
     from unbake.typemap import mapping, storage
 
-    return key("rom-facts", str(mapping.SCHEMA), json.dumps(storage.map_inputs(project), sort_keys=True))
+    return key(
+        "rom-facts",
+        str(mapping.SCHEMA),
+        json.dumps(storage.map_inputs(project), sort_keys=True),
+        # layout.toml naming rows the split no longer holds is rendered again from the current split.
+        json.dumps(layout_map.stale(project)),
+    )
 
 
 def _rom_facts(project: Project, host: Host) -> None:
@@ -130,9 +135,9 @@ def _rom_facts(project: Project, host: Host) -> None:
     # Modules are ROM interval evidence: infer them before types and headers read the groups.
     layout_map.ensure(project)
     if (project.build / "map/facts.json").is_file():
-        mapping.refresh_map(project)
+        mapping.refresh_map(project, host)
     else:
-        mapping.map_program(project)
+        mapping.map_program(project, host)
 
 
 def _types_key(project: Project, host: Host) -> str:
@@ -332,15 +337,18 @@ def ensure(
 
 
 class Command:
-    """What one ensure changed, so a failed command publishes none of it: the steps it recorded (forgotten on
-    rollback) and layout.toml's bytes before its first rewrite (restored only while the file still holds what
-    this command wrote, so a concurrent merge-units write is never undone). Kept per process and thread on disk;
-    a later command rolls back the journal of a process that died."""
+    """The step one ensure is running, so an interrupted or failed step is run again: its record is forgotten.
+
+    Every completed step stands: it recorded the key of what it wrote, and the steps that publish layout.toml
+    (extract's shape edits, merge-units) commit it together with the split and symbol files. Restoring an
+    earlier layout.toml after such a step would name rows the split no longer has. A step that fails restores
+    its own files (shape edits and merge-units keep a backup; the map step writes layout.toml in one atomic
+    write). Kept per process and thread on disk; a later command rolls back the journal of a process that died."""
 
     def __init__(self, project: Project, path: Path | None = None) -> None:
         self.project = project
         self.path = path or project.build / "steps.journal" / f"{os.getpid()}-{threading.get_ident()}.json"
-        self.state: dict[str, object] = {"ran": [], "before": None, "after": None}
+        self.state: dict[str, str | None] = {"running": None}
         if path is not None:
             self.state = json.loads(path.read_text())
 
@@ -358,32 +366,15 @@ class Command:
                 pass
         return found
 
-    def _save(self) -> None:
+    def running(self, name: str | None) -> None:
+        """NAME starts (None: the step that was running finished and recorded its key)."""
+        self.state["running"] = name
         atomic_files.write(self.path, json.dumps(self.state).encode())
 
-    def ran(self, name: str, before: bytes | None, after: bytes | None) -> None:
-        ran = self.state["ran"]
-        assert isinstance(ran, list)
-        ran.append(name)
-        if before != after and self.state["after"] is None:
-            self.state["before"] = None if before is None else base64.b64encode(before).decode()
-        if before != after:
-            self.state["after"] = None if after is None else hashlib.sha256(after).hexdigest()
-        self._save()
-
     def rollback(self) -> None:
-        from unbake import lock
-
-        layout = self.project.root / "layout.toml"
-        with lock.publishing(self.project.root):
-            for name in self.state["ran"]:  # type: ignore[attr-defined]
-                forget(self.project, name)
-            after, before = self.state["after"], self.state["before"]
-            if after is not None and layout.is_file() and hashlib.sha256(layout.read_bytes()).hexdigest() == after:
-                if before is None:
-                    layout.unlink()
-                else:
-                    atomic_files.write(layout, base64.b64decode(str(before)))
+        name = self.state.get("running")
+        if name is not None:
+            forget(self.project, name)
         self.close()
 
     def close(self) -> None:
@@ -399,7 +390,6 @@ def _ensure(
     report: Callable[[StepResult], object] | None,
     command: Command,
 ) -> list[StepResult]:
-    layout = project.root / "layout.toml"
     requested = set(names := list(names))
     steps = order(names)
     # A step whose recorded output went missing or changed runs first: it regenerates from its recorded
@@ -420,7 +410,7 @@ def _ensure(
                     results.append(StepResult(name, step.trigger, False, 0.0))
                 continue
             trigger = f"an output is missing or changed: {', '.join(changed)}" if changed else step.trigger
-            before = layout.read_bytes() if layout.is_file() else None
+            command.running(name)
             try:
                 step.run(project, host)
             except Held:
@@ -432,13 +422,14 @@ def _ensure(
                 project,
                 name,
                 # These steps write their own inputs (types publishes the headers its source facts preprocess;
-                # extract applies shape edits to the split): the key after the run is the one the next command sees.
+                # extract applies shape edits to the split; rom-facts renders layout.toml): the key after the run
+                # is the one the next command sees.
                 step.key(project, host)
-                if name in ("extract", "types", "resident", "headers", "buildfiles")
+                if name in ("extract", "rom-facts", "types", "resident", "headers", "buildfiles")
                 else current,
                 None if step.outputs is None else _digests(project, step.outputs(project)),
             )
-            command.ran(name, before, layout.read_bytes() if layout.is_file() else None)
+            command.running(None)
             result = StepResult(name, trigger, True, time.monotonic() - started)
             results = [row for row in results if row.step != name or row.ran]
             results.append(result)

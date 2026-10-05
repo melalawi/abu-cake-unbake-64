@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -191,6 +193,11 @@ def _committed(project: Project) -> dict[str, Summary]:
         raise Held("work", f"{SUMMARY}: {target}: {error}") from error
 
 
+def committed_documents(project: Project) -> dict[str, dict[str, Any]]:
+    """attempts.json as it is on disk, by function (empty when absent)."""
+    return {name: summary.document() for name, summary in _committed(project).items()}
+
+
 def _logged(project: Project) -> list[str]:
     if not project.work.is_dir():
         return []
@@ -220,3 +227,62 @@ def write_summary(project: Project, rows: set[str]) -> Path:
     if not target.is_file() or target.read_bytes() != content:
         atomic_files.write(target, content)
     return target
+
+
+# Draft history moves with a rename: text files carry the new name; compiled objects are rebuilt, not carried.
+_TEXT = frozenset({".c", ".h", ".jsonl", ".json", ".txt", ".s", ".md"})
+
+
+@dataclass(frozen=True)
+class Carry:
+    old: Path
+    staged: Path
+    new: Path
+
+
+def stage_renames(project: Project, renamed: dict[str, str]) -> list[Carry]:
+    """Each renamed function's work directory, copied under its new name beside build/work (nothing live moves
+    yet): paths and text name the new function. Refused when the new name already has a work directory."""
+    carries = []
+    try:
+        for old, new in sorted(renamed.items()):
+            source = directory(project, old)
+            if not source.is_dir():
+                continue
+            target = directory(project, new)
+            if target.exists():
+                raise Held("work", f"attempts.rename: {target} exists; {source} cannot carry its history there")
+            staged = project.work / f".{new}.staged"
+            shutil.rmtree(staged, ignore_errors=True)
+            carries.append(Carry(source, staged, target))
+            word = re.compile(rf"\b{re.escape(old)}\b")
+            for path in sorted(source.rglob("*")):
+                if not path.is_file() or path.suffix not in _TEXT:
+                    continue
+                relative = Path(*(part.replace(old, new) for part in path.relative_to(source).parts))
+                atomic_files.text(staged / relative, word.sub(new, path.read_text(errors="replace")))
+            staged.mkdir(parents=True, exist_ok=True)
+    except BaseException:
+        discard(carries)
+        raise
+    return carries
+
+
+def install(carries: list[Carry]) -> None:
+    """Swap every staged directory in under its new name and drop the old one."""
+    for carry in carries:
+        os.rename(carry.staged, carry.new)
+        shutil.rmtree(carry.old)
+
+
+def discard(carries: list[Carry]) -> None:
+    for carry in carries:
+        shutil.rmtree(carry.staged, ignore_errors=True)
+
+
+def renamed_summary(project: Project, renamed: dict[str, str]) -> bytes | None:
+    """attempts.json with renamed functions under their new names; None when it names none of them."""
+    table = _committed(project)
+    if not table.keys() & renamed.keys():
+        return None
+    return encode({renamed.get(name, name): summary for name, summary in table.items()})

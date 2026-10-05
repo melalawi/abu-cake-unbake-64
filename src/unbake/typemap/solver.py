@@ -798,7 +798,7 @@ def input_key(project: Project, host: Host | None) -> str:
     from unbake.typemap import facts as source_facts
     from unbake.typemap.abi_facts import refine
 
-    facts = refine(project, refresh_map(project))
+    facts = refine(project, refresh_map(project, host))
     return _types_key(project, host, facts, source_facts.published_keys(project, host))
 
 
@@ -810,7 +810,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
 
     database = types_db.path(project)
     previous = types_db.summary(database) if database.is_file() else {}
-    facts = refine(project, refresh_map(project))
+    facts = refine(project, refresh_map(project, policy))
     fact_keys = source_facts.published_keys(project, policy)
     result = infer(
         project,

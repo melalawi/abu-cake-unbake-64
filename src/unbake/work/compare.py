@@ -94,7 +94,8 @@ def view_for(project: Project, file: Path, function: str) -> Project:
 
 
 def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ...] | None = None) -> Compared:
-    """Compare without recording an attempt (search variants use this)."""
+    """Compare without recording an attempt (search variants use this); a compile failure scores 0%, a link
+    failure refuses."""
     from unbake import runner
     from unbake.decomp import checks
 
@@ -110,7 +111,6 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
         target = split.words(project, row)
         try:
             obj = runner.compile_unit(view, host, file, version, unit=function)
-            linked, problems = runner.link_function(project, host, obj, version, row)
         except Held as error:
             results[version] = Compare(
                 version,
@@ -121,6 +121,8 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
                 0.0,
             )
             continue
+        # A link failure is a refusal naming the symbol and file, never a 0% compare.
+        linked, problems = runner.link_function(project, host, obj, version, row, file)
         result = compare_words(version, target, linked)
         if problems:
             result.typed["relocation"] += len(problems)

@@ -35,21 +35,27 @@ class StepRecordTests(TempCase):
     def test_step_key_follows_inputs_and_schema_not_tool_code(self) -> None:
         from unittest.mock import patch
 
+        from unbake.layout import map as layout_map
         from unbake.typemap import mapping, storage
 
-        def key(inputs: dict[str, str], schema: int) -> str:
-            with patch.object(storage, "map_inputs", return_value=inputs), patch.object(mapping, "SCHEMA", schema):
+        def key(inputs: dict[str, str], schema: int, stale: tuple[str, ...] = ()) -> str:
+            with (
+                patch.object(storage, "map_inputs", return_value=inputs),
+                patch.object(mapping, "SCHEMA", schema),
+                patch.object(layout_map, "stale", return_value=stale),
+            ):
                 return steps.STEPS["rom-facts"].key(self.project, SimpleNamespace())
 
         base = key({"config.toml": "a"}, 1)
         self.assertRegex(base, re.compile(r"^[0-9a-f]{64}$"))
-        for label, inputs, schema, changes in [
-            ("same inputs and schema", {"config.toml": "a"}, 1, False),
-            ("an input changed", {"config.toml": "b"}, 1, True),
-            ("the schema was bumped", {"config.toml": "a"}, 2, True),
+        for label, inputs, schema, stale, changes in [
+            ("same inputs and schema", {"config.toml": "a"}, 1, (), False),
+            ("an input changed", {"config.toml": "b"}, 1, (), True),
+            ("the schema was bumped", {"config.toml": "a"}, 2, (), True),
+            ("layout.toml names a row the split lost", {"config.toml": "a"}, 1, ("func_8020402C_de",), True),
         ]:
             with self.subTest(label):
-                self.assertEqual(key(inputs, schema) != base, changes)
+                self.assertEqual(key(inputs, schema, stale) != base, changes)
 
 
 class StepOrderTests(TempCase):
@@ -177,7 +183,7 @@ class DamagedOutputOrderTests(TempCase):
 
 
 class CommandJournalTests(TempCase):
-    """One command publishes all of its outputs or none, and an unexpected error names the step."""
+    """A failed or interrupted step runs again; every completed step stands; an unexpected error names the step."""
 
     def ensure(self, run: object) -> None:
         from unittest.mock import patch
@@ -189,51 +195,46 @@ class CommandJournalTests(TempCase):
 
         table = {
             "a": steps.Step("a", "a", lambda project, host: "1", write_layout),
-            "b": steps.Step("b", "b", lambda project, host: "1", run),
+            "b": steps.Step("b", "b", lambda project, host: "2", run),
         }
         with patch.object(steps, "STEPS", table), patch.object(steps, "order", lambda names: ["a", "b"]):
             steps.ensure(project, None, ["a", "b"])
 
-    def test_a_failing_later_step_rolls_back_an_earlier_step_and_the_record(self) -> None:
+    def test_a_failing_step_is_forgotten_and_completed_steps_stand(self) -> None:
         (self.root / "layout.toml").write_text("authored\n")
-
-        def missing(project: object, host: object) -> None:
-            open(self.root / "include" / "common" / "data.h")  # noqa: SIM115
-
-        with self.assertRaises(Held) as caught:
-            self.ensure(missing)
-        self.assertIn("steps.b: FileNotFoundError reading", caught.exception.reason)
-        self.assertIn("include/common/data.h", caught.exception.reason)
-        self.assertEqual((self.root / "layout.toml").read_text(), "authored\n")
         project = SimpleNamespace(build=self.root / "build", root=self.root)
-        self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), (None, None))
-        self.assertEqual(list((self.root / "build" / "steps.journal").glob("*.json")), [])
+        steps.record(project, "b", "old")
 
-    def test_a_concurrent_rewrite_of_layout_is_never_undone(self) -> None:
-        (self.root / "layout.toml").write_text("authored\n")
+        for label, error in (("error", FileNotFoundError), ("interrupt", KeyboardInterrupt)):
+            with self.subTest(label):
 
-        def merged_elsewhere(project: object, host: object) -> None:
-            (self.root / "layout.toml").write_text("merged by another command\n")
-            raise RuntimeError("held")
+                def failing(project: object, host: object, error: type[BaseException] = error) -> None:
+                    (self.root / "layout.toml").write_text("half-written by b\n")
+                    raise error("include/common/data.h")
 
-        with self.assertRaises(Held):
-            self.ensure(merged_elsewhere)
-        self.assertEqual((self.root / "layout.toml").read_text(), "merged by another command\n")
+                with self.assertRaises((Held, KeyboardInterrupt)) as caught:
+                    self.ensure(failing)
+                if label == "error":
+                    self.assertIn("steps.b: FileNotFoundError", str(caught.exception))
+                # a published its layout with its key; b reruns next time; nothing restores an older layout.
+                self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), ("1", None))
+                self.assertEqual((self.root / "layout.toml").read_text(), "half-written by b\n")
+                self.assertEqual(list((self.root / "build" / "steps.journal").glob("*.json")), [])
 
-    def test_a_dead_commands_journal_is_rolled_back_by_the_next(self) -> None:
-        project = SimpleNamespace(build=self.root / "build", root=self.root)
-        (self.root / "layout.toml").write_text("authored\n")
-        dead = steps.Command(project)
-        dead.path = self.root / "build" / "steps.journal" / "999999-1.json"
-        (self.root / "layout.toml").write_text("inferred\n")
-        steps.record(project, "a", "1")
-        dead.ran("a", b"authored\n", b"inferred\n")
+    def test_a_dead_commands_running_step_is_forgotten_by_the_next(self) -> None:
         from unittest.mock import patch
 
+        project = SimpleNamespace(build=self.root / "build", root=self.root)
+        steps.record(project, "a", "1")
+        steps.record(project, "b", "2")
+        dead = steps.Command(project)
+        dead.path = self.root / "build" / "steps.journal" / "999999-1.json"
+        dead.running("b")
         with patch.object(steps.os, "kill", side_effect=ProcessLookupError):
             for stale in steps.Command.stale(project):
                 stale.rollback()
-        self.assertEqual(((self.root / "layout.toml").read_text(), steps.recorded(project, "a")), ("authored\n", None))
+        self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), ("1", None))
+        self.assertFalse(dead.path.exists())
 
 
 class BootstrapTests(TempCase):

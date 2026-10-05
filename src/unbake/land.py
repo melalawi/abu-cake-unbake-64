@@ -97,20 +97,23 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
     )
 
 
-def record(project: Project, host: Host) -> str | None:
+def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
     """Cycle end: fold the attempt logs into attempts.json and commit it with the reports it moves.
 
-    Return the "Record attempts" commit, or None when no derived file changed.
-    """
+    Return the "Record attempts" commit and the functions whose history it records, or None when no attempt
+    changed attempts.json (report changes alone are committed with the other generated files)."""
     from unbake.report import progress
 
+    summary = attempts.summary_path(project)
+    before = attempts.committed_documents(project)
     paths = progress.write(project, host)
     steps.record(project, "progress", steps.STEPS["progress"].key(project, host))
-    relative = [str(path.relative_to(project.root)) for path in paths]
-    if not _git(project, "status", "--porcelain", "--", *relative).strip():
+    after = attempts.committed_documents(project)
+    functions = tuple(sorted(name for name in after if after[name] != before.get(name)))
+    if not functions:
         return None
-    _commit(project, host, paths, "Record attempts")
-    return _git(project, "rev-parse", "HEAD").strip()
+    _commit(project, host, sorted({*paths, summary}), "Record attempts: " + ", ".join(functions))
+    return _git(project, "rev-parse", "HEAD").strip(), functions
 
 
 def chosen_compiler(project: Project, function: str) -> str:
@@ -153,7 +156,7 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
             work = Path(temporary)
             placed = work / "placed.o"
             runner.place(project, host, obj, version, row, placed, score=False)
-            linked = runner.link(project, host, placed, version, row, work)
+            linked = runner.link(project, host, placed, version, row, work, file)
         if linked != split.words(project, row):
             raise Held("land", f"land.mismatch: {function} {version}: linked bytes differ from the ROM row")
     changed = {

@@ -29,6 +29,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("fn.landed", "function bytes versions seconds retried", ""),
         ("fn.land_failed", "function versions diagnostic returned_to_worker", ""),
         ("fn.committed", "function commit message", ""),
+        ("cycle.committed", "commit message functions", ""),
         ("fn.pushed", "commits remote branch ok", "error"),
         ("fn.held", "function key reason next", ""),
         ("fn.failed", "function key reason next", ""),

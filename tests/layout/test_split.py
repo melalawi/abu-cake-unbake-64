@@ -16,6 +16,7 @@ class ProjectFixture:
         self.root = root
         self.name = "fixture"
         self.build = root / "build"
+        self.work = self.build / "work"
         self.roms = root / "roms"
         self.roms.mkdir()
         self.versions = versions

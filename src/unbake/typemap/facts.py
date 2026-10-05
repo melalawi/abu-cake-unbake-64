@@ -56,6 +56,7 @@ class Snapshot:
         self._edges: dict[Path, tuple[Path, ...]] = {}
         self._closures: dict[tuple[Path, ...], tuple[Path, ...]] = {}
         self._digests: dict[Path, str] = {}
+        self._generated: frozenset[Path] | None = None
 
     def edges(self, path: Path) -> tuple[Path, ...]:
         found = self._edges.get(path)
@@ -83,6 +84,13 @@ class Snapshot:
             found = self._closures[roots] = tuple(sorted(seen))
         return found
 
+    def generated(self) -> frozenset[Path]:
+        if self._generated is None:
+            from unbake.layout import index
+
+            self._generated = frozenset(index.headers(self.project))
+        return self._generated
+
     def digest(self, path: Path) -> str:
         found = self._digests.get(path)
         if found is None:
@@ -109,8 +117,11 @@ def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snap
     parts: list[str | bytes] = [FACTS, str(SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
+    # Generated headers are written from the type solution these facts feed: keying on their bytes made every
+    # publish invalidate every source's facts and run the solve again. Their names stay in the key.
+    generated = snapshot.generated()
     for path in snapshot.closure(roots):
-        parts.extend((storage.relative(project, path), snapshot.digest(path)))
+        parts.extend((storage.relative(project, path), "generated" if path in generated else snapshot.digest(path)))
     return key(*parts)
 
 

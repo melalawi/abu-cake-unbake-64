@@ -6,7 +6,8 @@
   so the name keeps telling where the function starts in every version.
 - Tail: an asm row that continues the asm row before it (work.shape.tail) is folded into that row; its row
   and its symbols are deleted.
-Renames and folded tails are carried into layout.toml members and unbake-exclusions.json.
+Renames and folded tails are carried into layout.toml members and unbake-exclusions.json; a renamed function's
+draft history (build/work/FUNC/) and its attempts.json record move to the new name in the same publish.
 Refused (left as is, reported): a symbol already at the entry, rows in different segments, or a name that a
 published src/*.c uses. The build copies asm and data rows from the ROM, so bytes cannot change.
 """
@@ -23,7 +24,7 @@ from unbake import atomic as atomic_files
 from unbake.config import Held
 from unbake.decomp.exclusions import MANIFEST
 from unbake.layout import split
-from unbake.work import shape
+from unbake.work import attempts, shape
 
 if TYPE_CHECKING:
     from unbake.config import Host, Project
@@ -191,10 +192,17 @@ def run(project: Project, host: Host) -> list[str]:
     paths = [
         layout,
         project.root / MANIFEST,
+        attempts.summary_path(project),
         *(p for v in project.versions for p in (project.version(v).split, project.version(v).symbols)),
     ]
     backup = {path: path.read_bytes() for path in paths if path.is_file()}
+    # Draft history and attempt records move with a rename in the same publish: staged first, swapped in after
+    # the commit, discarded on any failure.
+    carries = attempts.stage_renames(project, renamed)
     try:
+        summary = attempts.renamed_summary(project, renamed)
+        if summary is not None:
+            atomic_files.write(attempts.summary_path(project), summary)
         for version, findings in kept.items():
             if not findings:
                 continue
@@ -206,10 +214,12 @@ def run(project: Project, host: Host) -> list[str]:
         generated = buildfiles.write(project_config.load(project.root), host)
         _commit(project, host, sorted({*backup, *generated}), kept, renamed)
     except BaseException:
+        attempts.discard(carries)
         for path, content in backup.items():
             atomic_files.write(path, content)
         buildfiles.write(project_config.load(project.root), host)
         raise
+    attempts.install(carries)
     for findings in kept.values():
         for f in findings:
             target = f"into {f.owner}" if f.kind == "tail" else f"+0x{f.skip:X} as {renamed.get(f.name, f.name)}"

@@ -12,13 +12,15 @@ from unbake.config import Held
 def run_tool(argv: list[str], work: Path, phase: str) -> str:
     """Run argv in work with a private TMPDIR and the C locale; return stdout or refuse with stderr."""
     environment = dict(os.environ, TMPDIR=str(work), TMP=str(work), TEMP=str(work), LC_ALL="C")
+    # The key names the phase and tool, never a machine path; callers that know the unit name it.
+    key = f"{phase}.{Path(argv[0]).name}"
     try:
         result = subprocess.run(argv, cwd=work, env=environment, capture_output=True, text=True)
     except OSError as error:
-        raise Held(phase, f"{argv[0]}: {error}") from error
+        raise Held(phase, f"{key}: {argv[0]}: {error}") from error
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
-        raise Held(phase, f"{argv[0]} exited {result.returncode}: {detail}")
+        raise Held(phase, f"{key}: {argv[0]} exited {result.returncode}: {detail}")
     return result.stdout
 
 

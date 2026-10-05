@@ -100,7 +100,7 @@ def prove(project: Project, host: Host, members: tuple[str, ...], source: str) -
                 obj = runner.compile_unit(project, host, file, version, unit=first)
                 placed = work / f"{version}.placed.o"
                 runner.place(project, host, obj, version, row, placed, score=False)
-                linked = runner.link(project, host, placed, version, row, work)
+                linked = runner.link(project, host, placed, version, row, work, file)
             except Held:
                 return False
             if linked != split.words(project, row):

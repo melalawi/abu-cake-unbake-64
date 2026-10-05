@@ -203,7 +203,7 @@ def assemble(project: Project, host: Host, text: str, row: split.Function, work:
     atomic_files.text(path, text)
     obj = work / "unit.o"
     process.run_tool([str(host.mips_as), *project.asflags, "-o", str(obj), str(path)], work, "original-asm")
-    return runner.link(project, host, obj, row.version, row, work)
+    return runner.link(project, host, obj, row.version, row, work, path)
 
 
 def write_source(project: Project, host: Host, row: split.Function, data: bytes, found: shape.Original) -> str:

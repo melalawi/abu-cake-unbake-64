@@ -147,6 +147,8 @@ def validate(
                 mirror.parent.mkdir(parents=True, exist_ok=True)
                 mirror.symlink_to(path)
     memo: dict[Path, frozenset[Path]] = {}
+    # Each VERSION's alias index once, not once per affected source.
+    owners = {version: split.owners_by_alias(project, version) for version in project.versions}
     view = replace(project, work_include=(staged_headers,))
     compiled = []
     jobs: list[tuple[Project, Host, Path, str, str]] = []
@@ -160,7 +162,8 @@ def validate(
                 file = staged_sources / source.name
                 atomic_files.write(file, own)
             jobs.extend(
-                (view, host, file, version, source.stem) for version in split.holding_versions(project, source.stem)
+                (view, host, file, version, source.stem)
+                for version in split.holding_versions(project, source.stem, owners)
             )
             compiled.append(source.stem)
         pool.run(host, _compile, jobs)
@@ -221,6 +224,22 @@ def missing(project: Project) -> list[str]:
             if name in generated and not (root / name).is_file():
                 absent.add(name)
     return sorted(absent)
+
+
+def absent(project: Project, functions: tuple[str, ...]) -> list[str]:
+    """Generated headers a draft context of FUNCTIONS includes and the tree lacks: the ones published sources and
+    present headers include (a draft context includes every header), and the group headers of FUNCTIONS."""
+    from unbake.layout import map as layout_map
+
+    root = project.include[0]
+    groups = layout_map.load(project).groups
+    generated = {path.relative_to(root).as_posix() for path in index.listed(project)}
+    generated |= {group.header for group in groups}
+    wanted = {group.header for group in groups if set(group.members) & set(functions)}
+    texts = [*project.src.glob("*.c"), *(path for include in project.include for path in include.rglob("*.h"))]
+    for path in texts:
+        wanted.update(_INCLUDE.findall(path.read_text(errors="replace")))
+    return sorted(name for name in wanted & generated if not (root / name).is_file())
 
 
 def journal_path(project: Project) -> Path:

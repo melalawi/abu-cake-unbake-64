@@ -102,6 +102,12 @@ _LINKER_ALIAS = re.compile(r"^//\s*unbake linker alias:\s*([A-Za-z_]\w*)\s*=\s*0
 _ADDRESS_NAMED = re.compile(r"\b(?:D|func)_([0-9A-F]{8})\b")
 
 
+def named_address(name: str) -> int | None:
+    """The vram an address-named symbol (D_XXXXXXXX, func_XXXXXXXX) encodes; None for any other name."""
+    match = _ADDRESS_NAMED.fullmatch(name)
+    return int(match[1], 16) if match else None
+
+
 def address_named(project: Project) -> dict[str, int]:
     """Names splat derives from a vram (D_XXXXXXXX, func_XXXXXXXX) that published C or headers spell."""
     names: dict[str, int] = {}

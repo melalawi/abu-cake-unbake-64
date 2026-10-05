@@ -60,7 +60,11 @@ class PublishedUnitTests(ProjectCase):
     def test_candidates_hold_both_and_the_ranker_mixes_them(self) -> None:
         self.publish("alpha", BROKEN)
         self.publish("beta", CLEAN.replace("alpha", "beta"))
-        found = {row.function: row for row in plan.candidates(self.project, self.host)}
+        with (
+            patch("unbake.pool.run", lambda host, fn, items: [fn(item) for item in items]),
+            patch("unbake.pool.Pool.from_host", return_value=type("P", (), {"size": 2})()),
+        ):
+            found = {row.function: row for row in plan.candidates(self.project, self.host)}
         self.assertEqual(sorted(found), ["alpha", "gamma"])
         self.assertEqual((found["alpha"].bytes, found["alpha"].versions), (12, ("us", "eu")))
         history = [rank.History("old", 12, True, 1.0)]

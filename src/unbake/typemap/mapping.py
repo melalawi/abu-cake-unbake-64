@@ -10,8 +10,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from unbake import inputs
-from unbake.config import Held, Project
+from unbake import inputs, pool
+from unbake.config import Held, Host, Project
 from unbake.decomp.indexed import indexed_references
 from unbake.extract import discovered_symbols, symbols_from
 from unbake.layout import split
@@ -23,11 +23,25 @@ from unbake.work import inventory as plan
 SCHEMA = 2
 
 
-def map_program(project: Project) -> dict[str, Any]:
-    return _map(project)
+JOBS_PER_WORKER = 4
 
 
-def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, Any]:
+def _analyses(job: tuple[dict[int, str], dict[int, list[str]], list[tuple[str, str, int, int, bytes]]]) -> list[Any]:
+    """Pool worker: the instruction analysis of each function of one VERSION's chunk."""
+    targets, symbols, rows = job
+    return [
+        Analysis(
+            canonical, version, address, start, [word for (word,) in struct.iter_unpack(">I", body)], targets, symbols
+        ).run()
+        for canonical, version, address, start, body in rows
+    ]
+
+
+def map_program(project: Project, host: Host) -> dict[str, Any]:
+    return _map(project, host)
+
+
+def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.monotonic()
     pinned = storage.map_inputs(project)
     images = {}
@@ -145,6 +159,7 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
     writer = shards.Writer(directory)
     reused = rescanned = 0
     try:
+        decided = []
         for row in inventory:
             canonical = names[row.version, row.name]
             body = bodies[row.version, row.name]
@@ -171,14 +186,33 @@ def _map(project: Project, previous: dict[str, Any] | None = None) -> dict[str, 
                 if not (accesses & changed_symbols[row.version] or branches & changed_targets[row.version] or indirect):
                     analysis = candidate
                     retained = True
+            decided.append((row, canonical, body, words, analysis, retained))
+        # Instruction analysis of every rescanned function runs in the worker pool, chunked per VERSION so each
+        # job ships that version's targets and symbols once.
+        missing: dict[str, list[int]] = {}
+        for index, (row, _, _, _, analysis, _) in enumerate(decided):
             if analysis is None:
+                missing.setdefault(row.version, []).append(index)
+        jobs, owners = [], []
+        size = max(1, -(-sum(map(len, missing.values())) // (pool.Pool.from_host(host).size * JOBS_PER_WORKER)))
+        for version, indices in missing.items():
+            for start in range(0, len(indices), size):
+                chunk = indices[start : start + size]
+                rows_ = [
+                    (decided[i][1], version, decided[i][0].address, decided[i][0].start, decided[i][2]) for i in chunk
+                ]
+                jobs.append((targets[version], symbols[version], rows_))
+                owners.append(chunk)
+        for chunk, results in zip(owners, pool.run(host, _analyses, jobs), strict=True):
+            for index, analysis in zip(chunk, results, strict=True):
+                row, canonical, body, _, _, retained = decided[index]
                 words = [word for (word,) in struct.iter_unpack(">I", body)]
-                analysis = Analysis(
-                    canonical, row.version, row.address, row.start, words, targets[row.version], symbols[row.version]
-                ).run()
-                rescanned += 1
-            else:
-                reused += 1
+                decided[index] = (row, canonical, body, words, analysis, retained)
+        rescanned = sum(map(len, missing.values()))
+        reused = len(decided) - rescanned
+        for row, canonical, body, words, found, retained in decided:
+            assert found is not None
+            analysis = found
             indexed = {ref.offset: ref for ref in indexed_references(words)} if not retained else {}
             for memory in analysis["memory"]:
                 relative = memory["instruction"] - row.address
@@ -290,7 +324,7 @@ def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
     return result
 
 
-def refresh_map(project: Project) -> dict[str, Any]:
+def refresh_map(project: Project, host: Host | None) -> dict[str, Any]:
     """Refresh symbol and boundary dependencies, retaining unaffected instruction facts."""
     result = _read_map(project)
     pinned = storage.map_inputs(project)
@@ -303,7 +337,9 @@ def refresh_map(project: Project) -> dict[str, Any]:
     if pinned == old_inputs and result.get("map_schema") == SCHEMA:
         result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
         return result
-    return _map(project, result)
+    if host is None:
+        raise Held("map", "map.host: the map is stale and rebuilding it needs the host's worker pool")
+    return _map(project, host, result)
 
 
 def compiler_inputs(project: Project, config_content: bytes) -> tuple[Path, bytes] | None:

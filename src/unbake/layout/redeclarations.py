@@ -324,12 +324,16 @@ def strip(text: str, imported: list[str], disagreements: dict[str, tuple[str, st
             if name in shared and not equivalent(shared[name], declaration, mapping):
                 raise Held("layout", f"layout.redeclaration.{name}: shared conflict\n{shared[name]}\n{declaration}")
             shared[name] = declaration
+    # A name the source #defines is an alias (often per version) for another symbol: the header's declaration
+    # of that name does not declare what the local one does after expansion, so it is kept.
+    macros = set(re.findall(r"^[ \t]*#[ \t]*define[ \t]+(\w+)", text, re.M))
     for start, end in reversed(spans(text)):
         declaration = text[start:end]
         local = {
             name: variant
             for variant in variants(declaration)
             for name in declarations(variant).typedefs | declarations(variant).declared
+            if name not in macros
         }
         collisions = local.keys() & shared.keys()
         if not collisions:

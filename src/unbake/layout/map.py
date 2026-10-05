@@ -208,8 +208,42 @@ def load(project: Project) -> Map:
     return validate(value, project.versions, catalog(project))
 
 
+def stale(project: Project) -> tuple[str, ...]:
+    """The members layout.toml names that no VERSION's split holds (rows renamed or folded since it was written);
+    the map step's key, so a disagreeing layout.toml makes it run again."""
+    target = project.root / "layout.toml"
+    try:
+        value = tomllib.loads(target.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return ()
+    members = catalog(project)
+    named = (m for group in value.get("group", []) if isinstance(group, dict) for m in group.get("members", []))
+    return tuple(sorted({m for m in named if isinstance(m, str) and m not in members}))
+
+
+def _drop_stale_defaults(value: dict[str, Any], members: dict[str, Member]) -> None:
+    """Drop names no split holds from `default` groups (inference plans their rows again); authored and proven
+    groups keep them, so validation names the conflict."""
+    kept = []
+    for group in value.get("group", []):
+        if isinstance(group, dict) and group.get("evidence") == "default" and isinstance(group.get("members"), list):
+            gone = {m for m in group["members"] if m not in members}
+            group["members"] = [m for m in group["members"] if m not in gone]
+            for mark in ("only",):
+                if isinstance(group.get(mark), dict):
+                    group[mark] = {k: v for k, v in group[mark].items() if k not in gone}
+            if isinstance(group.get("split"), list):
+                group["split"] = [m for m in group["split"] if m not in gone]
+            if not group["members"]:
+                continue
+        kept.append(group)
+    if "group" in value:
+        value["group"] = kept
+
+
 def ensure(project: Project) -> bool:
-    """Infer modules for every `default` group (all members when there are no groups); True when layout.toml changed."""
+    """Infer modules for every `default` group (all members when there are no groups); True when layout.toml changed.
+    Rendered from the current split only: a `default` group's names the split no longer holds are planned again."""
     from unbake.layout import modules
 
     target = project.root / "layout.toml"
@@ -218,6 +252,7 @@ def ensure(project: Project) -> bool:
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise Held("layout", f"layout.map: {target}: {error}") from error
     members = catalog(project)
+    _drop_stale_defaults(value, members)
     cap = positive(value.get("cap"), "cap")
     current = validate(value, project.versions, members) if value.get("group") else Map(cap, ())
     if current.groups and all(group.evidence != "default" for group in current.groups):

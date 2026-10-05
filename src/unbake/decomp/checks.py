@@ -10,7 +10,7 @@ from pathlib import Path
 
 from unbake import atomic as atomic_files
 from unbake.cache import Cache, key
-from unbake.config import Held
+from unbake.config import Held, Host
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
@@ -469,15 +469,21 @@ def unmarked(source: str | Path) -> list[GuardFinding]:
     return [finding for finding in run(source) if finding.fakematch is None]
 
 
-def dirty(cache: Cache, sources: list[Path]) -> list[Path]:
+def _has_unmarked(source: Path) -> bool:
+    """Pool worker: SOURCE has a finding without a FAKEMATCH reason."""
+    return bool(unmarked(source))
+
+
+def dirty(cache: Cache, sources: list[Path], host: Host) -> list[Path]:
     """The sources with an unmarked finding, cached on every source's stat signature (a change to any source
-    rescans them all once)."""
-    from unbake import inputs
+    rescans them all once, in the worker pool)."""
+    from unbake import inputs, pool
 
     content_key = key(*(f"{path}\0{inputs.signature(path)}" for path in sources))
 
     def make(path: Path) -> None:
-        atomic_files.fresh(path, json.dumps([str(source) for source in sources if unmarked(source)]).encode())
+        found = pool.run(host, _has_unmarked, sources)
+        atomic_files.fresh(path, json.dumps([str(s) for s, bad in zip(sources, found, strict=True) if bad]).encode())
 
     return [Path(name) for name in json.loads(cache.produce("source-findings", content_key, make).read_text())]
 

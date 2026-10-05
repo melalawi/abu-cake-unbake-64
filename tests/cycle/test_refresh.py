@@ -208,6 +208,7 @@ class CycleStartTests(TempCase):
             patch.object(engine, "_draft_task", draft_task),
             patch.object(engine, "_compare_task", compare_task),
             patch.object(engine, "choose", lambda *a: candidates),
+            patch("unbake.layout.header_step.absent", lambda *a: []),
             patch.object(engine, "interactive", lambda: False),
             patch.object(pool, "Pool", FakePool),
             patch.object(pool, "admitted", lambda *a: 2),

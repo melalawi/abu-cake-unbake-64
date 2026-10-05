@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 import shutil
@@ -638,6 +639,33 @@ def _portable_signatures(seed: dict[str, Any], shared_aliases: dict[str, str]) -
     return rewritten
 
 
+PREFIX_MEMO = 4
+
+
+def _prefix_seed(prefix: str, contracts: bool) -> tuple[dict[str, Any], dict[str, bool], str]:
+    """The header prefix's facts and typedef scope, parsed once per prefix text: units sharing their header
+    expansion (the facts jobs group them) and a unit's two passes reuse it. Consumers treat it as read-only."""
+
+    def parse() -> tuple[dict[str, Any], dict[str, bool], str]:
+        cleaned = clean(prefix, line_markers=True)
+        parser = cdecl.parser()
+        seed = extract(
+            cleaned,
+            {},
+            definitions=True,
+            owned_source=Path("__unbake_header_prefix__"),
+            _parser=parser,
+            _contracts=contracts,
+        )
+        seed["shared_typedefs"] = seed["aliases"]
+        seed["layout_source"] = cleaned
+        return seed, parser._scope_stack[0].copy(), cleaned
+
+    digest = hashlib.sha256(prefix.encode()).hexdigest()
+    seed, scope, cleaned = memo("decl.prefix", (digest, contracts), parse, keep=PREFIX_MEMO)
+    return seed, dict(scope), cleaned
+
+
 def published(
     text: str | tuple[str, str],
     provenance: dict[str, Any],
@@ -653,19 +681,7 @@ def published(
         prefix, marker, suffix = text.partition(_BOUNDARY + "\n")
         if not marker:
             raise Held("solve", "types.declaration: missing preprocessor source boundary")
-    cleaned = clean(prefix, line_markers=True)
-    parser = cdecl.parser()
-    seed = extract(
-        cleaned,
-        {},
-        definitions=True,
-        owned_source=Path("__unbake_header_prefix__"),
-        _parser=parser,
-        _contracts=contracts,
-    )
-    seed["shared_typedefs"] = seed["aliases"]
-    seed["layout_source"] = cleaned
-    scope = parser._scope_stack[0].copy()
+    seed, scope, cleaned = _prefix_seed(prefix, contracts)
     unit = _declaration_unit(_unit_clean("published", suffix, line_markers=True))
     # New aggregate definitions need the full layout context. Anonymous
     # extern declarations do not define named layouts and stay incremental.
@@ -757,6 +773,19 @@ def published_sources(project: Project) -> list[tuple[str, Path, str]]:
     )
 
 
+def rooted(project: Project, text: str) -> str:
+    """TEXT with the tree root's absolute path dropped from quoted paths (cpp line markers)."""
+    return text.replace(f'"{project.root}/', '"').replace(f'"{project.root.resolve()}/', '"')
+
+
+def _declared_job(job: tuple[Host, str, dict[str, Any], set[Path]]) -> None:
+    """Pool worker: one version's declared header facts, extracted into the shared store."""
+    from unbake.typemap import facts
+
+    policy, text, provenance, authored = job
+    facts.store(policy).text(text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored))
+
+
 def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict[str, Any]]:
     """Declared header seeds per version, declaration evidence, then every published source's facts."""
     from unbake.typemap import facts
@@ -785,9 +814,26 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
     authored = {
         path.resolve() for root in project.include for path in root.rglob("*.h") if not storage.generated(project, path)
     }
+    texts = {
+        version: _headers(project, policy, version, contents, None, line_markers=True, ordered=ordered)
+        for version in project.versions
+    }
+    if policy is not None:
+        # Each distinct version's declared headers are extracted in the worker pool into the shared store; the
+        # loop below reads them back.
+        from unbake import pool
+
+        distinct = {
+            text: {"kind": "declared", "version": version, "sha256": storage.digest(rooted(project, text).encode())}
+            for version, text in reversed(texts.items())
+        }
+        pool.run(policy, _declared_job, [(policy, text, row, authored) for text, row in distinct.items()])
     for version in project.versions:
-        header_text = _headers(project, policy, version, contents, None, line_markers=True, ordered=ordered)
-        provenance = {"kind": "declared", "version": version, "sha256": storage.digest(header_text.encode())}
+        header_text = texts[version]
+        # Line markers name absolute include paths: the digest reads them relative to the tree root, so the same
+        # tree at another path records the same provenance.
+        relative = rooted(project, header_text)
+        provenance = {"kind": "declared", "version": version, "sha256": storage.digest(relative.encode())}
         seed = declared.get(header_text)
         if seed is None:
             seed = store.text(

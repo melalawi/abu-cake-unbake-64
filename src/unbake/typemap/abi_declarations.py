@@ -61,6 +61,10 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
             if declarations.parameter_registers([{"type": t} for t in carriers], aliases) != ordered:
                 unspecified = True
                 reasons.append("types.abi.parameters: C argument convention unresolved; argument list unspecified")
+    if not unspecified and not carriers and abi.get("caller_arguments"):
+        # The callee reads no argument, but a caller passes one (a K&R call): (void) would refuse that call.
+        unspecified = True
+        reasons.append("types.abi.caller_arguments: callers pass arguments the callee never reads; list unspecified")
     if abi["missing"]:
         reasons.append("types.abi.arguments: some mapped callers do not establish every consumed argument value")
     if any("input registers differ" in reason for reason in abi["conflicts"]):

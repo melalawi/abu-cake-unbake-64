@@ -111,7 +111,7 @@ def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         with lock.reading(root):
             measured = compare.measure(config.load(root), host, root / "src" / f"{function}.c")
     except Held as error:
-        return {"exact": False, "best_percent": 0.0, "diagnostic": error.reason}
+        return {"exact": False, "best_percent": None, "diagnostic": error.reason}
     return {
         "exact": measured.exact,
         "best_percent": measured.best_percent,
@@ -233,6 +233,8 @@ def run(
     from unbake import land, pool, steps
 
     before = land.dirty(project)
+    # The picks read the split, the map and layout.toml: bring them up to date first.
+    started = steps.ensure(project, host, START_STEPS)
     picked = choose(project, host, pick, functions)
     if not picked:
         raise Held("cycle", "cycle.pick: nothing to work on (no candidates in the size window)")
@@ -271,7 +273,7 @@ def run(
             ),
         )
 
-    for done in steps.ensure(project, host, START_STEPS):
+    for done in started:
         if done.ran:
             emitter.emit("step.run", step=done.step, trigger=done.trigger, seconds=round(done.seconds, 3))
     emitter.emit(
@@ -324,6 +326,25 @@ def run(
 
     generation = {"epoch": 0}
     from unbake.cycle import refresh as background
+    from unbake.layout import header_step
+
+    absent = header_step.absent(project, tuple(rows))
+    waiting: dict[str, bool] = {}
+
+    def headers_written(*, ended: bool) -> None:
+        """Start the drafts that waited on generated headers once every one exists, or once the refresh ended
+        (a draft that still misses one then holds naming it)."""
+        from unbake import config
+
+        if not waiting:
+            return
+        absent[:] = header_step.absent(config.load(project.root), tuple(rows))
+        if absent and not ended:
+            return
+        absent.clear()
+        for function, redraft in list(waiting.items()):
+            del waiting[function]
+            start(rows[function], redraft=redraft)
 
     with pool.Pool.from_host(host) as workers, pool.sharing(workers):
         refresh = background.Refresh(project.root, host, inbox)
@@ -343,6 +364,12 @@ def run(
 
         def start(row: Row, *, redraft: bool = False) -> None:
             if row.held:
+                return
+            if absent:
+                # A draft's context includes generated headers the refresh has not written yet: it starts when
+                # the refresh reports them written (a step or refreshed message), not before.
+                row.stage = "waiting for headers"
+                waiting[row.function] = redraft
                 return
             file = project.work / row.function / f"{row.function}.c"
             if redraft:
@@ -407,6 +434,11 @@ def run(
         def refreshed(done: background.Refreshed) -> None:
             """Drafts and compares made against the old headers are made again against the new ones."""
             generation["epoch"] += 1
+            if "headers" in done.steps or "types" in done.steps:
+                # A draft refused against the old headers or types (a missing generated header, say) drafts again.
+                for row in rows.values():
+                    if not row.held and row.stage == "held":
+                        start(row)
             for row in rows.values():
                 if row.held or row.stage not in ("comparing", "waiting for edit"):
                     continue
@@ -494,7 +526,7 @@ def run(
                             function=function,
                             sha256=row.sha256,
                             per_version={},
-                            best_percent=0.0,
+                            best_percent=None,
                             tries=row.tries,
                             seconds=round(result["seconds"], 3),
                             diagnostic=result["diagnostic"],
@@ -553,6 +585,7 @@ def run(
                     emitter.emit(
                         "step.run", step=payload.step, trigger=payload.trigger, seconds=round(payload.seconds, 3)
                     )
+                    headers_written(ended=False)
                 elif kind == "refreshed":
                     emitter.emit(
                         "types.refreshed",
@@ -565,6 +598,7 @@ def run(
                     if payload.steps:
                         recheck()
                         refreshed(payload)
+                    headers_written(ended=True)
                 elif kind == "key":
                     _key(payload, rows, start, emitter, next_words)
                 elif kind == "quit":
@@ -605,8 +639,9 @@ def run(
 
     recorded = land.record(config.load(project.root), host)
     if recorded is not None:
-        emitter.emit("fn.committed", function="", commit=recorded, message="Record attempts")
-        unpushed.append(recorded)
+        commit, functions = recorded
+        emitter.emit("cycle.committed", commit=commit, message="Record attempts", functions=list(functions))
+        unpushed.append(commit)
     if exit_code != 130:
         # Lands and merges changed step inputs; settle them now so the next cycle drafts at once, measure the
         # lands again if anything was refreshed, and commit what the settle wrote so the tree is left clean.
@@ -614,7 +649,7 @@ def run(
             recheck()
         settled = land.commit_generated(project, host, before, "Refresh generated files")
         if settled is not None:
-            emitter.emit("fn.committed", function="", commit=settled, message="Refresh generated files")
+            emitter.emit("cycle.committed", commit=settled, message="Refresh generated files", functions=[])
             unpushed.append(settled)
     if pusher is not None:
         pusher.wait()

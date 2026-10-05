@@ -21,6 +21,7 @@ class SourceKeyTests(TempCase):
         versions = {name: SimpleNamespace(macros=(f"VERSION_{name.upper()}",)) for name in ("us", "eu")}
         self.project = SimpleNamespace(
             root=self.root,
+            build=self.root / "build",
             include=(include,),
             cppflags=(),
             default_compiler="c",
@@ -48,6 +49,21 @@ class SourceKeyTests(TempCase):
                 self.assertEqual(self.key() != base, changes)
                 path.write_text(original)
                 self.assertEqual(self.key(), base)
+
+    def test_generated_header_bytes_leave_the_key(self) -> None:
+        """The solve writes generated headers: their bytes in the key reran it after every publish."""
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include" / "used.h"
+        for generated, changes in ((frozenset(), True), (frozenset({used}), False)):
+            with self.subTest(generated=bool(generated)), patch.object(index, "headers", return_value=generated):
+                base = self.key()
+                original = used.read_text()
+                used.write_text(original + "typedef long Used2;\n")
+                self.assertEqual(self.key() != base, changes)
+                used.write_text(original)
 
     def test_key_names_the_version(self) -> None:
         self.assertNotEqual(self.key("us"), self.key("eu"))
