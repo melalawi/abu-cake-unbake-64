@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -31,43 +31,73 @@ def _rank(record: dict[str, Any]) -> int:
     return _RANKS.get(record["provenance"].get("kind"), 1)
 
 
-def _comparable(record: dict[str, Any], key: str, aliases: dict[str, str]) -> dict[str, Any]:
+def _comparable(
+    record: dict[str, Any], key: str, aliases: dict[str, str], canonical: Callable[[str], str] | None = None
+) -> dict[str, Any]:
     """A record's type meaning: typedef names resolved through its own seed's aliases (s32 and int are one type),
-    parameter names dropped."""
+    parameter names dropped. CANONICAL is canonical() bound to ALIASES (a merge passes a remembering one)."""
+    resolve = canonical or (lambda type_: declarations.canonical(type_, aliases))
     row = {k: v for k, v in record.items() if k not in _MERGE_IGNORED}
     if key == "functions":
-        row["params"] = [declarations.canonical(p["type"], aliases) for p in row["params"]]
+        row["params"] = [resolve(p["type"]) for p in row["params"]]
     for field in ("type", "return"):
         if isinstance(row.get(field), str):
-            row[field] = declarations.canonical(row[field], aliases)
+            row[field] = resolve(row[field])
     return row
+
+
+def _stripped(record: dict[str, Any], key: str) -> dict[str, Any]:
+    """The fields a conflict names: everything but provenance and spelling, parameter types without names."""
+    row = {k: v for k, v in record.items() if k not in _MERGE_IGNORED}
+    if key == "functions":
+        row["params"] = [p["type"] for p in row["params"]]
+    return row
+
+
+class _Canonical:
+    """canonical() per alias environment, remembered for one merge: seeds share interned alias maps, so one
+    environment object serves thousands of seeds. The map is held, so its id stays its own."""
+
+    def __init__(self) -> None:
+        self._known: dict[int, tuple[dict[str, str], dict[str, str]]] = {}
+
+    def bound(self, aliases: dict[str, str]) -> Callable[[str], str]:
+        entry = self._known.get(id(aliases))
+        if entry is None or entry[0] is not aliases:
+            entry = self._known[id(aliases)] = (aliases, {})
+        known = entry[1]
+
+        def resolve(type_: str) -> str:
+            found = known.get(type_)
+            if found is None:
+                found = known[type_] = declarations.canonical(type_, aliases)
+            return found
+
+        return resolve
 
 
 def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) -> dict[str, Any]:
     records: dict[str, Any] = {}
     meanings: dict[str, dict[str, Any]] = {}
+    environments = _Canonical()
     index = 0
     while index < len(seeds):
         seed = seeds[index]
         index += 1
         conflicts_before = len(graph.facts)
         aliases = seed.get("aliases", {})
+        canonical = environments.bound(aliases)
         for name, record in seed[key].items():
             previous = records.get(name)
             if previous is not None:
-                old = {k: v for k, v in previous.items() if k not in _MERGE_IGNORED}
-                new = {k: v for k, v in record.items() if k not in _MERGE_IGNORED}
-                if key == "functions":
-                    # Parameter names have no type meaning.
-                    for row in (old, new):
-                        row["params"] = [p["type"] for p in row["params"]]
-                if meanings[name] == _comparable(record, key, aliases):
+                if meanings[name] == _comparable(record, key, aliases, canonical):
                     # The same type, maybe spelled through a typedef: no conflict. As for identical records,
                     # the incoming one is kept unless it ranks lower, so a published contract replaces a
                     # declared one (and the published-storage rule then keeps it in the header).
                     if _rank(record) >= _rank(previous):
                         records[name] = {**record, "declaration_conflict": bool(previous.get("declaration_conflict"))}
                     continue
+                old, new = _stripped(previous, key), _stripped(record, key)
                 if old != new:
                     ranks = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
                     old_rank = ranks.get(previous["provenance"].get("kind"), 1)
@@ -85,7 +115,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                         )
                         if new_rank > old_rank:
                             records[name] = {**record, "declaration_conflict": False}
-                            meanings[name] = _comparable(record, key, aliases)
+                            meanings[name] = _comparable(record, key, aliases, canonical)
                         continue
                 if old != new:
                     graph.facts.append(
@@ -100,7 +130,7 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     records[name] = {**previous, "declaration_conflict": True}
                     continue
             records[name] = {**record, "declaration_conflict": bool(previous and previous.get("declaration_conflict"))}
-            meanings[name] = _comparable(record, key, aliases)
+            meanings[name] = _comparable(record, key, aliases, canonical)
         shared = seed[key]
         if isinstance(shared, declarations.ProvenStructs) and len(graph.facts) == conflicts_before:
             # An uninterrupted run of identical layouts only replaces provenance.

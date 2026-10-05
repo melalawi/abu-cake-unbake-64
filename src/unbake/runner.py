@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, process
+from unbake import cache, inputs, process
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -31,8 +31,11 @@ def object_path(project: Project, version: str, unit: str, file: Path) -> Path:
 
 
 def _compiler_pins(project: Project, unit: str) -> str:
+    """The compiler tree's file digests; each digest is reused while the file's stat signature holds."""
     compiler = project.compiler_for(unit)
-    return cache.key(*sorted(path for path in (project.tools / compiler.id).rglob("*") if path.is_file()))
+    root = project.tools / compiler.id
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    return cache.key(*(part for path in files for part in (path.relative_to(root).as_posix(), inputs.digest(path))))
 
 
 def compile_unit(
@@ -56,8 +59,8 @@ def compile_unit(
         "\0".join(compile_argv[1:]),
         "\0".join(commands.assemble[1:] if commands.assemble else ()),
         _compiler_pins(project, unit),
-        Path(host.n64link) if commands.assemble else "",
-        Path(host.mips_as) if commands.assemble else "",
+        inputs.digest(Path(host.n64link)) if commands.assemble else "",
+        inputs.digest(Path(host.mips_as)) if commands.assemble else "",
     )
     name = Path(unit).name
 

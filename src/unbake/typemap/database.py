@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -353,6 +354,11 @@ def _render(
     source_typedefs: set[str] = set()
     homes = value.get("published_homes", {})
     published_homes = {path for path in retained_contracts if path.relative_to(root).as_posix() in homes}
+    # Each source checks only the retained contracts declaring a name it declares locally (not every contract).
+    contracts_by_name: dict[str, list[Path]] = defaultdict(list)
+    for path, names in retained_contracts.items():
+        for name in names:
+            contracts_by_name[name].append(path)
     for source_path, text in session.sources.items():
         local: dict[str, list[str]] = {}
         for start, end in redeclarations.spans(text):
@@ -376,10 +382,10 @@ def _render(
         # source-local or defined contract. Conflicting local views stay local;
         # inference already records their disagreement as declaration evidence.
         # A published declaration of a name this source defines yields to the definition when they disagree.
-        for path, names in retained_contracts.items():
+        for path in dict.fromkeys(path for name in local for path in contracts_by_name.get(name, ())):
             if path in components and any(
                 not redeclarations.equivalent(variant, components[path], local_aliases)
-                for name in local.keys() & names
+                for name in local.keys() & retained_contracts[path]
                 if path not in published_homes or name in definitions
                 for variant in local[name]
             ):
@@ -607,12 +613,7 @@ def validate_headers(
     session: regeneration.Session | None = None,
 ) -> None:
     """Parse the staged shared context before any revision or header is published."""
-    from dataclasses import replace
-
     from unbake.cache import Cache, key, memo
-    from unbake.decomp.draft_context import preprocess_context
-    from unbake.process import run_tool
-    from unbake.typemap import declarations
 
     def remembered_digest(data: bytes) -> str:
         return memo("typemap-validation-digest", data, lambda: storage.digest(data), keep=32768)
@@ -665,6 +666,7 @@ def validate_headers(
         inputs = closure if body.strip() else {path, *(dep for dep in closure if dep not in outputs)}
         rows.append((signature(str(path), inputs), closure, ""))
     rows.extend((signature(text, closure), closure, text) for text, closure in abi)
+    jobs: list[_Validation] = []
     for version in project.versions:
         pending: dict[str, tuple[set[Path], str]] = {}
         for input_key, closure, text in rows:
@@ -674,74 +676,117 @@ def validate_headers(
         if not pending:
             continue
         selected = {path for closure, _ in pending.values() for path in closure}
-        texts = list(dict.fromkeys(text for _, text in pending.values() if text))
-        project.build.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=".type-context-", dir=project.build) as temporary:
-            scratch = Path(temporary)
-            roots = [scratch / str(index) for index in range(len(project.include))]
-            for root, staged_root in zip(project.include, roots, strict=True):
-                staged_root.mkdir()
-                for path in selected:
-                    prefix = str(root) + os.sep
-                    if str(path).startswith(prefix):
-                        staged = staged_root / str(path)[len(prefix) :]
-                        staged.parent.mkdir(parents=True, exist_ok=True)
-                        atomic_files.write(staged, contents[path], durable=False)
-            staged_project = replace(project, work_include=tuple(roots))
-            source = scratch / "context.c"
-            generated = selected.intersection(outputs)
-            dependencies = {dep for path in generated for dep in closures[path] if dep != path}
-            entry_points = sorted(generated - dependencies)
-            if not entry_points:
-                entry_points = sorted(generated)
-            covered = {dep for path in entry_points for dep in closures[path]}
-            entry_points.extend(sorted(selected - covered))
-            atomic_files.text(
-                source,
-                durable=False,
-                content="".join(
-                    f'#include "{str(path)[len(str(root)) + 1 :]}"\n'
-                    for path in entry_points
-                    for root in project.include
-                    if str(path).startswith(str(root) + os.sep)
-                ),
+        generated = selected.intersection(outputs)
+        jobs.append(
+            _Validation(
+                project,
+                policy,
+                version,
+                {path: contents[path] for path in selected},
+                {path: closures[path] for path in generated},
+                list(dict.fromkeys(text for _, text in pending.values() if text)),
+                frozenset(pending),
             )
-            assembly = scratch / "validate.s"
-            atomic_files.text(assembly, ".text\nglabel __unbake_validate_context\n jr $ra\n nop\n", durable=False)
-            try:
-                if policy is None:
-                    expanded = "\n".join(declarations.clean(contents[path].decode()) for path in sorted(selected))
-                else:
-                    expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
-                context_text = expanded + "\n" + "\n".join(texts)
-                context_key = key(context_text)
-                if context_key not in validated:
-                    if policy is not None and getattr(policy, "m2c", None):
-                        context = scratch / "expanded.c"
-                        atomic_files.text(context, context_text, durable=False)
-                        run_tool(
-                            [
-                                str(policy.m2c),
-                                "--context",
-                                str(context),
-                                "--function",
-                                "__unbake_validate_context",
-                                str(assembly),
-                            ],
-                            project.root,
-                            "solve",
-                        )
-                    else:
-                        if isinstance(policy, Host):
-                            raise Held("solve", "policy.m2c: required shared context parser")
-                        declarations.extract(context_text, {"kind": "declared"})
-                    validated.add(context_key)
-                certificates.add(set(pending))
-                validated.update(pending)
-            except Held as error:
-                raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
+        )
+    # Each version's staged context is preprocessed and parsed on its own (cpp, m2c): one pool task per version.
+    # The parent records the certificates in version order; the first refused version is reported, as before.
+    from unbake import pool
+
+    project.build.mkdir(parents=True, exist_ok=True)
+    parsed = pool.run(policy, _validate_version, jobs) if policy is not None else [_validate_version(j) for j in jobs]
+    for job, context_key in zip(jobs, parsed, strict=True):
+        validated.add(context_key)
+        certificates.add(set(job.pending))
+        validated.update(job.pending)
 
     def complete(path: Path) -> None:
         atomic_files.fresh(path, b"validated\n")
 
     cache.produce("typemap-validation", bundle_key, complete)
+
+
+@dataclass(frozen=True)
+class _Validation:
+    """One version's pending validation: the staged header bytes it reads and the ABI texts it adds."""
+
+    project: Project
+    policy: Host | None
+    version: str
+    contents: dict[Path, bytes]
+    closures: dict[Path, set[Path]]
+    texts: list[str]
+    pending: frozenset[str]
+
+
+def _validate_version(job: _Validation) -> str:
+    """Stage the selected headers, preprocess them for the version and parse the context (a pool task).
+    Returns the parsed context's key."""
+    from dataclasses import replace
+
+    from unbake.cache import key
+    from unbake.decomp.draft_context import preprocess_context
+    from unbake.process import run_tool
+    from unbake.typemap import declarations
+
+    project, policy, version, contents = job.project, job.policy, job.version, job.contents
+    selected = set(contents)
+    with tempfile.TemporaryDirectory(prefix=".type-context-", dir=project.build) as temporary:
+        scratch = Path(temporary)
+        roots = [scratch / str(index) for index in range(len(project.include))]
+        for root, staged_root in zip(project.include, roots, strict=True):
+            staged_root.mkdir()
+            for path in selected:
+                prefix = str(root) + os.sep
+                if str(path).startswith(prefix):
+                    staged = staged_root / str(path)[len(prefix) :]
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_files.write(staged, contents[path], durable=False)
+        staged_project = replace(project, work_include=tuple(roots))
+        source = scratch / "context.c"
+        generated = set(job.closures)
+        dependencies = {dep for path in generated for dep in job.closures[path] if dep != path}
+        entry_points = sorted(generated - dependencies)
+        if not entry_points:
+            entry_points = sorted(generated)
+        covered = {dep for path in entry_points for dep in job.closures[path]}
+        entry_points.extend(sorted(selected - covered))
+        atomic_files.text(
+            source,
+            durable=False,
+            content="".join(
+                f'#include "{str(path)[len(str(root)) + 1 :]}"\n'
+                for path in entry_points
+                for root in project.include
+                if str(path).startswith(str(root) + os.sep)
+            ),
+        )
+        assembly = scratch / "validate.s"
+        atomic_files.text(assembly, ".text\nglabel __unbake_validate_context\n jr $ra\n nop\n", durable=False)
+        try:
+            if policy is None:
+                expanded = "\n".join(declarations.clean(contents[path].decode()) for path in sorted(selected))
+            else:
+                expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
+            context_text = expanded + "\n" + "\n".join(job.texts)
+            if policy is not None and getattr(policy, "m2c", None):
+                context = scratch / "expanded.c"
+                atomic_files.text(context, context_text, durable=False)
+                run_tool(
+                    [
+                        str(policy.m2c),
+                        "--context",
+                        str(context),
+                        "--function",
+                        "__unbake_validate_context",
+                        str(assembly),
+                    ],
+                    project.root,
+                    "solve",
+                )
+            else:
+                if isinstance(policy, Host):
+                    raise Held("solve", "policy.m2c: required shared context parser")
+                declarations.extract(context_text, {"kind": "declared"})
+        except Held as error:
+            raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
+    return key(context_text)

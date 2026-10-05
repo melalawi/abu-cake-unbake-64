@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import copy
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import pool
 from unbake.config import Held, Host, Project
 from unbake.layout import index, map, redeclarations
 from unbake.typemap import storage
@@ -124,6 +125,42 @@ def source(
     return redeclarations.strip(text, bodies, disagreements)
 
 
+# At least this many source chunks per worker, so uneven sources still spread over every worker.
+CHUNKS_PER_WORKER = 4
+
+
+@dataclass(frozen=True)
+class _Rewrite:
+    """One chunk of sources to rewrite against the rendered headers (a pool task)."""
+
+    project: Project
+    headers: dict[Path, bytes]
+    ownership: map.Map
+    lookup: dict[str, Any]
+    previous: set[str]
+    items: list[tuple[Path, str]]
+    collect: bool
+
+
+def _rewrite(job: _Rewrite) -> list[tuple[bytes, dict[str, tuple[str, str]] | None]]:
+    """Worker body: each source's rewritten bytes and, when collected, its removed differing declarations."""
+    rows = []
+    for path, text in job.items:
+        found: dict[str, tuple[str, str]] | None = {} if job.collect else None
+        data = source(
+            job.project,
+            text,
+            path.stem,
+            job.headers,
+            ownership=job.ownership,
+            lookup=job.lookup,
+            previous=job.previous,
+            disagreements=found,
+        ).encode()
+        rows.append((data, found))
+    return rows
+
+
 def render(
     project: Project, policy: Host, disagreements: dict[Path, dict[str, tuple[str, str]]] | None = None
 ) -> dict[Path, bytes]:
@@ -136,9 +173,12 @@ def render(
     from unbake.typemap import database, regeneration
 
     map.load(project)
-    value = copy.deepcopy(database.load(project, allow_stale=True))
-    if value is None:
+    loaded = database.load(project, allow_stale=True)
+    if loaded is None:
         raise Held("headers", "headers.types: no type solution; the types step must run first")
+    # The loaded solution is memoised: rendering adds declaration evidence and alias fields, so it gets its own
+    # top level and evidence map; every other record is only read.
+    value = {**loaded, "declaration_evidence": dict(loaded.get("declaration_evidence", {}))}
     session = regeneration.Session(project, policy)
     outputs = {
         path: data.read_bytes() if isinstance(data, Path) else data
@@ -146,20 +186,28 @@ def render(
     }
     lookup = json.loads(outputs[index.path(project)])
     previous = set(index.load(project)["headers"])
-    for path, text in session.sources.items():
-        found: dict[str, tuple[str, str]] | None = {} if disagreements is not None else None
-        outputs[path] = source(
+    # Each source is rewritten on its own: its imports read only include/ (generated outputs or files), never
+    # another source. The sources go to the worker pool in chunks that carry the shared views once.
+    headers = {path: data for path, data in outputs.items() if path.suffix != ".c"}
+    items = list(session.sources.items())
+    size = max(1, -(-len(items) // (pool.Pool.from_host(policy).size * CHUNKS_PER_WORKER)))
+    jobs = [
+        _Rewrite(
             project,
-            text,
-            path.stem,
-            outputs,
-            ownership=session.ownership,
-            lookup=lookup,
-            previous=previous,
-            disagreements=found,
-        ).encode()
-        if found and disagreements is not None:
-            disagreements[path] = found
+            headers,
+            session.ownership,
+            lookup,
+            previous,
+            items[start : start + size],
+            disagreements is not None,
+        )
+        for start in range(0, len(items), size)
+    ]
+    for job, rows in zip(jobs, pool.run(policy, _rewrite, jobs), strict=True):
+        for (path, _), (data, found) in zip(job.items, rows, strict=True):
+            outputs[path] = data
+            if found and disagreements is not None:
+                disagreements[path] = found
     return outputs
 
 

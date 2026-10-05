@@ -786,6 +786,24 @@ def _declared_job(job: tuple[Host, str, dict[str, Any], set[Path]]) -> None:
     facts.store(policy).text(text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored))
 
 
+def _version_text(job: tuple[Project, Host | None, str, dict[Path, str], Path | None, list[Path]]) -> str:
+    """One version's preprocessed authored headers (and EXTRA after the generated ones): a pool task."""
+    project, policy, version, contents, extra, ordered = job
+    return _headers(project, policy, version, contents, extra, line_markers=True, ordered=ordered)
+
+
+def _version_texts(
+    project: Project, policy: Host | None, contents: dict[Path, str], extra: Path | None, ordered: list[Path]
+) -> dict[str, str]:
+    """Every version's preprocessed header text; each version's cpp runs in the worker pool."""
+    jobs = [(project, policy, version, contents, extra, ordered) for version in project.versions]
+    if policy is None:
+        return {version: _version_text(job) for version, job in zip(project.versions, jobs, strict=True)}
+    from unbake import pool
+
+    return dict(zip(project.versions, pool.run(policy, _version_text, jobs), strict=True))
+
+
 def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict[str, Any]]:
     """Declared header seeds per version, declaration evidence, then every published source's facts."""
     from unbake.typemap import facts
@@ -814,10 +832,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
     authored = {
         path.resolve() for root in project.include for path in root.rglob("*.h") if not storage.generated(project, path)
     }
-    texts = {
-        version: _headers(project, policy, version, contents, None, line_markers=True, ordered=ordered)
-        for version in project.versions
-    }
+    texts = _version_texts(project, policy, contents, None, ordered)
     if policy is not None:
         # Each distinct version's declared headers are extracted in the worker pool into the shared store; the
         # loop below reads them back.
@@ -880,6 +895,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
                     supplemental.append(statement)
         atomic_files.text(extra, "\n".join(supplemental))
         evidence: dict[str, dict[str, Any]] = {}
+        evidence_texts = _version_texts(project, policy, contents, extra, ordered)
         for version in project.versions:
             provenance = {
                 "kind": "declared",
@@ -890,7 +906,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
             # Evidence imports the generated context too. Preserve definition
             # homes so a canonical layout reused after a rename remains a
             # generated provider, with its split dependencies intact.
-            text = headers(project, policy, version, extra, line_markers=True)
+            text = evidence_texts[version]
             template = evidence.get(text)
             if template is None:
                 template = store.text(
