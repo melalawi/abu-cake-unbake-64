@@ -7,7 +7,7 @@ from unbake.config import Held
 from unbake.search.core import Generator
 
 METHODS: dict[str, Generator] = {}
-BUILTINS = ("registers", "order", "permute")
+BUILTINS = ("types", "registers", "order", "permute")
 
 
 def available() -> tuple[str, ...]:
