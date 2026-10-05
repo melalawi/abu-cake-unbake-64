@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from unbake import atomic as atomic_files
+from unbake import effort
 from unbake.config import Held
 
 T = TypeVar("T")
@@ -66,7 +67,7 @@ class Cache:
             raise Held("cache", f"key {content_key!r}: expected SHA-256")
         return self.root / kind / content_key[:2] / content_key
 
-    def get(self, kind: str, content_key: str) -> Path | None:
+    def _find(self, kind: str, content_key: str) -> Path | None:
         path = self.path(kind, content_key)
         try:
             mode = path.stat().st_mode
@@ -75,6 +76,11 @@ class Cache:
         if stat.S_ISREG(mode):
             return path
         raise Held("cache", f"{path}: expected cached file")
+
+    def get(self, kind: str, content_key: str) -> Path | None:
+        path = self._find(kind, content_key)
+        effort.count("cache." + kind, int(path is not None), 1)
+        return path
 
     def put(self, kind: str, content_key: str, src: Path) -> Path:
         path = self.path(kind, content_key)
@@ -89,8 +95,9 @@ class Cache:
 
     def produce(self, kind: str, content_key: str, make: Callable[[Path], None]) -> Path:
         """Return the entry, computing it at most once across threads and processes."""
-        cached = self.get(kind, content_key)
+        cached = self._find(kind, content_key)
         if cached is not None:
+            effort.count("cache." + kind, 1, 1)
             return cached
         identity = (str(self.root), kind + "/" + content_key)
         with _inflight_lock:
@@ -101,9 +108,11 @@ class Cache:
                 _inflight[identity] = running
         assert running is not None
         if not owner:
+            effort.count("cache." + kind, 1, 1)
             return running.result()
         try:
-            result = self._produce_locked(kind, content_key, make)
+            result, made = self._produce_locked(kind, content_key, make)
+            effort.count("cache." + kind, int(not made), 1)
         except BaseException as error:
             running.set_exception(error)
             raise
@@ -114,14 +123,15 @@ class Cache:
             with _inflight_lock:
                 _inflight.pop(identity, None)
 
-    def _produce_locked(self, kind: str, content_key: str, make: Callable[[Path], None]) -> Path:
+    def _produce_locked(self, kind: str, content_key: str, make: Callable[[Path], None]) -> tuple[Path, bool]:
+        """The entry and whether this call ran make."""
         path = self.path(kind, content_key)
         path.parent.mkdir(parents=True, exist_ok=True)
         with (path.parent / ".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            cached = self.get(kind, content_key)
+            cached = self._find(kind, content_key)
             if cached is not None:
-                return cached
+                return cached, False
             descriptor, name = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
             os.close(descriptor)
             temporary = Path(name)
@@ -131,7 +141,7 @@ class Cache:
                 if not temporary.is_file():
                     raise Held("cache", f"make output {temporary}: expected file")
                 os.replace(temporary, path)
-                return path
+                return path, True
             except OSError as error:
                 raise Held("cache", f"{path}: {error}") from error
             finally:

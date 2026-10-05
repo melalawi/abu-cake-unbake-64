@@ -19,6 +19,10 @@ from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
 from unbake.typemap import header_names, split, storage
 
+# Bump when the value an artifact kind stores changes for the same inputs.
+SOURCE_NAMES_SCHEMA = 2
+RENDER_SCHEMA = 2
+
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
     def load() -> bytes:
@@ -100,7 +104,11 @@ class Session:
         self.inputs = key(
             self.environment,
             layout_map.encoded(self.ownership),
-            *(part for path, text in {**self.authored, **self.sources}.items() for part in (str(path), text)),
+            *(
+                part
+                for path, text in {**self.authored, **self.sources}.items()
+                for part in (storage.relative(self.project, path), text)
+            ),
         )
         self.reserved: set[str] = set()
         self.consumer_names: dict[Path, set[str]] = {}
@@ -119,13 +127,15 @@ class Session:
             )
             return {
                 "names": sorted(names),
-                "consumers": {str(p): sorted(v) for p, v in consumers.items()},
-                "tags": {str(p): sorted(v) for p, v in self.consumer_tags.items()},
+                "consumers": {storage.relative(self.project, p): sorted(v) for p, v in consumers.items()},
+                "tags": {storage.relative(self.project, p): sorted(v) for p, v in self.consumer_tags.items()},
             }
 
-        value = artifact(self.cache, "typemap-source-names", self.inputs, compute)
-        consumers.update({Path(p): set(names) for p, names in value["consumers"].items()})
-        self.consumer_tags.update({Path(p): set(tags) for p, tags in value["tags"].items()})
+        value = artifact(
+            self.cache, "typemap-source-names", key(str(SOURCE_NAMES_SCHEMA), self.inputs), compute
+        )
+        consumers.update({self.project.root / p: set(names) for p, names in value["consumers"].items()})
+        self.consumer_tags.update({self.project.root / p: set(tags) for p, tags in value["tags"].items()})
         self.reserved = set(value["names"])
         return self.reserved
 
@@ -212,7 +222,7 @@ class Session:
             for kind, keys in self._PROJECTED.items()
         }
         projection.update((field, value.get(field, {})) for field in self._CARRIED)
-        return key(self.inputs, storage.encoded(projection)), projection
+        return key(str(RENDER_SCHEMA), self.inputs, storage.encoded(projection)), projection
 
     def render(
         self, value: dict[str, Any], compute: Callable[[], dict[Path, bytes | Path]]
@@ -248,12 +258,16 @@ class Session:
                 return result
             outputs = compute()
             return {
-                "outputs": {str(p): data.decode() for p, data in outputs.items() if isinstance(data, bytes)},
+                "outputs": {
+                    storage.relative(self.project, p): data.decode()
+                    for p, data in outputs.items()
+                    if isinstance(data, bytes)
+                },
                 "declaration_headers": value["declaration_headers"],
                 "shared_aliases": value["shared_aliases"],
                 "reserved": sorted(self.reserved),
-                "consumers": {str(p): sorted(names) for p, names in self.consumer_names.items()},
-                "consumer_tags": {str(p): sorted(tags) for p, tags in self.consumer_tags.items()},
+                "consumers": {storage.relative(self.project, p): sorted(names) for p, names in self.consumer_names.items()},
+                "consumer_tags": {storage.relative(self.project, p): sorted(tags) for p, tags in self.consumer_tags.items()},
             }
 
         result = artifact(self.cache, "typemap-render", content_key, make)
@@ -270,7 +284,7 @@ class Session:
                 atomic_files.copyfile(rendered, output, durable=False)
 
             self.cache.produce("typemap-render", stored_key, same)
-        return {Path(p): data.encode() for p, data in result["outputs"].items()}
+        return {self.project.root / p: data.encode() for p, data in result["outputs"].items()}
 
 
 def validation_inputs(

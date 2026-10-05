@@ -23,6 +23,10 @@ from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
+from unbake.typemap import storage
+
+# Bump when the archive an extraction stores changes for the same inputs.
+EXTRACT_SCHEMA = 2
 
 _FINGERPRINT_PARTS = ("extract.py",)
 # A landed row (c, or hasm for original asm) goes back to asm for splat.
@@ -110,7 +114,7 @@ def _version_key(project: Project, host: Host, version: str) -> str:
     configured = project.version(version)
     return key(
         Path(__file__),
-        "extract-v1",
+        f"extract-v{EXTRACT_SCHEMA}",
         configured.baserom_sha1,
         splat_rows(project, version),
         configured.symbols,
@@ -168,6 +172,11 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
         if result.returncode:
             tail = result.stdout.decode(errors="replace").strip().splitlines()[-5:]
             raise Held("extract", f"extract.splat.{version}: splat exited {result.returncode}: " + " | ".join(tail))
+        # splat names its generated macro files by the staging path it was given: store that path from the project.
+        for generated in sorted((staging / "include").glob("*")):
+            written = generated.read_text()
+            if str(staging) in written:
+                atomic_files.text(generated, written.replace(str(staging), storage.relative(project, staging)))
         dump = staging / ".splat" / "splat_symbols.csv"
         if not dump.is_file():
             raise Held("extract", f"extract.splat.{version}: splat wrote no symbol dump")

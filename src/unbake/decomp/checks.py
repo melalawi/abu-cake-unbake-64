@@ -10,10 +10,13 @@ from pathlib import Path
 
 from unbake import atomic as atomic_files
 from unbake.cache import Cache, key
-from unbake.config import Held, Host
+from unbake.config import Held, Host, Project
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
+from unbake.typemap import storage
+
+SOURCE_FINDINGS_SCHEMA = 2
 
 
 @dataclass(frozen=True)
@@ -474,18 +477,21 @@ def _has_unmarked(source: Path) -> bool:
     return bool(unmarked(source))
 
 
-def dirty(cache: Cache, sources: list[Path], host: Host) -> list[Path]:
+def dirty(project: Project, cache: Cache, sources: list[Path], host: Host) -> list[Path]:
     """The sources with an unmarked finding, cached on every source's stat signature (a change to any source
-    rescans them all once, in the worker pool)."""
+    rescans them all once, in the worker pool). The cache holds project-relative paths."""
     from unbake import inputs, pool
 
-    content_key = key(*(f"{path}\0{inputs.signature(path)}" for path in sources))
+    named = [storage.relative(project, path) for path in sources]
+    content_key = key(
+        str(SOURCE_FINDINGS_SCHEMA), *(f"{name}\0{inputs.signature(path)}" for name, path in zip(named, sources, strict=True))
+    )
 
     def make(path: Path) -> None:
         found = pool.run(host, _has_unmarked, sources)
-        atomic_files.fresh(path, json.dumps([str(s) for s, bad in zip(sources, found, strict=True) if bad]).encode())
+        atomic_files.fresh(path, json.dumps([name for name, bad in zip(named, found, strict=True) if bad]).encode())
 
-    return [Path(name) for name in json.loads(cache.produce("source-findings", content_key, make).read_text())]
+    return [project.root / name for name in json.loads(cache.produce("source-findings", content_key, make).read_text())]
 
 
 def message(finding: GuardFinding) -> str:

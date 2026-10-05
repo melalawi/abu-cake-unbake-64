@@ -24,17 +24,32 @@ from typing import Any
 from pycparser import c_ast  # type: ignore[import-untyped]
 
 from unbake import cdecl
-from unbake.config import Held
+from unbake.config import Held, Project
 from unbake.typemap import declarations
+
+# Turns a line-marker or header path into the one spelling a cached value stores (see spelling).
+Spell = Callable[[str], str]
 
 _MARKER = re.compile(r'^#\s*(\d+)\s+"([^"]*)"[^\n]*$')
 _KINDS = ("functions", "globals", "arrays")
 _WORD = re.compile(r"\b[A-Za-z_]\w*\b")
 
 
-def path(text: str) -> str:
-    """A line-marker path in one spelling (cpp names a header by the -I route it took)."""
-    return os.path.normpath(text)
+def spelling(project: Project, machine_root: Path, text: str) -> str:
+    """A line-marker or header path in the spelling cached values store, so a copied or moved project reads them.
+
+    A path under the project root is its posix path from the root; one under the machine root is `@machine/` and
+    its path from that root. A path with no root (cpp keeps the -I route it took) is taken from the project root.
+    Any other path is refused."""
+    clean = os.path.normpath(text)
+    if not os.path.isabs(clean):
+        return clean
+    for root, prefix in ((project.root, ""), (machine_root, "@machine/")):
+        try:
+            return prefix + Path(clean).relative_to(root).as_posix()
+        except ValueError:
+            continue
+    raise Held("solve", f"facts.paths: {text} is outside the project and the machine root")
 
 
 def suffix(text: str) -> str:
@@ -51,7 +66,7 @@ class Marked:
     A run is a stretch one file contributes, named by (file, its first line in that file). A header with
     includes contributes several runs, split where cpp enters a nested include."""
 
-    def __init__(self, text: str, first: str) -> None:
+    def __init__(self, text: str, first: str, spell: Spell) -> None:
         """FIRST names the file of the lines before any marker (all of them in a text preprocessed without cpp)."""
         lines = text.split("\n")
         self.lines: list[tuple[str, int]] = []
@@ -61,7 +76,7 @@ class Marked:
             found = _MARKER.match(line) if line.startswith("#") else None
             if found is not None:
                 lines[index] = ""
-                name = path(found[2])
+                name = spell(found[2])
                 if not name.startswith("<"):
                     current, number = name, int(found[1]) - 1
                     if self.runs[-1][0] != current:
@@ -140,12 +155,12 @@ def _portable_rows(found: list[tuple[str, str, dict[str, Any]]], aliases: dict[s
     return rewritten
 
 
-def header_part(text: str, header: Path) -> dict[str, Any]:
+def header_part(text: str, header: Path, spell: Spell) -> dict[str, Any]:
     """One header's own facts, from a line-marked text of it preprocessed alone (its includes give it context).
 
     Every item carries its line in the header, so a unit places it in the run of the header it falls in."""
-    own_file = path(str(header))
-    marked = Marked(suffix(text), own_file)
+    own_file = spell(str(header))
+    marked = Marked(suffix(text), own_file, spell)
     cleaned = declarations.cleaned_unit(marked.blank)
     try:
         tree = declarations.unit_tree(cleaned)
@@ -224,13 +239,13 @@ def _within(items: list[list[Any]], start: int, stop: int | None) -> list[list[A
 
 
 def source_part(
-    text: str, source: Path, headers: Mapping[str, dict[str, Any]], provenance: dict[str, Any]
+    text: str, source: Path, headers: Mapping[str, dict[str, Any]], provenance: dict[str, Any], spell: Spell
 ) -> dict[str, Any] | None:
     """The source's own facts parsed in its headers' scope, or None when the unit needs whole-unit extraction.
 
     TEXT is the line-marked unit; HEADERS the header parts by marker path."""
-    own = path(str(source))
-    marked = Marked(suffix(text), own)
+    own = spell(str(source))
+    marked = Marked(suffix(text), own, spell)
     missing = [name for name, _ in marked.runs if name != own and name not in headers]
     if missing:
         raise Held("solve", f"facts.headers: {source}: no header part for {missing[0]}")
@@ -306,12 +321,11 @@ def _layout_identity(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key not in ("aliases", "provenance")}
 
 
-def dependencies(context: Context, runs: list[list[Any]], source: Path, named: list[str]) -> dict[str, Any]:
+def dependencies(context: Context, runs: list[list[Any]], own: str, named: list[str]) -> dict[str, Any]:
     """The header layouts a source's own layouts read: those NAMED spells, by name or alias, as its headers
-    give them now. A source part is valid only against the same dependencies."""
+    give them now. A source part is valid only against the same dependencies. OWN is the source's spelling."""
     if not named:
         return {}
-    own = path(str(source))
     spans = tuple(span for span in _spans([(name, line) for name, line in runs]) if span[0] != own)
     words = set(named)
     return {
@@ -348,7 +362,8 @@ class Context:
         base = self.facts(spans[:-1], own)
         name, start, stop = spans[-1]
         part = self.headers.get(name) if own is None or name in self.headers else own
-        assert part is not None
+        if part is None:
+            raise Held("solve", f"facts.headers: {name} is included by a source but has no header part for this version")
         # Copy on write: a span that adds nothing of a kind shares its base's object, so units of one header
         # list share one alias map and one layout template (encoded and merged once).
         found: dict[str, Any] = {}
@@ -394,20 +409,19 @@ def _layouts(built: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def assemble(
     context: Context,
     part: dict[str, Any],
-    source: Path,
+    own: str,
     source_text: str,
     provenance: Callable[[str], dict[str, Any]],
     generated: frozenset[str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The unit's consumed contracts and its whole definition seed (every function it defines).
 
-    GENERATED names the headers the solver wrote (layers.path spelling): their declarations are the solver's own
+    OWN is the source's spelling. GENERATED names the headers the solver wrote (spelled): their declarations are the solver's own
     output, so they never come back as consumed evidence. The definition seed keeps them, because a source's own
     layouts embed included structs by value.
 
     PROVENANCE(kind) gives the provenance of the "published" contracts and of the "proven" definitions.
     """
-    own = path(str(source))
     spans = tuple(_spans([(name, line) for name, line in part["runs"]]))
     first = next((index for index, (name, _, _) in enumerate(spans) if name == own), len(spans))
     context.facts(spans[:first])

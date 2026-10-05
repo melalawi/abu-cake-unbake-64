@@ -19,6 +19,9 @@ from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
 SCHEMA = 3
+# The value formats of the two cached evidence kinds (the input key above names the solve itself).
+ABI_SCHEMA = 3
+MACHINE_SCHEMA = 3
 
 
 _MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")
@@ -252,7 +255,7 @@ def infer(
     signatures = closure.cached(
         cache,
         "types-abi",
-        [str(SCHEMA), *map_parts, json.dumps(sorted(declared_returns.items()))],
+        [str(ABI_SCHEMA), *map_parts, json.dumps(sorted(declared_returns.items()))],
         lambda: evidence.abi(bodies(), declared_returns),
     )
     # A previously inferred/declarative signature cannot truncate register use
@@ -285,7 +288,7 @@ def infer(
         cache,
         shard_dir,
         [
-            str(SCHEMA),
+            str(MACHINE_SCHEMA),
             *map_parts,
             json.dumps(sorted((name, row["registers"]) for name, row in signatures.items())),
             json.dumps(sorted((name, sorted(registers)) for name, registers in used.items())),

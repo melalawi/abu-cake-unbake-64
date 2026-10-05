@@ -36,8 +36,10 @@ FACTS = "facts"
 SHARED = "facts-shared"
 SOURCE = "facts-source"
 HEADER = "facts-header"
-# Bump when the facts extract() produces change for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
+# Bump a kind's number when the value it stores changes for the same inputs. Keys never digest the tool's code.
+FACTS_SCHEMA = 3
+SOURCE_SCHEMA = 4
+HEADER_SCHEMA = 3
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
@@ -261,7 +263,7 @@ def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snap
     function, source, version = task
     command = _command(project, policy, version)
     roots = (source, *_forced(project, command))
-    parts: list[str | bytes] = [FACTS, str(SCHEMA), "source", version, json.dumps(command), function]
+    parts: list[str | bytes] = [FACTS, str(FACTS_SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
     for path in snapshot.closure(roots):
@@ -273,7 +275,7 @@ def unit_key(project: Project, policy: Host | None, source: Path, version: str, 
     """A source part: the source's bytes, authored headers' bytes and generated headers' interface only."""
     command = _command(project, policy, version, marked=True)
     roots = (source, *_forced(project, command))
-    parts: list[str | bytes] = [SOURCE, str(SCHEMA), "unit", version, json.dumps(command)]
+    parts: list[str | bytes] = [SOURCE, str(SOURCE_SCHEMA), "unit", version, json.dumps(command)]
     parts.extend((storage.relative(project, source), source.read_bytes()))
     closure = snapshot.closure(roots)
     names = set(_IDENTIFIER.findall(source.read_text(errors="replace")))
@@ -288,7 +290,7 @@ def header_key(project: Project, policy: Host | None, header: Path, version: str
     scheme, keyed on the header's own identifiers)."""
     command = _command(project, policy, version, marked=True)
     roots = (header, *_forced(project, command))
-    parts: list[str | bytes] = [HEADER, str(SCHEMA), version, json.dumps(command), storage.relative(project, header)]
+    parts: list[str | bytes] = [HEADER, str(HEADER_SCHEMA), version, json.dumps(command), storage.relative(project, header)]
     parts.extend(("self", snapshot.digest(header)))
     closure = snapshot.closure(roots)
     names = set(_IDENTIFIER.findall(header.read_text(errors="replace")))
@@ -299,7 +301,7 @@ def header_key(project: Project, policy: Host | None, header: Path, version: str
 
 
 def text_key(text: str, provenance: dict[str, Any], authored: list[str]) -> str:
-    return key(FACTS, str(SCHEMA), "text", text, json.dumps(provenance, sort_keys=True), "\n".join(authored))
+    return key(FACTS, str(FACTS_SCHEMA), "text", text, json.dumps(provenance, sort_keys=True), "\n".join(authored))
 
 
 def _write(path: Path, *, data: bytes) -> None:
@@ -556,10 +558,17 @@ class _Parts(Mapping[str, dict[str, Any]]):
         return name in self.content
 
 
+def _spell(project: Project, host: Host | None) -> layers.Spell:
+    """The spelling of line-marker paths the cache stores (every path of an in-memory run is the project's)."""
+    return functools.partial(
+        layers.spelling, project, project.root if host is None else host.cache_machine_root
+    )
+
+
 def _header_part(project: Project, host: Host | None, version: str, header: Path) -> dict[str, Any]:
     text = declarations.source_unit(project, host, version, header, line_markers=True)
     try:
-        return layers.header_part(text, header)
+        return layers.header_part(text, header, _spell(project, host))
     except Held as error:
         # A header that does not parse alone leaves its includers to whole-unit extraction.
         return {"refused": True, "reason": error.reason}
@@ -592,18 +601,19 @@ def _source_tasks(
     preprocess alike, and a part is extracted once for all of them (placeholders keep it version-free)."""
     _, content_key, (_, source, version) = group[0]
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)
+    spell = _spell(project, host)
+    own = spell(str(source))
     text: str | None = None
 
     def extracted() -> dict[str, Any] | None:
         nonlocal text
         if text is None:
             text = declarations.source_unit(project, host, version, source, line_markers=True)
-        own = layers.path(str(source))
-        names = sorted({name for name, _ in layers.Marked(layers.suffix(text), own).runs if name != own})
+        names = sorted({name for name, _ in layers.Marked(layers.suffix(text), own, spell).runs if name != own})
         identity = (text, tuple((name, parts[version].identity(name)) for name in names if name in parts[version]))
         if identity not in shared:
             counts["sources"] += 1
-            shared[identity] = layers.source_part(text, source, parts[version], placeholder)
+            shared[identity] = layers.source_part(text, source, parts[version], placeholder, spell)
         if unit_key(project, host, source, version, snapshot) != content_key:
             raise Held("solve", f"facts.inputs: {storage.relative(project, source)} changed during the solve; rerun")
         return shared[identity]
@@ -619,7 +629,7 @@ def _source_tasks(
     context = contexts.get(version)
     if context is None:
         context = contexts[version] = layers.Context(parts[version])
-    depends = layers.dependencies(context, stub["runs"], source, stub["named"])
+    depends = layers.dependencies(context, stub["runs"], own, stub["named"])
     part_key = key(SOURCE, content_key, json.dumps(depends, sort_keys=True))
     if part is None:
         part = output.json(SOURCE, part_key)
@@ -629,7 +639,7 @@ def _source_tasks(
             raise Held("solve", f"facts.layers: {storage.relative(project, source)} became a whole unit; rerun")
     output.put_json(SOURCE, part_key, part)
     source_text = source.read_text()
-    generated = frozenset(layers.path(str(header)) for header in snapshot.generated())
+    generated = frozenset(spell(str(header)) for header in snapshot.generated())
     result = []
     for index, _, (function, _, _) in group:
         stamped = _provenance(project, function, version, source)
@@ -637,7 +647,7 @@ def _source_tasks(
         def provenance(kind: str, row: dict[str, Any] = stamped) -> dict[str, Any]:
             return {**row, "kind": kind}
 
-        consumed, definition = layers.assemble(context, part, source, source_text, provenance, generated)
+        consumed, definition = layers.assemble(context, part, own, source_text, provenance, generated)
         result.append((index, output.encoded([consumed, _owned(definition, function)])))
     return result
 
@@ -716,10 +726,11 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     header_keys: dict[str, dict[str, str]] = {version: {} for version in versions}
     missing_headers: dict[str, list[tuple[str, Path]]] = {version: [] for version in versions}
     if policy is not None:
+        spell = _spell(project, policy)
         for version in versions:
             for header in _headers(project):
                 content_key = header_key(project, policy, header, version, snapshot)
-                header_keys[version][layers.path(str(header))] = content_key
+                header_keys[version][spell(str(header))] = content_key
                 if output.json_path(HEADER, content_key) is None:
                     missing_headers[version].append((content_key, header))
     groups: dict[tuple[Path, str], list[tuple[int, str, Task]]] = {}
