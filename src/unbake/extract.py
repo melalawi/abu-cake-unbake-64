@@ -23,7 +23,6 @@ from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
-from unbake.typemap import storage
 
 # Bump when the archive an extraction stores changes for the same inputs.
 EXTRACT_SCHEMA = 2
@@ -172,6 +171,8 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
         if result.returncode:
             tail = result.stdout.decode(errors="replace").strip().splitlines()[-5:]
             raise Held("extract", f"extract.splat.{version}: splat exited {result.returncode}: " + " | ".join(tail))
+        from unbake.typemap import storage
+
         # splat names its generated macro files by the staging path it was given: store that path from the project.
         for generated in sorted((staging / "include").glob("*")):
             written = generated.read_text()
