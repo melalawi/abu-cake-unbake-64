@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import shutil
 import struct
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -91,10 +91,9 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
     from unbake.search.permute import Permuter
 
     function = compare.function_of(file)
-    out = project.work / function / ".search"
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
+    # The external permuter refuses a work directory inside the project, so every search works under the cache.
+    host.cache_root.mkdir(parents=True, exist_ok=True)
+    out = Path(tempfile.mkdtemp(prefix=f"search-{function}-", dir=host.cache_root))
     if method == "permute":
         versions = split.holding_versions(project, function)
         version = project.names_from if project.names_from in versions else versions[0]
