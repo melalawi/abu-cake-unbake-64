@@ -108,7 +108,7 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         "best_percent": measured.best_percent,
         "exact": measured.exact,
         "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
-        or next((f"precondition: {line}" for line in measured.preconditions), ""),
+        or next((f"rule broken: {line}" for line in measured.rule_lines), ""),
         "seconds": time.monotonic() - started,
     }
 
@@ -151,11 +151,12 @@ def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
                     "best_percent": None,
                     "diagnostic": f"{function} no longer builds identical in {version} (unit {row.path})",
                 }
-            if checks.unmarked(project.src / f"{row.path}.c"):
+            broken = checks.unmarked(project.src / f"{row.path}.c")
+            if broken:
                 return {
                     "exact": False,
                     "best_percent": None,
-                    "diagnostic": f"{function}: its unit {row.path} breaks the source rules",
+                    "diagnostic": f"rule broken: {checks.plain(broken[0])}",
                 }
     except Held as error:
         return {"exact": False, "best_percent": None, "diagnostic": error.reason}

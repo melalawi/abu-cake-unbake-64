@@ -1,22 +1,34 @@
-"""extract is imported by the type map, so it never imports the type package at load (a worker that starts on it
-would crash on the cycle)."""
+"""Each worker entry module imports first in a clean module table: a worker starts that way, and an import cycle
+there is a crash that mocked tests never see."""
 
-import ast
+import importlib
+import sys
 import unittest
-from pathlib import Path
 
-import unbake.extract
+ENTRIES = (
+    "unbake.cycle.engine",
+    "unbake.typemap.mapping",
+    "unbake.extract",
+    "unbake.typemap.facts",
+    "unbake.typemap.database",
+    "unbake.land",
+    "unbake.steps",
+    "unbake.work.plan",
+)
 
 
 class ImportOrderTests(unittest.TestCase):
-    def test_extract_imports_no_type_module_at_the_top_level(self) -> None:
-        tree = ast.parse(Path(unbake.extract.__file__).read_text())
-        top = [
-            node
-            for node in tree.body
-            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("unbake.typemap")
-        ]
-        self.assertEqual(top, [])
+    def test_each_entry_imports_first_without_a_cycle(self) -> None:
+        saved = dict(sys.modules)
+        try:
+            for entry in ENTRIES:
+                with self.subTest(entry):
+                    for name in [name for name in sys.modules if name == "unbake" or name.startswith("unbake.")]:
+                        del sys.modules[name]
+                    importlib.import_module(entry)
+        finally:
+            sys.modules.clear()
+            sys.modules.update(saved)
 
 
 if __name__ == "__main__":
