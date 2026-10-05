@@ -445,7 +445,7 @@ def unprototyped_calls(functions: dict[str, Any]) -> set[str]:
     return {
         name
         for name, record in functions.items()
-        if record.get("abi", {}).get("caller_arguments")
+        if (record.get("abi") or {}).get("caller_arguments")
         and re.search(r"\(\s*void\s*\)\s*;\s*$", record["prototype"] or "")
     }
 

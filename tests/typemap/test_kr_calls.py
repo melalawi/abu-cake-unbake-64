@@ -23,6 +23,9 @@ class KRCallTests(unittest.TestCase):
             ("void f(void (*callback)(void), int a);", ["r4", "r5"], False),
             (None, ["r4"], False),
         ]
+        # A function the map never saw has no ABI record at all.
+        self.assertEqual(unprototyped_calls({"f": {"prototype": "void f(void);", "abi": None}}), set())
+        self.assertEqual(unprototyped_calls({"f": {"prototype": "void f(void);"}}), set())
         for prototype, arguments, expected in cases:
             with self.subTest(prototype=prototype, arguments=arguments):
                 self.assertEqual(unprototyped_calls({"f": record(prototype, arguments)}) == {"f"}, expected)
