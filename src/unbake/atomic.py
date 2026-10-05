@@ -72,6 +72,12 @@ def write(path: Path, content: bytes | bytearray, *, mode: int | None = None) ->
         output.write(content)
 
 
+def fresh(path: Path, content: bytes) -> None:
+    """Fill a private path that a cache producer renames into place; a re-derivable entry is not synced."""
+    with path.open("xb") as output:
+        output.write(content)
+
+
 def text(
     path: Path, content: str, encoding: str | None = None, errors: str | None = None, newline: str | None = None
 ) -> int:

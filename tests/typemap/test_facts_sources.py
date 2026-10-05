@@ -1,0 +1,65 @@
+"""facts.source_facts: one extraction per distinct unit text, stamped per task, equal to single extraction."""
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from tests.kit import TempCase
+from unbake.typemap import declarations, facts
+
+HEADER = "typedef struct Pair { int a; int b; } Pair;\nextern Pair shared;\n"
+
+
+class SourceFactsTests(TempCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.source = self.root / "src" / "alpha.c"
+        self.source.parent.mkdir()
+        self.source.write_text("Pair *alpha(void) { return &shared; }\nint beta(void) { return 1; }\n")
+        self.project = SimpleNamespace(root=self.root, include=(), version=lambda v: SimpleNamespace(macros=()))
+        texts = {
+            "us": HEADER + "Pair *alpha(void);\nint beta(void);\n",
+            "eu": HEADER + "Pair *alpha(void);\nint beta(void);\n",
+            "jp": HEADER + "Pair *alpha(void);\nint beta(void);\nconst int rodata_jp = 1;\n",
+        }
+        self.units = lambda project, policy, version, source: (
+            "extern int __unbake_feedback_boundary;\n" + texts[version]
+        )
+
+    def test_stamped_facts_equal_each_task_extracted_alone(self) -> None:
+        tasks = [(f, self.source, v) for v in ("eu", "jp", "us") for f in ("alpha", "beta")]
+        with patch.object(declarations, "source_unit", self.units):
+            store = facts.Store(None)
+            stamped = facts.source_facts(self.project, None, store, tasks)
+            for task, data in zip(tasks, stamped, strict=True):
+                with self.subTest(task=task[0] + "/" + task[2]):
+                    self.assertEqual(data, store.encoded(facts.extract(self.project, None, task)))
+        self.assertNotIn(b"\\u0000", b"".join(stamped))
+
+    def test_merge_order_does_not_depend_on_extraction_order(self) -> None:
+        tasks = [(f, self.source, v) for v in ("eu", "jp", "us") for f in ("alpha", "beta")]
+        snapshot = facts.Snapshot(self.project)
+        misses = [(facts.source_key(self.project, None, task, snapshot), task) for task in tasks]
+        results = []
+        with patch.object(declarations, "source_unit", self.units):
+            for order in (misses, list(reversed(misses))):
+                store = facts.Store(None)
+                facts.compute(self.project, None, store, order)
+                results.append([store.memory[content_key] for content_key, _ in misses])
+        self.assertEqual(results[0], results[1])
+
+    def test_a_source_edited_after_its_key_is_refused(self) -> None:
+        task = ("alpha", self.source, "us")
+        stale = facts.source_key(self.project, None, task, facts.Snapshot(self.project))
+        self.source.write_text(self.source.read_text() + "int gamma;\n")
+        with patch.object(declarations, "source_unit", self.units), self.assertRaises(facts.Held) as raised:
+            facts.compute(self.project, None, facts.Store(None), [(stale, task)])
+        self.assertIn("facts.inputs: src/alpha.c changed during the solve", str(raised.exception))
+
+    def test_source_key_follows_schema_not_tool_code(self) -> None:
+        project = SimpleNamespace(root=self.root, include=(), version=lambda v: SimpleNamespace(macros=("V",)))
+        snapshot = facts.Snapshot(project)
+        task = ("alpha", self.source, "us")
+        base = facts.source_key(project, None, task, snapshot)
+        with patch.object(facts, "SCHEMA", facts.SCHEMA + 1):
+            self.assertNotEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
+        self.assertEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)

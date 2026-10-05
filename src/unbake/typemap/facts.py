@@ -1,10 +1,13 @@
 """Per-source declaration facts, cached by content key.
 
 A published source's facts depend only on its bytes, its include closure, the
-preprocessor command and the code that extracts them. Each (source, version)
-pair is extracted once and then read back from the shared cache. Large shared
-values (struct templates, typedef maps) are stored once by digest and interned
-on load, so many sources that include the same headers share one object.
+preprocessor command and SCHEMA. Each (source, version) pair is extracted once
+and then read back from the shared cache. Large shared values (struct templates,
+typedef maps) are stored once by digest and interned on load, so many sources
+that include the same headers share one object.
+
+A worker takes every task of a source together. Versions whose preprocessed unit
+is the same text are extracted once and stamped with each task's provenance.
 """
 
 from __future__ import annotations
@@ -26,23 +29,18 @@ from unbake.typemap import declarations, storage
 
 FACTS = "facts"
 SHARED = "facts-shared"
-_PRODUCERS = (
-    "typemap/declarations.py",
-    "typemap/facts.py",
-    "cdecl.py",
-    "decomp/draft_context.py",
-)
+# Bump when the facts extract() produces change for the same inputs. Keys never digest the tool's code.
+SCHEMA = 1
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
-_CHUNK = 16
+# At most this many sources per worker job: neighbours in include order share their header expansion.
+SOURCES_PER_JOB = 24
+# At least this many jobs per worker, so a small fill still spreads over every worker.
+JOBS_PER_WORKER = 4
+# Placeholders for the provenance fields that differ between tasks sharing one unit text.
+_FUNCTION = "\x00function"
+_VERSION = "\x00version"
 
 Task = tuple[str, Path, str]
-
-
-@functools.cache
-def fingerprint() -> str:
-    """Digest of the modules that compute facts; a code change invalidates only this kind."""
-    root = Path(__file__).resolve().parent.parent
-    return key(*(root / name for name in _PRODUCERS))
 
 
 @functools.cache
@@ -108,7 +106,7 @@ def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snap
     function, source, version = task
     command = _command(project, policy, version)
     roots = (source, *_forced(project, command))
-    parts: list[str | bytes] = [fingerprint(), "source", version, json.dumps(command), function]
+    parts: list[str | bytes] = [FACTS, str(SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
     for path in snapshot.closure(roots):
@@ -117,11 +115,19 @@ def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snap
 
 
 def text_key(text: str, provenance: dict[str, Any], authored: list[str]) -> str:
-    return key(fingerprint(), "text", text, json.dumps(provenance, sort_keys=True), "\n".join(authored))
+    return key(FACTS, str(SCHEMA), "text", text, json.dumps(provenance, sort_keys=True), "\n".join(authored))
 
 
 def _write(path: Path, *, data: bytes) -> None:
-    atomic_files.write(path, data)
+    """Cache.produce renames the private path into place; an entry is re-derivable, so no fsync."""
+    atomic_files.fresh(path, data)
+
+
+def _load(path: Path) -> Any:
+    try:
+        return json.loads(path.read_bytes())
+    except (OSError, ValueError) as error:
+        raise Held("solve", f"facts.cache: unreadable entry {path}: {error}; delete it and rerun") from error
 
 
 class Store:
@@ -151,7 +157,7 @@ class Store:
         if value is None:
             if self.cache is None or (path := self.cache.get(SHARED, digest)) is None:
                 raise Held("solve", f"facts.shared: missing {digest}")
-            value = json.loads(path.read_bytes())
+            value = _load(path)
             self.shared[digest] = value
         return value
 
@@ -178,8 +184,13 @@ class Store:
                 result[name] = self._get_shared(result[name]["$shared"])
         return result
 
+    def encoded(self, seeds: list[dict[str, Any]]) -> bytes:
+        return json.dumps([self.encode(seed) for seed in seeds], separators=(",", ":")).encode()
+
     def put(self, content_key: str, seeds: list[dict[str, Any]]) -> None:
-        data = json.dumps([self.encode(seed) for seed in seeds], separators=(",", ":")).encode()
+        self.put_encoded(content_key, self.encoded(seeds))
+
+    def put_encoded(self, content_key: str, data: bytes) -> None:
         if self.cache is None:
             self.memory[content_key] = json.loads(data)
         else:
@@ -195,7 +206,7 @@ class Store:
             rows = self.memory.get(content_key)
         else:
             path = self.cache.get(FACTS, content_key)
-            rows = None if path is None else json.loads(path.read_bytes())
+            rows = None if path is None else _load(path)
         return None if rows is None else [self.decode(row) for row in rows]
 
     def text(
@@ -214,46 +225,114 @@ def store(policy: Host | None) -> Store:
     return Store(None if policy is None else Cache(policy.cache_root))
 
 
-def extract(project: Project, policy: Host | None, task: Task) -> list[dict[str, Any]]:
-    """Two seeds: the contracts the source consumes, and the definition it owns."""
-    function, source, version = task
-    text = declarations.source_unit(project, policy, version, source)
-    provenance = {
+def _provenance(project: Project, function: str, version: str, source: Path) -> dict[str, Any]:
+    return {
         "kind": "published",
         "function": function,
         "version": version,
         "source": storage.relative(project, source),
         "sha256": inputs.digest(source),
     }
+
+
+def _unit_seeds(text: str, provenance: dict[str, Any], source: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The contracts a unit consumes and every definition it owns (all functions)."""
     contract = declarations.published(text, provenance, source, contracts=True, compact=True)
     consumed = declarations.consumed_contracts(contract, source.read_text())
     # The definition owns the function contract; imported prototypes are
     # dependencies, and cannot override a ROM-proven definition elsewhere.
     definition = declarations.published(text, {**provenance, "kind": "proven"}, source, compact=True)
-    definition["functions"] = {name: row for name, row in definition["functions"].items() if name == function}
-    return [consumed, definition]
+    return consumed, definition
 
 
-def _chunk(job: tuple[Project, Host, list[tuple[str, Task]]]) -> None:
-    """Worker body: extract misses straight into the shared cache."""
-    project, host, tasks = job
+def _owned(definition: dict[str, Any], function: str) -> dict[str, Any]:
+    return {**definition, "functions": {name: row for name, row in definition["functions"].items() if name == function}}
+
+
+def extract(project: Project, policy: Host | None, task: Task) -> list[dict[str, Any]]:
+    """Two seeds: the contracts the source consumes, and the definition it owns."""
+    function, source, version = task
+    text = declarations.source_unit(project, policy, version, source)
+    consumed, definition = _unit_seeds(text, _provenance(project, function, version, source), source)
+    return [consumed, _owned(definition, function)]
+
+
+def _stamp(data: bytes, function: str, version: str) -> bytes:
+    for placeholder, value in ((_FUNCTION, function), (_VERSION, version)):
+        data = data.replace(json.dumps(placeholder).encode(), json.dumps(value).encode())
+    return data
+
+
+def source_facts(project: Project, policy: Host | None, output: Store, tasks: list[Task]) -> list[bytes]:
+    """Encoded facts of every task of one source: each distinct unit text is extracted once."""
+    source = tasks[0][1]
+    placeholder = _provenance(project, _FUNCTION, _VERSION, source)
+    units: dict[str, tuple[bytes, dict[str, Any]]] = {}
+    texts = {version: declarations.source_unit(project, policy, version, source) for version in {t[2] for t in tasks}}
+    result = []
+    for function, task_source, version in tasks:
+        if task_source != source:
+            raise Held("solve", f"facts.source: {task_source} grouped with {source}")
+        text = texts[version]
+        if text not in units:
+            try:
+                consumed, definition = _unit_seeds(text, placeholder, source)
+            except Held:
+                # A refusal names the task's own provenance, exactly as a single extraction does.
+                extract(project, policy, (function, source, version))
+                raise
+            units[text] = output.encoded([consumed]), definition
+        consumed_data, definition = units[text]
+        owned = output.encoded([_owned(definition, function)])
+        result.append(_stamp(consumed_data[:-1] + b"," + owned[1:], function, version))
+    return result
+
+
+def _check_keys(project: Project, host: Host | None, group: list[tuple[str, Task]]) -> None:
+    """The inputs a key was computed from are the inputs extracted: a source edited mid-solve is refused."""
+    snapshot = Snapshot(project)
+    for content_key, task in group:
+        if source_key(project, host, task, snapshot) != content_key:
+            raise Held("solve", f"facts.inputs: {storage.relative(project, task[1])} changed during the solve; rerun")
+
+
+def _fill(project: Project, host: Host | None, output: Store, group: list[tuple[str, Task]]) -> None:
+    _check_keys(project, host, group)
+    encoded = source_facts(project, host, output, [task for _, task in group])
+    _check_keys(project, host, group)
+    for (content_key, _), data in zip(group, encoded, strict=True):
+        output.put_encoded(content_key, data)
+
+
+def _job(job: tuple[Project, Host, list[list[tuple[str, Task]]]]) -> None:
+    """Worker body: extract each source's missing tasks straight into the shared cache."""
+    project, host, sources = job
     output = store(host)
-    for content_key, task in tasks:
-        output.put(content_key, extract(project, host, task))
+    for group in sources:
+        _fill(project, host, output, group)
+
+
+def _include_order(source: Path) -> tuple[tuple[str, ...], str]:
+    """Sources whose include lines match sit together, so their header expansions are shared."""
+    return tuple(name for _, name in _includes(source, inputs.signature(source))), str(source)
 
 
 def compute(project: Project, host: Host | None, output: Store, misses: list[tuple[str, Task]]) -> None:
     """Fill the store for missing tasks; worker processes share the cache on disk."""
+    groups: dict[Path, list[tuple[str, Task]]] = {}
+    for miss in sorted(misses, key=lambda miss: (miss[1][2], miss[1][0])):
+        groups.setdefault(miss[1][1], []).append(miss)
+    ordered = [groups[source] for source in sorted(groups, key=_include_order)]
     if output.cache is None or host is None:
-        for content_key, task in misses:
-            output.put(content_key, extract(project, host, task))
+        for group in ordered:
+            _fill(project, host, output, group)
         return
     from unbake import pool
 
-    # One version's sources in a row share their header expansion, which cdecl.resumable_parse parses once.
-    misses = sorted(misses, key=lambda miss: (miss[1][2], str(miss[1][1]), miss[1][0]))
-    chunks = [(project, host, misses[start : start + _CHUNK]) for start in range(0, len(misses), _CHUNK)]
-    pool.run(host, _chunk, chunks)
+    workers = pool.Pool.from_host(host).size
+    size = max(1, min(SOURCES_PER_JOB, -(-len(ordered) // (workers * JOBS_PER_WORKER))))
+    jobs = [(project, host, ordered[start : start + size]) for start in range(0, len(ordered), size)]
+    pool.run(host, _job, jobs)
 
 
 def published_keys(project: Project, policy: Host | None) -> list[str]:
@@ -275,19 +354,3 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
             raise Held("solve", f"facts.{content_key}: missing after extraction")
         seeds.extend(rows)
     return seeds
-
-
-def refresh(project: Project, policy: Host, tasks: list[Task]) -> dict[str, str]:
-    """Extract facts for these sources now and return the refusal reason of each failing function."""
-    output = store(policy)
-    refused: dict[str, str] = {}
-    snapshot = Snapshot(project)
-    for task in tasks:
-        content_key = source_key(project, policy, task, snapshot)
-        if task[0] in refused or output.has(content_key):
-            continue
-        try:
-            output.put(content_key, extract(project, policy, task))
-        except Held as error:
-            refused[task[0]] = error.reason
-    return refused

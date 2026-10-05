@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import ast
 import re
-from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -268,12 +267,18 @@ LAYOUT_TOKEN = re.compile(
 )
 
 
+def layout_tokens(clean: str, start: int = 0, end: int | None = None) -> list[re.Match[str]]:
+    """LayoutParser's tokens of declaration_source text between start and end."""
+    matches = LAYOUT_TOKEN.finditer(clean, start, len(clean) if end is None else end)
+    return [match for match in matches if not match[0].startswith(("/*", "//"))]
+
+
 class LayoutParser:
-    def __init__(self, source: str) -> None:
+    def __init__(self, source: str, tokens: list[re.Match[str]] | None = None) -> None:
+        """tokens: the layout tokens of declaration_source(source), when the caller already has them."""
         self.source = source
         self.defines = dict(re.findall(r"^\s*#\s*define\s+([A-Za-z_]\w*)[ \t]+([^\n]+)", source, re.M))
-        clean = declaration_source(source)
-        self.tokens = [match for match in LAYOUT_TOKEN.finditer(clean) if not match[0].startswith(("/*", "//"))]
+        self.tokens = layout_tokens(declaration_source(source)) if tokens is None else tokens
         self.index = 0
         self.types: dict[str, Aggregate | tuple[str | Aggregate, tuple[Operation, ...]]] = {}
         self.aggregates: list[Aggregate] = []
@@ -490,7 +495,12 @@ class LayoutParser:
         ]
 
     def parse(self) -> list[Layout]:
-        while self.peek():
+        self.declare(len(self.tokens))
+        return self.layouts()
+
+    def declare(self, stop: int) -> None:
+        """Read top-level declarations until the token index reaches stop (or the tokens end)."""
+        while self.index < stop and self.peek():
             begin = self.position()
             if self.peek() == "typedef":
                 self.take()
@@ -510,6 +520,9 @@ class LayoutParser:
                     self.skip_external()
             else:
                 self.skip_external()
+
+    def layouts(self) -> list[Layout]:
+        """Give each aggregate its typedef chain aliases, then lay out every named aggregate."""
         for name, target in self.types.items():
             if isinstance(target, tuple) and not target[1]:
                 base = target[0]
@@ -669,69 +682,37 @@ class SeededParser(c_parser.CParser):  # type: ignore[misc]
         return super()._parse_translation_unit_or_empty()
 
 
-_TOP_LEVEL = re.compile(r"[{}();]")
-# Translation units that share a long header expansion parse it once: (scope, prefix) -> (nodes, scope after it).
-_PREFIXES: OrderedDict[tuple[tuple[tuple[str, bool], ...], str], tuple[tuple[Any, ...], dict[str, bool]]] = (
-    OrderedDict()
-)
-PREFIXES_KEPT = 4
-_previous: list[tuple[tuple[tuple[str, bool], ...], str]] = []
-
-
-def _common_length(left: str, right: str) -> int:
-    low, high = 0, min(len(left), len(right))
-    while low < high:
-        middle = (low + high + 1) // 2
-        if left[:middle] == right[:middle]:
-            low = middle
-        else:
-            high = middle - 1
-    return low
-
-
-def _boundary(text: str, limit: int) -> int:
-    """The end of the last top-level declaration that finishes within text[:limit] (0 if none)."""
-    depth = found = 0
-    for match in _TOP_LEVEL.finditer(text, 0, limit):
-        token = match[0]
-        if token in "{(":
-            depth += 1
-        elif token in "})":
-            depth -= 1
-        elif depth == 0:
-            found = match.end()
-    return found
-
-
 def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
-    """parser(scope).parse(text), reusing the parse of a long prefix shared with an earlier unit.
+    """parser(scope).parse(text), resumed after the longest checkpointed prefix shared with a recent unit.
 
-    pycparser's only state between top-level declarations is the file scope, so a unit split after a
-    top-level ';' parses as the prefix's nodes followed by the rest seeded with the prefix's scope.
+    pycparser's only state between top-level declarations is the file scope, so a unit split at a
+    checkpoint parses as the prefix's nodes followed by the rest seeded with the prefix's scope.
+    A unit that does not parse is parsed whole, so its error is the same as without resumption.
     """
-    key = tuple(sorted(scope.items()))
-    known = [prefix for (scope_key, prefix) in _PREFIXES if scope_key == key and text.startswith(prefix)]
-    if not known and _previous and _previous[0][0] == key:
-        end = _boundary(text, _common_length(text, _previous[0][1]))
-        if end * 2 > len(text):
-            head = parser(scope)
-            try:
-                nodes = tuple(head.parse(text[:end]).ext)
-            except Exception:
-                nodes = None
-            if nodes is not None:
-                _PREFIXES[key, text[:end]] = nodes, head._scope_stack[0].copy()
-                while len(_PREFIXES) > PREFIXES_KEPT:
-                    _PREFIXES.popitem(last=False)
-                known = [text[:end]]
-    _previous[:] = [(key, text)]
-    if not known:
-        return parser(scope).parse(text)
-    prefix = max(known, key=len)
-    _PREFIXES.move_to_end((key, prefix))
-    nodes, after = _PREFIXES[key, prefix]
-    rest = parser(after).parse(text[len(prefix) :])
-    return c_ast.FileAST([*nodes, *rest.ext])
+    from unbake import prefixes
+
+    State = tuple[tuple[Any, ...], dict[str, bool]]
+
+    def advance(state: State | None, whole: str, start: int, end: int) -> State | None:
+        nodes, before = state or ((), scope)
+        head = parser(before)
+        try:
+            tree = head.parse(whole[start:end])
+        except Exception:
+            return None
+        return (*nodes, *tree.ext), head._scope_stack[0].copy()
+
+    def finish(state: State | None, whole: str, start: int) -> c_ast.FileAST:
+        if state is None:
+            return parser(scope).parse(whole)
+        nodes, after = state
+        try:
+            rest = parser(after).parse(whole[start:])
+        except Exception:
+            return parser(scope).parse(whole)
+        return c_ast.FileAST([*nodes, *rest.ext])
+
+    return prefixes.resumed("cdecl.parse." + repr(sorted(scope.items())), text, advance, finish)
 
 
 class GnuParser(c_parser.CParser):  # type: ignore[misc]

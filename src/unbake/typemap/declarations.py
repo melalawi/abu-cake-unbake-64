@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import subprocess
 import tempfile
-from collections.abc import Iterator, Mapping
+import weakref
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import cdecl
+from unbake import cdecl, prefixes
 from unbake.cache import memo
-from unbake.cdecl import LayoutParser, attribute_source, declaration_source
+from unbake.cdecl import attribute_source, declaration_source
 from unbake.cdecl import declarations as header_declarations
 from unbake.config import Held, Host, Project
 from unbake.decomp.draft_context import ordered_headers
 from unbake.project.headers import include_headers
-from unbake.typemap import storage
+from unbake.typemap import storage, unit_layouts
 
 _BOUNDARY = "extern int __unbake_feedback_boundary;"
 # One source's facts parse the same unit up to four times (scoped then full, contracts then definition).
@@ -52,8 +54,25 @@ def _outer_guard(text: str) -> str | None:
 
 
 def _declaration_unit(source: str) -> str:
-    """_unit_bodies_blanked, once per text: a source's facts blank the same unit several times."""
-    return memo("decl.unit", source, lambda: _unit_bodies_blanked(source), keep=2 * UNIT_MEMO)
+    """_unit_bodies_blanked, once per text, resumed after the header prefix shared with recent units."""
+    return memo(
+        "decl.unit",
+        source,
+        lambda: prefixes.concatenated("unit.blank", source, _unit_bodies_blanked),
+        keep=2 * UNIT_MEMO,
+    )
+
+
+def _unit_clean(stream: str, source: str, *, line_markers: bool) -> str:
+    """clean() of a whole unit, once per text, resumed after the header prefix shared with recent units."""
+    return memo(
+        "decl.clean." + stream,
+        (source, line_markers),
+        lambda: prefixes.concatenated(
+            f"unit.clean.{stream}.{line_markers}", source, lambda text: clean(text, line_markers=line_markers)
+        ),
+        keep=2 * UNIT_MEMO,
+    )
 
 
 def _unit_bodies_blanked(source: str) -> str:
@@ -261,7 +280,46 @@ class _FullDeclarationUnit(Exception):
     """A source changes the layout meaning of its shared header prefix."""
 
 
+_TYPES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+_PROTOTYPES: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+
 def _type(node: Any) -> str:
+    """_node_type once per node: a resumed parse shares its header prefix's nodes across units."""
+    found = _TYPES.get(node)
+    if found is None:
+        found = _TYPES[node] = _node_type(node)
+    return found
+
+
+def _prototype(declaration: Any) -> str:
+    found = _PROTOTYPES.get(declaration)
+    if found is None:
+        found = _PROTOTYPES[declaration] = c_generator.CGenerator().visit(declaration) + ";"
+    return found
+
+
+_GLOBALS: weakref.WeakKeyDictionary[Any, tuple[str, str, tuple[str, str | None] | None]] = weakref.WeakKeyDictionary()
+
+
+def _global(declaration: Any) -> tuple[str, str, tuple[str, str | None] | None]:
+    """A global's type, extern declaration and array element/extent, once per node."""
+    found = _GLOBALS.get(declaration)
+    if found is None:
+        generator = c_generator.CGenerator()
+        # A shallow copy: the parse tree is shared, and only the copy drops its initializer.
+        bare = copy.copy(declaration)
+        bare.init = None
+        array = None
+        if isinstance(declaration.type, c_ast.ArrayDecl):
+            dim = declaration.type.dim
+            array = _type(declaration.type.type), None if dim is None else generator.visit(dim)
+        extern = "extern " + generator.visit(bare).removeprefix("extern ") + ";"
+        found = _GLOBALS[declaration] = _type(declaration.type), extern, array
+    return found
+
+
+def _node_type(node: Any) -> str:
     # A named aggregate's body never enters an abstract type spelling. Prune
     # it before copying; callbacks can otherwise copy a whole shared layout.
     memo: dict[int, Any] = {}
@@ -330,13 +388,30 @@ def unknown(type_: str) -> bool:
     return bool(re.search(r"\bM2C_(?:UNK|UNKNOWN)\w*\b", type_))
 
 
+def _canonical_in(aliases: dict[str, str]) -> Callable[[str], str]:
+    """canonical(type_, aliases), remembered per alias environment: a unit's extractions share one."""
+    known: dict[str, str] = memo("decl.canonical", tuple(aliases.items()), dict, keep=4)
+
+    def resolve(type_: str) -> str:
+        found = known.get(type_)
+        if found is None:
+            found = known[type_] = canonical(type_, aliases)
+        return found
+
+    return resolve
+
+
 def parameter_registers(params: list[dict[str, Any]], aliases: dict[str, str]) -> list[str | None]:
+    return _registers(params, lambda type_: canonical(type_, aliases))
+
+
+def _registers(params: list[dict[str, Any]], resolve: Callable[[str], str]) -> list[str | None]:
     """O32 first four words, including the leading floating-point register rule."""
     result: list[str | None] = []
     slot = 0
     floating_prefix = True
     for param in params:
-        type_ = canonical(param["type"], aliases)
+        type_ = resolve(param["type"])
         width = 2 if type_ in ("double", "long long", "unsigned long long") else 1
         if width == 2:
             slot += slot % 2
@@ -369,7 +444,7 @@ def extract(
     _compact: bool = False,
     _contracts: bool = False,
 ) -> dict[str, Any]:
-    source = clean(source, line_markers=owned_source is not None or authored_headers is not None)
+    source = _unit_clean("extract", source, line_markers=owned_source is not None or authored_headers is not None)
     source = _declaration_unit(source)
     try:
         tree = _parser.parse(source) if _parser is not None else _tree(source, _scope or {})
@@ -390,6 +465,7 @@ def extract(
         and (owned_source is None or (node.coord.file and node.coord.file != str(owned_source)))
     )
     prefix_structs = {} if _prefix is None else _prefix["structs"]
+    resolve = _canonical_in(aliases)
     complete_layout = False
     if _prefix is not None:
         additions = []
@@ -399,7 +475,7 @@ def extract(
                 if type_ != _prefix["aliases"][name]:
                     overrides = True
                 continue
-            target = canonical(type_, aliases)
+            target = resolve(type_)
             aggregate = re.fullmatch(r"(?:struct|union) (\w+)", target)
             if aggregate is not None:
                 additions.append((aggregate[1], name))
@@ -466,7 +542,6 @@ def extract(
 
         Homes().visit(tree)
         result["authored_structs"] = sorted(authored_names)
-    generator = c_generator.CGenerator()
     for node in tree.ext:
         definition = isinstance(node, c_ast.FuncDef)
         declaration = node.decl if definition else node
@@ -490,28 +565,17 @@ def extract(
                 "params": params,
                 "variadic": variadic,
                 "arity_known": known_arity,
-                "prototype": generator.visit(declaration) + ";",
-                "registers": parameter_registers(params, aliases),
+                "prototype": _prototype(declaration),
+                "registers": _registers(params, resolve),
                 "provenance": provenance,
             }
         elif "static" not in declaration.storage and (
             _contracts or not definitions or (owned_source is not None and declaration.coord.file == str(owned_source))
         ):
-            type_ = _type(declaration.type)
-            # A shallow copy: the parse tree is shared by memo, and only the copy drops its initializer.
-            declaration = copy.copy(declaration)
-            declaration.init = None
-            result["globals"][declaration.name] = {
-                "type": type_,
-                "provenance": provenance,
-                "declaration": "extern " + generator.visit(declaration).removeprefix("extern ") + ";",
-            }
-            if isinstance(declaration.type, c_ast.ArrayDecl):
-                result["arrays"][declaration.name] = {
-                    "type": _type(declaration.type.type),
-                    "extent": generator.visit(declaration.type.dim) if declaration.type.dim is not None else None,
-                    "provenance": provenance,
-                }
+            type_, extern, array = _global(declaration)
+            result["globals"][declaration.name] = {"type": type_, "provenance": provenance, "declaration": extern}
+            if array is not None:
+                result["arrays"][declaration.name] = {"type": array[0], "extent": array[1], "provenance": provenance}
     if not complete_layout:
         rows, unknown = _layout_records(source, provenance, aliases)
         if _prefix is not None and (unknown or rows):
@@ -522,44 +586,25 @@ def extract(
     return result
 
 
-def _layout_typedefs(declaration: str, aliases: dict[str, str]) -> dict[str, str]:
-    """Keep the typedef prerequisites of a retained aggregate's C spelling."""
-    # Resolve prerequisite spellings so a pointer callback can precede the
-    # aggregate whose fields use it, without introducing a typedef cycle.
-    return {
-        name: canonical(aliases[name], aliases)
-        for name in sorted(header_declarations(declaration).uses)
-        if name in aliases
-    }
-
-
 def _layout_records(
     source: str, provenance: dict[str, Any], aliases: dict[str, str]
 ) -> tuple[dict[str, Any], list[str]]:
-    records: dict[str, Any] = {}
-    unknown = []
-    layout_source = clean(source)
-    try:
-        for layout in memo("decl.layouts", layout_source, lambda: LayoutParser(layout_source).parse(), keep=UNIT_MEMO):
-            if not layout.fields:
-                continue
-            declaration = layout_source[layout.start : layout.end] + ";"
-            records[layout.name] = {
-                "type": f"{layout.kind} {layout.name}",
-                "size": layout.size,
-                "alignment": layout.alignment,
-                "aliases": list(layout.aliases),
-                "declaration": declaration,
-                "typedefs": _layout_typedefs(declaration, aliases),
-                "fields": [
-                    {"name": f.name, "type": f.type, "offset": f.offset, "size": f.size, "extent": list(f.extent)}
-                    for f in layout.fields
-                ],
-                "provenance": provenance,
-            }
-    except Held as error:
-        unknown.append("types.layout: " + error.reason)
-    return records, unknown
+    layout_source = _unit_clean("layouts", source, line_markers=False)
+    rows, unknown = memo(
+        "decl.layouts",
+        (layout_source, tuple(aliases.items())),
+        lambda: unit_layouts.records(layout_source, aliases),
+        keep=UNIT_MEMO,
+    )
+    # Units whose rows are the same objects share one record dict, so its shared template is encoded once.
+    identity = (json.dumps(provenance, sort_keys=True), tuple((name, id(row)) for name, row in rows.items()))
+    records, _ = memo(
+        "decl.records",
+        identity,
+        lambda: ({name: {**row, "provenance": provenance} for name, row in rows.items()}, rows),
+        keep=8,
+    )
+    return records, list(unknown)
 
 
 def _portable_signatures(seed: dict[str, Any], shared_aliases: dict[str, str]) -> list[str]:
@@ -620,7 +665,7 @@ def published(
     seed["shared_typedefs"] = seed["aliases"]
     seed["layout_source"] = cleaned
     scope = parser._scope_stack[0].copy()
-    unit = _declaration_unit(clean(suffix, line_markers=True))
+    unit = _declaration_unit(_unit_clean("published", suffix, line_markers=True))
     # New aggregate definitions need the full layout context. Anonymous
     # extern declarations do not define named layouts and stay incremental.
     try:
