@@ -642,7 +642,7 @@ def validate_headers(
     def remembered_digest(data: bytes) -> str:
         return memo("typemap-validation-digest", data, lambda: storage.digest(data), keep=32768)
 
-    cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+    cache = Cache(project.cache)
     environment = session.environment if session is not None else regeneration.environment(project, policy)
     authored = (
         session.authored

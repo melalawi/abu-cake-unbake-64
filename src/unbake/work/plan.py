@@ -98,7 +98,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         )
     published = _published_rows(project)
     sources = [source for source in sorted(project.src.glob("*.c")) if source.stem in published]
-    for source in checks.dirty(Cache(host.cache_root), sources, host):
+    for source in checks.dirty(Cache(project.cache), sources, host):
         versions, row = published[source.stem]
         summary = history.get(source.stem)
         result.append(

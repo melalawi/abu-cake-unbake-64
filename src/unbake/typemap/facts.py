@@ -439,8 +439,8 @@ class Store:
         return rows[0]
 
 
-def store(policy: Host | None) -> Store:
-    return Store(None if policy is None else Cache(policy.cache_root))
+def store(project: Project, policy: Host | None) -> Store:
+    return Store(None if policy is None else Cache(project.cache))
 
 
 def _provenance(project: Project, function: str, version: str, source: Path) -> dict[str, Any]:
@@ -568,7 +568,7 @@ def _header_part(project: Project, host: Host | None, version: str, header: Path
 def _header_job(job: tuple[Project, Host | None, str, list[tuple[str, Path]]]) -> int:
     """Worker body: one version's missing header parts, straight into the shared cache."""
     project, host, version, headers = job
-    output = store(host)
+    output = store(project, host)
     for content_key, header in headers:
         output.put_json(HEADER, content_key, _header_part(project, host, version, header))
     return len(headers)
@@ -677,7 +677,7 @@ def _unit_job(
     source parts, each distinct one once."""
     global _session
     project, host, header_keys, versions = job
-    output = store(host)
+    output = store(project, host)
     if _session is None or _session[0] is not header_keys:
         _session = (header_keys, {version: _Parts(output, keys) for version, keys in header_keys.items()}, {})
     _, parts, contexts = _session

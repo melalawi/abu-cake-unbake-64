@@ -74,7 +74,7 @@ def compile_unit(
             atomic_files.copyfile(work / f"{name}.o", destination)
 
     try:
-        cached = cache.Cache(host.cache_root).produce("object", content_key, make)
+        cached = cache.Cache(project.cache).produce("object", content_key, make)
     except Held as error:
         raise Held("compile", f"compile.{name}: {source}: {error.reason}") from error
     output = object_path(project, version, unit, file)

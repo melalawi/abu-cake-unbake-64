@@ -10,7 +10,7 @@
 # memory_worker_bytes = 1500000000
 
 [cache]
-# root = "/abs/cache"
+# machine_root = "/abs/machine-cache"   # machine-wide: compilers and search scratch; each project keeps its own cache in .unbake/cache
 # max_bytes = 80000000000
 # trim_to_bytes = 60000000000
 # memory_bytes = 2000000000

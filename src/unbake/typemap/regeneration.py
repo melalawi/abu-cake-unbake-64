@@ -86,7 +86,7 @@ def environment(project: Project, policy: Host | None) -> str:
 class Session:
     def __init__(self, project: Project, policy: Host | None) -> None:
         self.project, self.policy = project, policy
-        self.cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+        self.cache = Cache(project.cache)
         self.environment = environment(project, policy)
         self.certificates = Certificates(self.cache, self.environment)
         self.authored = {

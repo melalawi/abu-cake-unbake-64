@@ -350,7 +350,7 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
     from unbake.typemap.declarations import clean
 
     project, policy, path, text = item
-    cache = Cache(policy.cache_root if policy is not None else project.root / ".unbake/cache")
+    cache = Cache(project.cache)
     generator = key(Path(__file__))
     # Preserve the no-owned-type fast path, but still collect authored
     # header ownership for sources with no local typedefs or tags.

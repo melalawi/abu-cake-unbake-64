@@ -154,12 +154,12 @@ def specification(ident: str) -> CompilerSpec:
 
 def acquire(spec: CompilerSpec, policy: Host | Host, *, supply: Path | None = None) -> Path:
     """Acquire a pinned candidate in the host cache without any project config."""
-    if not policy.cache_root.is_absolute():
-        raise Held("setup", "policy.cache_root: expected absolute path")
+    if not policy.cache_machine_root.is_absolute():
+        raise Held("setup", "policy.cache_machine_root: expected absolute path")
     current = specification(spec.id)
     if spec != current:
         raise Held("setup", f"setup.proposal_stale: compiler {spec.id}: registry specification changed")
-    cache = policy.cache_root / "compilers"
+    cache = policy.cache_machine_root / "compilers"
     cache.mkdir(parents=True, exist_ok=True)
     try:
         return _install(spec, cache, supply)
@@ -290,13 +290,13 @@ def _supplies(project: Project, override: Path | None) -> dict[str, Path]:
 
 def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Path:
     try:
-        compilers, tools, root, cache_root = project.compilers, project.tools, project.root, policy.cache_root
+        compilers, tools, root, cache_root = project.compilers, project.tools, project.root, policy.cache_machine_root
     except AttributeError as error:
         raise Held("setup", f"missing contract value {error}") from error
     if not isinstance(compilers, dict) or not compilers:
         raise Held("setup", "[compilers]: expected nonempty compiler set")
     if not cache_root.is_absolute():
-        raise Held("setup", "policy.cache_root: expected absolute path")
+        raise Held("setup", "policy.cache_machine_root: expected absolute path")
     try:
         tools.resolve().relative_to(root.resolve())
         tools_relative = tools.absolute().relative_to(root.absolute())
@@ -386,7 +386,7 @@ def status(policy: Host | Host) -> list[tuple[str, str]]:
     rows = []
     for ident, spec in registry().items():
         try:
-            verify(policy.cache_root / "compilers" / ident, spec)
+            verify(policy.cache_machine_root / "compilers" / ident, spec)
         except Held as error:
             rows.append((ident, error.reason))
         else:

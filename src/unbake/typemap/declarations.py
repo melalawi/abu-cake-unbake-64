@@ -831,12 +831,12 @@ def rooted(project: Project, text: str) -> str:
     return text.replace(f'"{project.root}/', '"').replace(f'"{project.root.resolve()}/', '"')
 
 
-def _declared_job(job: tuple[Host, str, dict[str, Any], set[Path]]) -> None:
+def _declared_job(job: tuple[Project, Host, str, dict[str, Any], set[Path]]) -> None:
     """Pool worker: one version's declared header facts, extracted into the shared store."""
     from unbake.typemap import facts
 
-    policy, text, provenance, authored = job
-    facts.store(policy).text(text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored))
+    project, policy, text, provenance, authored = job
+    facts.store(project, policy).text(text, provenance, authored, lambda: extract(text, provenance, authored_headers=authored))
 
 
 def _version_text(job: tuple[Project, Host | None, str, dict[Path, str], Path | None, list[Path]]) -> str:
@@ -866,7 +866,7 @@ def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict
 
     temporary = journal.scratch(project.build, ".declarations-")
     try:
-        return _collect(project, policy, temporary, facts.store(policy), keys)
+        return _collect(project, policy, temporary, facts.store(project, policy), keys)
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 
@@ -895,7 +895,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
             text: {"kind": "declared", "version": version, "sha256": storage.digest(rooted(project, text).encode())}
             for version, text in reversed(texts.items())
         }
-        pool.run(policy, _declared_job, [(policy, text, row, authored) for text, row in distinct.items()])
+        pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in distinct.items()])
     for version in project.versions:
         header_text = texts[version]
         # Line markers name absolute include paths: the digest reads them relative to the tree root, so the same
@@ -964,7 +964,7 @@ def _collect(project: Project, policy: Host | None, scratch: Path, store: Any, k
             from unbake import pool
 
             first = {text: evidence_row(version) for version, text in reversed(evidence_texts.items())}
-            pool.run(policy, _declared_job, [(policy, text, row, authored) for text, row in first.items()])
+            pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in first.items()])
         for version in project.versions:
             provenance = evidence_row(version)
             # Evidence imports the generated context too. Preserve definition

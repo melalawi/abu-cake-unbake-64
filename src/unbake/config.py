@@ -118,6 +118,10 @@ class Layout:
         return self.root / "build" / "work"
 
     @property
+    def cache(self) -> Path:
+        return self.root / ".unbake" / "cache"
+
+    @property
     def src(self) -> Path:
         return self.root / "src"
 
@@ -161,6 +165,10 @@ class Project:
     @property
     def work(self) -> Path:
         return Layout(self.root).work
+
+    @property
+    def cache(self) -> Path:
+        return Layout(self.root).cache
 
     @property
     def src(self) -> Path:
@@ -511,7 +519,7 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
         "memory_parent_bytes": "int",
         "memory_worker_bytes": "int",
     },
-    "cache": {"root": "path", "max_bytes": "int", "trim_to_bytes": "int", "memory_bytes": "int"},
+    "cache": {"machine_root": "path", "max_bytes": "int", "trim_to_bytes": "int", "memory_bytes": "int"},
     "tools": {
         "make": "exe",
         "path": "dirs",
@@ -570,7 +578,7 @@ _RESOURCES = (
     "resources.workers",
     *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")),
 )
-_CACHE = ("cache.root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_bytes")
+_CACHE = ("cache.machine_root", "cache.max_bytes", "cache.trim_to_bytes", "cache.memory_bytes")
 _BINUTILS = ("tools.cpp", "tools.mips_as", "tools.mips_ld", "tools.mips_objcopy", "tools.n64link")
 # buildfiles writes the CI workflow for [publish].branch, so every command that may regenerate it needs it.
 _BUILDFILES = (*_BINUTILS, "publish.branch")
@@ -761,7 +769,7 @@ class Host:
     memory_total_bytes = property(lambda self: self.get("resources.memory_total_bytes"))
     memory_parent_bytes = property(lambda self: self.get("resources.memory_parent_bytes"))
     memory_worker_bytes = property(lambda self: self.get("resources.memory_worker_bytes"))
-    cache_root = property(lambda self: self.get("cache.root"))
+    cache_machine_root = property(lambda self: self.get("cache.machine_root"))
     cache_max_bytes = property(lambda self: self.get("cache.max_bytes"))
     cache_trim_to_bytes = property(lambda self: self.get("cache.trim_to_bytes"))
     cache_memory_bytes = property(lambda self: self.get("cache.memory_bytes"))

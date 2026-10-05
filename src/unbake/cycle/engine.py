@@ -330,7 +330,7 @@ def run(
         ),
         cores=host.cores,
         memory_total_bytes=host.memory_total_bytes,
-        cache_root=str(host.cache_root),
+        cache_root=str(project.cache),
         stop=stopper.condition,
     )
     landed: list[str] = []

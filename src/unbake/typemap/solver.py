@@ -891,7 +891,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
         project,
         facts,
         declarations.collect(project, policy, fact_keys),
-        cache=None if policy is None else Cache(policy.cache_root),
+        cache=None if policy is None else Cache(project.cache),
         shard_dir=project.build / "types",
     )
     from unbake.typemap import declaration_evidence

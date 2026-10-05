@@ -84,7 +84,7 @@ def reproduce(
                 }
                 row["probes"].append(probe)
                 try:
-                    cache = policy.cache_root / "compilers" / ident
+                    cache = policy.cache_machine_root / "compilers" / ident
                     toolchain.verify(cache, spec)
                     if spec.kind == "ido":
                         run_tool(

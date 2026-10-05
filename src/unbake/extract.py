@@ -193,7 +193,7 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
 def directory(project: Project, host: Host, version: str) -> Path:
     """The unpacked extraction of one version, computed once per content key."""
     content_key = _version_key(project, host, version)
-    store = Cache(host.cache_root)
+    store = Cache(project.cache)
     archive = store.produce("extract", content_key, lambda path: _make_archive(project, host, version, path))
     unpacked = archive.with_name(archive.name + ".d")
     if unpacked.is_dir():

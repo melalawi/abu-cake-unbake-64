@@ -241,14 +241,14 @@ def _progress(project: Project, host: Host) -> None:
 def _trim_key(project: Project, host: Host) -> str:
     from unbake import cache
 
-    total = sum(path.stat().st_size for path in cache.entries(host.cache_root))
+    total = sum(path.stat().st_size for path in cache.entries(project.cache))
     return "over" if total > host.cache_max_bytes else "under"
 
 
 def _trim(project: Project, host: Host) -> None:
     from unbake import cache
 
-    cache.trim(host.cache_root, host.cache_max_bytes, host.cache_trim_to_bytes)
+    cache.trim(project.cache, host.cache_max_bytes, host.cache_trim_to_bytes)
 
 
 def _resident_key(project: Project, host: Host) -> str:

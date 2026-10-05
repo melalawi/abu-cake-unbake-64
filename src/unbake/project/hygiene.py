@@ -110,7 +110,7 @@ def tracked_findings(project: Project, policy: Host) -> list[str]:
     directories = compiler_directories(project)
     prefixes = tuple("/" + name + "/" for name in ("home", "mnt", "opt"))
     policy_paths = tuple(
-        str(value) for value in (policy.cache_root, policy.n64link, policy.cpp) if Path(value).is_absolute()
+        str(value) for value in (policy.cache_machine_root, policy.n64link, policy.cpp) if Path(value).is_absolute()
     )
     records = [record for record in result.stdout.split(b"\0") if record]
     blobs = [record.split(b"\t", 1)[0].split()[1] for record in records]

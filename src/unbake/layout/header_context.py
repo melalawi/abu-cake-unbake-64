@@ -231,9 +231,8 @@ class Headers:
     combined source, so callers locate declarations exactly as with context().
     """
 
-    def __init__(self, texts: dict[Path, str], *, root: Path | None, cache_root: Path | None = None) -> None:
+    def __init__(self, texts: dict[Path, str], *, root: Path | None) -> None:
         self.root = root
-        self._cache_root = cache_root
         self._load(texts)
 
     def _load(self, texts: dict[Path, str]) -> None:
@@ -263,9 +262,9 @@ class Headers:
         self.tag_only = {record.name for record in self.records if record.name not in record.aliases}
 
     @classmethod
-    def read(cls, project: Any, *, cache_root: Path | None = None) -> Headers:
+    def read(cls, project: Any) -> Headers:
         texts = {path: path.read_text() for path, _ in include_headers(project)}
-        return cls(texts, root=getattr(project, "root", None), cache_root=cache_root)
+        return cls(texts, root=getattr(project, "root", None))
 
     def seeded(self, text: str) -> LayoutParser:
         """A parser for text that sees every type declared by these headers."""

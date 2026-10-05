@@ -232,7 +232,7 @@ def propose_compilers(
     availability = {}
     for ident, spec in specs.items():
         try:
-            toolchain.verify(policy.cache_root / "compilers" / ident, spec)
+            toolchain.verify(policy.cache_machine_root / "compilers" / ident, spec)
         except Held as error:
             available[ident] = False
             availability[ident] = error.reason

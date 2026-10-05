@@ -394,7 +394,7 @@ def _layout_names(
                 partial(typed_context, versions[index]),
                 resolution,
                 tag_only,
-                cache_root=policy.cache_root,
+                cache_root=project.cache,
                 typedef_renames=callbacks,
                 preprocess=partial(expanded_context, parser, versions[index]),
                 source_path=source_path or project.src / f"{function}.c",

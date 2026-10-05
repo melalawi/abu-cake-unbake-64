@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import struct
 import tempfile
 from dataclasses import dataclass
@@ -92,19 +93,24 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
 
     function = compare.function_of(file)
     # The external permuter refuses a work directory inside the project, so every search works under the cache.
-    host.cache_root.mkdir(parents=True, exist_ok=True)
-    out = Path(tempfile.mkdtemp(prefix=f"search-{function}-", dir=host.cache_root))
-    if method == "permute":
-        versions = split.holding_versions(project, function)
-        version = project.names_from if project.names_from in versions else versions[0]
-        row = compare.row_of(project, function, version)
-        target = out / f"target-{version}.o"
-        atomic_files.write(target, target_object(function, split.words(project, row)))
-        generators: list[Any] = [Permuter(version, target, float(seconds))]
-    else:
-        generators = methods.methods(method)
-    # A draft under build/work/FUNC sees its own private headers first, as compare does.
-    result = run(compare.view_for(project, file, function), host, file, generators, out, float(seconds))
-    best = file.with_name(f"{function}.best.c")
-    atomic_files.copyfile(result.source, best)
-    return Searched(function, best, result.fuzzy, result.trial.exact, result.steps, result.trials - 1)
+    host.cache_machine_root.mkdir(parents=True, exist_ok=True)
+    out = Path(tempfile.mkdtemp(prefix=f"search-{function}-", dir=host.cache_machine_root))
+    try:
+        if method == "permute":
+            versions = split.holding_versions(project, function)
+            version = project.names_from if project.names_from in versions else versions[0]
+            row = compare.row_of(project, function, version)
+            target = out / f"target-{version}.o"
+            atomic_files.write(target, target_object(function, split.words(project, row)))
+            generators: list[Any] = [Permuter(version, target, float(seconds))]
+        else:
+            generators = methods.methods(method)
+        # A draft under build/work/FUNC sees its own private headers first, as compare does.
+        result = run(compare.view_for(project, file, function), host, file, generators, out, float(seconds))
+        best = file.with_name(f"{function}.best.c")
+        atomic_files.copyfile(result.source, best)
+        steps = file.with_name(f"{function}.steps.jsonl")
+        atomic_files.copyfile(result.steps, steps)
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+    return Searched(function, best, result.fuzzy, result.trial.exact, steps, result.trials - 1)
