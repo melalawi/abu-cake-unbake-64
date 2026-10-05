@@ -8,8 +8,8 @@ from unbake.typemap import solver
 ALIASES = {"s32": "int", "u32": "unsigned int"}
 
 
-def seed(type_: str, source: str) -> dict:
-    provenance = {"kind": "published", "source": source}
+def seed(type_: str, source: str, kind: str = "published") -> dict:
+    provenance = {"kind": kind, "source": source}
     record = {"type": type_, "declaration": f"extern {type_} D_800CD910_de;", "provenance": provenance}
     return {"aliases": ALIASES, "globals": {"D_800CD910_de": record}}
 
@@ -27,5 +27,24 @@ class MergeTests(unittest.TestCase):
                 merged = solver._merge_records([seed(left, "a.c"), seed(right, "b.c")], "globals", graph)
                 record = merged["D_800CD910_de"]
                 self.assertEqual(record["declaration_conflict"], conflict)
-                self.assertEqual(record["type"], left)  # the first published spelling stays
                 self.assertEqual(bool(graph.facts), conflict)
+
+    def test_a_published_contract_replaces_an_equal_declared_one(self) -> None:
+        """The RW loss: the header's declared int came first; the consumer's published int must win, or the
+        flow conflict drops the global from the header its consumer needs."""
+        for label, first, second, kind in [
+            ("declared then published", ("int", "declared"), ("int", "published"), "published"),
+            ("declared then published s32", ("int", "declared"), ("s32", "published"), "published"),
+            ("published then declared", ("int", "published"), ("int", "declared"), "published"),
+            (
+                "near miss: different types keep the conflict rules",
+                ("int", "declared"),
+                ("float", "published"),
+                "published",
+            ),
+        ]:
+            with self.subTest(label):
+                graph = SimpleNamespace(facts=[])
+                seeds = [seed(first[0], "h.h", first[1]), seed(second[0], "c.c", second[1])]
+                record = solver._merge_records(seeds, "globals", graph)["D_800CD910_de"]
+                self.assertEqual(record["provenance"]["kind"], kind)

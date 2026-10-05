@@ -24,6 +24,13 @@ SCHEMA = 3
 _MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")
 
 
+_RANKS = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
+
+
+def _rank(record: dict[str, Any]) -> int:
+    return _RANKS.get(record["provenance"].get("kind"), 1)
+
+
 def _comparable(record: dict[str, Any], key: str, aliases: dict[str, str]) -> dict[str, Any]:
     """A record's type meaning: typedef names resolved through its own seed's aliases (s32 and int are one type),
     parameter names dropped."""
@@ -55,7 +62,11 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
                     for row in (old, new):
                         row["params"] = [p["type"] for p in row["params"]]
                 if meanings[name] == _comparable(record, key, aliases):
-                    # The same type spelled through a typedef: no conflict, the first spelling stays.
+                    # The same type, maybe spelled through a typedef: no conflict. As for identical records,
+                    # the incoming one is kept unless it ranks lower, so a published contract replaces a
+                    # declared one (and the published-storage rule then keeps it in the header).
+                    if _rank(record) >= _rank(previous):
+                        records[name] = {**record, "declaration_conflict": bool(previous.get("declaration_conflict"))}
                     continue
                 if old != new:
                     ranks = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
