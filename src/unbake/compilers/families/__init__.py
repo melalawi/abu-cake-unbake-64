@@ -11,7 +11,7 @@ from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
-    from unbake.compilers.families.mips import Relocation
+    from unbake.compilers.families.mips import Relocation, Shape
     from unbake.decomp.explain import Allocation
 
 from unbake.config import Held
@@ -24,6 +24,7 @@ class CompilerIdentity(Protocol):
 
 @runtime_checkable
 class Family(Protocol):
+    def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape: ...
     def rodata_section(self) -> str: ...
     def move_idiom(self) -> str: ...
     def relocation_pairs(self, relocations: Iterable[Relocation]) -> list[tuple[Relocation | None, Relocation]]: ...

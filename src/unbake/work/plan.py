@@ -10,7 +10,7 @@ from unbake.config import Host, Project
 from unbake.cycle import rank
 from unbake.decomp import checks, exclusions
 from unbake.layout import split
-from unbake.work import attempts, inventory
+from unbake.work import attempts, inventory, shape
 
 M2C_KINDS = ("sn64", "ido")
 
@@ -31,6 +31,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
     history = attempts.summaries(project)
     result = []
     before = {(item.version, item.end): item for item in functions}
+    shapes = {ident: shape.for_compiler(compiler) for ident, compiler in project.compilers.items()}
     for items in inventory.groups(functions, bodies):
         if all(item.kind == "c" for item in items):
             continue
@@ -38,14 +39,14 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         aliases = {name for item in items for name in (item.name, *item.aliases)}
         if aliases & excluded or any(item.kind == "c" for item in items):
             continue
-        level = inventory.isa(project.compiler_for(canonical.name).cflags)
-        if any(
-            inventory.classify(bodies[item.version, item.name], item.address, level)[0] != "drafter" for item in items
-        ):
+        target = shapes[project.compiler_for(canonical.name).id]
+        if any(shape.classify(bodies[item.version, item.name], item.address, target)[0] != "drafter" for item in items):
             continue
         if any(
             (previous := before.get((item.version, item.start))) is not None
-            and inventory.tail(bodies[item.version, previous.name], previous.address, bodies[item.version, item.name])
+            and shape.tail(
+                bodies[item.version, previous.name], previous.address, bodies[item.version, item.name], target
+            )
             for item in items
         ):
             continue

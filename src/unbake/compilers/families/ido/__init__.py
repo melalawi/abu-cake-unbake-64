@@ -11,11 +11,17 @@ from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
-    from unbake.compilers.families.mips import Relocation
+    from unbake.compilers.families.mips import Relocation, Shape
     from unbake.decomp.explain import Allocation
 
 
 class Ido:
+    def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
+        """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments."""
+        from unbake.compilers.families.mips import o32_shape
+
+        return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64)
+
     def rodata_section(self) -> str:
         return ".rodata"
 
