@@ -5,7 +5,21 @@ import re
 from unbake.cdecl import SOURCE_TOKEN, LayoutParser
 from unbake.config import Held
 from unbake.decomp import opaque_pointers
+from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
+
+
+def _field_of(source: str, name: str) -> str | None:
+    """The offset of the first M2C_FIELD whose type argument names the unknown NAME."""
+    found: list[str] = []
+
+    def note(args: list[str]) -> str:
+        if len(args) == 3 and re.search(r"\b" + name + r"\b", args[1]):
+            found.append(args[2])
+        return ""
+
+    calls(source, "M2C_FIELD", note)
+    return found[0] if found else None
 
 
 def normalize(source: str, context: str) -> str:
@@ -31,6 +45,11 @@ def normalize(source: str, context: str) -> str:
         if not re.fullmatch(r"M2C_UNK\d*", name):
             continue
         if name not in parser.types:
+            field = _field_of(source, name)
+            if field is not None:
+                raise Held(
+                    "m2c", f"{name}: the field at {field} is dereferenced but its pointee has no measured layout"
+                )
             raise Held("m2c", f"{name}: unknown type has no declared target layout")
         spelling = parser.type_name(name, ())
         if spelling not in SCALARS or spelling in ("float", "double", "f32", "f64"):
