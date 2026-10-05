@@ -36,8 +36,9 @@ class SingleWriterTests(TempCase):
 
         land_steps: what each ensure of LAND_STEPS does, in turn: the names that ran, a Held to raise, or "quit".
         search: (call number, the file's text, method) -> the text of the method's best file, a result dict, or
-        None for the file as it is. A beta text spelling "better" scores 10 points more each time, "worse" 10 less,
-        "EXACT" is exact. The run ends when beta needs a creative edit."""
+        None for the file as it is, "SKIP" for a method with no mutation to propose.
+        A beta text spelling "better" scores 10 points more each time, "worse" 10 less, "EXACT" is exact.
+        The run ends when beta needs a creative edit."""
         project = SimpleNamespace(root=self.root, build=self.root / "build", work=self.root / "work", versions=("us",))
         host = SimpleNamespace(
             cycle_debounce_ms=100,
@@ -162,9 +163,11 @@ class SingleWriterTests(TempCase):
             found = search(len(searches), path.read_text(), method) if search is not None else None
             if isinstance(found, dict):
                 return found
+            if found == "SKIP":
+                return {"ok": True, "best_file": str(path), "mutations": 0, "seconds": 0.0}
             best = path.with_name(f"{path.stem}.best.c")
             best.write_text(path.read_text() if found is None else found)
-            return {"ok": True, "best_file": str(best), "seconds": 0.0}
+            return {"ok": True, "best_file": str(best), "mutations": 1, "seconds": 0.0}
 
         def write_trouble(project_, host_, function, file, ladder_, difference):
             log.append(f"trouble {function}")
@@ -314,6 +317,22 @@ class SingleWriterTests(TempCase):
         held = run.names("fn.held", "beta")[0]
         self.assertEqual(held["reason"], "search.registers: registers broke")
         self.assertEqual(run.result.data["held"], ["beta"])
+
+    def test_a_method_with_nothing_to_mutate_is_skipped_and_the_next_one_runs(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: "SKIP" if n == 1 else None)
+        self.assertEqual(self.methods(run), ["registers", "order"])
+        skipped = [e for e in run.names("fn.search.done", "beta") if e.get("diagnostic")]
+        self.assertEqual([e["method"] for e in skipped], ["registers"])
+        creative = run.names("fn.creative", "beta")[0]
+        self.assertEqual(creative["methods"]["order"], 50.0)
+        self.assertTrue(creative["methods"]["registers"].startswith("skipped:"))
+        self.assertEqual(run.names("fn.held"), [])
+
+    def test_every_method_skipped_ends_in_a_creative_edit_not_a_hold(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: "SKIP")
+        self.assertEqual(self.methods(run), ["registers", "order", "permute"])
+        self.assertEqual(set(run.names("fn.creative", "beta")[0]["methods"]), {"registers", "order", "permute"})
+        self.assertEqual(run.names("fn.held"), [])
 
     def test_a_search_started_before_the_land_runs_after_the_steps(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)

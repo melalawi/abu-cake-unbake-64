@@ -21,6 +21,8 @@ class Searched:
     best_percent: float
     exact: bool
     steps: Path
+    # Mutations the methods proposed and measured (the starting source is not one).
+    mutations: int
 
     def document(self) -> dict[str, Any]:
         return {
@@ -29,6 +31,7 @@ class Searched:
             "best_percent": round(self.best_percent, 6),
             "exact": self.exact,
             "steps": str(self.steps),
+            "mutations": self.mutations,
         }
 
     def lines(self) -> list[str]:
@@ -105,4 +108,4 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
     result = run(compare.view_for(project, file, function), host, file, generators, out, float(seconds))
     best = file.with_name(f"{function}.best.c")
     atomic_files.copyfile(result.source, best)
-    return Searched(function, best, result.fuzzy, result.trial.exact, result.steps)
+    return Searched(function, best, result.fuzzy, result.trial.exact, result.steps, result.trials - 1)

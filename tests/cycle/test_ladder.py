@@ -19,8 +19,10 @@ class LadderTests(unittest.TestCase):
             current.tried[method] = 0.0
         self.assertEqual(tuple(seen), BUILTINS)
 
-    def test_a_method_already_scored_is_skipped(self) -> None:
+    def test_a_method_already_scored_or_skipped_is_not_run_again(self) -> None:
         self.assertEqual(ladder.Ladder(tried={"registers": 50.0}).next_method(), "order")
+        self.assertEqual(ladder.Ladder(skipped={"registers": "n/a"}, tried={"order": 1.0}).next_method(), "permute")
+        self.assertIsNone(ladder.Ladder(skipped={"registers": "n/a", "order": "n/a", "permute": "n/a"}).next_method())
 
     def test_only_a_strictly_higher_percent_is_a_gain(self) -> None:
         current = ladder.Ladder(best=60.0)
@@ -33,10 +35,10 @@ class LadderTests(unittest.TestCase):
 
 
 class TroubleTests(TempCase):
-    def write(self, tried: dict, assembly: object = "glabel f\n nop\n") -> str:
+    def write(self, tried: dict, assembly: object = "glabel f\n nop\n", skipped: dict | None = None) -> str:
         file = self.root / "f.c"
         file.write_text("int f(void) { return 1; }\n")
-        current = ladder.Ladder(tried=tried, best=72.5)
+        current = ladder.Ladder(tried=tried, best=72.5, skipped=skipped or {})
         target = patch.object(
             ladder, "target_assembly", side_effect=assembly if isinstance(assembly, Exception) else None
         )
@@ -48,7 +50,7 @@ class TroubleTests(TempCase):
         return path.read_text()
 
     def test_it_holds_the_target_the_best_c_the_first_difference_and_each_method(self) -> None:
-        text = self.write({"registers": 70.0, "order": 71.0})
+        text = self.write({"registers": 70.0, "order": 71.0}, skipped={"permute": "no mutation"})
         for part in (
             "Best compare so far: 72.50%",
             "glabel f",
@@ -56,9 +58,9 @@ class TroubleTests(TempCase):
             "first divergence: word 3",
             "| registers | 70.00% |",
             "| order | 71.00% |",
+            "| permute | skipped: no mutation |",
         ):
             self.assertIn(part, text)
-        self.assertNotIn("permute", text)
 
     def test_missing_target_assembly_is_written_by_name_not_dropped(self) -> None:
         self.assertIn("unavailable: extract: no asm", self.write({}, Held("extract", "extract: no asm")))

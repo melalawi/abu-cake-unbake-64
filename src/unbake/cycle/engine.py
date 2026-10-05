@@ -78,6 +78,8 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
     return {"ok": True, "file": str(made.file), "seconds": time.monotonic() - started}
 
 
+SKIPPED = "the method proposed no mutation for this function"
+
 FIRST = ("VERSION ", "first divergence: ", "constant: ")
 
 
@@ -121,7 +123,12 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
         found = search.search(config.load(root), host, Path(file), method, host.cycle_search_seconds)
     except Held as error:
         return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
-    return {"ok": True, "best_file": str(found.best_file), "seconds": time.monotonic() - started}
+    return {
+        "ok": True,
+        "best_file": str(found.best_file),
+        "mutations": found.mutations,
+        "seconds": time.monotonic() - started,
+    }
 
 
 def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
@@ -481,7 +488,7 @@ def run(
                 "fn.creative",
                 function=row.function,
                 best_percent=row.ladder.best,
-                methods=dict(row.ladder.tried),
+                methods={**row.ladder.tried, **{name: f"skipped: {why}" for name, why in row.ladder.skipped.items()}},
                 trouble=str(trouble),
             )
 
@@ -516,6 +523,7 @@ def run(
                 ok=result["ok"],
                 seconds=round(result["seconds"], 3),
                 **({} if result["ok"] else {"diagnostic": result["diagnostic"]}),
+                **({"diagnostic": SKIPPED} if result["ok"] and not result["mutations"] else {}),
             )
             if not result["ok"]:
                 # A method that errors is a tool gap, never a plateau: the row holds with the method's reason.
@@ -528,6 +536,13 @@ def run(
                     reason=row.diagnostic,
                     next=next_words("search-variants", row.file, "--method", method),
                 )
+                return
+            if not result["mutations"]:
+                # Nothing to mutate (no pseudo register to move, no statement to reorder): the method does not
+                # apply to this function, which says nothing about the ones after it.
+                current.skipped[method] = SKIPPED
+                current.method = ""
+                search_next(row)
                 return
             file, best = Path(row.file), Path(result["best_file"])
             if best.read_bytes() == file.read_bytes():

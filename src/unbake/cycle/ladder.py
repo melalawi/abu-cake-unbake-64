@@ -21,11 +21,13 @@ class Ladder:
     # method -> the compare percent after it ran
     tried: dict[str, float] = field(default_factory=dict)
     best: float = 0.0
+    # method -> why it did not apply to this function
+    skipped: dict[str, str] = field(default_factory=dict)
     # The method whose search or whose adopted text's compare is outstanding.
     method: str = ""
 
     def next_method(self) -> str | None:
-        return next((name for name in BUILTINS if name not in self.tried), None)
+        return next((name for name in BUILTINS if name not in self.tried and name not in self.skipped), None)
 
     def gained(self, percent: float) -> bool:
         return percent > self.best
@@ -57,7 +59,10 @@ def write_trouble(project: Project, host: Host, function: str, file: Path, ladde
         assembly = target_assembly(project, host, function)
     except Held as error:
         assembly = f"unavailable: {error.reason}"
-    methods = "\n".join(f"| {name} | {value:.2f}% |" for name, value in ladder.tried.items())
+    methods = "\n".join(
+        [f"| {name} | {value:.2f}% |" for name, value in ladder.tried.items()]
+        + [f"| {name} | skipped: {why} |" for name, why in ladder.skipped.items()]
+    )
     path = file.with_name("TROUBLE.md")
     atomic_files.text(
         path,

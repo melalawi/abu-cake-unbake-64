@@ -22,7 +22,9 @@ class SearchViewTests(TempCase):
         def run(given, host, source, generators, out, seconds):  # type: ignore[no-untyped-def]
             seen.append(given)
             best.write_text("int f(void) { return 0; }\n")
-            return SimpleNamespace(source=best, fuzzy=75.0, trial=SimpleNamespace(exact=False), steps=out / "steps")
+            return SimpleNamespace(
+                source=best, fuzzy=75.0, trial=SimpleNamespace(exact=False), steps=out / "steps", trials=1
+            )
 
         with (
             patch.object(
