@@ -98,9 +98,9 @@ class ContractTests(TempCase):
         code, stdout, stderr = self.run_main(["--help"])
         result = self.only_object(stdout)
         self.assertEqual((code, result["status"]), (0, "ok"))
-        for verb in set(VERBS) - {"recompute"}:
+        for verb in VERBS:
             self.assertIn(verb, stderr)
-        for verb in ("try", "submit", "clone", "recompute"):
+        for verb in ("try", "submit", "clone"):
             self.assertNotRegex(stderr, rf"\b{verb}\b")
 
 

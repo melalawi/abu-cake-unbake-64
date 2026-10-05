@@ -8,13 +8,13 @@ from unbake.cli.args import Context
 from unbake.cli.output import Result
 
 NAME = "recompute"
-HELP = "Re-run an internal step, ignoring its cached results (debugging)."
-HIDDEN = True
+HELP = "Re-run internal steps, ignoring their cached results (debugging)."
 DESCRIPTION = """\
-Re-run one internal step (or all) and ignore its cached results. For debugging only; ordinary work
-never needs it because every step reruns by itself when its inputs change.
+Re-run the named internal steps (or all) and ignore their cached results. For debugging only; ordinary
+work never needs it because every step reruns by itself when its inputs change.
 
   unbake recompute types
+  unbake recompute headers buildfiles
   unbake recompute --all
 """
 PROJECT = "ready"
@@ -27,15 +27,21 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 def register(parser: argparse.ArgumentParser) -> None:
     from unbake import steps
 
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("step", nargs="?", choices=steps.NAMES)
-    group.add_argument("--all", action="store_true")
+    parser.add_argument("steps", nargs="*", metavar="STEP", help="One or more of: " + ", ".join(steps.NAMES))
+    parser.add_argument("--all", action="store_true")
 
 
 def run(context: Context) -> Result:
     from unbake import steps
+    from unbake.config import Held
 
-    names = steps.NAMES if context.args.all else (context.args.step,)
+    named = tuple(dict.fromkeys(context.args.steps))
+    if context.args.all == bool(named):
+        raise Held("recompute", "recompute.steps: name one or more steps, or --all")
+    unknown = [name for name in named if name not in steps.NAMES]
+    if unknown:
+        raise Held("recompute", f"recompute.steps: unknown {', '.join(unknown)}; steps are {', '.join(steps.NAMES)}")
+    names = steps.NAMES if context.args.all else named
     ran = steps.recompute(context.project(), context.require_host(), names)
     data = {"steps": [row.document() for row in ran]}
     return Result.ok(NAME, data, [row.line() for row in ran], context.cmd("next"))
