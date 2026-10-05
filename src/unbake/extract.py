@@ -12,6 +12,7 @@ import csv
 import fcntl
 import json
 import os
+import posixpath
 import re
 import subprocess
 import tarfile
@@ -38,10 +39,57 @@ def scalar(text: str) -> str:
     return str(ast.literal_eval(text)) if text[:1] in {"'", '"'} else text
 
 
-def assembly_rows(text: str) -> str:
-    """The split with every C and hasm row as assembly and no alignment annotations (splat's own syntax)."""
+def assembly_rows(text: str, functions: dict[int, str]) -> str:
+    """The split as splat reads it: every C and hasm row as assembly, no alignment annotations, and a landed row cut
+    at every function FUNCTIONS (address -> name) places inside it.
+
+    A merge-units pass joins landed rows into one; cut at its members' starts, the merged row reads as the rows it
+    replaced, so the extraction (keyed on this text) is the one already made and no merge re-extracts anything."""
     text = _ALIGN.sub(lambda match: match[1] + match[2], text)
-    return _C_ROW.sub(lambda match: match[1] + "asm" + match[2] + match[3] + match[4], text)
+    lines = text.splitlines(keepends=True)
+    cuts: dict[int, list[str]] = {}
+    if functions:
+        from unbake.layout import split
+
+        _, _, segments = split.parse_layout(Path("split"), text)
+        for segment in segments:
+            if "start" not in segment.fields or "vram" not in segment.fields:
+                continue
+            bias = split.number(segment.fields["vram"], "vram") - split.number(segment.fields["start"], "start")
+            for index, row in enumerate(segment.rows):
+                if row.kind not in ("c", "hasm"):
+                    continue
+                stop = segment.rows[index + 1].start if index + 1 < len(segment.rows) else segment.end
+                assert stop is not None
+                folder = posixpath.dirname(scalar(row.path))
+                cuts[row.line] = [
+                    f'{row.match["indent"]}- [0x{address - bias:X}, asm, "{posixpath.join(folder, name)}"]\n'
+                    for address, name in sorted(functions.items())
+                    if row.start < address - bias < stop
+                ]
+    out = []
+    for index, line in enumerate(lines):
+        out.append(_C_ROW.sub(lambda match: match[1] + "asm" + match[2] + match[3] + match[4], line))
+        out.extend(cuts.get(index, ()))
+    return "".join(out)
+
+
+def function_symbols(path: Path) -> dict[int, str]:
+    """Each address the symbols file marks type:func, by its first name in order (aliases share an address)."""
+    from unbake.layout import split
+
+    _, rows = split.symbols(path)
+    found: dict[int, str] = {}
+    for name, (address, _, match) in sorted(rows.items(), key=lambda item: item[0]):
+        if re.search(r"\btype\s*:\s*func\b", match.string):
+            found.setdefault(address, name)
+    return found
+
+
+def splat_rows(project: Project, version: str) -> str:
+    """The split splat extracts for VERSION (assembly_rows of the configured split and symbols)."""
+    configured = project.version(version)
+    return assembly_rows(configured.split.read_text(), function_symbols(configured.symbols))
 
 
 def _version_key(project: Project, host: Host, version: str) -> str:
@@ -50,7 +98,7 @@ def _version_key(project: Project, host: Host, version: str) -> str:
         Path(__file__),
         "extract-v1",
         configured.baserom_sha1,
-        assembly_rows(configured.split.read_text()),
+        splat_rows(project, version),
         configured.symbols,
         inputs.digest(host.splat),
         "SN64" if project.compilers[project.default_compiler].kind == "sn64" else "IDO",
@@ -91,7 +139,8 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
         staging = Path(temporary)
         config = staging / "input.yaml"
         overlay = staging / "outputs.yaml"
-        atomic_files.text(config, assembly_rows(configured.split.read_text()))
+        rows = splat_rows(project, version)
+        atomic_files.text(config, rows)
         options = _options(project, version, staging, configured.symbols.resolve())
         atomic_files.text(
             overlay, "options:\n" + "".join(f"  {name}: {json.dumps(value)}\n" for name, value in options.items())
@@ -110,7 +159,7 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
             raise Held("extract", f"extract.splat.{version}: splat wrote no symbol dump")
         atomic_files.copyfile(dump, staging / "splat_symbols.csv")
         committed = instruction_symbols(staging / "asm", discovered_symbols(dump, symbols_from([configured.symbols])))
-        units = unit_addresses(configured.split.read_text())
+        units = unit_addresses(rows)
         for name, address in units.items():
             if name in committed and committed[name] != address:
                 raise Held("extract", f"extract.symbols.{version}: split and symbols disagree for {name}")
