@@ -24,13 +24,7 @@ def spelled(text: str) -> set[str]:
 
 def _local_names(text: str) -> set[str]:
     """Names the source declares itself before its first use of them; a later declaration needs the header."""
-    from unbake.cdecl import declarations
-
-    first: dict[str, int] = {}
-    for start, end in redeclarations.spans(text):
-        for variant in redeclarations.variants(text[start:end]):
-            for name in declarations(variant).declared:
-                first[name] = min(first.get(name, start), start)
+    first = redeclarations.declared(text)
     code = re.sub(r"/\*.*?\*/|//[^\n]*", lambda m: " " * len(m[0]), text, flags=re.S)
     code = re.sub(r"^[ \t]*#[ \t]*include[^\n]*", lambda m: " " * len(m[0]), code, flags=re.M)
     used: dict[str, int] = {}

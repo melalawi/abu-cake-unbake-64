@@ -226,7 +226,7 @@ class Layout:
                 raise Held("layout", f"layout.member.{source.stem}: source has no group")
             from unbake.layout import redeclarations
 
-            local = set().union(*(declarations(text[start:end]).declared for start, end in redeclarations.spans(text)))
+            local = set(redeclarations.declared(text))
             self.local_names.setdefault(owner.header, set()).update(local)
             for provider in required_providers(text, self.providers, self.tags, self.aliases, local):
                 if provider not in fixed:

@@ -17,6 +17,11 @@ class LocalNamesTests(unittest.TestCase):
                 set(),
             ),
             ("a comment is not a use", "/* D_1 */\nextern int D_1;\nint f(void) { return D_1; }\n", {"D_1"}),
+            (
+                "a declarator split by version conditionals",
+                "extern void\n#if defined(V_A)\nD_1\n#else\nD_2\n#endif\n(int a);\nint f(void) { D_1(0); }\n",
+                {"D_1"},
+            ),
         ):
             with self.subTest(name):
                 self.assertEqual(_local_names(text) & {"D_1"}, expected)

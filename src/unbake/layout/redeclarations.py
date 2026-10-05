@@ -124,6 +124,18 @@ def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
     return _signature(left, items).replace("()", "(void)") == _signature(right, items).replace("()", "(void)")
 
 
+def declared(text: str) -> dict[str, int]:
+    """Each name a source declares at file scope, in any version branch, with the offset of its first declaration."""
+    from unbake.cdecl import declarations
+
+    first: dict[str, int] = {}
+    for start, end in spans(text):
+        for variant in variants(text[start:end]):
+            for name in declarations(variant).declared:
+                first.setdefault(name, start)
+    return first
+
+
 def variants(text: str) -> tuple[str, ...]:
     """Expand declaration-local conditionals without interpreting project macros."""
     lines = text.splitlines(keepends=True)
