@@ -78,9 +78,12 @@ def catalog(project: Project) -> dict[str, Member]:
     order = (project.names_from, *(v for v in project.versions if v != project.names_from))
     for version in order:
         path = project.version(version).split
-        segments = split.layout(path)[2]
+        owners: dict[str, Any] = {}
+        for segment in split.layout(path)[2]:
+            for row in segment.rows:
+                owners.setdefault(row.path, segment)
         for function in split.functions(project, version):
-            segment = next(s for s in segments if any(row.path == function.path for row in s.rows))
+            segment = owners[function.path]
             name = Path(function.path).name
             segment_name = split.plain(segment.fields.get("name", f"span_{int(segment.fields['start'], 0):X}"))
             if name in result:

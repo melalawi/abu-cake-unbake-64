@@ -41,16 +41,30 @@ def _encode(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def content_digest(value: dict[str, Any]) -> str:
-    """The canonical digest of a solution (independent of sqlite page layout)."""
+Encoded = dict[str, "str | dict[str, str]"]
+
+
+def encode(value: dict[str, Any]) -> Encoded:
+    """Every top-level value and every row of each kind as canonical JSON, encoded once per solution."""
+    return {
+        key: {name: _encode(row) for name, row in item.items()}
+        if key in KINDS and isinstance(item, dict)
+        else _encode(item)
+        for key, item in value.items()
+    }
+
+
+def content_digest(encoded: Encoded) -> str:
+    """The canonical digest of an encoded solution (independent of sqlite page layout)."""
     hash_ = hashlib.sha256()
-    for key in sorted(value):
+    for key in sorted(encoded):
         hash_.update(_encode(key).encode() + b":")
-        if key in KINDS and isinstance(value[key], dict):
-            for name in sorted(value[key]):
-                hash_.update(_encode(name).encode() + b"=" + _encode(value[key][name]).encode() + b";")
+        item = encoded[key]
+        if isinstance(item, dict):
+            for name in sorted(item):
+                hash_.update(_encode(name).encode() + b"=" + item[name].encode() + b";")
         else:
-            hash_.update(_encode(value[key]).encode())
+            hash_.update(item.encode())
         hash_.update(b"\n")
     return hash_.hexdigest()
 
@@ -64,34 +78,36 @@ def _connect(file: Path) -> sqlite3.Connection:
 
 def stage(
     destination: Path,
-    value: dict[str, Any],
+    encoded: Encoded,
     summary: dict[str, dict[str, dict[str, Any]]],
     marks: dict[str, Any],
 ) -> tuple[Path, str]:
-    """Write a complete database next to DESTINATION; return (staged file, content digest)."""
+    """Write a complete encoded solution next to DESTINATION; return (staged file, content digest)."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(prefix=".types-", suffix=".sqlite", dir=destination.parent)
     os.close(descriptor)
     staged = Path(name)
-    digest = content_digest(value)
+    digest = content_digest(encoded)
     try:
         staged.unlink()
         connection = sqlite3.connect(staged)
         with connection:
             for statement in SCHEMA:
                 connection.execute(statement)
-            meta = {key: row for key, row in value.items() if key not in KINDS}
-            meta["content_sha256"] = digest
-            connection.executemany("INSERT INTO meta VALUES (?, ?)", ((k, _encode(v)) for k, v in sorted(meta.items())))
+            meta = {key: item for key, item in encoded.items() if key not in KINDS}
+            meta["content_sha256"] = _encode(digest)
+            connection.executemany("INSERT INTO meta VALUES (?, ?)", sorted(meta.items()))
             for kind in KINDS:
-                rows = value.get(kind, {})
+                rows = encoded.get(kind, {})
+                if not isinstance(rows, dict):
+                    raise Held("types", f"types.sqlite: {kind}: expected rows by name")
                 connection.executemany(
-                    "INSERT INTO entries VALUES (?, ?, ?)", ((kind, k, _encode(v)) for k, v in sorted(rows.items()))
+                    "INSERT INTO entries VALUES (?, ?, ?)", ((kind, k, v) for k, v in sorted(rows.items()))
                 )
-            for kind, rows in summary.items():
+            for kind, summaries in summary.items():
                 connection.executemany(
                     "INSERT INTO summary VALUES (?, ?, ?, ?)",
-                    ((kind, k, row["semantic_sha256"], _encode(row["users"])) for k, row in sorted(rows.items())),
+                    ((kind, k, row["semantic_sha256"], _encode(row["users"])) for k, row in sorted(summaries.items())),
                 )
             connection.executemany(
                 "INSERT INTO redraft VALUES (?, ?)", ((k, _encode(v)) for k, v in sorted(marks.items()))

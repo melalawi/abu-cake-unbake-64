@@ -342,6 +342,8 @@ def _render(
         for path, text in value.get("published_declarations", {}).items()
     }
     source_typedefs: set[str] = set()
+    homes = value.get("published_homes", {})
+    published_homes = {path for path in retained_contracts if path.relative_to(root).as_posix() in homes}
     for source_path, text in session.sources.items():
         local: dict[str, list[str]] = {}
         for start, end in redeclarations.spans(text):
@@ -367,7 +369,7 @@ def _render(
         for path, names in retained_contracts.items():
             if (
                 path in components
-                and path.relative_to(root).as_posix() not in value.get("published_homes", {})
+                and path not in published_homes
                 and any(
                     not redeclarations.equivalent(variant, components[path], local_aliases)
                     for name in local.keys() & names
@@ -433,8 +435,6 @@ def symbol_segments(project: Project) -> dict[str, str]:
 
 
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Host | None = None) -> None:
-    from unbake.cache import memo, serialized
-
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
     session = regeneration.Session(project, policy)
@@ -473,27 +473,21 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         if isinstance(content, bytes)
     }
     database = types_db.path(project)
-    digest = types_db.content_digest(value)
+    encoded = types_db.encode(value)
+    digest = types_db.content_digest(encoded)
     summary: dict[str, Any] = {}
     changed: set[str] = set()
     for kind in ("functions", "globals", "structs", "arrays"):
         before = previous.get(kind, {})
         after = value[kind]
 
-        def summarize(after: dict[str, Any] = after) -> dict[str, Any]:
-            return {
-                name: {
-                    "semantic_sha256": storage.digest(storage.encoded(_semantic(row))),
-                    "users": list(row.get("users", [])),
-                }
-                for name, row in after.items()
+        summary[kind] = {
+            name: {
+                "semantic_sha256": storage.digest(storage.encoded(_semantic(row))),
+                "users": list(row.get("users", [])),
             }
-
-        summary[kind] = memo(
-            "typemap.summary." + kind,
-            storage.digest(serialized(["typemap.database." + kind, after])),
-            summarize,
-        )
+            for name, row in after.items()
+        }
         for name in set(before) | set(after):
             old = before.get(name, {})
             old_digest = old.get("semantic_sha256") or storage.digest(storage.encoded(_semantic(old)))
@@ -528,7 +522,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     # Carry pending marks forward so a draft against the newest revision can clear them.
     for mark in marks.values():
         mark.update(revision=value["revision"], type_db_sha256=digest)
-    staged, _ = types_db.stage(database, value, summary, marks)
+    staged, _ = types_db.stage(database, encoded, summary, marks)
     from unbake.layout import index
 
     # Sources still include headers this render no longer produces until the headers step rewrites them, and

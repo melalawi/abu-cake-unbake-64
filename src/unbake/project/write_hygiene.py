@@ -62,9 +62,8 @@ def violations(path: Path, content: str) -> list[str]:
                 ):
                     unsafe = True
                 # Exclusive creation cannot truncate an existing shared inode.
-        graph_touch = attr == "touch" and name == "typemap/solver.py"
-        if called in {"os.open", "os.fdopen"} or (attr == "touch" and not graph_touch):
-            # One descriptor stream: storage.s mkstemp-backed JSON writer (solver.touch is a graph method).
+        if called in {"os.open", "os.fdopen"} or attr == "touch":
+            # One descriptor stream: storage's mkstemp-backed JSON writer.
             unsafe = not (
                 name == "typemap/storage.py" and called == "os.fdopen" and ast.unparse(node.args[0]) == "descriptor"
             )
