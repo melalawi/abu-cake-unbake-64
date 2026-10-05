@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Callable, Iterator
@@ -875,8 +876,94 @@ def input_key(project: Project, host: Host | None) -> str:
     return _types_key(project, host, facts, source_facts.published_keys(project, host))
 
 
+def marker(project: Project) -> Path:
+    """Where the digest of the inputs of the last published solution is kept."""
+    return project.build / "types" / "solve-input.sha256"
+
+
+def _plain(value: Any) -> Any:
+    """JSON for a seed's values: layouts with their receipt, sets in order, paths as text."""
+    if isinstance(value, declarations.ProvenStructs):
+        return {"template": value.template, "provenance": value.provenance}
+    if isinstance(value, (set, frozenset)):
+        return sorted(value)
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"types.input: {type(value).__name__} is not part of a seed")
+
+
+def _seeds_digest(seeds: list[dict[str, Any]]) -> bytes:
+    """The digest of every seed in one pass. Seeds share interned alias maps and layout templates, so each shared
+    object is hashed once."""
+    memo: dict[int, tuple[Any, bytes]] = {}
+
+    def digest(value: Any) -> bytes:
+        found = memo.get(id(value))
+        if found is None or found[0] is not value:
+            if isinstance(value, declarations.ProvenStructs):
+                body = digest(value.template) + json.dumps(value.provenance, sort_keys=True).encode()
+            else:
+                body = json.dumps(value, sort_keys=True, default=_plain).encode()
+            found = memo[id(value)] = value, hashlib.sha256(body).digest()
+        return found[1]
+
+    whole = hashlib.sha256()
+    for seed in seeds:
+        for name in sorted(seed):
+            whole.update(name.encode() + b"\0" + digest(seed[name]))
+        whole.update(b"\1")
+    return whole.digest()
+
+
+def _evidence(project: Project) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]]]:
+    """The generated-header evidence a solve reads and publishes with its solution, by path from include/."""
+    from unbake.typemap import declaration_evidence
+
+    root = project.include[0]
+    feedback = {
+        str(path.relative_to(root)): text for path, text in declaration_evidence.feedback_components(project).items()
+    }
+    published, homes = declaration_evidence.published_snapshot(project)
+    return (
+        feedback,
+        {str(path.relative_to(root)): text for path, text in published.items()},
+        {
+            str(path.relative_to(root)): sorted(str(home.relative_to(root)) for home in paths)
+            for path, paths in homes.items()
+        },
+    )
+
+
+def solve_input_key(
+    project: Project,
+    policy: Host | None,
+    facts: dict[str, Any],
+    seeds: list[dict[str, Any]],
+    evidence: tuple[dict[str, str], dict[str, str], dict[str, list[str]]] | None = None,
+) -> str:
+    """The digest of everything infer and publish read: a solve with the same key as the last published one gives
+    the same solution. EVIDENCE is _evidence(project) when the caller already read it."""
+    feedback, published, homes = evidence if evidence is not None else _evidence(project)
+    parts: list[str | bytes] = [
+        "solve-input",
+        str(SCHEMA),
+        json.dumps(storage.identity(project), sort_keys=True),
+        facts["shard_sha256"],
+        json.dumps(facts.get("abi_supplement"), sort_keys=True),
+        inputs.digest(project.build / "map/facts.json"),
+        _seeds_digest(seeds),
+        json.dumps([feedback, published, homes], sort_keys=True),
+        json.dumps([str(policy.cpp), *project.cppflags] if policy is not None else None),
+        inputs.digest(project.root / "config.toml"),
+        inputs.digest(project.root / "layout.toml"),
+    ]
+    return content_cache.key(*parts)
+
+
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
-    """Merge cached per-source facts with the map and infer types; publish the solution."""
+    """Merge cached per-source facts with the map and infer types; publish the solution. Inputs identical to the
+    last published solution's leave it standing."""
+    from unbake.layout import header_step
     from unbake.typemap import facts as source_facts
     from unbake.typemap import types_db
     from unbake.typemap.abi_facts import refine
@@ -885,28 +972,27 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     previous = types_db.summary(database) if database.is_file() else {}
     facts = refine(project, refresh_map(project, policy))
     fact_keys = source_facts.published_keys(project, policy)
+    seeds = declarations.collect(project, policy, fact_keys)
+    evidence = _evidence(project)
+    content_key = solve_input_key(project, policy, facts, seeds, evidence)
+    stored = marker(project)
+    if (
+        stored.is_file()
+        and stored.read_text() == content_key
+        and database.is_file()
+        and not header_step.missing(project)
+    ):
+        tui.line("The type inputs did not change, so the last solution stands")
+        return {"changes": {}, "reused": True}
     result = infer(
         project,
         facts,
-        declarations.collect(project, policy, fact_keys),
+        seeds,
         cache=None if policy is None else Cache(project.cache),
         shard_dir=project.build / "types",
         policy=policy,
     )
-    from unbake.typemap import declaration_evidence
-
-    result["declaration_evidence"] = {
-        str(path.relative_to(project.include[0])): text
-        for path, text in declaration_evidence.feedback_components(project).items()
-    }
-    published, homes = declaration_evidence.published_snapshot(project)
-    result["published_declarations"] = {
-        str(path.relative_to(project.include[0])): text for path, text in published.items()
-    }
-    result["published_homes"] = {
-        str(path.relative_to(project.include[0])): sorted(str(home.relative_to(project.include[0])) for home in paths)
-        for path, paths in homes.items()
-    }
+    result["declaration_evidence"], result["published_declarations"], result["published_homes"] = evidence
     revision = int(previous.get("revision", 0)) + 1
     result = {
         **storage.identity(project),
@@ -919,7 +1005,12 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     }
     from unbake.typemap.database import publish
 
-    publish(project, result, previous, policy=policy)
+    try:
+        publish(project, result, previous, policy=policy)
+    except BaseException:
+        stored.unlink(missing_ok=True)
+        raise
+    atomic_files.text(stored, content_key)
     result["changes"] = changes(previous, types_db.summary(database))
     return result
 

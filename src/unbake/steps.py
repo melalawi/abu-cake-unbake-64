@@ -526,4 +526,10 @@ def _checked(host: Host, results: list[StepResult], chain: effort.Mark, *, force
 def recompute(
     project: Project, host: Host, names: Iterable[str], report: Callable[[StepResult], object] | None = None
 ) -> list[StepResult]:
+    names = list(names)
+    if "types" in order(names):
+        # A forced types step solves again, whatever the last solution's inputs were.
+        from unbake.typemap import solver
+
+        solver.marker(project).unlink(missing_ok=True)
     return ensure(project, host, names, force=True, report=report)
