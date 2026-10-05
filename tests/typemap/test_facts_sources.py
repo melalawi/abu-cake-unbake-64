@@ -47,7 +47,7 @@ class SourceFactsTests(TempCase):
             patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
             self.assertRaises(facts.Held) as raised,
         ):
-            facts._unit_job((project, None, {"us": {}}, [[(0, stale, task)]]))
+            facts._unit_job((project, None, {"us": {}}, [[[(0, stale, task)]]]))
         self.assertIn("facts.inputs: src/alpha.c changed during the solve", str(raised.exception))
 
     def test_source_key_follows_schema_not_tool_code(self) -> None:
@@ -58,3 +58,41 @@ class SourceFactsTests(TempCase):
         with patch.object(facts, "SCHEMA", facts.SCHEMA + 1):
             self.assertNotEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
         self.assertEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
+
+
+class SharedVersionsTests(TempCase):
+    """The versions of one source that preprocess alike share one source-part extraction in their job."""
+
+    def test_one_extraction_per_distinct_unit_text_across_versions(self) -> None:
+        from unbake.typemap import layers
+
+        source = self.root / "src" / "alpha.c"
+        source.parent.mkdir()
+        source.write_text("int alpha;\n")
+        project = SimpleNamespace(
+            root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
+        )
+        texts = {v: declarations.BOUNDARY + "\nint alpha;\n" for v in ("de", "eu", "us")}
+        texts["jp"] = declarations.BOUNDARY + "\nint alpha;\nint jp_only;\n"  # near miss: another unit text
+        snapshot = facts.Snapshot(project)
+        groups = [
+            [(index, facts.unit_key(project, None, source, version, snapshot), ("alpha", source, version))]
+            for index, version in enumerate(sorted(texts))
+        ]
+        parts: list[str] = []
+
+        def source_part(text, *rest):  # type: ignore[no-untyped-def]
+            parts.append(text)
+            return None  # whole-unit: the job hands every version to one whole extraction
+
+        whole: list[list] = []
+        with (
+            patch.object(declarations, "source_unit", lambda p, h, version, s, **k: texts[version]),
+            patch.object(layers, "source_part", source_part),
+            patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
+            patch.object(facts, "_whole_tasks", lambda p, h, o, group, c: whole.append(group) or []),
+        ):
+            _, counts = facts._unit_job((project, None, {v: {} for v in texts}, [groups]))
+        self.assertEqual(sorted(parts), sorted(set(texts.values())))
+        self.assertEqual(counts["sources"], 2)
+        self.assertEqual([len(group) for group in whole], [4])  # one whole call for all four versions

@@ -419,6 +419,10 @@ class _Parts(Mapping[str, dict[str, Any]]):
             self.loaded[name] = found
         return found
 
+    def identity(self, name: str) -> str:
+        """What the part of NAME holds: two versions whose parts hold the same give a unit the same facts."""
+        return key(json.dumps(self[name], sort_keys=True))
+
     def __iter__(self) -> Iterator[str]:
         return iter(self.content)
 
@@ -455,8 +459,14 @@ def _source_tasks(
     contexts: dict[str, layers.Context],
     group: list[tuple[int, str, Task]],
     counts: dict[str, int],
-) -> list[tuple[int, bytes]]:
-    """Encoded facts of every task of one source and version: its source part joined to its header parts."""
+    shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None],
+    snapshot: Snapshot,
+) -> list[tuple[int, bytes]] | None:
+    """Encoded facts of every task of one source and version: its source part joined to its header parts; None
+    when the source needs whole-unit extraction.
+
+    SHARED holds the source's parts by unit text and header-part content: the versions of one source mostly
+    preprocess alike, and a part is extracted once for all of them (placeholders keep it version-free)."""
     _, content_key, (_, source, version) = group[0]
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)
     text: str | None = None
@@ -465,11 +475,15 @@ def _source_tasks(
         nonlocal text
         if text is None:
             text = declarations.source_unit(project, host, version, source, line_markers=True)
-        counts["sources"] += 1
-        found = layers.source_part(text, source, parts[version], placeholder)
-        if unit_key(project, host, source, version, Snapshot(project)) != content_key:
+        own = layers.path(str(source))
+        names = sorted({name for name, _ in layers.Marked(layers.suffix(text), own).runs if name != own})
+        identity = (text, tuple((name, parts[version].identity(name)) for name in names if name in parts[version]))
+        if identity not in shared:
+            counts["sources"] += 1
+            shared[identity] = layers.source_part(text, source, parts[version], placeholder)
+        if unit_key(project, host, source, version, snapshot) != content_key:
             raise Held("solve", f"facts.inputs: {storage.relative(project, source)} changed during the solve; rerun")
-        return found
+        return shared[identity]
 
     stub = output.json(SOURCE, content_key)
     part = None
@@ -478,7 +492,7 @@ def _source_tasks(
         stub = {"wide": True} if part is None else {"runs": part["runs"], "named": part["named"]}
         output.put_json(SOURCE, content_key, stub)
     if stub.get("wide"):
-        return _whole_tasks(project, host, output, group, counts)
+        return None
     context = contexts.get(version)
     if context is None:
         context = contexts[version] = layers.Context(parts[version])
@@ -507,7 +521,8 @@ def _source_tasks(
 def _whole_tasks(
     project: Project, host: Host | None, output: Store, group: list[tuple[int, str, Task]], counts: dict[str, int]
 ) -> list[tuple[int, bytes]]:
-    """Whole-unit facts of a source the layers cannot represent, keyed on every byte of its includes."""
+    """Whole-unit facts of a source the layers cannot represent, keyed on every byte of its includes. GROUP holds
+    the tasks of every version that needs them: source_facts extracts each distinct unit text once."""
     snapshot = Snapshot(project)
     keyed = [(index, source_key(project, host, task, snapshot), task) for index, _, task in group]
     missing = [(content_key, task) for _, content_key, task in keyed if not output.has(content_key)]
@@ -528,17 +543,28 @@ def _whole_tasks(
 
 
 def _unit_job(
-    job: tuple[Project, Host | None, dict[str, dict[str, str]], list[list[tuple[int, str, Task]]]],
+    job: tuple[Project, Host | None, dict[str, dict[str, str]], list[list[list[tuple[int, str, Task]]]]],
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
-    """Worker body: encoded facts of each task of its sources, extracting only missing source parts."""
-    project, host, header_keys, groups = job
+    """Worker body: encoded facts of each task of its sources (each source with all its versions), extracting
+    only missing source parts, each distinct one once."""
+    project, host, header_keys, sources = job
     output = store(host)
     parts = {version: _Parts(output, keys) for version, keys in header_keys.items()}
     contexts: dict[str, layers.Context] = {}
     counts: dict[str, int] = {"sources": 0, "whole": 0}
     result = []
-    for group in groups:
-        result.extend(_source_tasks(project, host, output, parts, contexts, group, counts))
+    for versions in sources:
+        shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
+        snapshot = Snapshot(project)
+        whole: list[tuple[int, str, Task]] = []
+        for group in versions:
+            found = _source_tasks(project, host, output, parts, contexts, group, counts, shared, snapshot)
+            if found is None:
+                whole.extend(group)
+            else:
+                result.extend(found)
+        if whole:
+            result.extend(_whole_tasks(project, host, output, whole, counts))
     return result, counts
 
 
@@ -570,7 +596,11 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     groups: dict[tuple[Path, str], list[tuple[int, str, Task]]] = {}
     for index, (content_key, task) in enumerate(zip(keys, tasks, strict=True)):
         groups.setdefault((task[1], task[2]), []).append((index, content_key, task))
-    ordered = [groups[group] for group in sorted(groups, key=lambda group: (_include_order(group[0]), group[1]))]
+    # Every version of a source goes to one job, so a unit text the versions share is extracted once.
+    by_source: dict[Path, list[list[tuple[int, str, Task]]]] = {}
+    for group in sorted(groups, key=lambda group: group[1]):
+        by_source.setdefault(group[0], []).append(groups[group])
+    ordered = [by_source[source] for source in sorted(by_source, key=_include_order)]
     from unbake import pool
 
     header_jobs = [
