@@ -207,3 +207,14 @@ class ProjectConfigTests(TempCase):
         layout = config.Layout(self.root)
         self.assertEqual(layout.include, (self.root / "include",))
         self.assertEqual(layout.work, self.root / "build" / "work")
+
+
+class BudgetConfigTests(TempCase):
+    def test_budgets_are_host_keys_refused_by_name_and_never_project_facts(self) -> None:
+        values = host_values(self.root)
+        del values["budgets"]["facts_miss_fraction"]
+        for command in ("recompute", "cycle", "check"):
+            with self.subTest(command), self.assertRaisesRegex(Held, r"\[budgets\]\.facts_miss_fraction: missing"):
+                config.Host.from_values(values, command).require_command(command)
+        self.assertNotIn("budgets", config.CONFIG_SECTIONS)
+        config.Host.from_values(values, "next").require_command("next")  # a command that runs no steps

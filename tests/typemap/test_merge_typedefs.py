@@ -48,3 +48,42 @@ class MergeTests(unittest.TestCase):
                 seeds = [seed(first[0], "h.h", first[1]), seed(second[0], "c.c", second[1])]
                 record = solver._merge_records(seeds, "globals", graph)["D_800CD910_de"]
                 self.assertEqual(record["provenance"]["kind"], kind)
+
+
+class KnownSpellingTests(unittest.TestCase):
+    """A spelling already merged in the same alias map is the same type; any other map is resolved again."""
+
+    def merge(self, maps: list[dict[str, str]], types: list[str]) -> tuple[dict, list, int]:
+        from unittest.mock import patch
+
+        from unbake.typemap import declarations
+
+        seeds = [
+            {"aliases": aliases, "globals": {"D_1": {"type": type_, "provenance": {"kind": "published", "n": i}}}}
+            for i, (aliases, type_) in enumerate(zip(maps, types, strict=True))
+        ]
+        real, calls = declarations.canonical, []
+
+        def counted(type_: str, aliases: dict[str, str]) -> str:
+            calls.append(type_)
+            return real(type_, aliases)
+
+        graph = SimpleNamespace(facts=[])
+        with patch.object(declarations, "canonical", counted):
+            record = solver._merge_records(seeds, "globals", graph)["D_1"]
+        return record, graph.facts, len(calls)
+
+    def test_a_shared_map_resolves_one_spelling_once(self) -> None:
+        shared = {"T": "int"}
+        record, facts, calls = self.merge([shared] * 50, ["T"] * 50)
+        self.assertEqual((record["provenance"]["n"], facts, calls), (49, [], 1))
+
+    def test_near_miss_one_spelling_in_another_map_is_resolved_again(self) -> None:
+        # Same spelling, another meaning: the known spelling is not reused; the later record's meaning is taken.
+        record, facts, calls = self.merge([{"T": "int"}, {"T": "float"}, {"T": "float"}], ["T", "T", "T"])
+        self.assertEqual((record["provenance"]["n"], calls), (2, 3))
+        self.assertEqual(facts, [])
+
+    def test_one_spelling_in_an_equal_but_distinct_map_still_agrees(self) -> None:
+        record, facts, calls = self.merge([{"T": "int"}, {"T": "int"}], ["T", "T"])
+        self.assertEqual((record["declaration_conflict"], facts, calls), (False, [], 2))

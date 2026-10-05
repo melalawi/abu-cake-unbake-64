@@ -599,7 +599,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
     ),
     "publish": (*_COMPARE, *_PUBLISH),
     "boundary": (*_RESOURCES, *_CACHE, "tools.splat", "tools.cpp"),
-    "check": (*_RESOURCES, *_CACHE, *_BUILDFILES, *_BUDGETS, "tools.make", "tools.path"),
+    "check": (*_RESOURCES, *_CACHE, *_BUILDFILES, "tools.make", "tools.path", *_BUDGETS),
     "explain": (*_CACHE, "tools.cpp", "tools.mips_objdump", "tools.splat"),
     "cycle": (
         *_COMPARE,

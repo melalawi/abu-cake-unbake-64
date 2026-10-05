@@ -8,6 +8,7 @@ its own; a mark taken before several windows sees the highest of them."""
 from __future__ import annotations
 
 import contextlib
+import os
 import resource
 import threading
 import time
@@ -42,8 +43,13 @@ def resident_peak() -> int:
 
 
 def _reset_peak() -> None:
+    # A kernel control write (resets VmHWM to the current RSS), not a file the tool publishes.
     with contextlib.suppress(OSError):
-        Path("/proc/self/clear_refs").write_text("5")  # resets VmHWM to the current RSS
+        descriptor = os.open("/proc/self/clear_refs", os.O_WRONLY)
+        try:
+            os.write(descriptor, b"5")
+        finally:
+            os.close(descriptor)
 
 
 def window() -> None:

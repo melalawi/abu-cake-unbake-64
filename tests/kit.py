@@ -8,6 +8,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+# Generous step budgets: a test that checks budgets sets its own.
+BUDGETS = {
+    "recompute_seconds": 3600,
+    "unchanged_seconds": 3600,
+    "changed_seconds": 3600,
+    "facts_miss_fraction": 1.0,
+    "main_rss_bytes": 1 << 40,
+    "worker_rss_bytes": 1 << 40,
+}
+# A host for code that only reads the budgets (steps.ensure in mocked step tables).
+BUDGET_HOST = SimpleNamespace(**BUDGETS)
+
 EXECUTABLES = [
     "make",
     "cpp",
@@ -56,6 +68,7 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
         },
         "search": {"stall_trials": 100, "beam": 4},
         "cycle": {"min_bytes": 16, "max_bytes": 4096, "min_history": 3, "debounce_ms": 200},
+        "budgets": dict(BUDGETS),
         "publish": {
             "remote": "origin",
             "branch": "main",

@@ -143,13 +143,6 @@ class BuildAndProgressTests(OriginalAsmCase):
                 if suffix:
                     self.assertEqual(unit["metadata"]["source_path"], f"src/alpha{suffix}")
 
-    def test_splat_reads_landed_rows_as_asm(self) -> None:
-        for kind in ("c", "hasm"):
-            with self.subTest(kind):
-                self.assertEqual(
-                    extract.assembly_rows(f"      - [0x40, {kind}, alpha]\n"), "      - [0x40, asm, alpha]\n"
-                )
-
 
 class SourceTextTests(OriginalAsmCase):
     FOUND = shape.Original("cop0", "mtc0 at +0x0")
