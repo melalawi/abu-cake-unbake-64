@@ -400,6 +400,7 @@ class Pool:
                 return
             error = done.exception()
             if error is not None:
+                effort.count("worker.crash", 1, 1)
                 failed = Held(
                     "pool",
                     f"worker.crash: {effort.name_of(fn)}: {error}",
@@ -420,6 +421,8 @@ class Pool:
                 return
             result, seconds, rss, counts, fault = done.result()
             effort.charge(effort.name_of(fn) + (".failed" if fault is not None else ""), seconds, rss, counts)
+            if isinstance(fault, MemoryError):
+                effort.count("worker.memory", 1, 1)
             if fault is not None:
                 outer.set_exception(fault)
             else:
@@ -482,6 +485,7 @@ class Pool:
                     raise fault
             except (BrokenProcessPool, MemoryError) as error:
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
+                effort.count(failure, 1, 1)
                 if attempt:
                     diagnostic = (
                         dict(error.args[0])
@@ -497,6 +501,7 @@ class Pool:
                     )
                     diagnostic["configured_cap_bytes"] = self.memory_worker_bytes
                     raise TaskFailed(failure, diagnostic) from error
+                effort.count("worker.retry", 1, 1)
                 self._fresh()
                 if isinstance(error, BrokenProcessPool):
                     pending = deque((i, submit(i), a) for i, _, a in pending)

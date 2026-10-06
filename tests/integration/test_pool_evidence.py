@@ -95,3 +95,12 @@ class PoolEvidenceTests(unittest.TestCase):
             result = _result(future)
         self.assertEqual(result["key"], "worker.memory")
         self.assertGreaterEqual(result["seconds"], 0.03)
+
+    def test_recovered_process_crash_is_visible_in_command_counts(self):
+        before = effort.counted()
+        with tempfile.TemporaryDirectory() as directory, self.workers() as workers:
+            list(workers.map(once, [str(Path(directory) / "crash")]))
+        after = effort.counted()
+        for name in ("worker.crash", "worker.retry"):
+            old = before.get(name, (0, 0))
+            self.assertEqual(after.get(name), (old[0] + 1, old[1] + 1))
