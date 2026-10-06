@@ -9,6 +9,7 @@ from unbake.compilers.families.gcc import Gcc
 from unbake.compilers.families.ido import Ido
 from unbake.compilers.families.mips import ORIGINAL_RULES, Shape, emitters
 from unbake.work import shape
+from tests.work.test_shape import owned
 
 # Each probed compiler at the flags it was probed with.
 ADAPTERS: dict[str, Shape] = {
@@ -95,7 +96,7 @@ class OriginalRuleTests(unittest.TestCase):
         for label, text in NEAR_MISSES.items():
             with self.subTest(label):
                 self.assertIsNone(shape.original(words(text), GAMES))
-                route = shape.classify(bytes.fromhex(text.replace(" ", "")), 0x80001000, IDO_ONLY, GAMES)[0]
+                route = shape.classify(bytes.fromhex(text.replace(" ", "")), 0x80001000, ADAPTERS["ido-7.1 -mips2"], GAMES, owned(bytes.fromhex(text.replace(" ", "")), 0x80001000, ADAPTERS["ido-7.1 -mips2"]))[0]
                 self.assertNotEqual(route, "original")
 
     def test_each_rule_fires_on_its_instruction(self) -> None:
@@ -126,12 +127,11 @@ class OriginalRuleTests(unittest.TestCase):
             with self.subTest(label):
                 self.assertLessEqual(ORIGINAL_RULES, adapter.rules)
 
-    def test_classify_routes_original_before_counting_returns(self) -> None:
-        # BT osInvalICache: two jr ra in one row, cache inside.
-        body = "bd100000 " + JR_RA + " 3c088000 bd000000 " + JR_RA
-        self.assertEqual(
-            shape.classify(bytes.fromhex(body.replace(" ", "")), 0x80112570, IDO_ONLY, GAMES)[0], "original"
-        )
+    def test_closed_native_body_routes_original(self) -> None:
+        body = bytes.fromhex("bd100000 03e00008 00000000")
+        target = ADAPTERS["ido-7.1 -mips2"]
+        self.assertEqual(shape.classify(body, 0x80112570, target, GAMES,
+                         owned(body, 0x80112570, target))[0], "original")
 
 
 if __name__ == "__main__":

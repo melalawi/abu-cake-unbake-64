@@ -59,3 +59,24 @@ class DriverTests(ProjectCase):
             drivers.TEMPLATES["sn64"]["compile"] or (), {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)}
         )
         self.assertEqual(made, ("$(CC)", "-quiet", "$(CG)", "$*.i", "-o", "$*.s"))
+
+    def test_stage_contract_keeps_macro_options_and_strips_only_ido_codegen_optimization(self):
+        self.project = replace(self.project, unit_flags={"alpha": ("-O3", "-imacros", "flags.h", "-iquote", "quotes", "-DVALUE=7")})
+        steps = self.steps("alpha")
+        self.assertNotIn("-O2", steps.preprocess)
+        self.assertNotIn("-O3", steps.preprocess)
+        self.assertIn("-O3", steps.compile)
+        for option, value in (("-imacros", "flags.h"), ("-iquote", "quotes")):
+            index = steps.preprocess.index(option)
+            self.assertEqual(steps.preprocess[index + 1], value)
+        context = drivers.preprocess_command(self.project, "/bin/cpp", "us", "alpha", self.project.src / "alpha.c", non_matching=False)
+        self.assertEqual(context[1:], list(steps.preprocess[1:-1]) + [str(self.project.src / "alpha.c")])
+
+    def test_malformed_missing_or_unsupported_flags_fail_by_name(self):
+        from unbake.config import Held
+        for flags, bad in [(("-imacros",), "-imacros"), (("-iquote", "-DVALUE"), "-iquote"),
+                           (("-mfp16",), "-mfp16"), (("-invented",), "-invented")]:
+            self.project = replace(self.project, unit_flags={"alpha": flags})
+            with self.assertRaises(Held) as caught:
+                self.steps("alpha")
+            self.assertIn(bad, caught.exception.reason)

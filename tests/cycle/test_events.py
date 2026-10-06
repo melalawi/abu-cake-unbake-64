@@ -34,7 +34,12 @@ REQUIRED = {
 
 
 def fields(event: str) -> dict:
-    return dict.fromkeys(events.SCHEMA[event][0], "x")
+    values = {"workers": 2, "cores": 2, "memory_total_bytes": 1000, "bytes": 12, "tries": 1,
+              "landed_bytes": 12, "pid": 1, "signal": 9, "cap_bytes": 1000, "exit": 0,
+              "versions": ["us"], "functions": ["alpha"], "methods": ["types"], "landed": [], "held": [],
+              "carryovers": [], "ok": True, "carryover": False, "exact": True, "retried": False,
+              "returned_to_worker": True, "seconds": 0.1, "best_percent": None, "per_version": {}}
+    return {name: values.get(name, "x") for name in events.SCHEMA[event][0]}
 
 
 class EventTests(unittest.TestCase):
@@ -84,3 +89,42 @@ class FirstDifferenceTests(unittest.TestCase):
         ]:
             with self.subTest(lines=lines):
                 self.assertEqual(first_difference(lines), expected)
+
+
+class TypedDeliveryTests(unittest.TestCase):
+    def test_malformed_fields_fail_before_sequence_or_output_changes(self):
+        emitter = events.Emitter(io.StringIO())
+        for fields_ in ({"function": 17, "key": [], "reason": {}, "next": 3},
+                        {"function": "a", "key": "x", "reason": "bad", "next": 3}):
+            with self.assertRaises(events.SchemaError):
+                emitter.emit("fn.held", **fields_)
+        with self.assertRaises(events.SchemaError):
+            emitter.emit("fn.exact", function="a", bytes=True, sha256="s")
+        with self.assertRaises(events.SchemaError):
+            emitter.emit("step.run", step="types", trigger="changed", seconds=float("nan"))
+        self.assertEqual((emitter.seq, emitter.stream.getvalue()), (0, ""))
+
+    def test_concurrent_and_reentrant_listeners_observe_stdout_sequence(self):
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        emitter = events.Emitter(io.StringIO())
+        seen = []
+
+        def listener(record):
+            if record["seq"] == 1:
+                entered.set()
+                self.assertTrue(release.wait(2))
+            seen.append(record["seq"])
+            if record["seq"] == 2:
+                emitter.emit("fn.draft.start", function="reentrant")
+
+        emitter.listeners.append(listener)
+        thread = threading.Thread(target=lambda: emitter.emit("fn.draft.start", function="first"))
+        thread.start()
+        self.assertTrue(entered.wait(2))
+        emitter.emit("fn.draft.start", function="second")
+        release.set()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        written = [json.loads(line)["seq"] for line in emitter.stream.getvalue().splitlines()]
+        self.assertEqual((written, seen), ([1, 2, 3], [1, 2, 3]))

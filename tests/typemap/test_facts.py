@@ -30,6 +30,15 @@ class SourceKeyTests(TempCase):
             version=versions.__getitem__,
         )
         self.host = Host.from_values(host_values(self.root), "compare")
+        compiler = self.project.compilers["c"]
+        compiler.cc = self.host.cpp
+        compiler.sha256 = self.root / "compiler.pin"
+        compiler.sha256.write_text("fixture compiler pin")
+        compiler.kind = "sn64"
+        self.project.unit_flags = {}
+        self.project.compiler_for = lambda unit: compiler
+        self.project.versions = ("us", "eu")
+
 
     def key(self, version: str = "us") -> str:
         return facts.source_key(self.project, self.host, ("alpha", self.source, version), facts.Snapshot(self.project))

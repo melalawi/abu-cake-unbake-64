@@ -15,7 +15,11 @@ class SourceFactsTests(TempCase):
         self.source = self.root / "src" / "alpha.c"
         self.source.parent.mkdir()
         self.source.write_text("Pair *alpha(void) { return &shared; }\nint beta(void) { return 1; }\n")
-        self.project = SimpleNamespace(root=self.root, include=(), version=lambda v: SimpleNamespace(macros=()))
+        pin = self.root / "compiler.pin"
+        pin.write_text("fixture compiler pin")
+        compiler = SimpleNamespace(cc=self.root / "cc", cflags=("-mips3",), sha256=pin)
+        self.project = SimpleNamespace(root=self.root, include=(), unit_flags={}, compiler_for=lambda unit: compiler,
+                                       version=lambda v: SimpleNamespace(macros=("VERSION_" + v,)))
         texts = {
             "us": HEADER + "Pair *alpha(void);\nint beta(void);\n",
             "eu": HEADER + "Pair *alpha(void);\nint beta(void);\n",
@@ -96,3 +100,21 @@ class SharedVersionsTests(TempCase):
         self.assertEqual(sorted(parts), sorted(set(texts.values())))
         self.assertEqual(counts["sources"], 2)
         self.assertEqual([len(group) for group in whole], [4])  # one whole call for all four versions
+
+
+class UnitFaultIdentityTests(TempCase):
+    def test_fault_names_actual_physical_source_and_versions(self):
+        from unbake.pool import WorkerMemory
+        source = self.root / '804069F4_de.c'
+        source.write_text('int real_input;\n')
+        project = SimpleNamespace(root=self.root)
+        tasks = [[(0, 'source-key', ('func_804069F4_de', source, 'de'))],
+                 [(1, 'other-key', ('func_804069F4_de', source, 'us'))]]
+        with patch.object(facts, '_unit_work', side_effect=MemoryError):
+            with self.assertRaises(WorkerMemory) as caught:
+                facts._unit_job((project, None, {}), tasks)
+        identity = caught.exception.args[0]['identity']
+        self.assertEqual(identity['source'], '804069F4_de.c')
+        self.assertEqual(identity['functions'], ('func_804069F4_de',))
+        self.assertEqual(identity['versions'], ('de', 'us'))
+        self.assertEqual(identity['source_bytes'], source.stat().st_size)

@@ -20,7 +20,8 @@ class DeclarationTests(unittest.TestCase):
         from unbake.layout import structs
         from unbake.typemap import declarations
 
-        for mock in (boundary(structs, output), boundary(declarations, output)):
+        from unbake import process
+        for mock in (boundary(process, output),):
             mock.start()
             self.addCleanup(mock.stop)
 
@@ -174,7 +175,8 @@ class FoldTests(unittest.TestCase):
         from unbake.layout import structs
         from unbake.typemap import declarations
 
-        for mock in (boundary(structs, output), boundary(declarations, output)):
+        from unbake import process
+        for mock in (boundary(process, output),):
             mock.start()
             self.addCleanup(mock.stop)
 
@@ -560,7 +562,8 @@ class DefinitionOrderTests(unittest.TestCase):
         from unbake.layout import structs
         from unbake.typemap import declarations
 
-        for mock in (boundary(structs, output), boundary(declarations, output)):
+        from unbake import process
+        for mock in (boundary(process, output),):
             mock.start()
             self.addCleanup(mock.stop)
 

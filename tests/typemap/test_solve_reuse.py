@@ -1,114 +1,81 @@
-"""A solve whose inputs match the last published solution's leaves it standing; a forced recompute does not."""
-
+"""Complete current input snapshots skip collect/evidence and advance existing SQLite revisions."""
 import io
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-
-from tests.kit import BUDGET_HOST, TempCase
-from unbake import steps, tui
-from unbake.typemap import declarations, solver, types_db
-from unbake.typemap import facts as source_facts
-
-SAME = "The type inputs did not change, so the last solution stands"
+from tests.project_fixture import ProjectCase
+from unbake import inputs, tui
+from unbake.config import Held
+from unbake.typemap import declarations, facts, solver, types_db
 
 
-class SolveReuseTests(TempCase):
-    def setUp(self) -> None:
+class SolveReuseTests(ProjectCase):
+    versions = ("us",)
+
+    def setUp(self):
         super().setUp()
-        self.project = SimpleNamespace(
-            root=self.root,
-            build=self.root / "build",
-            include=(self.root / "include",),
-            cppflags=(),
-            id="p",
-            versions=("us",),
-            version=lambda version: SimpleNamespace(baserom_sha1="x"),
-        )
-        (self.root / "build/map").mkdir(parents=True)
-        for name in ("build/map/facts.json", "config.toml", "layout.toml"):
-            (self.root / name).write_text(name)
-        self.database = self.root / "build/types.sqlite"
-        self.published = MagicMock(side_effect=lambda *args, **named: self.database.write_text("solution"))
+        (self.project.build / "map").mkdir(exist_ok=True)
+        (self.project.build / "map/facts.json").write_text('{}')
+        self.source = self.project.src / 'alpha.c'
+        self.source.write_text('int alpha(void) { return 1; }\n')
+        self.database = types_db.path(self.project)
         self.infer = MagicMock(return_value={})
-        self.seeds: list[dict] = [{"functions": {}, "aliases": {"s32": "int"}}]
-        self.missing: list[str] = []
+        self.collect = MagicMock(return_value=[{"functions": {}, "aliases": {}}])
+        self.evidence = MagicMock(return_value=({}, {}, {}))
+        self.missing = []
+        self.published = MagicMock(side_effect=self.publish)
 
-    def solve(self, publish: MagicMock | None = None) -> dict:
-        facts = {"shard_sha256": "s", "shard": {}, "abi_supplement": None}
-        refine = patch("unbake.typemap.abi_facts.refine", return_value=facts)
-        with (
-            refine,
-            patch.object(solver, "refresh_map", return_value={}),
-            patch.object(source_facts, "published_keys", return_value=[]),
-            patch.object(declarations, "collect", side_effect=lambda *args: self.seeds),
-            patch.object(solver, "_evidence", return_value=({}, {}, {})),
-            patch.object(solver, "infer", self.infer),
-            patch.object(types_db, "path", return_value=self.database),
-            patch.object(types_db, "summary", return_value={}),
-            patch("unbake.typemap.database.publish", publish or self.published),
-            patch("unbake.layout.header_step.missing", side_effect=lambda project: self.missing),
-        ):
+    def publish(self, project, result, previous, **named):
+        staged, _ = types_db.stage(self.database, result, {}, {})
+        types_db.install(self.database, staged)
+
+    def solve(self, publish=None):
+        mapped = {"shard_sha256": "s", "shard": {}, "abi_supplement": None}
+        with (patch.object(solver, "refresh_map", return_value={}),
+              patch("unbake.typemap.abi_facts.refine", return_value=mapped),
+              patch.object(facts, "published_keys", side_effect=lambda *args: [inputs.digest(self.source)]),
+              patch.object(declarations, "collect", self.collect),
+              patch.object(solver, "_evidence", self.evidence),
+              patch.object(solver, "infer", self.infer),
+              patch("unbake.typemap.database.publish", publish or self.published),
+              patch("unbake.layout.header_step.missing", side_effect=lambda project: self.missing)):
             return solver.solve(self.project, None)
 
-    def marker(self) -> Path:
-        return solver.marker(self.project)
-
-    def test_same_inputs_twice_reuse_the_solution(self) -> None:
-        err = io.StringIO()
+    def test_unchanged_snapshot_reuses_before_collect_or_evidence(self):
         self.solve()
-        with patch("sys.stderr", err):
+        before = self.collect.call_count, self.evidence.call_count
+        with patch('sys.stderr', io.StringIO()):
             again = self.solve()
         self.assertEqual(again, {"changes": {}, "reused": True})
-        self.assertEqual((self.infer.call_count, self.published.call_count), (1, 1))
-        self.assertIn(SAME, err.getvalue())
+        self.assertEqual((self.collect.call_count, self.evidence.call_count), before)
+        self.assertEqual(types_db.meta(self.database, 'revision'), 1)
         tui.stop()
 
-    def test_one_seed_differs_so_the_solve_runs_and_the_marker_moves(self) -> None:
+    def test_changed_source_advances_revision_and_retains_semantic_digest(self):
         self.solve()
-        first = self.marker().read_text()
-        self.seeds = [{"functions": {}, "aliases": {"s32": "long"}}]
-        result = self.solve()
-        self.assertNotIn("reused", result)
-        self.assertEqual((self.infer.call_count, self.published.call_count), (2, 2))
-        self.assertNotEqual(self.marker().read_text(), first)
-
-    def test_a_missing_database_or_header_solves_again(self) -> None:
-        for label in ("types database missing", "generated header missing"):
-            with self.subTest(label):
-                self.solve()
-                before = self.infer.call_count
-                if label.startswith("types"):
-                    self.database.unlink()
-                else:
-                    self.missing = ["common/x.h"]
-                self.solve()
-                self.assertEqual(self.infer.call_count, before + 1)
-                self.missing = []
-
-    def test_a_failed_publish_leaves_no_marker(self) -> None:
+        first_key = solver.marker(self.project).read_text()
+        first_digest = types_db.meta(self.database, 'solution_sha256')
+        self.source.write_text('int alpha(void) { return 2; }\n')
         self.solve()
-        self.assertTrue(self.marker().is_file())
-        self.seeds = [{"functions": {}, "aliases": {}}]
+        self.assertEqual(types_db.meta(self.database, 'revision'), 2)
+        self.assertEqual(types_db.meta(self.database, 'solution_sha256'), first_digest)
+        self.assertNotEqual(solver.marker(self.project).read_text(), first_key)
+        self.assertEqual(self.published.call_count, 2)
+
+    def test_missing_header_and_forced_marker_require_a_solve(self):
+        self.solve()
+        self.missing = ['common/x.h']
+        self.solve()
+        self.assertEqual(types_db.meta(self.database, 'revision'), 2)
+        self.missing = []
+        solver.marker(self.project).unlink()
+        self.solve()
+        self.assertEqual(types_db.meta(self.database, 'revision'), 3)
+
+    def test_invalid_existing_revision_is_named_and_publish_failure_removes_marker(self):
+        self.solve()
+        with patch.object(types_db, 'meta', return_value=True):
+            with self.assertRaisesRegex(Held, 'meta.revision'):
+                self.solve()
+        self.source.write_text('int alpha(void) { return 3; }\n')
         with self.assertRaises(RuntimeError):
-            self.solve(MagicMock(side_effect=RuntimeError("no")))
-        self.assertFalse(self.marker().exists())
-
-    def test_a_forced_recompute_of_types_removes_the_marker_before_ensure(self) -> None:
-        self.marker().parent.mkdir(parents=True, exist_ok=True)
-        self.marker().write_text("key")
-        seen = []
-        with patch.object(
-            steps, "ensure", side_effect=lambda *args, **named: seen.append(self.marker().exists()) or []
-        ):
-            steps.recompute(self.project, BUDGET_HOST, ["types"])
-            self.assertEqual(seen, [False])
-            self.marker().write_text("key")
-            steps.recompute(self.project, BUDGET_HOST, ["buildfiles"])
-        self.assertEqual(seen, [False, True])  # a recompute that never runs types keeps it
-
-
-if __name__ == "__main__":
-    import unittest
-
-    unittest.main()
+            self.solve(MagicMock(side_effect=RuntimeError('install failed')))
+        self.assertFalse(solver.marker(self.project).exists())

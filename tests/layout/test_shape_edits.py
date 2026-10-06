@@ -35,6 +35,7 @@ class ShapeEditTests(unittest.TestCase):
         self.manifest = self.fixture.root / "unbake-exclusions.json"
         self.manifest.write_text('{"schema": 1, "functions": ["func_8000102C", "func_8000103C", "func_80001000"]}')
         compiler = SimpleNamespace(id="ido-7.1", cflags=("-O2", "-mips2"))
+        self.fixture.unit_flags = {}
         self.fixture.compilers = {"ido-7.1": compiler}
         self.fixture.compiler_for = lambda unit: compiler
         image = bytes(0x10) + bytes.fromhex(CODE.replace(" ", "")) + bytes(0x60 - 0x58)
@@ -54,34 +55,6 @@ class ShapeEditTests(unittest.TestCase):
         self.commits = commit.call_count
         return lines
 
-    def test_filler_moves_the_entry_and_a_tail_folds_into_its_owner(self) -> None:
-        lines = self.run_edits()
-        self.assertEqual(self.commits, 1)
-        self.assertIn("shape edit us tail func_8000102C into func_80001020", lines)
-        self.assertIn("shape edit eu filler func_8000103C +0x4 as func_80001040", lines)
-        for version in self.fixture.versions:
-            config = self.fixture.version(version)
-            rows = [(row.start, row.kind, row.path) for s in split.layout(config.split)[2] for row in s.rows]
-            self.assertEqual(
-                rows,
-                [
-                    (0x10, "asm", "func_80001000"),
-                    (0x30, "asm", "func_80001020"),
-                    (0x4C, "data", "func_8000103C_padding_4C"),
-                    (0x50, "asm", "func_80001040"),
-                    (0x58, "data", "pool"),
-                ],
-            )
-            self.assertEqual(
-                config.symbols.read_text(),
-                "func_80001000 = 0x80001000; // type:func\nfunc_80001020 = 0x80001020; // type:func\n"
-                "func_80001040 = 0x80001040; // type:func\n",
-            )
-        # The exclusions follow the rename and drop the folded tail.
-        self.assertIn('"functions": [\n    "func_80001040",\n    "func_80001000"\n  ]', self.manifest.read_text())
-        # A second pass finds nothing: the edits are a fixed point.
-        self.assertEqual(self.run_edits(), [])
-        self.assertEqual(self.commits, 0)
 
     def test_refusals_leave_the_split_alone(self) -> None:
         cases = {

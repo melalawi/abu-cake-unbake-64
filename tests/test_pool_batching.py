@@ -26,7 +26,7 @@ class Batching(unittest.TestCase):
                 sizes.append(len(job[1]))
                 yield fn(job)
 
-        with patch.object(pool.Pool, "map", serial):
+        with patch.object(pool.Pool, "_fresh"), patch.object(pool.Pool, "map", serial):
             result = pool.Pool(workers, 64 * GIB, 1 * GIB, 1 * GIB).run(double, list(range(count)))
         return result, sizes, charged
 
@@ -52,16 +52,20 @@ class Batching(unittest.TestCase):
 
 
 class MemoryFailure(unittest.TestCase):
-    def test_the_second_failure_names_the_cap_and_the_workers_peak(self) -> None:
-        workers = pool.Pool(2, 8 * GIB, 1 * GIB, 512_000_000)
-        failed: Future[Any] = Future()
-        failed.set_exception(pool.WorkerMemory(123456))
-        with patch.object(workers, "_submit", lambda fn, item: failed), self.assertRaises(pool.TaskFailed) as raised:
-            list(workers.map(double, [1]))
-        text = str(raised.exception)
-        self.assertIn("worker.memory", text)
-        self.assertIn("worker cap 512000000 bytes", text)
-        self.assertIn("worker peak resident 123456 bytes", text)
+    def test_fresh_retry_names_the_actual_unit_and_measured_memory(self) -> None:
+        workers = pool.Pool(2, 8 * GIB, GIB, 512_000_000)
+        fault = {"action": "types", "identity": {"source": "src/actual.c", "functions": ["actual"], "versions": ["de"]},
+                 "allocation": "declarations.py:scan", "peak_rss_bytes": 123456, "cpu_seconds": 2.0}
+        failed = Future()
+        failed.set_result((None, 2.0, 123456, {}, pool.WorkerMemory(fault)))
+        with patch.object(workers, "_submit", return_value=failed), patch.object(workers, "_fresh") as fresh:
+            with self.assertRaises(pool.TaskFailed) as raised:
+                list(workers.map(double, ["batch-first"]))
+        self.assertEqual(fresh.call_count, 1)
+        self.assertIn("actual.c", raised.exception.reason)
+        self.assertNotIn("batch-first", raised.exception.reason)
+        self.assertEqual(raised.exception.fault["configured_cap_bytes"], 512_000_000)
+        self.assertEqual(raised.exception.fault["peak_rss_bytes"], 123456)
 
     def test_a_crash_names_the_cap_without_inventing_a_peak(self) -> None:
         from concurrent.futures.process import BrokenProcessPool
@@ -81,3 +85,12 @@ class MemoryFailure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhysicalRetirement(unittest.TestCase):
+    def test_existing_retirement_budget_counts_items_inside_batches(self):
+        with patch.object(pool, 'ProcessPoolExecutor') as executor:
+            pool._executor(2, 512_000_000, 24)
+        child_jobs = executor.call_args.kwargs['max_tasks_per_child']
+        self.assertLessEqual(child_jobs * 24, pool.RECYCLE_AFTER)
+        self.assertEqual(executor.call_args.kwargs['initargs'], (512_000_000,))

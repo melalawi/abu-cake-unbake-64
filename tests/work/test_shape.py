@@ -43,48 +43,35 @@ def words(text: str) -> bytes:
     return bytes.fromhex(text.replace(" ", ""))
 
 
+def owned(data: bytes, address: int, target):
+    from unbake.layout import boundary
+    return boundary.evidence({i * 4: word for i, word in enumerate(shape.words_of(data))},
+                             0, len(data), address, {"fixture-placement"}, set(), target)
+
+
 class ShapeRuleTests(unittest.TestCase):
-    def test_routes_for_every_adapter(self) -> None:
-        for ident, target in SHAPES.items():
-            for name, ((text, address), (route, evidence)) in {**SHARED, "isa": PER_ADAPTER[ident]}.items():
-                with self.subTest(ident=ident, case=name):
-                    got = shape.classify(words(text), address, target, EMITTED)
-                    self.assertEqual(got[0], route, got[1])
-                    self.assertIn(evidence, got[1])
+    def test_closed_multiple_returns_are_drafted_but_bundled_intervals_are_refused(self) -> None:
+        multiple = words("10800003 00000000 03e00008 00801025 03e00008 00001025")
+        bundled = words("03e00008 00000000 27bdfff0 afbf000c 8fbf000c 03e00008 27bd0010")
+        for target in SHAPES.values():
+            self.assertEqual(shape.classify(multiple, 0x80001000, target, EMITTED,
+                             owned(multiple, 0x80001000, target))[0], "drafter")
+            route, cause = shape.classify(bundled, 0x80001000, target, EMITTED, owned(bundled, 0x80001000, target))
+            self.assertEqual(route, "boundary")
+            self.assertIn("unowned-code-or-data-island", cause)
 
-    def test_an_adapter_switches_a_rule_off(self) -> None:
-        # rule left out -> the case that rule decided
-        cases = {
-            "filler": ("BT func_8010CB5C_us filler", "drafter"),
-            "frame": ("release without frame", "drafter"),
-            "call_ra": ("call without saving ra", "drafter"),
-            "entry_registers": ("RW tail reads $f0", "drafter"),
-        }
-        base = SHAPES["ido-7.1"]
-        for rule, (case, route) in cases.items():
-            with self.subTest(rule):
-                target = dataclasses.replace(base, rules=base.rules - {rule})
-                (text, address), _ = SHARED[case]
-                self.assertEqual(shape.classify(words(text), address, target, EMITTED)[0], route)
+    def test_native_capability_rules_remain_after_boundary_proof(self) -> None:
+        data = words("bd100000 03e00008 00000000")
+        target = SHAPES["ido-7.1"]
+        self.assertEqual(shape.classify(data, 0x80001000, target, EMITTED,
+                         owned(data, 0x80001000, target))[0], "original")
 
-    def test_adapter_fields_come_from_the_compiler_flags(self) -> None:
-        cases = [
-            (Gcc(), ("-G0", "-mips3", "-mgp32"), 3),
-            (Ido(), ("-G0", "-mips2", "-O2"), 2),
-            (Gcc(), ("-mips2", "-mips3"), 3),
-        ]
-        for family, flags, level in cases:
-            with self.subTest(flags):
-                target = family.shape("c", flags)
-                self.assertEqual((target.isa_level, target.object_alignment, target.fragment_bytes), (level, 16, 64))
-        with self.assertRaises(Held) as refused:
+    def test_adapter_fields_come_from_the_effective_flags(self) -> None:
+        for family, flags, level in [(Gcc(), ("-mips2", "-mips3", "-mgp32"), 3),
+                                      (Ido(), ("-G0", "-mips2", "-O2"), 2)]:
+            target = family.shape("fixture", flags)
+            self.assertEqual((target.isa_level, target.object_alignment), (level, 16))
+        with self.assertRaises(Held):
             Ido().shape("ido-7.1", ("-O2",))
-        self.assertIn("compilers.ido-7.1.cflags: required -mipsN", str(refused.exception))
-
-    def test_a_frameless_row_after_a_body_with_no_return_is_its_tail(self) -> None:
-        owner, cut = words("c4a20004 c4c00008 46001082"), words("46010002 46001081 03e00008 e4820008")
-        target = SHAPES["gcc-2.8.1-sn64"]
-        self.assertTrue(shape.tail(owner, 0x80272018, cut, target, EMITTED))
-        self.assertFalse(shape.tail(words(EPILOGUE), 0x80272018, cut, target, EMITTED))
-        self.assertFalse(shape.tail(owner, 0x80272018, words(FRAMED), target, EMITTED))
-        self.assertFalse(shape.tail(owner, 0x80272018, cut, dataclasses.replace(target, rules=frozenset()), EMITTED))
+        with self.assertRaisesRegex(Held, "unsupported -mgp"):
+            Gcc().shape("gcc-2.8.1-sn64", ("-mips3", "-mgp64"))

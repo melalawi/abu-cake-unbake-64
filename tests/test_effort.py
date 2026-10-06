@@ -184,3 +184,11 @@ class HostLoadTests(unittest.TestCase):
             patch.object(effort.os, "sysconf", return_value=100),
         ):
             self.assertEqual(effort.host_busy(), 1.6)
+
+
+class ExactCountTests(unittest.TestCase):
+    def test_bool_negative_or_out_of_total_counts_fail_before_accounting(self):
+        for done, total in ((True, 1), (-1, 1), (2, 1), (0, -1)):
+            with self.assertRaises(ValueError):
+                effort.count('invalid', done, total)
+        self.assertNotIn('invalid', effort.counted())

@@ -235,3 +235,17 @@ class GeneratedEvidenceTests(unittest.TestCase):
     def test_the_definition_seed_still_sees_the_generated_struct_size(self) -> None:
         _, definition = self.assembled(self.GEN, frozenset({spell(self.GEN[0])}))
         self.assertEqual(definition["structs"]["B"]["size"], 2)
+
+
+class UnitLifetimeTests(unittest.TestCase):
+    def test_a_header_after_source_spans_cannot_retain_the_previous_units_local_alias(self):
+        context = layers.Context(header_parts([TYPES]))
+        spans = ((str(SOURCE), 1, None), (TYPES[0], 1, None))
+
+        def own(type_):
+            return {"contracts": {kind: [] for kind in ("functions", "globals", "arrays")},
+                    "definitions": {kind: [] for kind in ("functions", "globals", "arrays")},
+                    "typedefs": [(1, "Local", type_)], "aliases": [], "layouts": []}
+
+        self.assertEqual(context.facts(spans, own("int"))["aliases"]["Local"], "int")
+        self.assertEqual(context.facts(spans, own("short"))["aliases"]["Local"], "short")

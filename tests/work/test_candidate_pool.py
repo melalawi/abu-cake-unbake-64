@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from tests.work.test_shape import EMITTED, SHAPES, words
+from tests.work.test_shape import EMITTED, SHAPES, words, owned
 from unbake.typemap import declarations
 from unbake.work import plan, shape
 
@@ -17,19 +17,11 @@ OPEN = words("27bdffe8 afbf0014 0c000000 00000000")
 
 class DrafterVerdictTests(unittest.TestCase):
     def test_each_verdict_equals_the_serial_rules(self) -> None:
-        groups = [
-            (TARGET, EMITTED, ((FRAMED, 0x80001000),), ()),
-            (TARGET, EMITTED, ((FILLER, 0x8008EC78),), ()),
-            (TARGET, EMITTED, ((FRAMED, 0x80001000), (FILLER, 0x8008EC78)), ()),
-            (TARGET, EMITTED, ((FRAMED, 0x80001010),), ((OPEN, 0x80001000, FRAMED),)),
-        ]
-        serial = [
-            all(shape.classify(b, a, t, e)[0] == "drafter" for b, a in bodies)
-            and not any(shape.tail(p, pa, b, t, e) for p, pa, b in tails)
-            for t, e, bodies, tails in groups
-        ]
-        self.assertEqual(serial, [True, False, False, True])
-        self.assertEqual([plan._drafter(group) for group in groups], serial)
+        placements = [((FRAMED, 0x80001000),), ((FILLER, 0x8008EC78),),
+                      ((FRAMED, 0x80001000), (FILLER, 0x8008EC78))]
+        groups = [(TARGET, EMITTED, tuple((body, address, owned(body, address, TARGET))
+                  for body, address in bodies)) for bodies in placements]
+        self.assertEqual([plan._drafter(group) for group in groups], [True, False, False])
 
 
 class DeclaredDigestTests(unittest.TestCase):

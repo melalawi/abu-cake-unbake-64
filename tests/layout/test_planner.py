@@ -5,6 +5,7 @@ import struct
 import unittest
 
 from unbake.config import SymbolPolicy
+from tests.work.test_shape import SHAPES
 from unbake.layout.planner import carve, complete_providers, correspondence
 from unbake.layout.rodata_owners import Span
 from unbake.layout.split import Function
@@ -27,7 +28,7 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(constants[0]["owners"], ["alpha"])
         self.assertEqual(constants[1]["owners"], ["alpha", "beta"])
         self.assertTrue(constants[1]["name"].startswith("rodata/shared/"))
-        providers = complete_providers(bytes(image), ff, constants, tuple(ff))
+        providers = complete_providers(bytes(image), ff, constants, tuple(ff), SHAPES)
         self.assertEqual(sum(p["end"] - p["start"] for p in providers), len(image))
         self.assertEqual([p["start"] for p in providers[1:]], [p["end"] for p in providers[:-1]])
         self.assertEqual(providers[0]["start"], 0)

@@ -96,3 +96,10 @@ class DraftSignatureTests(unittest.TestCase):
         self.assertTrue(all(number % 2 == 0 for number in numbers))
         self.assertTrue(all(number >= 20 for number in numbers))
         self.assertEqual(register_pairs(text, (), "alpha"), text)
+
+
+class EffectiveFpTests(unittest.TestCase):
+    def test_last_effective_fp_mode_wins(self):
+        text = "lwc1 $f1, 0($a0)\nadd.s $f0, $f0, $f1\n"
+        self.assertEqual(register_pairs(text, ("-mfp64", "-mfp32"), "alpha"), text)
+        self.assertNotEqual(register_pairs(text, ("-mfp32", "-mfp64"), "alpha"), text)

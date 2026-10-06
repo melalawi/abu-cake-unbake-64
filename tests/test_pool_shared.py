@@ -22,7 +22,7 @@ def explode(item: int) -> int:
 
 
 def counting(item: int) -> int:
-    effort.count("cache.sample", item, 1)
+    effort.count("cache.sample", item, item)
     return item
 
 
@@ -43,7 +43,7 @@ class SharedTests(TempCase):
             self.assertTrue(Path(path).is_file())
             return original(path)
 
-        with patch.object(pool.Pool, "map", serial), patch.object(pool, "_shared_value", spy):
+        with patch.object(pool.Pool, "_fresh"), patch.object(pool.Pool, "map", serial), patch.object(pool, "_shared_value", spy):
             result = workers.run(add, list(range(30)), {"base": 100})
         self.assertEqual(result, [100 + value for value in range(30)])
         self.assertEqual(len(set(seen)), 1)
@@ -60,34 +60,32 @@ class SharedTests(TempCase):
 
 
 class MeasuredTests(unittest.TestCase):
-    def test_a_crash_becomes_a_refusal_naming_the_function_and_place(self) -> None:
-        with self.assertRaises(Held) as raised:
-            pool._measured((explode, 1))
-        text = raised.exception.reason
-        self.assertIn("explode", text)
-        self.assertIn("ValueError at test_pool_shared.py:", text)
-        self.assertIn("not a number", text)
+    def test_fault_outcomes_retain_failed_effort_and_the_original_cause(self) -> None:
+        result, seconds, rss, counts, error = pool._measured((explode, 1))
+        self.assertIsNone(result)
+        self.assertIsInstance(error, Held)
+        self.assertIn("explode", error.reason)
+        self.assertIn("test_pool_shared.py", error.reason)
+        self.assertGreaterEqual(seconds, 0)
+        self.assertGreater(rss, 0)
+        self.assertEqual(error.fault["counts"], counts)
 
-    def test_a_refusal_and_memory_pass_as_themselves(self) -> None:
-        def refuse(item: int) -> int:
-            raise Held("x", "x.key: reason")
-
-        def starve(item: int) -> int:
+    def test_memory_outcome_names_the_allocation_frame(self) -> None:
+        def starve(item):
             raise MemoryError
-
-        with self.assertRaises(Held) as raised:
-            pool._measured((refuse, 1))
-        self.assertEqual(raised.exception.key, "x.key")
-        with self.assertRaises(pool.WorkerMemory):
-            pool._measured((starve, 1))
+        result, seconds, rss, counts, error = pool._measured((starve, 1))
+        self.assertIsInstance(error, pool.WorkerMemory)
+        self.assertIn("test_pool_shared.py", error.args[0]["allocation"])
+        self.assertEqual(error.args[0]["cpu_seconds"], seconds)
 
     def test_worker_counts_reach_the_main_ledger(self) -> None:
-        _, _, _, added = pool._measured((counting, 2))
-        self.assertEqual(added, {"cache.sample": (2, 1)})
+        _, _, _, added, error = pool._measured((counting, 2))
+        self.assertIsNone(error)
+        self.assertEqual(added, {"cache.sample": (2, 2)})
         before = effort.counted().get("cache.sample", (0, 0))
         effort.charge("n", 0.0, 0, added)
         after = effort.counted()["cache.sample"]
-        self.assertEqual((after[0] - before[0], after[1] - before[1]), (2, 1))
+        self.assertEqual((after[0] - before[0], after[1] - before[1]), (2, 2))
 
 
 class CacheCountTests(TempCase):
