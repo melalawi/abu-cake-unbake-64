@@ -219,6 +219,47 @@ def insert_fragment(script: str, sections: str) -> str:
     return script[: marker.start()] + sections + "\n" + script[marker.start() :]
 
 
+def unresolved_sections(obj: Object) -> list[str]:
+    """Constant sections still reachable through relocations after native placement.
+
+    Proved references are already absolute. Score mode can leave references to
+    unplaced constants, including unallocated GCC literal pools. Follow their
+    dependencies too, so a retained table never points into a discarded pool.
+    """
+    text = obj.section(".text")
+    if text is None:
+        return []
+    pending, visited, retained = [text], {text}, set()
+    while pending:
+        for _, _, symbol in obj.relocations(pending.pop()):
+            index = symbol["section"]
+            if index in visited or not 0 < index < len(obj.sections):
+                continue
+            visited.add(index)
+            section, name = obj.sections[index], obj.names[index]
+            if section[1] not in (1, 8) or not section[5]:
+                continue
+            if not (section[2] & 2 or name in (".rdata", ".rodata")):
+                continue
+            retained.add(index)
+            pending.append(index)
+    return [obj.names[index] for index in sorted(retained)]
+
+
+def trial_fragment(sections: Iterable[str]) -> str:
+    """Keep unplaced constants at zero solely to link a nonexact score trial.
+
+    These NOLOAD bytes never enter the extracted .text or replace ROM data.
+    Zero supplies no inferred resident address; native placement owns that proof.
+    """
+    result = []
+    for index, section in enumerate(sections):
+        if not re.fullmatch(r"\.[\w.$-]+", section):
+            raise ValueError(f"linker section: invalid name {section!r}")
+        result.append(f'  .trial_{index} 0 (NOLOAD) : SUBALIGN(1) {{ *("{section}") }}')
+    return "\n".join(result)
+
+
 def defer_bss(script: str) -> str:
     """Move a premature Splat NOLOAD transition after its remaining load inputs.
 

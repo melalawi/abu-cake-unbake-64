@@ -177,7 +177,15 @@ def derived_symbols(names: set[str], known: frozenset[str], version: str, source
 
 
 def link(
-    project: Project, host: Host, placed: Path, version: str, row: split.Function, work: Path, source: Path
+    project: Project,
+    host: Host,
+    placed: Path,
+    version: str,
+    row: split.Function,
+    work: Path,
+    source: Path,
+    *,
+    score: bool = False,
 ) -> bytes:
     """Link the placed object alone at its address and return its .text bytes; a link failure is a refusal
     naming SOURCE."""
@@ -186,6 +194,16 @@ def link(
     script = project.root / "versions" / version / f"{project.name}.ld"
     if not script.is_file():
         raise Held("compile", f"build.link_script: {script} is missing; run unbake recompute buildfiles")
+    from unbake.objects import rodata
+    from unbake.objects.elf import Object
+
+    sections = rodata.unresolved_sections(Object(placed))
+    if sections:
+        if not score:
+            raise Held("link", f"link.unproved: {source}: VERSION {version}: unplaced {', '.join(sections)}")
+        trial = work / "trial.ld"
+        atomic_files.text(trial, rodata.insert_fragment(script.read_text(), rodata.trial_fragment(sections)))
+        script = trial
     derived = derived_symbols(undefined(placed), provided(symbols_file(project, version)), version, source)
     try:
         process.run_tool(
@@ -219,11 +237,19 @@ def link_function(
     project: Project, host: Host, obj: Path, version: str, row: split.Function, source: Path
 ) -> tuple[bytes, list[str]]:
     """Score mode: the unit's linked words even when some constants are unproved, with those problems."""
+    from unbake.objects import rodata
+    from unbake.objects.elf import Object
+
     with tempfile.TemporaryDirectory(prefix="link-") as temporary:
         work = Path(temporary)
         placed = work / "placed.o"
         problems = place(project, host, obj, version, row, placed, score=True)
-        return link(project, host, placed, version, row, work, source), problems
+        # Even if native placement omits a diagnostic, placeholder addresses
+        # must never make this trial eligible for an exact comparison.
+        problems.extend(
+            f"{section}: no proved resident address" for section in rodata.unresolved_sections(Object(placed))
+        )
+        return link(project, host, placed, version, row, work, source, score=True), problems
 
 
 def build_unit(project: Project, host: Host, unit: str, version: str) -> bytes:
