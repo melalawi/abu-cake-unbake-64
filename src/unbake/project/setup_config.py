@@ -10,7 +10,7 @@ import toml  # type: ignore[import-untyped]
 
 from unbake.compilers import files as compiler_files
 from unbake.config import Held, PendingProject
-from unbake.project import rom
+from unbake.project import header, rom
 from unbake.project.census import Census
 
 
@@ -20,6 +20,16 @@ def version_macros(versions: tuple[str, ...]) -> dict[str, str]:
     if len(set(macros.values())) != len(macros):
         raise Held("setup", "project.versions: VERSION macro collision; supply distinct --version-name labels")
     return macros
+
+
+def version_metadata(measured: header.Header, authored: dict[str, Any]) -> dict[str, str]:
+    """Measured report labels for a new version; explicit authored labels remain authoritative."""
+    fields = {
+        "cartridge_id": measured.category + measured.game_code + measured.region,
+        "region": header.DESTINATIONS[measured.region],
+        "description": f"{measured.title}, revision {measured.revision}, CIC {measured.cic}.",
+    }
+    return {key: authored.get(key, value) for key, value in fields.items()}
 
 
 def facts(project: PendingProject, census: Census, *, name: str | None, title: str | None) -> dict[str, Any]:
@@ -40,11 +50,7 @@ def facts(project: PendingProject, census: Census, *, name: str | None, title: s
     data["project"].update(name=name, title=title, names_from=census.names_from, versions=list(census.versions))
     data["version"] = {
         census.names[item.path]: {
-            **{
-                key: data.get("version", {}).get(census.names[item.path], {})[key]
-                for key in ("cartridge_id", "region", "description")
-                if key in data.get("version", {}).get(census.names[item.path], {})
-            },
+            **version_metadata(item.header, data.get("version", {}).get(census.names[item.path], {})),
             "baserom": (project.roms / f"baserom.{census.names[item.path]}.z64").relative_to(project.root).as_posix(),
             "baserom_sha1": item.sha1,
             "split": f"versions/{census.names[item.path]}/{name}.yaml",

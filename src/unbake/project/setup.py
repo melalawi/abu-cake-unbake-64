@@ -483,6 +483,15 @@ def refresh(pending: PendingProject, policy: Host, *, supply: Path | None = None
             destination.parent.mkdir(parents=True, exist_ok=True)
             atomic_files.copy2(manifest, destination)
             measured = census.run(config.load_pending(tree), policy, names_from=project.names_from)
+            import tomllib
+
+            import toml  # type: ignore[import-untyped]
+
+            data = tomllib.loads(configured)
+            for cartridge in measured.cartridges:
+                version = data["version"][measured.names[cartridge.path]]
+                version.update(setup_config.version_metadata(cartridge.header, version))
+            atomic_files.text(tree / "config.toml", toml.dumps(data))
             layout_path = tree / "build/setup/layout.json"
             if layout_path.is_file():
                 _ready_readme(project, measured, cast("LayoutManifest", json.loads(layout_path.read_bytes())), tree)
