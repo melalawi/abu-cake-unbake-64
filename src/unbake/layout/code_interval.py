@@ -101,6 +101,9 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
             "split",
             "split.code.reference: data-to-code correction needs a direct code target or referenced code-pointer table",
         )
+    from unbake.work.shape import for_compiler
+
+    compiler = project.compiler_for(row.path)
     evidence = boundary.evidence(
         words,
         start,
@@ -108,7 +111,7 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
         address - start,
         {s["kind"] for s in sources},
         {f.address - (address - start) for f in functions},
-        4,
+        for_compiler(compiler, (*compiler.cflags, *project.unit_flags.get(Path(row.path).name, ()))),
     )
     if not evidence.proven:
         raise Held("split", "split.code.control_flow: " + "; ".join(evidence.unproven))

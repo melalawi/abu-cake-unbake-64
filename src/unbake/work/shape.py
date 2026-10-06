@@ -15,6 +15,7 @@ from unbake.config import Held
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
     from unbake.config import Compiler
+    from unbake.layout.boundary import Boundary
 
 JR_RA, NOP = 0x03E00008, 0
 # MIPS III doubleword opcodes and SPECIAL functions; no -mips1/-mips2 compiler emits them.
@@ -35,18 +36,18 @@ class Original:
     evidence: str
 
 
-def for_compiler(compiler: Compiler) -> Shape:
+def for_compiler(compiler: Compiler, flags: tuple[str, ...]) -> Shape:
     """The Shape of one configured compiler: its family's adapter built from the compiler's flags."""
     from unbake.compilers.families import family_for
 
-    return family_for(compiler.id).shape(compiler.id, compiler.cflags)
+    return family_for(compiler.id).shape(compiler.id, flags)
 
 
-def emitters(compilers: Iterable[Compiler]) -> Shape:
+def emitters(shapes: Iterable[Shape]) -> Shape:
     """What any configured compiler can emit (compilers.families.mips.emitters), for the original-asm rules."""
     from unbake.compilers.families.mips import emitters as combined
 
-    return combined(for_compiler(compiler) for compiler in compilers)
+    return combined(shapes)
 
 
 def words_of(data: bytes) -> list[int]:
@@ -55,43 +56,18 @@ def words_of(data: bytes) -> list[int]:
     return [item[0] for item in struct.iter_unpack(">I", data)]
 
 
-def classify(data: bytes, address: int, shape: Shape, emitted: Shape) -> tuple[str, str]:
+def classify(data: bytes, address: int, shape: Shape, emitted: Shape, owned: Boundary) -> tuple[str, str]:
     """Return a route and its word evidence for the interval at VRAM ADDRESS; classification is a work hint.
 
     SHAPE is the function's own compiler; EMITTED is what any configured compiler emits (emitters), which alone
     decides the `original` route: words no configured compiler can produce from C."""
     words = words_of(data)
-    skip = filler(words, address, shape)
-    if skip:
-        return "boundary", f"{skip * 4} bytes of alignment filler before the function at +0x{skip * 4:X}"
-    if not any(words) or words[0] == 0:
-        return "boundary", "leading padding"
-    if len(words) >= 2 and all(0x80000000 <= word < 0xC0000000 and word % 4 == 0 for word in words):
-        return "table", "aligned address table"
-    if all(byte == 0 or 32 <= byte < 127 for byte in data) and any(32 <= byte < 127 for byte in data):
-        return "table", "text data in a function interval"
+    if not owned.proven:
+        return "boundary", "; ".join(owned.unproven)
     found = original(words, emitted)
     if found is not None:
         return "original", f"{found.rule}: {found.evidence}"
-    # Original asm may leave twice (osInvalDCache); compiled code never does.
-    returns = [index for index, word in enumerate(words) if word == JR_RA]
-    if len(returns) > 1:
-        return "boundary", f"{len(returns)} jr-ra instructions in one interval"
-    if returns:
-        end = returns[0] + 2
-        if end > len(words):
-            return "boundary", "jr-ra delay slot outside the interval"
-        if len(words) - end >= 2 and not any(words[end:]):
-            return "boundary", "padding beyond the return delay slot"
-        if any(words[end:]):
-            return "boundary", "words beyond the return delay slot"
-        reason = not_c(words, shape)
-        if reason:
-            return "dead", reason
-        return "drafter", "one complete return"
-    if any(word >> 26 == 0 and word & 63 == 8 for word in words):
-        return "drafter", "indirect dispatch"
-    return "merge", "no complete return or indirect dispatch"
+    return "drafter", "proved single-entry body"
 
 
 def _cop0(word: int) -> str | None:
@@ -209,6 +185,8 @@ def _registers(word: int) -> tuple[set[int], set[int], set[int], set[int]]:
     none: set[int] = set()
     if op == 0:
         function = word & 63
+        if function in (12, 13):
+            return none, none, none, none
         if function in (8, 9):
             return {rs}, ({rd} if function == 9 else none), none, none
         if function in (0, 2, 3):
@@ -249,94 +227,6 @@ def _registers(word: int) -> tuple[set[int], set[int], set[int], set[int]]:
                 return none, none, {fs, rt}, {fd}
             return none, none, {fs}, {fd}
     return none, none, none, none
-
-
-def not_c(words: list[int], shape: Shape) -> str | None:
-    """Why a short body (at most shape.fragment_bytes) with no balanced frame cannot be compiled C, or None.
-
-    Rules, each switchable per compiler: `frame` (allocated without a release or the reverse), `call_ra` (a call
-    without saving ra), `isa` (an opcode above the compiler's ISA level), `entry_registers` (a register read
-    before anything sets it). For an optimizing compiler also `zero_write` (any instruction but the canonical nop
-    writes $zero) and `dead_write` (a register written and never read before the return completes).
-    A balanced frame or a longer body is a real function's shape and is never judged."""
-    adjusts = [((word & 0xFFFF) ^ 0x8000) - 0x8000 for word in words if word >> 16 == 0x27BD]
-    allocated, released = any(value < 0 for value in adjusts), any(value > 0 for value in adjusts)
-    if len(words) * 4 > shape.fragment_bytes or (allocated and released):
-        return None
-    if "frame" in shape.rules and allocated != released:
-        return "stack frame allocated or released but not both"
-    if "call_ra" in shape.rules and any(_calls(word) for word in words):
-        return "call without saving ra"
-    if (
-        "isa" in shape.rules
-        and shape.isa_level < 3
-        and any(word >> 26 in _MIPS3_OPS or (word >> 26 == 0 and word & 63 in _MIPS3_SPECIAL) for word in words)
-    ):
-        return f"64-bit opcode outside -mips{shape.isa_level}"
-    if "entry_registers" in shape.rules:
-        gprs, fprs = set(shape.entry_gprs), set(shape.entry_fprs)
-        for word in words:
-            reads, writes, freads, fwrites = _registers(word)
-            if reads - gprs:
-                return f"reads ${min(reads - gprs)} before setting it"
-            if freads - fprs:
-                return f"reads $f{min(freads - fprs)} before setting it"
-            gprs |= writes
-            fprs |= fwrites
-    if "zero_write" in shape.rules and any(word and 0 in _registers(word)[1] for word in words):
-        return "writes $zero"
-    if "dead_write" in shape.rules:
-        dead = _dead_write(words)
-        if dead:
-            return dead
-    return None
-
-
-# Written and unread is normal for the results a caller reads and the registers a callee restores.
-_RESULT_GPRS = frozenset({2, 3, 29, 31})
-_CALLEE_SAVED = frozenset({*range(16, 24), 30})
-_RESULT_FPRS = frozenset({0, 2})
-
-
-def _dead_write(words: list[int]) -> str | None:
-    """A register an instruction writes that nothing reads before the body returns (the delay slot counts), or
-    None. Only a straight-line body is judged: a branch or jump before the final return can read it elsewhere.
-    Not judged: v0, v1, sp, ra, loads into s0-s7 and fp (a callee's restores) and f0, f2."""
-    if any(_transfers(word) for word in words[:-2]) or len(words) < 2:
-        return None
-    for index, word in enumerate(words):
-        _, writes, _, fwrites = _registers(word)
-        loaded = word >> 26 in range(32, 40)
-        for register in sorted(writes - {0} - _RESULT_GPRS - (_CALLEE_SAVED if loaded else set())):
-            if _unread(words[index + 1 :], register, fpr=False):
-                return f"writes ${register} and never reads it"
-        for register in sorted(fwrites - _RESULT_FPRS):
-            if _unread(words[index + 1 :], register, fpr=True):
-                return f"writes $f{register} and never reads it"
-    return None
-
-
-def _unread(rest: list[int], register: int, *, fpr: bool) -> bool:
-    """No instruction of REST reads REGISTER before one writes it again (the end of the body reads nothing)."""
-    for word in rest:
-        reads, writes, freads, fwrites = _registers(word)
-        if register in (freads if fpr else reads):
-            return False
-        if register in (fwrites if fpr else writes):
-            return True
-    return True
-
-
-def tail(previous: bytes, previous_address: int, data: bytes, shape: Shape, emitted: Shape) -> bool:
-    """DATA continues the row before it: that row has no complete return and does not end in a jump (every
-    compiled function ends with a jump or branch and its delay slot), and DATA opens no frame of its own and reads
-    a register before setting it (a value the row before computed), so both are one function the split cut."""
-    if "tail" not in shape.rules:
-        return False
-    words, before = words_of(data), words_of(previous)
-    if len(before) < 2 or _transfers(before[-2]) or classify(previous, previous_address, shape, emitted)[0] != "merge":
-        return False
-    return not any(_frame_open(word) for word in words) and _reads_unset(words, shape)
 
 
 def _reads_unset(words: list[int], shape: Shape) -> bool:

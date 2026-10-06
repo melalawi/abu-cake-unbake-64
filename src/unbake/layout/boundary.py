@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from unbake.layout import boundary_signatures
 from unbake.layout.boundary_signatures import Signature
+from unbake.compilers.families.mips import Shape
+from unbake.work.shape import _never_starts_c
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,15 @@ def shape(words: dict[int, int], start: int, end: int) -> tuple[str, ...]:
     return tuple(tags)
 
 
+@dataclass(frozen=True)
+class _Frame:
+    sp: int = 0
+    ra: bool = True
+    saved: tuple[tuple[int, tuple[int, bool]], ...] = ()
+    fp: int | None = None
+    guarded: bool = False
+
+
 def closure(
     words: dict[int, int],
     start: int,
@@ -55,79 +66,163 @@ def closure(
     known: set[int],
     jump_tables: dict[int, tuple[int, ...]] | None = None,
 ) -> tuple[set[int], tuple[str, ...], tuple[str, ...]]:
-    """Follow a single entry; a jump to another entry is a tail call only after frame restore."""
-    pending = [start]
+    """Prove each reachable path with architectural delay/annul and exact frame ownership."""
+    from dataclasses import replace
+
+    from unbake.layout.split_analysis import instruction
+    from unbake.work.shape import _registers, _transfers
+
+    pending = [(start, _Frame())]
+    visited: set[tuple[int, _Frame]] = set()
+    balances: dict[int, tuple[int, int | None]] = {}
     seen: set[int] = set()
     tags: set[str] = set()
     failures: set[str] = set()
-    framed = bool(words.get(start, 0) & 0xFFFF0000 in (0x27BD0000, 0x67BD0000) and words[start] & 0x8000)
-    from unbake.layout.split_analysis import instruction
 
-    while pending:
-        offset = pending.pop()
-        if offset in seen:
-            continue
-        if not start <= offset < end:
-            failures.add(f"merge-or-fallthrough:0x{offset + bias:X}")
-            continue
+    def at(offset: int) -> str:
+        return f"0x{offset + bias:X}"
+
+    def execute(offset: int, frame: _Frame) -> _Frame | None:
         word = words.get(offset)
         if word is None or not instruction(word):
-            failures.add(f"data-or-missing-instruction:0x{offset + bias:X}")
+            failures.add(f"data-or-missing-instruction:{at(offset)}")
+            return None
+        seen.add(offset)
+        op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
+        immediate = word & 65535
+        immediate -= 65536 if immediate & 32768 else 0
+        if op == 0 and word & 63 in (12, 13):
+            if frame.guarded and word & 63 == 13:
+                tags.add(f"guarded-trap-terminal:{at(offset)}")
+            else:
+                failures.add(f"unproved-trap-terminal:{at(offset)}")
+            return None
+        saved = dict(frame.saved)
+        if op in (40, 41, 42, 43, 44, 45, 46, 63) and rs in (29, 30):
+            base = frame.sp if rs == 29 else frame.fp
+            if base is None:
+                failures.add(f"unresolved-frame-store:{at(offset)}")
+                return None
+            address = base + immediate
+            width = 8 if op == 63 else 4
+            saved = {slot: value for slot, value in saved.items() if not (address < slot + value[0] and slot < address + width)}
+            if rt == 31 and op in (43, 63):
+                if not frame.sp <= address < address + width <= 0:
+                    failures.add(f"return-address-save-outside-frame:{at(offset)}")
+                    return None
+                saved[address] = width, frame.ra
+            frame = replace(frame, saved=tuple(sorted(saved.items())))
+        if op in (35, 55) and rt == 31 and rs in (29, 30):
+            base = frame.sp if rs == 29 else frame.fp
+            return replace(frame, ra=base is not None and saved.get(base + immediate) == (8 if op == 55 else 4, True))
+        _, writes, _, _ = _registers(word)
+        if rt == 29 and rs == 29 and op in (9, 25):
+            frame = replace(frame, sp=frame.sp + immediate)
+            if frame.sp > 0:
+                failures.add(f"frame-restored-above-entry:{at(offset)}")
+                return None
+        elif 29 in writes:
+            # move sp,fp is the only non-immediate restoration whose value is owned here.
+            if op == 0 and word & 63 in (33, 37, 45) and {rs, rt} == {0, 30} and frame.fp is not None:
+                frame = replace(frame, sp=frame.fp)
+            else:
+                failures.add(f"unresolved-stack-write:{at(offset)}")
+                return None
+        if 30 in writes:
+            if op == 0 and word & 63 in (33, 37, 45) and {rs, rt} == {0, 29}:
+                frame = replace(frame, fp=frame.sp)
+            else:
+                frame = replace(frame, fp=None)
+        if 31 in writes:
+            frame = replace(frame, ra=False)
+        return frame
+
+    def terminal(offset: int, before: _Frame, after: _Frame, target: int | None = None) -> None:
+        if after.sp != 0:
+            failures.add(f"compiler-frame-imbalance:{at(offset)}:{after.sp}")
+        if not before.ra:
+            failures.add(f"returned-ra-not-owned:{at(offset)}")
+        if after.sp == 0 and before.ra:
+            tags.add("control-flow-closed-return" if target is None else f"tail-call:{at(target)}")
+
+    while pending:
+        offset, frame = pending.pop()
+        if (offset, frame) in visited:
+            continue
+        if not start <= offset < end or offset % 4:
+            failures.add(f"merge-or-fallthrough:{at(offset)}")
+            continue
+        balance = frame.sp, frame.fp
+        if offset in balances and balances[offset] != balance:
+            failures.add(f"inconsistent-frame-state:{at(offset)}")
+            continue
+        balances[offset] = balance
+        visited.add((offset, frame))
+        word = words.get(offset)
+        if word is None or not instruction(word):
+            failures.add(f"data-or-missing-instruction:{at(offset)}")
             continue
         seen.add(offset)
-        op = word >> 26
+        op, rt, rs = word >> 26, word >> 16 & 31, word >> 21 & 31
         indirect = op == 0 and word & 63 in (8, 9)
-        branch = op in (1, 4, 5, 6, 7, 20, 21, 22, 23) or (op == 17 and word >> 21 & 31 == 8)
+        branch = op in (1, 4, 5, 6, 7, 20, 21, 22, 23) or (op == 17 and rs == 8)
         if op in (2, 3) or branch or indirect:
             delay = words.get(offset + 4)
             if delay is None or offset + 4 >= end:
-                failures.add("missing-delay-slot")
+                failures.add(f"missing-delay-slot:{at(offset)}")
                 continue
-            if not instruction(delay):
-                failures.add(f"invalid-delay-instruction:0x{offset + bias + 4:X}")
+            if _transfers(delay) or delay == 0x42000018:
+                failures.add(f"unsafe-delay-transfer:{at(offset + 4)}")
                 continue
-            seen.add(offset + 4)
+            likely = op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3, 18, 19)) or (op == 17 and rt & 2 != 0)
+            unconditional = op in (4, 20) and rs == rt or op == 1 and rs == 0 and rt in (1, 3, 17, 19)
+            linking = op == 3 or indirect and word & 63 == 9 or op == 1 and rt in (16, 17, 18, 19)
+            taken = replace(frame, ra=False) if linking else frame
+            if branch and not unconditional and likely:
+                taken = replace(taken, guarded=True)
+            delayed = execute(offset + 4, taken)
+            if linking and delayed is not None:
+                delayed = replace(delayed, saved=tuple((slot, value) for slot, value in delayed.saved if slot >= delayed.sp))
             if branch:
-                displacement = word & 65535
-                displacement -= 65536 if displacement & 32768 else 0
-                target = offset + 4 + displacement * 4
-                if op == 1 and word >> 16 & 31 in (16, 17, 18, 19):
-                    pending.append(offset + 8)
+                immediate = word & 65535
+                immediate -= 65536 if immediate & 32768 else 0
+                target = offset + 4 + immediate * 4
+                if delayed is not None:
+                    taken = replace(delayed, guarded=delayed.guarded or not unconditional)
+                    pending.append((offset + 8 if linking else target, taken))
+                if not unconditional:
+                    untaken = replace(frame, ra=False) if likely and linking else frame if likely else delayed
+                    if untaken is not None:
+                        pending.append((offset + 8, replace(untaken, guarded=True)))
+            elif delayed is not None:
+                if op == 2:
+                    target = (((offset + bias + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)) - bias
+                    if start <= target < end:
+                        pending.append((target, delayed))
+                    elif target in known:
+                        terminal(offset, delayed, delayed, target)
+                    else:
+                        failures.add(f"merge-or-unresolved-tail:{at(target)}")
+                elif indirect and word & 63 == 8:
+                    if word == 0x03E00008:
+                        terminal(offset, frame, delayed)
+                    elif jump_tables and jump_tables.get(offset):
+                        targets = jump_tables[offset]
+                        if any(not start <= target < end or target % 4 for target in targets):
+                            failures.add(f"unresolved-local-table-edge:{at(offset)}")
+                        else:
+                            pending.extend((target, delayed) for target in targets)
+                            tags.add("proved-local-jump-table")
+                    else:
+                        failures.add(f"unresolved-indirect-jump-table-ownership:{at(offset)}")
                 else:
-                    pending.append(target)
-                    if not (op == 4 and word >> 21 & 31 == word >> 16 & 31):
-                        pending.append(offset + 8)
-            elif op == 2:
-                target = (((offset + bias + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)) - bias
-                if start <= target < end:
-                    pending.append(target)
-                elif target in known and (
-                    not framed or (delay & 0xFFFF0000 == 0x27BD0000 and 0 < delay & 65535 < 32768)
-                ):
-                    tags.add(f"tail-call:0x{target + bias:X}")
-                else:
-                    failures.add(f"merge-or-unresolved-tail:0x{target + bias:X}")
-            elif indirect and word & 63 == 8:
-                if word == 0x03E00008:
-                    tags.add("control-flow-closed-return")
-                    if framed and not any(
-                        restored & 0xFFFF0000 in (0x27BD0000, 0x67BD0000) and 0 < restored & 65535 < 32768
-                        for restored in (delay, words.get(offset - 4, 0), words.get(offset - 8, 0))
-                    ):
-                        failures.add("compiler-frame-restore-missing")
-                elif jump_tables and offset in jump_tables:
-                    pending.extend(jump_tables[offset])
-                    tags.add("proved-local-jump-table")
-                else:
-                    failures.add("unresolved-indirect-jump-table-ownership")
-            else:
-                pending.append(offset + 8)
-        elif op == 0 and word & 63 in (12, 13):
-            failures.add("trap-termination")
+                    pending.append((offset + 8, delayed))
         elif word == 0x42000018:
             tags.add("vector-eret")
         else:
-            pending.append(offset + 4)
+            after = execute(offset, frame)
+            if after is not None:
+                pending.append((offset + 4, after))
     return seen, tuple(sorted(tags)), tuple(sorted(failures))
 
 
@@ -138,9 +233,10 @@ def evidence(
     bias: int,
     sources: set[str],
     known: set[int],
-    alignment: int,
+    compiler_shape: Shape,
     jump_tables: dict[int, tuple[int, ...]] | None = None,
 ) -> Boundary:
+    alignment = compiler_shape.object_alignment
     seen, tags, failures = closure(words, start, end, bias, known, jump_tables)
     reasons = list(failures)
     result = [*sorted(sources), *shape(words, start, end), *tags]
@@ -150,17 +246,21 @@ def evidence(
     padding = set(range(trailing, end, 4))
     if (
         padding
+        and "filler" in compiler_shape.rules
         and alignment > 0
         and alignment & (alignment - 1) == 0
         and (
             (trailing + bias + alignment - 1) // alignment * alignment == end + bias
-            and all(words.get(offset) == 0 for offset in padding)
+            and (all(words.get(offset) == 0 for offset in padding) or _never_starts_c([words[offset] for offset in sorted(padding)], compiler_shape))
         )
     ):
         result.append(f"alignment-padding:{end - trailing}")
     else:
         padding = set()
-    uncovered = set(range(start, end, 4)) - seen - padding
+    dead = {offset for offset in range(start, trailing, 4) if offset not in seen and words.get(offset) == 0}
+    if dead:
+        result.append("proved-dead-zero-island:" + ",".join(f"0x{offset + bias:X}" for offset in sorted(dead)))
+    uncovered = set(range(start, end, 4)) - seen - padding - dead
     if uncovered:
         reasons.append(
             "unowned-code-or-data-island:" + ",".join(f"0x{offset + bias:X}" for offset in sorted(uncovered))
