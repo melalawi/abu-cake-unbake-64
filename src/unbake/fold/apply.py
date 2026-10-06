@@ -119,6 +119,15 @@ def fold(project: Project, host: Host, function: str, text: str, *, versions: tu
             "fold",
             f"fold.source_rules: {function} breaks the source rules: " + "; ".join(checks.plain(f) for f in blockers),
         )
+    from unbake.layout import header_loss
+
+    header_loss.check(
+        project,
+        {
+            project.src / f"{function}.c": folded.encode(),
+            **{project.include[-1] / n: t.encode() for n, t in headers.items()},
+        },
+    )
     return Folded(function, folded, headers, tuple(split_edits), tuple(learned))
 
 

@@ -21,7 +21,7 @@ from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
 SOURCE_NAMES_SCHEMA = 4
-RENDER_SCHEMA = 3
+RENDER_SCHEMA = 4
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
@@ -328,6 +328,7 @@ class Session:
                 },
                 "declaration_headers": value["declaration_headers"],
                 "shared_aliases": value["shared_aliases"],
+                **{field: value.get(field, {}) for field in self._CARRIED},
                 "reserved": sorted(self.reserved),
                 "consumers": {
                     storage.relative(self.project, p): sorted(names) for p, names in self.consumer_names.items()
@@ -344,7 +345,7 @@ class Session:
         state_content = storage.encoded({"projection": projection, "content_key": content_key})
         if not state.is_file() or state.read_bytes() != state_content:
             storage.write(state, state_content, durable=False)
-        value.update({field: result[field] for field in ("declaration_headers", "shared_aliases")})
+        value.update({field: result[field] for field in ("declaration_headers", "shared_aliases", *self._CARRIED)})
         self.reserved = set(result["reserved"])
         stored_key, _ = self._content_key(value)
         if stored_key != content_key:

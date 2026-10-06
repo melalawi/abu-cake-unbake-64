@@ -136,6 +136,17 @@ def _render(
     consumer_names: dict[Path, set[str]] = {}
     reserved = session.source_names(consumer_names)
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
+    # Retention follows installed C dependencies independently of the current
+    # inference facts, including typedefs used only inside function bodies.
+    from unbake.typemap.declaration_evidence import published_snapshot
+
+    retained_components, retained_homes = published_snapshot(project, sources=session.sources)
+    published = value.setdefault("published_declarations", {})
+    published_homes = value.setdefault("published_homes", {})
+    for path, text in retained_components.items():
+        relative = path.relative_to(root).as_posix()
+        published.setdefault(relative, text)
+        published_homes.setdefault(relative, sorted(home.relative_to(root).as_posix() for home in retained_homes[path]))
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     components.update({root / path: text for path, text in value.get("published_declarations", {}).items()})
@@ -546,6 +557,10 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
     session = regeneration.Session(project, policy)
     with tui.task("Writing the shared headers", len(session.sources)):
         outputs = session.render(value, lambda: _render(project, value, policy, session))
+    from unbake.layout import header_loss
+
+    # Types retains obsolete headers until layout rewrites their source imports.
+    header_loss.check(project, outputs)
     replacements = value["shared_aliases"]
     reserved = session.reserved
     abi_context = "\n".join(

@@ -304,6 +304,11 @@ def fold_source(
         from unbake.layout import redeclarations
 
         final = redeclarations.strip(final, apply.imported(final, project.include[0], {}))
+    from unbake.layout import header_loss
+
+    header_loss.check(
+        project, {project.src / f"{function}.c": final.encode(), **{edit.path: edit.after.encode() for edit in edits}}
+    )
     return Folded(function, final, edits, removed)
 
 

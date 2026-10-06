@@ -307,7 +307,9 @@ def published_components(project: Project) -> dict[Path, str]:
     return published_snapshot(project)[0]
 
 
-def published_snapshot(project: Project) -> tuple[dict[Path, str], dict[Path, set[Path]]]:
+def published_snapshot(
+    project: Project, *, sources: dict[Path, str] | None = None
+) -> tuple[dict[Path, str], dict[Path, set[Path]]]:
     """Keep installed declaration dependencies used by published C bodies.
 
     Generated does not mean disposable: a matched body proves the declaration
@@ -325,30 +327,37 @@ def published_snapshot(project: Project) -> tuple[dict[Path, str], dict[Path, se
             by_name.setdefault(name, []).append(unit)
     from unbake.layout import redeclarations
 
-    pending = set()
-    local_tags = set()
-    for _function, source, _ in published_sources(project):
-        local_tags.update(redeclarations.local_tags(source.read_text()))
-        # A function's own installed declaration is carried too: it moves with its module to the new owner header.
-        # One that disagrees with the definition is dropped when types are rendered (database._render).
-        pending.update(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(source.read_text())))
+    if sources is None:
+        sources = {source: source.read_text() for _, source, _ in published_sources(project)}
     selected: dict[Path, str] = {}
     homes: dict[Path, set[Path]] = {}
-    seen = set()
-    while pending:
-        name = pending.pop()
-        if name in seen:
-            continue
-        seen.add(name)
-        for unit in by_name.get(name, ()):
-            if unit.tags & local_tags:
+    for text in sources.values():
+        # Ownership is local to one consumer. A private same-named tag in a
+        # different unit cannot erase this unit's shared declaration dependency.
+        local_tags = redeclarations.local_tags(text)
+        local_types = set().union(
+            *(
+                declarations(variant).typedefs
+                for start, end in redeclarations.spans(text)
+                for variant in redeclarations.variants(text[start:end])
+            )
+        )
+        pending = set(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(text)))
+        seen = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
                 continue
-            digest = hashlib.sha256(unit.text.encode()).hexdigest()[:24]
-            label = "published_" + digest
-            virtual = project.include[0] / ("." + label + ".h")
-            homes.setdefault(virtual, set()).add(unit.path)
-            selected[virtual] = f"/* unbake published declaration: {label} */\n" + unit.text
-            pending.update(unit.uses - seen)
+            seen.add(name)
+            for unit in by_name.get(name, ()):
+                if unit.tags & local_tags or unit.types & local_types:
+                    continue
+                digest = hashlib.sha256(unit.text.encode()).hexdigest()[:24]
+                label = "published_" + digest
+                virtual = project.include[0] / ("." + label + ".h")
+                homes.setdefault(virtual, set()).add(unit.path)
+                selected[virtual] = f"/* unbake published declaration: {label} */\n" + unit.text
+                pending.update(unit.uses - seen)
     return selected, homes
 
 

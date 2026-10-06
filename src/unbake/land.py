@@ -604,6 +604,15 @@ def land(
         for name, text in headers.items()
         if name in folded.headers or project.include[-1] / name in dependencies
     }
+    from unbake.layout import header_loss
+
+    header_loss.check(
+        project,
+        {
+            project.src / f"{function}.c": source.encode(),
+            **{project.include[-1] / n: t.encode() for n, t in headers.items()},
+        },
+    )
     written: dict[Path, bytes | None] = {}
 
     def put(path: Path, content: bytes) -> None:

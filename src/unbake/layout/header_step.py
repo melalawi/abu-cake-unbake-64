@@ -23,15 +23,9 @@ from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 4
+SCHEMA = 5
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
-_DECLARED = (
-    re.compile(r"^[ \t]*#[ \t]*define[ \t]+(\w+)", re.M),
-    re.compile(r"\b(?:struct|union|enum)[ \t]+(\w+)[ \t]*\{"),
-    re.compile(r"\b(\w+)[ \t]*(?:\[[^\]]*\])*[ \t]*;[ \t]*(?://[^\n]*)?$", re.M),
-    re.compile(r"\b(\w+)[ \t]*\([^;{]*\)[ \t]*;"),
-)
 
 
 def input_key(project: Project) -> str:
@@ -44,12 +38,14 @@ def input_key(project: Project) -> str:
     parts.append(types_db.solution(types_db.path(project)) or "no solution")
     for include in project.include:
         parts.extend(sorted(include.rglob("*.h")))
-    parts.extend(sorted(project.src.glob("*.c")))
+    parts.extend(sorted(project.src.rglob("*.c")))
     return cache.key(*parts)
 
 
 def declared(text: str) -> set[str]:
-    return {name for pattern in _DECLARED for name in pattern.findall(text)}
+    from unbake.layout.header_loss import declared as names
+
+    return names(text)
 
 
 def includes(path: Path, project: Project, memo: dict[Path, frozenset[Path]]) -> frozenset[Path]:
@@ -75,21 +71,9 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     A previously generated header the outputs no longer contain is deleted by apply.install, so it is
     checked like a change to an empty header."""
     changed = {path: data for path, data in outputs.items() if not path.is_file() or path.read_bytes() != data}
-    used: set[str] = set()
-    for source in project.src.glob("*.c"):
-        used |= uses(source.read_text())
-    obsolete = {path: b"" for path in index.headers(project) - outputs.keys()}
-    # A name that moves to another generated header is not removed.
-    kept = set().union(*(declared(data.decode()) for path, data in outputs.items() if path.suffix == ".h"))
-    refusals = []
-    for path in sorted({**changed, **obsolete}):
-        if path.suffix != ".h" or not path.is_file():
-            continue
-        removed = (declared(path.read_text()) - kept) & used
-        if removed:
-            refusals.append(f"{path}: would remove {', '.join(sorted(removed))} used by published C")
-    if refusals:
-        raise Held("headers", "headers.merge_only: " + "; ".join(refusals))
+    from unbake.layout import header_loss
+
+    header_loss.check(project, outputs, obsolete=index.headers(project) - outputs.keys())
     return changed
 
 

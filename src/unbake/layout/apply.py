@@ -228,7 +228,10 @@ def units(project: Project, *, dry_run: bool = False) -> int:
 
 def install(project: Project, outputs: dict[Path, bytes | Path], *, dry_run: bool = False) -> int:
     """Validate all content before the first write; stale paths come from the old index."""
+    from unbake.layout import header_loss
+
     obsolete = index.headers(project) - outputs.keys()
+    header_loss.check(project, outputs, obsolete=obsolete)
     changed = {
         p: data
         for p, data in outputs.items()
