@@ -50,6 +50,7 @@ class Receipts:
             found = known.get(id(row))
             if found is not None:
                 return found
+            result: Any
             if isinstance(row, dict):
                 if thaw and set(row) == {"$receipt"}:
                     result = self.rows[row["$receipt"]]
