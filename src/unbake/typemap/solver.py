@@ -840,11 +840,24 @@ def infer(
 
 
 def _map_parts(facts: dict[str, Any], inventory: Any) -> list[str]:
-    """What the ABI and machine graph read from the map: the shard, its supplement, inventory and globals."""
+    """Machine inputs, excluding the C/assembly storage classification a landing changes."""
     return [
         facts["shard_sha256"],
         json.dumps(facts.get("abi_supplement"), sort_keys=True),
-        storage.digest(storage.encoded(dict(inventory))),
+        storage.digest(
+            storage.encoded(
+                {
+                    name: {
+                        **item,
+                        "versions": {
+                            version: {k: v for k, v in placement.items() if k != "kind"}
+                            for version, placement in item["versions"].items()
+                        },
+                    }
+                    for name, item in inventory.items()
+                }
+            )
+        ),
         storage.digest(storage.encoded(facts["globals"])),
     ]
 

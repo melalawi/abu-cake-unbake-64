@@ -295,3 +295,9 @@ class HeaderKeyTests(SourceKeyTests):
             self.assertNotEqual(self.key(), base)
             used.write_text("struct Shape { Used a; };\ntypedef int Used;\nstruct Unspelled { int z; };\n")
             self.assertEqual(self.key(), base)
+
+
+class ComputedIncludeTests(TempCase):
+    def test_a_computed_include_is_a_preprocessor_input(self):
+        self.assertEqual(facts.interface("#include SELECTED_HEADER\n", []), "#include SELECTED_HEADER")
+        self.assertEqual(facts.interface('#include "literal.h"\n', []), "")

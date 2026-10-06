@@ -179,7 +179,9 @@ def parse(text: str) -> Parsed:
 
     code = declaration_source(text)
     directives = tuple(
-        line.strip() for line in re.findall(r"^[ \t]*#.*$", text, re.M) if not re.match(r"#\s*include\b", line.strip())
+        line.strip()
+        for line in re.findall(r"^[ \t]*#.*$", text, re.M)
+        if not re.match(r'#\s*include\s*[<"]', line.strip())
     )
     statements: list[Statement] = []
     depth = 0
