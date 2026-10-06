@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -161,3 +162,32 @@ class PolymorphicCalleeTests(unittest.TestCase):
         self.assertEqual(
             [(p["state"], p["type"]) for p in solved["func_80260550_de"]["params"]][2], ("known", "void *")
         )
+
+
+class StructDefinitionTests(unittest.TestCase):
+    """Two real functions read the word at offset 4 of the object behind global D_800D5268_de."""
+
+    def test_the_solved_global_points_to_a_struct_defined_with_its_proven_field(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "fixtures" / "shape_struct_facts.json"
+        solved = infer(SimpleNamespace(), json.loads(path.read_text()), [])
+        self.assertEqual(solved["globals"]["D_800D5268_de"]["type"], "struct Shape_func_802BB5F0_de *")
+        definition = solved["structs"]["Shape_func_802BB5F0_de"]["declaration"]
+        self.assertEqual(
+            definition,
+            "struct Shape_func_802BB5F0_de {\n    unsigned char padding_0[4];\n    int field_4;\n};",
+        )
+        snippet = (
+            "extern struct Shape_func_802BB5F0_de *D_800D5268_de;\nint f(void) { return D_800D5268_de->field_4; }\n"
+        )
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("no C compiler on PATH")
+        for source, compiles in (
+            ("struct Shape_func_802BB5F0_de;\n" + snippet, False),
+            (definition + "\n" + snippet, True),
+        ):
+            with self.subTest(compiles=compiles):
+                result = subprocess.run(
+                    [compiler, "-fsyntax-only", "-x", "c", "-"], input=source, text=True, capture_output=True
+                )
+                self.assertEqual(result.returncode == 0, compiles, result.stderr)
