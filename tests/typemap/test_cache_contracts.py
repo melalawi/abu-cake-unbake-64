@@ -78,3 +78,45 @@ class RenderInputTests(ProjectCase):
             second = regeneration.Session(self.project, self.host)
         self.assertNotIn("Local", first.projections[source]["owned"])
         self.assertIn("Local", second.projections[source]["owned"])
+
+
+class PhysicalSourceKeyTests(ProjectCase):
+    def test_aliases_of_one_physical_source_do_not_repeat_version_key_work(self):
+        source = self.project.src / "alpha.c"
+        source.write_text("int alpha(void) { return 1; }\nint alias(void) { return 2; }\n")
+        tasks = [(name, source, version) for name in ("alpha", "alias") for version in self.project.versions]
+        expected = [
+            facts.unit_key(self.project, self.host, path, version, facts.Snapshot(self.project))
+            for _, path, version in tasks
+        ]
+        real = facts.unit_key
+        calls = []
+
+        def keyed(project, host, path, version, snapshot):
+            calls.append((path, version))
+            return real(project, host, path, version, snapshot)
+
+        def inline(host, function, items, shared):
+            return [function(shared, item) for item in items]
+
+        with (
+            patch.object(facts.declarations, "published_sources", return_value=tasks),
+            patch.object(facts, "unit_key", keyed),
+            patch("unbake.pool.run", side_effect=inline),
+        ):
+            found = facts.published_keys(self.project, self.host)
+        self.assertEqual(found, expected)
+        self.assertEqual(len(calls), len(self.project.versions))
+
+    def test_version_macros_do_not_rewalk_an_identical_include_search(self):
+        source = self.project.src / "alpha.c"
+        source.write_text('#include "types.h"\nint alpha(void) { return 0; }\n')
+        snapshot = facts.Snapshot(self.project)
+        with patch.object(snapshot, "edges", wraps=snapshot.edges) as edges:
+            first = facts.unit_key(self.project, self.host, source, "us", snapshot)
+            visits = edges.call_count
+            second = facts.unit_key(self.project, self.host, source, "eu", snapshot)
+            repeated = edges.call_count
+        self.assertNotEqual(first, second)
+        self.assertGreater(visits, 0)
+        self.assertEqual(repeated, visits)

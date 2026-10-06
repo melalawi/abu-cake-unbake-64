@@ -130,17 +130,21 @@ def _supported(kind: str, values: list[str]) -> None:
     import re
     import tomllib
 
+    from unbake import inputs
+    from unbake.cache import memo
     from unbake.compilers.registry import REGISTRY_PATH
 
-    definitions = tomllib.loads(REGISTRY_PATH.read_text())["compilers"]
-    supported = {
-        flag
-        for spec in definitions.values()
-        if spec["kind"] == kind
-        for flags in [spec["cflags"], *spec["flag_variants"]]
-        for flag in flags
-    }
-    supported.update({"-ansi", "-fsigned-char"})
+    def read() -> frozenset[str]:
+        definitions = tomllib.loads(REGISTRY_PATH.read_text())["compilers"]
+        return frozenset(
+            flag
+            for spec in definitions.values()
+            if spec["kind"] == kind
+            for flags in [spec["cflags"], *spec["flag_variants"]]
+            for flag in flags
+        ) | {"-ansi", "-fsigned-char"}
+
+    supported = memo("compiler.supported-flags", (kind, REGISTRY_PATH, inputs.signature(REGISTRY_PATH)), read, keep=8)
     for flag in values:
         if flag in supported or re.fullmatch(r"-G[0-9]+|-mips[1-4]|-O[0-3s]?|-g[0-3]?", flag):
             continue

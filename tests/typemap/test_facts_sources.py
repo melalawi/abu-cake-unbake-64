@@ -18,8 +18,13 @@ class SourceFactsTests(TempCase):
         pin = self.root / "compiler.pin"
         pin.write_text("fixture compiler pin")
         compiler = SimpleNamespace(cc=self.root / "cc", cflags=("-mips3",), sha256=pin)
-        self.project = SimpleNamespace(root=self.root, include=(), unit_flags={}, compiler_for=lambda unit: compiler,
-                                       version=lambda v: SimpleNamespace(macros=("VERSION_" + v,)))
+        self.project = SimpleNamespace(
+            root=self.root,
+            include=(),
+            unit_flags={},
+            compiler_for=lambda unit: compiler,
+            version=lambda v: SimpleNamespace(macros=("VERSION_" + v,)),
+        )
         texts = {
             "us": HEADER + "Pair *alpha(void);\nint beta(void);\n",
             "eu": HEADER + "Pair *alpha(void);\nint beta(void);\n",
@@ -105,16 +110,33 @@ class SharedVersionsTests(TempCase):
 class UnitFaultIdentityTests(TempCase):
     def test_fault_names_actual_physical_source_and_versions(self):
         from unbake.pool import WorkerMemory
-        source = self.root / '804069F4_de.c'
-        source.write_text('int real_input;\n')
+
+        source = self.root / "804069F4_de.c"
+        source.write_text("int real_input;\n")
         project = SimpleNamespace(root=self.root)
-        tasks = [[(0, 'source-key', ('func_804069F4_de', source, 'de'))],
-                 [(1, 'other-key', ('func_804069F4_de', source, 'us'))]]
-        with patch.object(facts, '_unit_work', side_effect=MemoryError):
-            with self.assertRaises(WorkerMemory) as caught:
-                facts._unit_job((project, None, {}), tasks)
-        identity = caught.exception.args[0]['identity']
-        self.assertEqual(identity['source'], '804069F4_de.c')
-        self.assertEqual(identity['functions'], ('func_804069F4_de',))
-        self.assertEqual(identity['versions'], ('de', 'us'))
-        self.assertEqual(identity['source_bytes'], source.stat().st_size)
+        tasks = [
+            [(0, "source-key", ("func_804069F4_de", source, "de"))],
+            [(1, "other-key", ("func_804069F4_de", source, "us"))],
+        ]
+        with patch.object(facts, "_unit_work", side_effect=MemoryError), self.assertRaises(WorkerMemory) as caught:
+            facts._unit_job((project, None, {}), tasks)
+        identity = caught.exception.args[0]["identity"]
+        self.assertEqual(identity["source"], "804069F4_de.c")
+        self.assertEqual(identity["functions"], ("func_804069F4_de",))
+        self.assertEqual(identity["versions"], ("de", "us"))
+        self.assertEqual(identity["source_bytes"], source.stat().st_size)
+
+    def test_python_fault_keeps_actual_source_versions_and_cause(self):
+        from unbake.config import Held
+
+        source = self.root / "actual.c"
+        source.write_text("int actual;\n")
+        tasks = [[(0, "input-pin", ("actual", source, "de"))]]
+        with (
+            patch.object(facts, "_unit_work", side_effect=SystemError("compile returned NULL without exception")),
+            self.assertRaises(Held) as caught,
+        ):
+            facts._unit_job((SimpleNamespace(root=self.root), None, {}), tasks)
+        self.assertEqual(caught.exception.fault["identity"]["source"], "actual.c")
+        self.assertEqual(caught.exception.fault["identity"]["versions"], ("de",))
+        self.assertIsInstance(caught.exception.__cause__, SystemError)

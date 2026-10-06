@@ -64,7 +64,7 @@ class Snapshot:
     def __init__(self, project: Project) -> None:
         self.project = project
         self._edges: dict[tuple[Path, tuple[Path, ...], tuple[Path, ...]], tuple[Path, ...]] = {}
-        self._closures: dict[tuple[tuple[Path, ...], tuple[str, ...]], tuple[Path, ...]] = {}
+        self._closures: dict[tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]], tuple[Path, ...]] = {}
         self._digests: dict[Path, str] = {}
         self._parsed: dict[Path, Parsed] = {}
         self._identifiers: dict[Path, frozenset[str]] = {}
@@ -85,10 +85,10 @@ class Snapshot:
 
     def closure(self, roots: tuple[Path, ...], command: list[str]) -> tuple[Path, ...]:
         """Every file the roots can include, ignoring conditionals (a superset is safe)."""
-        identity = (roots, tuple(command))
+        includes, quotes = _search(self.project, command)
+        identity = (roots, includes, quotes)
         found = self._closures.get(identity)
         if found is None:
-            includes, quotes = _search(self.project, command)
             seen: dict[Path, None] = dict.fromkeys(roots[1:])
             pending = list(roots)
             while pending:
@@ -868,29 +868,47 @@ def _unit_job(
     except Held as error:
         fault = {**(error.fault or {}), "action": "types", "identity": asdict(identity)}
         raise Held(error.phase, f"{identity.source}: {error.reason}", fault=fault) from error
+    except Exception as error:
+        from unbake.process import fault as cause_fault
+
+        fault = {**cause_fault(error), "action": "types", "identity": asdict(identity)}
+        raise Held("solve", f"types.source: {identity.source}: {type(error).__name__}: {error}", fault=fault) from error
 
 
 # The worker's include snapshot for published_keys, built once per shared value.
 _keying: tuple[tuple[Project, Host | None], Snapshot] | None = None
 
 
-def _unit_key_job(shared: tuple[Project, Host | None], task: Task) -> str:
-    """Worker body: one task's source-part key."""
+def _unit_key_job(shared: tuple[Project, Host | None], item: tuple[Path, tuple[str, ...]]) -> list[str]:
+    """One physical source's version keys, sharing its include snapshot in the worker."""
     global _keying
     if _keying is None or _keying[0] is not shared:
         _keying = (shared, Snapshot(shared[0]))
-    _, source, version = task
-    return unit_key(shared[0], shared[1], source, version, _keying[1])
+    source, versions = item
+    return [unit_key(shared[0], shared[1], source, version, _keying[1]) for version in versions]
 
 
 def published_keys(project: Project, policy: Host | None) -> list[str]:
-    """Each task's source-part key: what the solve's facts depend on besides the header layer."""
+    """Each logical task's key, deriving a physical source/version only once."""
     from unbake import pool
 
     tasks = declarations.published_sources(project)
-    if policy is None:
-        return [_unit_key_job((project, policy), task) for task in tasks]
-    return pool.run(policy, _unit_key_job, tasks, (project, policy))
+    versions: dict[Path, dict[str, None]] = {}
+    for _, source, version in tasks:
+        versions.setdefault(source, {})[version] = None
+    jobs = [(source, tuple(names)) for source, names in versions.items()]
+    shared = (project, policy)
+    rows = (
+        [_unit_key_job(shared, item) for item in jobs]
+        if policy is None
+        else pool.run(policy, _unit_key_job, jobs, shared)
+    )
+    keys = {
+        (source, version): content_key
+        for (source, names), values in zip(jobs, rows, strict=True)
+        for version, content_key in zip(names, values, strict=True)
+    }
+    return [keys[source, version] for _, source, version in tasks]
 
 
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
