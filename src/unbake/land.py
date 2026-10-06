@@ -267,6 +267,47 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
             "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"
         )
 
+    _fuzzy_calls(function, source)
+
+
+def _fuzzy_calls(function: str, source: str) -> None:
+    """Old compilers accept implicit function declarations; retained C must declare its calls."""
+    from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
+
+    from unbake import cdecl
+
+    try:
+        tree = cdecl.parse(cdecl.declaration_source(source))
+    except Exception as error:
+        raise Held("land", f"land.fuzzy_source: {function}: cannot validate call declarations: {error}") from error
+    declared = {node.name for node in tree.ext if isinstance(node, (c_ast.Decl, c_ast.Typedef))}
+    declared.update(node.decl.name for node in tree.ext if isinstance(node, c_ast.FuncDef))
+    definition = next(
+        (node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function), None
+    )
+    if definition is None:
+        raise Held("land", f"land.fuzzy_identity: {function}: executable definition is missing")
+    text = c_generator.CGenerator().visit(definition)
+    if placeholder := next(
+        (token[0] for token in cdecl.SOURCE_TOKEN.finditer(text) if re.fullmatch(r"M2C_\w+", token[0])), None
+    ):
+        raise Held("land", f"land.fuzzy_placeholder: {function}: unresolved {placeholder}")
+    if definition.decl.type.args is not None:
+        declared.update(param.name for param in definition.decl.type.args.params if isinstance(param, c_ast.Decl))
+
+    class Calls(c_ast.NodeVisitor):  # type: ignore[misc]
+        def visit_Decl(self, node: Any) -> None:
+            declared.add(node.name)
+            if node.init is not None:
+                self.visit(node.init)
+
+        def visit_FuncCall(self, node: Any) -> None:
+            if isinstance(node.name, c_ast.ID) and node.name.name not in declared:
+                raise Held("land", f"land.fuzzy_undeclared: {function}: call to undeclared {node.name.name}")
+            self.generic_visit(node)
+
+    Calls().visit(definition.body)
+
 
 def _fuzzy_builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[dict[str, Any], set[Path]]:
     from unbake.compilers.fingerprint import _body

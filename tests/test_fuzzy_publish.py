@@ -174,6 +174,8 @@ class FuzzyPublishTests(ProjectCase):
         ):
             land._fuzzy_signature(self.project, "alpha", "us", SOURCE)
             land._fuzzy_signature(self.project, "alpha", "us", "typedef signed int s32; s32 alpha(void) { return 1; }")
+            with self.assertRaisesRegex(Held, "undeclared missing"):
+                land._fuzzy_signature(self.project, "alpha", "us", "int alpha(void) { return missing(); }")
             with self.assertRaisesRegex(Held, "definition differs from canonical"):
                 land._fuzzy_signature(self.project, "alpha", "us", "int alpha(int value) { return value; }")
 
@@ -201,3 +203,16 @@ class FuzzyPublishTests(ProjectCase):
         self.assertEqual(row["metadata"]["source_path"], "src/alpha.c")
         self.assertFalse(row["metadata"]["complete"])
         self.assertAlmostEqual(report["measures"]["fuzzy_match_percent"], 50 / 3, places=5)
+
+    def test_implicit_calls_and_decompiler_placeholders_are_not_admitted(self):
+        with self.assertRaisesRegex(Held, "undeclared missing"):
+            land._fuzzy_calls("alpha", "int alpha(void) { return missing(); }")
+        with self.assertRaisesRegex(Held, "unresolved M2C_ERROR"):
+            land._fuzzy_calls("alpha", "int M2C_ERROR(void); int alpha(void) { return M2C_ERROR(); }")
+        with self.assertRaisesRegex(Held, "unresolved M2C_UNK"):
+            land._fuzzy_calls("alpha", "typedef int M2C_UNK; int alpha(void) { M2C_UNK value = 1; return value; }")
+        land._fuzzy_calls("alpha", "int supplied(void); int alpha(void) { return supplied(); }")
+        land._fuzzy_calls("alpha", "int alpha(int (*callback)(void)) { return callback(); }")
+        land._fuzzy_calls(
+            "alpha", "int supplied(void); int alpha(void) { int (*callback)(void) = supplied; return callback(); }"
+        )
