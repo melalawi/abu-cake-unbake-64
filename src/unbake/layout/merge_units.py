@@ -43,6 +43,8 @@ def input_key(project: Project) -> str:
 def runs(project: Project) -> list[tuple[layout_map.Group, tuple[str, ...]]]:
     """Mergeable runs, in layout order."""
     landed = {path.stem for path in project.src.glob("*.c")}
+    if len(landed) < 2:
+        return []
     owners = _owners(project)
     return member_runs(
         layout_map.load(project).groups, landed, lambda left, right: _joins(project, owners, left, right)
