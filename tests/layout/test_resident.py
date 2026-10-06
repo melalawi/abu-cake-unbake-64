@@ -9,6 +9,8 @@ from unbake.config import Held
 from unbake.layout import resident
 
 M = resident.MARKER
+IF = "#if defined(VERSION_US)"
+DEF = "const float unbake_rodata_u_0 = 1.0f;"
 
 
 def text(*lines: str) -> str:
@@ -25,6 +27,9 @@ class DeletedTests(unittest.TestCase):
                  "const unsigned char unbake_rodata_80002000_3[] = {0x25, 0x73, 0x00};", "#endif"],
                 [],
             ),
+            ("blank empty branches", [M, IF, "", "  ", "#elif defined(VERSION_DE)", "\t", "#endif"], []),
+            ("blank lines around definitions", [M, IF, "", DEF, "", "#endif"], []),
+            ("comment and crlf", [M + "\r", IF + "\r", "/* note */\r", DEF + "\r", "#endif \r"], []),
             ("unconditional definitions", [M, "const double unbake_rodata_u_0 = 2.0;"], []),
             ("empty first branch", [M, "#if defined(VERSION_DE)", "#else", "const float unbake_rodata_u_0 = 1.0f;",
                                     "#endif"], []),
@@ -43,6 +48,11 @@ class DeletedTests(unittest.TestCase):
 
     def test_refusals_name_the_unit(self) -> None:
         cases = [
+            (
+                "stray line after blank",
+                [M, "#if defined(VERSION_US)", "", "int x;", "#endif"],
+                "expected #endif, found 'int x;'",
+            ),
             ("stray line", [M, "#if defined(VERSION_US)", "int x;", "#endif"], "expected #endif, found 'int x;'"),
             ("missing endif", [M, "#if defined(VERSION_US)", "const float unbake_rodata_u_0 = 1.0f;"], "the end of"),
             (
@@ -77,3 +87,13 @@ class RunTests(TempCase):
         with mock.patch("unbake.land._commit") as commit:
             self.assertEqual(resident.run(project, SimpleNamespace()), [])
         commit.assert_not_called()
+
+    def test_a_malformed_source_is_refused_after_the_good_ones_are_committed(self) -> None:
+        src = self.root / "src"
+        src.mkdir()
+        (src / "a.c").write_text(text("", M, "const float unbake_rodata_a_0 = 0.5f;"))
+        (src / "b.c").write_text(text(M, "#if defined(VERSION_US)", "int x;", "#endif"))
+        with mock.patch("unbake.land._commit") as commit, self.assertRaisesRegex(Held, r"resident\.b: line"):
+            resident.run(SimpleNamespace(src=src), SimpleNamespace())
+        self.assertEqual((src / "a.c").read_text(), text())
+        commit.assert_called_once()

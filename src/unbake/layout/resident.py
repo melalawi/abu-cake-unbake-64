@@ -18,9 +18,10 @@ from unbake.config import Held, Host, Project
 MARKER = "/* Native resident constant storage; absolute access symbols retain their addresses. */"
 _DEFINITION = re.compile(r"const [A-Za-z_][\w ]*? (unbake_rodata_\w+?)(?:\[\w*\])* = .+;")
 _BRANCH = re.compile(r"#(?:elif|else)\b.*")
+_COMMENT = re.compile(r"/\*.*\*/|//.*")
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 1
+SCHEMA = 3
 
 
 def input_key(project: Project) -> str:
@@ -34,7 +35,7 @@ def deleted(text: str, unit: str) -> str:
     names: set[str] = set()
     at = 0
     while at < len(lines):
-        if lines[at] != MARKER:
+        if lines[at].strip() != MARKER:
             out.append(lines[at])
             at += 1
             continue
@@ -44,14 +45,18 @@ def deleted(text: str, unit: str) -> str:
         guarded = at < len(lines) and lines[at].startswith("#if")
         at += guarded
         while at < len(lines):
-            match = _DEFINITION.fullmatch(lines[at])
-            if match is None and not (guarded and _BRANCH.fullmatch(lines[at])):
+            line = lines[at].strip()
+            if guarded and (not line or _COMMENT.fullmatch(line)):
+                at += 1
+                continue
+            match = _DEFINITION.fullmatch(line)
+            if match is None and not (guarded and _BRANCH.fullmatch(line)):
                 break
             if match is not None:
                 names.add(match[1])
             at += 1
         if guarded:
-            if at >= len(lines) or lines[at] != "#endif":
+            if at >= len(lines) or lines[at].strip() != "#endif":
                 found = repr(lines[at]) if at < len(lines) else "the end of the file"
                 raise Held("resident", f"resident.{unit}: line {at + 1}: expected #endif, found {found}")
             at += 1
@@ -67,11 +72,18 @@ def run(project: Project, host: Host) -> list[Path]:
     from unbake import land
 
     changed = []
+    refused = []
     for path in sorted(project.src.glob("*.c")):
         text = path.read_text()
         if MARKER in text:
-            atomic_files.text(path, deleted(text, path.stem))
+            try:
+                atomic_files.text(path, deleted(text, path.stem))
+            except Held as error:
+                refused.append(error.reason)
+                continue
             changed.append(path)
     if changed:
         land._commit(project, host, changed, "Delete resident constant blocks the link discards")
+    if refused:
+        raise Held("resident", "; ".join(refused))
     return changed
