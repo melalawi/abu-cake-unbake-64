@@ -7,7 +7,9 @@ objects to build/<v>/src/UNIT.o (make keys its own under build/cas); drafts writ
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -259,3 +261,24 @@ def preprocess(project: Project, host: Host, file: Path, version: str, *, unit: 
         "compile",
         context={"source": str(file), "function": unit, "version": version},
     )
+
+
+def dependencies(project: Project, host: Host, file: Path, version: str, *, unit: str) -> set[Path]:
+    """Native preprocessing prerequisites with the same effective unit/version flags."""
+    argv = drivers.preprocess_command(project, str(host.cpp), version, unit, file, non_matching=False)
+    argv = [word for word in argv if word not in ("-E", "-P")]
+    argv.insert(len(argv) - 1, "-M")
+    output = process.run_tool(
+        argv, project.root, "compile", context={"source": str(file), "function": unit, "version": version}
+    )
+    rule = output.replace("\\\n", " ").splitlines()[0] if output.strip() else ""
+    target, separator, names = rule.partition(":")
+    if not target or not separator:
+        raise Held("compile", f"compile.dependencies: {unit} {version}: native dependency rule missing")
+    try:
+        paths = {Path(os.path.abspath(project.root / name)) for name in shlex.split(names)}
+    except ValueError as error:
+        raise Held("compile", f"compile.dependencies: {unit} {version}: {error}") from error
+    if file.absolute() not in paths:
+        raise Held("compile", f"compile.dependencies: {unit} {version}: proved source missing from native rule")
+    return paths - {file.absolute()}

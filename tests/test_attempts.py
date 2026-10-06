@@ -104,6 +104,8 @@ class ReaderTests(ProjectCase):
 
                 def git(project, *args, env=None, calls=calls):
                     calls.append(args)
+                    if args[:2] == ("rev-parse", "--git-path"):
+                        return str(self.project.root / ".git" / "index")
                     return {"rev-parse": "c0ffee\n"}.get(args[0], "")
 
                 with (

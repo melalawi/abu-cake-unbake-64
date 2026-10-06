@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -45,10 +44,7 @@ class Landed:
 
 
 def _git(project: Project, *args: str, env: dict[str, str] | None = None) -> str:
-    result = subprocess.run(["git", *args], cwd=project.root, capture_output=True, text=True, env=env)
-    if result.returncode:
-        raise Held("land", f"git {args[0]} exited {result.returncode}: {(result.stderr or result.stdout).strip()}")
-    return result.stdout
+    return process.run_native(["git", *args], project.root, "land", env=env).stdout
 
 
 def dirty(project: Project) -> set[str]:
@@ -76,21 +72,36 @@ def commit_generated(project: Project, host: Host, before: set[str], message: st
 
 
 def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
-    _git(project, "add", "--", *(str(path.relative_to(project.root)) for path in paths))
+    names = [str(path.relative_to(project.root)) for path in paths]
+    index = Path(_git(project, "rev-parse", "--git-path", "index").strip())
+    if not index.is_absolute():
+        index = project.root / index
+    before = index.read_bytes() if index.is_file() else None
     author = f"{host.publish_author_name} <{host.publish_author_email}>"
-    _git(
-        project,
-        "-c",
-        f"user.name={host.publish_author_name}",
-        "-c",
-        f"user.email={host.publish_author_email}",
-        "commit",
-        "-q",
-        "-m",
-        message,
-        "--author",
-        author,
-    )
+    try:
+        _git(project, "add", "--", *names)
+        _git(
+            project,
+            "-c",
+            f"user.name={host.publish_author_name}",
+            "-c",
+            f"user.email={host.publish_author_email}",
+            "commit",
+            "-q",
+            "-m",
+            message,
+            "--author",
+            author,
+            "--only",
+            "--",
+            *names,
+        )
+    except BaseException:
+        if before is None:
+            index.unlink(missing_ok=True)
+        else:
+            atomic_files.write(index, before)
+        raise
 
 
 def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
@@ -144,7 +155,7 @@ def _with_compiler(project: Project, function: str, ident: str) -> Project:
     return replace(project, units=units)
 
 
-def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> bool:
+def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[bool, set[Path]]:
     """Pool worker: one version's compile, place and link of the staged unit equals its ROM row."""
     project, view, host, function, file, version = spec
     row = compare.row_of(project, function, version)
@@ -154,26 +165,30 @@ def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> bool:
         placed = work / "placed.o"
         runner.place(project, host, obj, version, row, placed, score=False)
         linked = runner.link(project, host, placed, version, row, work, file)
-    return linked == split.words(project, row)
+    equal = linked == split.words(project, row)
+    return equal, runner.dependencies(view, host, file, version, unit=function) if equal else set()
 
 
 def _prove_versions(
     project: Project, host: Host, view: Project, function: str, file: Path, versions: Sequence[str]
-) -> None:
+) -> set[Path]:
     """Build every version at once in the pool; the first version in order that differs refuses."""
     from unbake import pool
 
     results = pool.run(host, _builds_row, [(project, view, host, function, file, version) for version in versions])
-    for version, equal in zip(versions, results, strict=True):
+    for version, (equal, _) in zip(versions, results, strict=True):
         if not equal:
             raise Held(
                 "land",
                 f"land.mismatch: {function} compares exact but the {version} ROM built with it differs. "
                 f"The tree changed since the compare. Run: unbake compare {project.work / function / f'{function}.c'}",
             )
+    return set().union(*(paths for _, paths in results))
 
 
-def prove(project: Project, host: Host, function: str, source: str, headers: dict[str, str], stage: Path) -> list[str]:
+def prove(
+    project: Project, host: Host, function: str, source: str, headers: dict[str, str], stage: Path
+) -> tuple[list[str], set[Path]]:
     """Compile the folded source against staged headers; its linked bytes must equal the ROM row everywhere."""
     from unbake.layout import header_step
 
@@ -191,7 +206,22 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
     atomic_files.text(file, source)
     view = replace(project, work_include=(include,))
     versions = split.holding_versions(project, function)
-    _prove_versions(project, host, view, function, file, versions)
+    dependencies = _prove_versions(project, host, view, function, file, versions)
+    publish_inputs = set()
+    native = tuple(project.tools / ident for ident in project.compilers)
+    for dependency in dependencies:
+        path = root / dependency.relative_to(include) if dependency.is_relative_to(include) else dependency
+        if not path.is_relative_to(project.root) or any(path.is_relative_to(home) for home in native):
+            continue
+        if any(path.is_relative_to(home) for home in (project.build, project.cache, project.roms)):
+            raise Held("land", f"land.dependency: {path}: published source depends on disposable or ROM input")
+        if path.resolve() != path:
+            raise Held("land", f"land.dependency: {path}: required regular project input, not a symlink")
+        if not path.is_file():
+            # New staged headers are installed by this same publication.
+            if not path.is_relative_to(root) or path.relative_to(root).as_posix() not in headers:
+                raise Held("land", f"land.dependency: {path}: required regular project input")
+        publish_inputs.add(path)
     changed = {
         project.include[-1] / name: text.encode()
         for name, text in headers.items()
@@ -200,7 +230,7 @@ def prove(project: Project, host: Host, function: str, source: str, headers: dic
     if changed:
         # A published unit's own source is validated as its new text, the one this land writes.
         header_step.validate(project, host, {**changed, project.src / f"{function}.c": source.encode()})
-    return list(versions)
+    return list(versions), publish_inputs
 
 
 def _row_edits(project: Project, function: str, versions: list[str], kind: str = "c") -> list[split.Edit]:
@@ -254,7 +284,7 @@ def land(project: Project, host: Host, file: Path) -> str:
     stage = project.work / "_land" / function
     shutil.rmtree(stage, ignore_errors=True)
     try:
-        versions = prove(project, host, function, folded.source, headers, stage)
+        versions, dependencies = prove(project, host, function, folded.source, headers, stage)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     written: dict[Path, bytes | None] = {}
@@ -292,7 +322,7 @@ def land(project: Project, host: Host, file: Path) -> str:
         steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
         generated += progress.write(updated, host)
         steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
-        _commit(project, host, sorted({*written, *generated}), message)
+        _commit(project, host, sorted({*written, *generated, *dependencies}), message)
     except BaseException:
         for path, previous in written.items():
             if previous is None:

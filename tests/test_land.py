@@ -26,13 +26,15 @@ class LandTests(ProjectCase):
     def run_land(self, proved: object, headers: dict[str, str] | None = None) -> str:
         def git(project, *args, env=None):
             self.git.append(args)
+            if args[:2] == ("rev-parse", "--git-path"):
+                return str(self.project.root / ".git" / "index")
             if args[-1:] == ("HEAD",):
                 return "c0ffee\n"
             if "commit" in args and self.fail_commit:
                 raise Held("land", "git commit exited 1: hook refused")
             return ""
 
-        prove = {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": proved}
+        prove = {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": (proved, set())}
         with (
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", SOURCE, headers or {}, ())),
@@ -122,7 +124,7 @@ class ProveVersionsTests(unittest.TestCase):
 
         def run(host, fn, items, shared=None):
             calls.append((fn, [item[-1] for item in items]))
-            return results
+            return [(equal, set()) for equal in results]
 
         project = SimpleNamespace(work=Path("/w"))
         with patch("unbake.pool.run", side_effect=run):
