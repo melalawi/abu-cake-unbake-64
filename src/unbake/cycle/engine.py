@@ -125,7 +125,8 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
         },
         "best_percent": None if measured.faults else measured.best_percent,
         "exact": measured.exact,
-        "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
+        "diagnostic": next((first_difference(measured.compares[v].lines) for v in measured.faults), "")
+        or next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
         or next((f"rule broken: {line}" for line in measured.rule_lines), ""),
         "seconds": time.monotonic() - started,
     }

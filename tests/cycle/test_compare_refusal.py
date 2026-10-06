@@ -41,8 +41,8 @@ class CompareRefusalTests(ProjectCase):
             file,
             sha,
             {
-                "us": Compare("us", 0, 3, {"changed": 3}, ["VERSION us: compile.cc1: invalid unary *"], 0.0),
                 "eu": Compare("eu", 1, 3, {"changed": 2}, ["first divergence: +4"], 33.3),
+                "us": Compare("us", 0, 3, {"changed": 3}, ["VERSION us: compile.cc1: invalid unary *"], 0.0),
             },
             faults={"us": failure},
         )
