@@ -955,12 +955,13 @@ def readiness(project: Project, host: Host | None) -> Readiness:
     )
     paths.update(path for path in (project.build / "types/abi.json",) if path.is_file())
     paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
-    # Every map/ABI shard and evidence receipt is included; a missing current key is not relocation.
+    # Map/ABI shards and evidence inputs count; the solve marker is checked separately.
+    receipt = marker(project)
     paths.update(
         path
         for directory in (project.build / "map", project.build / "types")
         for path in directory.glob("*")
-        if path.is_file()
+        if path.is_file() and path != receipt
     )
     policy = (
         None
