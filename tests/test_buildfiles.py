@@ -75,6 +75,7 @@ class BuildfileTests(ProjectCase):
     def test_unit_recipe_compiles_once_per_content_key(self) -> None:
         text = buildfiles.makefile(self.project, self.host)
         key = text[text.index("UNIT_KEY =") : text.index("UNIT_BIN =")]
+        key = " ".join(key.replace("\\\n", " ").split())
         for step in (
             "$(PREPROCESS_$(KIND)) &&",
             "| sha1sum - $(@D)/$(*F).i)",
@@ -83,7 +84,7 @@ class BuildfileTests(ProjectCase):
             "printf '%s\\n' $$1$$3 > $@",
         ):
             self.assertIn(step, key)
-        self.assertIn("'$(TOOLCHAIN) $(COMPILE_$(KIND))'", key)
+        self.assertIn("'$(TOOLCHAIN) $(subst $(CURDIR)/,,$(COMPILE_$(KIND)))'", key)
         link = text[text.index("UNIT_BIN =") : text.index("SLICE =")]
         self.assertIn("read key < $< && $(N64LINK) place build/cas/$$key.o", link.replace("\\\n  ", ""))
         self.assertIn("--oformat binary -o $@", link)

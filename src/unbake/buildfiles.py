@@ -22,7 +22,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -243,16 +243,17 @@ def _kind_recipes(kind: str) -> str:
 
 
 # One shell per unit and version: preprocess, key the object by content, compile only when build/cas lacks the key.
-# The key is sha1(toolchain pin digest + compile commands) then sha1(UNIT.i). mv -f into build/cas is atomic,
+# The key is sha1(toolchain pins + root-relative compile commands), then sha1(UNIT.i). Publication is atomic,
 # and two versions racing on one key write identical bytes. Place and link read the shared object and never write it.
 UNIT_RECIPES = r"""VER = $(word 2,$(subst /, ,$@))
 VERSION_DEFINES = $($(VER).DEFINES)
 TOOLCHAIN := $(firstword $(shell cat tools/compilers.sha256 tools/n64link.version | sha1sum))
 UNIT_KEY = printf '%s\n' '$(VER) $(*F)'; \
   $(PREPROCESS_$(KIND)) && \
-  set -- $$(printf '%s\n' '$(TOOLCHAIN) $(COMPILE_$(KIND))' | sha1sum - $(@D)/$(*F).i) && [ -n "$$3" ] && \
+  set -- $$(printf '%s\n' '$(TOOLCHAIN) $(subst $(CURDIR)/,,$(COMPILE_$(KIND)))' | \
+    sha1sum - $(@D)/$(*F).i) && [ -n "$$3" ] && \
   { [ -f build/cas/$$1$$3.o ] || { (cd $(@D) && $(COMPILE_$(KIND))) && mv -f $(@D)/$(*F).o build/cas/$$1$$3.o; }; } && \
-  printf '%s\n' $$1$$3 > $@
+  if [ ! -f $@ ] || [ "$$(cat $@)" != "$$1$$3" ]; then printf '%s\n' $$1$$3 > $@; fi
 UNIT_BIN = read key < $< && \
   $(N64LINK) place build/cas/$$key.o -o $(@D)/$(*F).placed.o --rom $($(VER).BASEROM) --text $($(VER).U.$(*F)) \
   $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld $(TRIM) && \
