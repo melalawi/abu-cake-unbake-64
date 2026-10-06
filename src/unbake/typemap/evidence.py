@@ -296,13 +296,17 @@ def abi(
         used_returns = consumed_by[name]
         if used_returns - return_regs:
             conflicts.append("callers consume return registers not defined at callee exits")
-        # GPR temporaries can coexist with an FP result. Caller consumption takes
-        # precedence over incidental exit register contents.
+        # Either result register can hold an incidental temporary. Consumption
+        # or a declaration disambiguates; an FP value alone has no precedence.
         consumed = used_returns & return_regs
-        returned = consumed or ({"f0"} if "f0" in return_regs else return_regs)
+        returned = consumed or return_regs
         if len(returned) > 1:
-            conflicts.append("callers disagree on integer versus floating return ABI")
-        if returned:
+            conflicts.append(
+                "callers disagree on integer versus floating return ABI"
+                if consumed
+                else "unconsumed exit registers do not identify the return ABI"
+            )
+        if len(returned) == 1:
             selected = next(iter(returned))
             for body in item["versions"].values():
                 for exit_ in body["returns"]:
@@ -332,6 +336,7 @@ def abi(
             and not used_returns
             and any(body["returns"] for body in item["versions"].values()),
             "return_known": not return_incomplete
+            and len(returned) <= 1
             and (not used_returns or bool(consumed))
             and any(body["returns"] for body in item["versions"].values()),
             "arity_known": not any("input registers differ" in reason for reason in conflicts) and not missing,

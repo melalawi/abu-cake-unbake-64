@@ -73,6 +73,11 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
             "types.abi.versions: callee argument registers differ across versions; argument list unspecified"
         )
     used = abi.get("used_returns", [])
+    if not used and not abi.get("call_sites") and len(abi.get("defined_returns", [])) > 1:
+        return {
+            "prototype": None,
+            "reasons": ["types.abi.return: unconsumed integer and floating exit values are ambiguous"],
+        }
     returned = record["return"].get("type")
     if returned is not None:
         returned = declarations.canonical(returned, aliases)
