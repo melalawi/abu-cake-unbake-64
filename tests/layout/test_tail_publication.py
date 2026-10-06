@@ -108,3 +108,21 @@ class TailPublicationTests(ProjectCase):
             rows = split.functions(self.project, version)
             self.assertEqual([(r.name, r.start, r.end) for r in rows], [("alpha", 0x40, 0x5C)])
         self.assertEqual(json.loads(self.manifest.read_text())["functions"], [])
+
+    def test_retired_unit_configuration_is_removed_without_losing_surviving_flags(self):
+        from unbake import config
+
+        path = self.project.root / "config.toml"
+        path.write_text(
+            path.read_text().replace(
+                "[units]",
+                '[units]\nalpha = { compiler = "ido-7.1", flags = ["-DUNIT=1"] }\n'
+                'beta = { compiler = "ido-7.1", flags = ["-DUNIT=1"] }',
+            )
+        )
+        self.project = config.load(self.project.root)
+        self.run_edits()
+        changed = config.load(self.project.root)
+        self.assertNotIn("beta", changed.unit_flags)
+        self.assertNotIn("beta", changed.units)
+        self.assertEqual(changed.unit_flags["alpha"], ("-DUNIT=1",))

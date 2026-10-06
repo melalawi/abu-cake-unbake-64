@@ -284,6 +284,7 @@ def run(project: Project, host: Host) -> list[str]:
     renamed = renames((Scan(item.version, tuple(kept[item.version]), item.names) for item in scans), used)
     layout = project.root / "layout.toml"
     paths = [
+        project.root / "config.toml",
         layout,
         project.root / MANIFEST,
         attempts.summary_path(project),
@@ -328,10 +329,22 @@ def _relabel(project: Project, renamed: dict[str, str], continuations: set[str])
     import json
     import tomllib
 
+    import toml  # type: ignore[import-untyped]
+
     from unbake.layout import map as layout_map
 
     remaining = layout_map.catalog(project)
     gone = continuations - remaining.keys()
+    configuration = project.root / "config.toml"
+    configured = tomllib.loads(configuration.read_text())
+    units = configured.get("units", {})
+    for old, new in renamed.items():
+        if old in units and new in units:
+            raise Held("shape-edits", f"shape.config: {old}: renamed unit {new} already configured")
+    relabeled = {renamed.get(name, name): row for name, row in units.items() if name not in gone}
+    if relabeled != units:
+        configured["units"] = relabeled
+        atomic_files.text(configuration, toml.dumps(configured))
     manifest = project.root / MANIFEST
     if manifest.is_file():
         value = json.loads(manifest.read_text())

@@ -31,6 +31,7 @@ class ShapeEditTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.fixture = ProjectFixture(Path(directory.name))
         self.fixture.src.mkdir()
+        (self.fixture.root / "config.toml").write_text("[units]\n")
         self.fixture.names_from = "us"
         self.manifest = self.fixture.root / "unbake-exclusions.json"
         self.manifest.write_text('{"schema": 1, "functions": ["func_8000102C", "func_8000103C", "func_80001000"]}')
