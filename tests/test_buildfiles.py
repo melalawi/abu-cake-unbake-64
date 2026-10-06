@@ -81,7 +81,7 @@ class BuildfileTests(ProjectCase):
             "| sha1sum - $(@D)/$(*F).i)",
             "[ -f build/cas/$$1$$3.o ] ||",
             "(cd $(@D) && $(COMPILE_$(KIND))) && mv -f $(@D)/$(*F).o build/cas/$$1$$3.o",
-            "printf '%s\\n' $$1$$3 > $@",
+            "printf '%s\\n' $$1$$3 > $(@D)/$(*F).key",
         ):
             self.assertIn(step, key)
         self.assertIn("'$(TOOLCHAIN) $(subst $(CURDIR)/,,$(COMPILE_$(KIND)))'", key)
@@ -89,7 +89,7 @@ class BuildfileTests(ProjectCase):
         self.assertIn("read key < $< && $(N64LINK) place build/cas/$$key.o", link.replace("\\\n  ", ""))
         self.assertIn("$(LINK_BIN)", link)
         self.assertIn("--oformat binary -o $@", text[text.index("LINK_BIN =") : text.index("UNIT_BIN =")])
-        self.assertIn("build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas\n", text)
+        self.assertIn("build/$1/src/%.i: src/%.c Makefile units.mk | verify build/$1/src build/cas\n", text)
 
     def test_preprocess_writes_dependencies_in_one_cpp_pass(self) -> None:
         for kind, depend_pass in (("sn64", False), ("ido", True)):
@@ -98,10 +98,10 @@ class BuildfileTests(ProjectCase):
                 preprocess = recipe.splitlines()[0]
                 self.assertEqual("-MMD" in preprocess, not depend_pass)
                 if kind == "ido":
-                    self.assertIn(" -M $<", preprocess)
+                    self.assertIn(" -M src/$(*F).c", preprocess)
                     self.assertNotIn("$(CPP)", preprocess)
                 else:
-                    self.assertIn("-MP -MT $@ -MF $(@D)/$(*F).d", preprocess)
+                    self.assertIn("-MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d", preprocess)
                 self.assertTrue(preprocess.endswith("> $(@D)/$(*F).i"))
 
     def test_flags_with_shell_characters_are_refused(self) -> None:

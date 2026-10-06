@@ -22,7 +22,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 5
+SCHEMA = 6
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -40,7 +40,7 @@ MAKE_VALUES: dict[str, tuple[str, ...]] = {
     "defines": ("$(COMPILER_DEFINES) $(VERSION_DEFINES) $(CONSUMER) $(UNIT_DEFINES)",),
     "cppflags": ("$(CPPFLAGS)",),
     "asflags": ("$(SN64_ASFLAGS)",),
-    "source": ("$<",),
+    "source": ("src/$(*F).c",),
     "name": ("$(*F)",),
 }
 
@@ -182,7 +182,7 @@ def units_mk(project: Project) -> str:
     default = project.compilers[project.default_compiler]
     names = sorted({path.stem for path in project.src.glob("*.c")})
     for name in names:
-        targets = f"build/%/src/{name}.key build/%/units/{name}.bin"
+        targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin"
         compiler = project.compiler_for(name)
         effective = [
             *(f"-I{relative(project, path)}" for path in project.include),
@@ -227,13 +227,13 @@ def _kind_recipes(kind: str) -> str:
     compile_ = template["compile"]
     assert preprocess is not None and compile_ is not None
     output = "> $(@D)/$(*F).i"
-    depend = "-MP -MT $@ -MF $(@D)/$(*F).d"
+    depend = "-MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d"
     if preprocess[0] == "{cpp}":
         prep = f"{_recipe(preprocess)} -MMD {depend} {output}"
     else:
         dependency = _recipe(("{cc}", "{preprocess}", "-M", "{source}"))
         prep = (
-            f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$@:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
+            f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$(@D)/$(*F).i:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
             f" && rm $(@D)/$(*F).deps && {_recipe(preprocess)} {output}"
         )
     commands = [_recipe(compile_)]
@@ -242,7 +242,8 @@ def _kind_recipes(kind: str) -> str:
     return f"PREPROCESS_{kind} = {prep}\nCOMPILE_{kind} = {' && '.join(commands)}\n"
 
 
-# One shell per unit and version: preprocess, key the object by content, compile only when build/cas lacks the key.
+# The expanded unit tracks source/header/command freshness; the key changes only with object content.
+# One shell preprocesses and compiles missing objects; an unchanged key never forces a binary relink.
 # The key is sha1(toolchain pins + root-relative compile commands), then sha1(UNIT.i). Publication is atomic,
 # and two versions racing on one key write identical bytes. Place and link read the shared object and never write it.
 UNIT_RECIPES = r"""VER = $(word 2,$(subst /, ,$@))
@@ -253,7 +254,8 @@ UNIT_KEY = printf '%s\n' '$(VER) $(*F)'; \
   set -- $$(printf '%s\n' '$(TOOLCHAIN) $(subst $(CURDIR)/,,$(COMPILE_$(KIND)))' | \
     sha1sum - $(@D)/$(*F).i) && [ -n "$$3" ] && \
   { [ -f build/cas/$$1$$3.o ] || { (cd $(@D) && $(COMPILE_$(KIND))) && mv -f $(@D)/$(*F).o build/cas/$$1$$3.o; }; } && \
-  if [ ! -f $@ ] || [ "$$(cat $@)" != "$$1$$3" ]; then printf '%s\n' $$1$$3 > $@; fi
+  if [ ! -f $(@D)/$(*F).key ] || [ "$$(cat $(@D)/$(*F).key)" != "$$1$$3" ]; then \
+    printf '%s\n' $$1$$3 > $(@D)/$(*F).key; fi
 LINK_BIN = $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
   --oformat binary -o $@ $(@D)/$(*F).placed.o
 UNIT_BIN = read key < $< && \
@@ -272,8 +274,10 @@ SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes stat
 # Every version's units, slices and ROM are targets of one make, so -jN spreads over all of them. A slice is named
 # by its start only, so it is cut again whenever slices.mk changes (a new unit can shorten it).
 VERSION_RULES = r"""define VERSION_RULES
-build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas
+build/$1/src/%.i: src/%.c Makefile units.mk | verify build/$1/src build/cas
 	$$(Q)$$(UNIT_KEY)
+build/$1/src/%.key: build/$1/src/%.i
+	$$(Q)test -f $$@ || { $$(UNIT_KEY); }
 build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/units
 	$$(Q)$$(UNIT_BIN)
 build/$1/hasm/%.bin: src/%.s Makefile versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
