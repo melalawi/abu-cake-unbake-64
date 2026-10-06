@@ -12,14 +12,14 @@ from typing import Any
 from unbake import inputs, pool
 from unbake.config import Held, Host, Project
 from unbake.decomp.indexed import indexed_references
-from unbake.extract import discovered_symbols, symbols_from
+from unbake.extract import discovered_symbols, read_symbol_table
 from unbake.layout import split
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis, control
 from unbake.work import inventory as plan
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 
 
 def _analysis(
@@ -64,7 +64,7 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
                 named = discovered_symbols(table, named)
             placements = generated / "symbol-addresses.txt"
             if placements.is_file():
-                for name, address in symbols_from([placements]).items():
+                for name, address in read_symbol_table(placements).items():
                     if name in named and named[name] != address:
                         raise ValueError(f"conflicting generated symbol {name}")
                     named[name] = address

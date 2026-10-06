@@ -232,7 +232,11 @@ def function_asm(project: Project, host: Host, version: str, row_path: str) -> s
 
 def symbol_table(project: Project, host: Host, version: str) -> dict[str, int]:
     """Every named address of one version: symbol_addrs, splat discoveries, instruction pairs and units."""
-    path = directory(project, host, version) / "symbol-addresses.txt"
+    return read_symbol_table(directory(project, host, version) / "symbol-addresses.txt")
+
+
+def read_symbol_table(path: Path) -> dict[str, int]:
+    """Read the extractor-owned name/address/optional-unit table."""
     result = {}
     for line in path.read_text().splitlines():
         name, value, *_ = line.split()

@@ -84,14 +84,14 @@ _symbol_digests: dict[Path, tuple[str, str]] = {}
 
 def symbol_digest(path: Path) -> str:
     """Pin exactly the extraction symbol facts consumed by map_program."""
-    from unbake.extract import discovered_symbols, symbols_from
+    from unbake.extract import discovered_symbols, read_symbol_table
 
     content = inputs.digest(path)
     cached = _symbol_digests.get(path)
     if cached is not None and cached[0] == content:
         return cached[1]
     try:
-        symbols = discovered_symbols(path, {}) if path.name == "splat_symbols.csv" else symbols_from([path])
+        symbols = discovered_symbols(path, {}) if path.name == "splat_symbols.csv" else read_symbol_table(path)
     except (OSError, ValueError, KeyError) as error:
         raise Held("map", f"map.symbols: {path}: {error}") from error
     result = digest(encoded(symbols))
