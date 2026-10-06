@@ -353,7 +353,11 @@ def _prove_publish(
         atomic_files.write(contributing, previous)
     outcome = build.check(staged, policy)
     if not outcome.ok:
-        raise Held("setup", "setup.proof: make check failed on the staged project:\n" + "\n".join(outcome.lines()))
+        raise Held(
+            "setup",
+            "setup.proof: make check failed on the staged project:\n" + "\n".join(outcome.lines()),
+            fault=outcome.fault,
+        )
     if before_publish is not None:
         before_publish()
     _publish(project, staged, fingerprint, fresh=fresh, removed_inputs=removed_inputs)

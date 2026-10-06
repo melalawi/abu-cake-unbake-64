@@ -127,7 +127,7 @@ def place(
         "--symbols",
         str(symbols_file(project, version)),
     ]
-    if kind not in drivers.UNTRIMMED:
+    if row.kind == "hasm" or kind not in drivers.UNTRIMMED:
         argv.append("--trim")
     if score:
         argv.append("--score")

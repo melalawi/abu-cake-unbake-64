@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -203,7 +203,9 @@ def assemble(project: Project, host: Host, text: str, row: split.Function, work:
     atomic_files.text(path, text)
     obj = work / "unit.o"
     process.run_tool([str(host.mips_as), *project.asflags, "-o", str(obj), str(path)], work, "original-asm")
-    return runner.link(project, host, obj, row.version, row, work, path)
+    placed = work / "placed.o"
+    runner.place(project, host, obj, row.version, replace(row, kind="hasm"), placed, score=False)
+    return runner.link(project, host, placed, row.version, row, work, path)
 
 
 def write_source(project: Project, host: Host, row: split.Function, data: bytes, found: shape.Original) -> str:

@@ -22,7 +22,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
+SCHEMA = 4
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -254,15 +254,17 @@ UNIT_KEY = printf '%s\n' '$(VER) $(*F)'; \
     sha1sum - $(@D)/$(*F).i) && [ -n "$$3" ] && \
   { [ -f build/cas/$$1$$3.o ] || { (cd $(@D) && $(COMPILE_$(KIND))) && mv -f $(@D)/$(*F).o build/cas/$$1$$3.o; }; } && \
   if [ ! -f $@ ] || [ "$$(cat $@)" != "$$1$$3" ]; then printf '%s\n' $$1$$3 > $@; fi
+LINK_BIN = $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
+  --oformat binary -o $@ $(@D)/$(*F).placed.o
 UNIT_BIN = read key < $< && \
   $(N64LINK) place build/cas/$$key.o -o $(@D)/$(*F).placed.o --rom $($(VER).BASEROM) --text $($(VER).U.$(*F)) \
   $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld $(TRIM) && \
-  $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
-  --oformat binary -o $@ $(@D)/$(*F).placed.o
+  $(LINK_BIN)
 HASM_BIN = printf '%s\n' '$(VER) $(*F)'; \
   $(AS) $(HASM_ASFLAGS) -o $(@D)/$(*F).o $< && \
-  $(LD) -T versions/$(VER)/$(NAME).ld --section-start=.text=$(firstword $(subst :, ,$($(VER).U.$(*F)))) \
-  --oformat binary -o $@ $(@D)/$(*F).o
+  $(N64LINK) place $(@D)/$(*F).o -o $(@D)/$(*F).placed.o --rom $($(VER).BASEROM) --text $($(VER).U.$(*F)) \
+  $(addprefix --map ,$($(VER).MAP)) --symbols versions/$(VER)/symbols.ld --trim && \
+  $(LINK_BIN)
 SLICE = dd if=$($(VER).BASEROM) of=$@ bs=65536 iflag=skip_bytes,count_bytes status=none \
   skip=$(word 1,$($(VER).S.$(*F))) count=$(word 2,$($(VER).S.$(*F)))
 """

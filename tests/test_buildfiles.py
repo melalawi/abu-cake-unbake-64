@@ -87,7 +87,8 @@ class BuildfileTests(ProjectCase):
         self.assertIn("'$(TOOLCHAIN) $(subst $(CURDIR)/,,$(COMPILE_$(KIND)))'", key)
         link = text[text.index("UNIT_BIN =") : text.index("SLICE =")]
         self.assertIn("read key < $< && $(N64LINK) place build/cas/$$key.o", link.replace("\\\n  ", ""))
-        self.assertIn("--oformat binary -o $@", link)
+        self.assertIn("$(LINK_BIN)", link)
+        self.assertIn("--oformat binary -o $@", text[text.index("LINK_BIN =") : text.index("UNIT_BIN =")])
         self.assertIn("build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas\n", text)
 
     def test_preprocess_writes_dependencies_in_one_cpp_pass(self) -> None:
