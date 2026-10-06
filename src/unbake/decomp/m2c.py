@@ -24,7 +24,7 @@ from unbake.decomp.draft_input import (
     stack_locals,
     whole_body,
 )
-from unbake.decomp.draft_layouts import normalize
+from unbake.decomp.draft_layouts import access_widths, normalize
 from unbake.decomp.draft_macros import lower
 from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
@@ -223,7 +223,7 @@ def _draft(
     if stack_header is not None:
         headers.append((stack_header, stack_header.relative_to(project.include[0]).as_posix()))
         atomic_files.text(context, context.read_text() + "\n" + stack_header.read_text())
-    output = normalize(output, context.read_text())
+    output = normalize(output, context.read_text(), access_widths(assembly.read_text()))
     if "second half of f64" in output:
         raise Held("m2c", f"{function}: unresolved second half of f64 in decompiler output")
     output = stack_locals(output, context.read_text(), function, assembly.read_text())

@@ -13,7 +13,7 @@ from unbake.decomp import m2c
 from unbake.decomp.draft_abi import stack_arguments
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_input import stack_locals
-from unbake.decomp.draft_layouts import normalize
+from unbake.decomp.draft_layouts import access_widths, normalize
 from unbake.decomp.draft_macros import lower
 from unbake.layout.structs import layouts
 from unbake.layout.structs_fold import fold
@@ -84,6 +84,16 @@ class DraftBoundaryTests(unittest.TestCase):
             source = "void alpha(void) { M2C_UNK *p; p = &opaque; " + use + " }"
             with self.subTest(use=use), self.assertRaisesRegex(Held, "unknown type has no declared target layout"):
                 normalize(source, "typedef int s32;")
+
+    def test_an_undeclared_unknown_takes_the_one_width_the_target_accesses(self) -> None:
+        source = "void alpha(M2C_UNK *a) { M2C_UNK t = *a; use(t); }"
+        word = access_widths("lw $v0, 0x0($a0)\n  sw $zero, 0x0($v0)\n  addiu $a0, $a0, 4\n")
+        self.assertEqual(word, {4})
+        self.assertEqual(normalize(source, "typedef int s32;", word), "void alpha(s32 *a) { s32 t = *a; use(t); }")
+        mixed = access_widths("lbu $v0, 0x0($a0)\n  lw $v1, 0x4($a0)\n  lwc1 $f0, 0x8($a0)\n")
+        self.assertEqual(mixed, {1, 4})
+        with self.assertRaisesRegex(Held, "M2C_UNK: unknown type has no declared target layout"):
+            normalize(source, "typedef int s32;", mixed)
 
     def test_bitwise_fields_are_lowered_after_sharing(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:

@@ -8,6 +8,14 @@ from unbake.decomp import opaque_pointers
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
 
+_ACCESS = re.compile(r"^\s*[ls](b|bu|h|hu|w|d)\s", re.M)
+_WIDTHS = {"b": 1, "bu": 1, "h": 2, "hu": 2, "w": 4, "d": 8}
+
+
+def access_widths(assembly: str) -> frozenset[int]:
+    """The widths of the integer loads and stores in the target ASSEMBLY."""
+    return frozenset(_WIDTHS[match[1]] for match in _ACCESS.finditer(assembly))
+
 
 def _field_of(source: str, name: str) -> str | None:
     """The offset of the first M2C_FIELD whose type argument names the unknown NAME."""
@@ -22,8 +30,9 @@ def _field_of(source: str, name: str) -> str | None:
     return found[0] if found else None
 
 
-def normalize(source: str, context: str) -> str:
-    """Replace only unknowns whose target ABI width is established by a typedef.
+def normalize(source: str, context: str, accessed: frozenset[int] = frozenset()) -> str:
+    """Replace only unknowns whose target ABI width is established by a typedef, or by the one width every
+    integer access of the target (ACCESSED) uses.
 
     Scalar spelling also makes pointers and arrays self-contained in a shared
     header, independently of whether its consumers include m2c's prelude.
@@ -50,7 +59,10 @@ def normalize(source: str, context: str) -> str:
                 raise Held(
                     "m2c", f"{name}: the field at {field} is dereferenced but its pointee has no measured layout"
                 )
-            raise Held("m2c", f"{name}: unknown type has no declared target layout")
+            if len(accessed) != 1:
+                raise Held("m2c", f"{name}: unknown type has no declared target layout")
+            replacements.append((token.start(), token.end(), f"s{next(iter(accessed)) * 8}"))
+            continue
         spelling = parser.type_name(name, ())
         if spelling not in SCALARS or spelling in ("float", "double", "f32", "f64"):
             raise Held("m2c", f"{name}: unknown type has unsupported target layout {spelling}")
