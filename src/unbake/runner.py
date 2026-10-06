@@ -47,7 +47,12 @@ def compile_unit(
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host), non_matching=non_matching)
     try:
-        preprocessed = process.run_tool(list(commands.preprocess), project.root, "compile", context={"source": str(file), "function": unit, "version": version})
+        preprocessed = process.run_tool(
+            list(commands.preprocess),
+            project.root,
+            "compile",
+            context={"source": str(file), "function": unit, "version": version},
+        )
     except Held as error:
         raise Held("compile", f"compile.{Path(unit).name}: {source}: {error.reason}") from error
     absolute_cc = str(project.compiler_for(unit).cc)
@@ -67,9 +72,16 @@ def compile_unit(
         with tempfile.TemporaryDirectory(prefix="compile-") as temporary:
             work = Path(temporary)
             atomic_files.text(work / f"{name}.i", preprocessed)
-            process.run_tool(compile_argv, work, "compile", context={"source": str(file), "function": unit, "version": version})
+            process.run_tool(
+                compile_argv, work, "compile", context={"source": str(file), "function": unit, "version": version}
+            )
             if commands.assemble is not None:
-                process.run_tool(list(commands.assemble), work, "compile", context={"source": str(file), "function": unit, "version": version})
+                process.run_tool(
+                    list(commands.assemble),
+                    work,
+                    "compile",
+                    context={"source": str(file), "function": unit, "version": version},
+                )
             atomic_files.copyfile(work / f"{name}.o", destination)
 
     try:
@@ -119,8 +131,12 @@ def place(
         argv.append("--trim")
     if score:
         argv.append("--score")
-    result = process.run_native(argv, project.root, "place", context={"function": row.name,
-                                "version": version, "address": row.address, "source": str(obj)})
+    result = process.run_native(
+        argv,
+        project.root,
+        "place",
+        context={"function": row.name, "version": version, "address": row.address, "source": str(obj)},
+    )
     prefix = "n64link: place: unproved: "
     return [line[len(prefix) :] for line in result.stderr.splitlines() if line.startswith(prefix)]
 
@@ -186,12 +202,16 @@ def link(
                 str(placed),
             ],
             project.root,
-            "link", context={"source": str(source), "function": row.name, "version": version, "address": row.address},
+            "link",
+            context={"source": str(source), "function": row.name, "version": version, "address": row.address},
         )
     except Held as error:
         raise Held("link", f"link.failed: {source}: VERSION {version}: {error.reason}") from error
     process.run_tool(
-        [str(host.mips_objcopy), "-O", "binary", "-j", ".text", str(elf), str(binary)], project.root, "link", context={"source": str(source), "function": row.name, "version": version, "address": row.address}
+        [str(host.mips_objcopy), "-O", "binary", "-j", ".text", str(elf), str(binary)],
+        project.root,
+        "link",
+        context={"source": str(source), "function": row.name, "version": version, "address": row.address},
     )
     return binary.read_bytes()
 
@@ -233,4 +253,9 @@ def preprocess(project: Project, host: Host, file: Path, version: str, *, unit: 
     file = Path(file).resolve()
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host))
-    return process.run_tool(list(commands.preprocess), project.root, "compile", context={"source": str(file), "function": unit, "version": version})
+    return process.run_tool(
+        list(commands.preprocess),
+        project.root,
+        "compile",
+        context={"source": str(file), "function": unit, "version": version},
+    )

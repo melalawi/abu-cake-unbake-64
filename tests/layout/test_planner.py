@@ -4,8 +4,8 @@ import json
 import struct
 import unittest
 
-from unbake.config import SymbolPolicy
 from tests.work.test_shape import SHAPES
+from unbake.config import SymbolPolicy
 from unbake.layout.planner import carve, complete_providers, correspondence
 from unbake.layout.rodata_owners import Span
 from unbake.layout.split import Function

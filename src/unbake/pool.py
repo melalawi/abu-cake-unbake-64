@@ -29,10 +29,10 @@ import threading
 import traceback
 import uuid
 from collections import deque
-from dataclasses import dataclass
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
 from typing import Any, TypeVar, cast
@@ -69,8 +69,7 @@ class TaskFailed(Held):
         functions = ", ".join(identity.get("functions", ()))
         versions = ", ".join(identity.get("versions", ()))
         where = fault.get("allocation", fault.get("cause", "worker exited"))
-        super().__init__("pool", f"{key}: {source} {functions} ({versions}): {where}; retry failed",
-                         fault=fault)
+        super().__init__("pool", f"{key}: {source} {functions} ({versions}): {where}; retry failed", fault=fault)
         self.failure = key
 
 
@@ -167,8 +166,11 @@ class WorkerMemory(MemoryError):
     """The measured allocating action, including any known physical input identity."""
 
 
-def memory_fault(error: BaseException, identity: TaskIdentity | None = None, *, expanded_bytes: int | None = None) -> dict[str, Any]:
+def memory_fault(
+    error: BaseException, identity: TaskIdentity | None = None, *, expanded_bytes: int | None = None
+) -> dict[str, Any]:
     from dataclasses import asdict
+
     from unbake import effort
 
     observed: dict[str, int | None] = {"vmdata_bytes": None, "rss_bytes": None}
@@ -179,10 +181,19 @@ def memory_fault(error: BaseException, identity: TaskIdentity | None = None, *, 
                     observed[field] = int(line.split()[1]) * 1024
     except OSError:
         pass
-    return {"category": "allocation", "action": "types" if identity is not None else "pool",
-            "identity": asdict(identity) if identity is not None else {}, "allocation": _where(error),
-            "cause": type(error).__name__, "cap_bytes": None if resource.getrlimit(resource.RLIMIT_DATA)[0] == resource.RLIM_INFINITY else resource.getrlimit(resource.RLIMIT_DATA)[0],
-            "peak_rss_bytes": effort.resident_peak(), "expanded_bytes": expanded_bytes, **observed}
+    return {
+        "category": "allocation",
+        "action": "types" if identity is not None else "pool",
+        "identity": asdict(identity) if identity is not None else {},
+        "allocation": _where(error),
+        "cause": type(error).__name__,
+        "cap_bytes": None
+        if resource.getrlimit(resource.RLIMIT_DATA)[0] == resource.RLIM_INFINITY
+        else resource.getrlimit(resource.RLIMIT_DATA)[0],
+        "peak_rss_bytes": effort.resident_peak(),
+        "expanded_bytes": expanded_bytes,
+        **observed,
+    }
 
 
 def _where(error: BaseException) -> str:
@@ -207,11 +218,21 @@ def _named(fn: Callable[..., R], *arguments: Any) -> R:
     except Held:
         raise
     except Exception as error:
-        raise Held("pool", f"{effort.name_of(fn)}: {type(error).__name__} at {_where(error)}: {error}",
-                   fault={"action": effort.name_of(fn), "category": "python", "cause": type(error).__name__, "where": _where(error)}) from error
+        raise Held(
+            "pool",
+            f"{effort.name_of(fn)}: {type(error).__name__} at {_where(error)}: {error}",
+            fault={
+                "action": effort.name_of(fn),
+                "category": "python",
+                "cause": type(error).__name__,
+                "where": _where(error),
+            },
+        ) from error
 
 
-def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]:
+def _measured(
+    task: tuple[Callable[[T], R], T],
+) -> tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]:
     """Return effort at the action boundary, even when its result is a fault."""
     from unbake import effort
 
@@ -232,6 +253,7 @@ def _measured(task: tuple[Callable[[T], R], T]) -> tuple[R | None, float, int, d
         error.args[0].update(cpu_seconds=seconds, peak_rss_bytes=rss, counts=added)
     elif isinstance(error, Held):
         from unbake.process import fault
+
         chain = fault(error)
         error.fault = {**(error.fault or {}), **chain, "cpu_seconds": seconds, "peak_rss_bytes": rss, "counts": added}
     return result, seconds, rss, added, error
@@ -361,7 +383,9 @@ class Pool:
         inner = self._submit(_measured, (fn, item))
         outer: Future[R] = _Outer(inner)
 
-        def finished(done: Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]]) -> None:
+        def finished(
+            done: Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]],
+        ) -> None:
             if done.cancelled():
                 outer.cancel()
                 return
@@ -416,7 +440,9 @@ class Pool:
         def submit(item: T) -> Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]]:
             return self._submit(_measured, (fn, item))
 
-        pending: deque[tuple[T, Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]], int]] = deque()
+        pending: deque[
+            tuple[T, Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]], int]
+        ] = deque()
         source = iter(items)
         for item in source:
             pending.append((item, submit(item), 0))
@@ -432,11 +458,20 @@ class Pool:
             except (BrokenProcessPool, MemoryError) as error:
                 failure = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
                 if attempt:
-                    fault = dict(error.args[0]) if isinstance(error, WorkerMemory) else {
-                        "action": name, "category": "worker-exit", "cause": type(error).__name__,
-                        "cpu_seconds": None, "peak_rss_bytes": None, "counts": None}
-                    fault["configured_cap_bytes"] = self.memory_worker_bytes
-                    raise TaskFailed(failure, fault) from error
+                    diagnostic = (
+                        dict(error.args[0])
+                        if isinstance(error, WorkerMemory)
+                        else {
+                            "action": name,
+                            "category": "worker-exit",
+                            "cause": type(error).__name__,
+                            "cpu_seconds": None,
+                            "peak_rss_bytes": None,
+                            "counts": None,
+                        }
+                    )
+                    diagnostic["configured_cap_bytes"] = self.memory_worker_bytes
+                    raise TaskFailed(failure, diagnostic) from error
                 self._fresh()
                 if isinstance(error, BrokenProcessPool):
                     pending = deque((i, submit(i), a) for i, _, a in pending)

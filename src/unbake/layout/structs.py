@@ -58,8 +58,12 @@ def preprocess(source: Path, project: Any, policy: Any, version: str) -> str:
     from unbake.compilers import drivers
     from unbake.process import run_tool
 
-    return run_tool(drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source.resolve(), non_matching=True),
-                    project.root, "structs", context={"source": str(source), "version": version})
+    return run_tool(
+        drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source.resolve(), non_matching=True),
+        project.root,
+        "structs",
+        context={"source": str(source), "version": version},
+    )
 
 
 def layouts(source: str | Path, *, project: Any = None, policy: Any = None, version: str | None = None) -> list[Layout]:

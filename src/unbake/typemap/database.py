@@ -712,7 +712,12 @@ def validate_headers(
         environment,
         abi_context,
         *(part for path, text in authored.items() for part in (storage.relative(project, path), text)),
-        *(part for path, content in outputs.items() if isinstance(content, bytes) for part in (storage.relative(project, path), content)),
+        *(
+            part
+            for path, content in outputs.items()
+            if isinstance(content, bytes)
+            for part in (storage.relative(project, path), content)
+        ),
     )
     bundle = cache.get("typemap-validation", bundle_key)
     if bundle is not None:

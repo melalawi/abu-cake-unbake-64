@@ -15,6 +15,7 @@ from unbake.work import attempts, inventory, shape
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
+    from unbake.project.flow import ProviderRecord
 
 M2C_KINDS = ("sn64", "ido")
 
@@ -41,7 +42,7 @@ def _placement(project: Project, item: split.Function, data: bytes, target: Shap
 
     configured = project.version(item.version)
 
-    def load():
+    def load() -> tuple[list[split.Function], bytes, list[ProviderRecord]]:
         rows = split.functions(project, item.version)
         image = configured.baserom.read_bytes()
         pools = []

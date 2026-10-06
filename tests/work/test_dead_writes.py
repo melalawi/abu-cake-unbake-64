@@ -1,5 +1,7 @@
 """Instruction semantics are independent of trap code fields and compiler optimization."""
+
 import unittest
+
 from unbake.work.shape import _registers
 
 

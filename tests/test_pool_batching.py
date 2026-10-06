@@ -54,13 +54,21 @@ class Batching(unittest.TestCase):
 class MemoryFailure(unittest.TestCase):
     def test_fresh_retry_names_the_actual_unit_and_measured_memory(self) -> None:
         workers = pool.Pool(2, 8 * GIB, GIB, 512_000_000)
-        fault = {"action": "types", "identity": {"source": "src/actual.c", "functions": ["actual"], "versions": ["de"]},
-                 "allocation": "declarations.py:scan", "peak_rss_bytes": 123456, "cpu_seconds": 2.0}
+        fault = {
+            "action": "types",
+            "identity": {"source": "src/actual.c", "functions": ["actual"], "versions": ["de"]},
+            "allocation": "declarations.py:scan",
+            "peak_rss_bytes": 123456,
+            "cpu_seconds": 2.0,
+        }
         failed = Future()
         failed.set_result((None, 2.0, 123456, {}, pool.WorkerMemory(fault)))
-        with patch.object(workers, "_submit", return_value=failed), patch.object(workers, "_fresh") as fresh:
-            with self.assertRaises(pool.TaskFailed) as raised:
-                list(workers.map(double, ["batch-first"]))
+        with (
+            patch.object(workers, "_submit", return_value=failed),
+            patch.object(workers, "_fresh") as fresh,
+            self.assertRaises(pool.TaskFailed) as raised,
+        ):
+            list(workers.map(double, ["batch-first"]))
         self.assertEqual(fresh.call_count, 1)
         self.assertIn("actual.c", raised.exception.reason)
         self.assertNotIn("batch-first", raised.exception.reason)
@@ -89,8 +97,8 @@ if __name__ == "__main__":
 
 class PhysicalRetirement(unittest.TestCase):
     def test_existing_retirement_budget_counts_items_inside_batches(self):
-        with patch.object(pool, 'ProcessPoolExecutor') as executor:
+        with patch.object(pool, "ProcessPoolExecutor") as executor:
             pool._executor(2, 512_000_000, 24)
-        child_jobs = executor.call_args.kwargs['max_tasks_per_child']
+        child_jobs = executor.call_args.kwargs["max_tasks_per_child"]
         self.assertLessEqual(child_jobs * 24, pool.RECYCLE_AFTER)
-        self.assertEqual(executor.call_args.kwargs['initargs'], (512_000_000,))
+        self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000,))

@@ -111,7 +111,8 @@ def flags(project: Project, version: str, unit: str, *, non_matching: bool = Fal
 
 def _options(values: list[str]) -> tuple[list[str], list[str]]:
     """Ordered preprocessing options and code generation options, with named pair errors."""
-    preprocess, codegen = [], []
+    preprocess: list[str] = []
+    codegen: list[str] = []
     pending = iter(values)
     for flag in pending:
         if flag in PREPROCESSOR_PAIRS:
@@ -180,7 +181,8 @@ def gnu_as_flags(project: Project) -> tuple[str, ...]:
 def _split(values: list[str]) -> tuple[list[str], list[str], list[str]]:
     """(includes, codegen, defines) in their original relative order."""
     preprocess, codegen = _options(values)
-    includes, defines = [], []
+    includes: list[str] = []
+    defines: list[str] = []
     pending = iter(preprocess)
     for flag in pending:
         destination = defines if flag.startswith(("-D", "-U")) else includes

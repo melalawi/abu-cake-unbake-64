@@ -43,7 +43,11 @@ class SharedTests(TempCase):
             self.assertTrue(Path(path).is_file())
             return original(path)
 
-        with patch.object(pool.Pool, "_fresh"), patch.object(pool.Pool, "map", serial), patch.object(pool, "_shared_value", spy):
+        with (
+            patch.object(pool.Pool, "_fresh"),
+            patch.object(pool.Pool, "map", serial),
+            patch.object(pool, "_shared_value", spy),
+        ):
             result = workers.run(add, list(range(30)), {"base": 100})
         self.assertEqual(result, [100 + value for value in range(30)])
         self.assertEqual(len(set(seen)), 1)
@@ -73,7 +77,8 @@ class MeasuredTests(unittest.TestCase):
     def test_memory_outcome_names_the_allocation_frame(self) -> None:
         def starve(item):
             raise MemoryError
-        result, seconds, rss, counts, error = pool._measured((starve, 1))
+
+        _result, seconds, _rss, _counts, error = pool._measured((starve, 1))
         self.assertIsInstance(error, pool.WorkerMemory)
         self.assertIn("test_pool_shared.py", error.args[0]["allocation"])
         self.assertEqual(error.args[0]["cpu_seconds"], seconds)

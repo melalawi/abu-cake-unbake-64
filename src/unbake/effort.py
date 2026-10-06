@@ -8,8 +8,8 @@ its own; a mark taken before several windows sees the highest of them."""
 from __future__ import annotations
 
 import contextlib
-import os
 import math
+import os
 import resource
 import threading
 import time
@@ -74,7 +74,13 @@ def window() -> None:
 
 def charge(name: str, seconds: float, rss: int = 0, counts: dict[str, tuple[int, int]] | None = None) -> None:
     """One pool task's CPU, peak resident bytes and the counts it added (the worker's, merged into this ledger)."""
-    if type(name) is not str or not name or type(seconds) not in (int, float) or seconds < 0 or not math.isfinite(seconds):
+    if (
+        type(name) is not str
+        or not name
+        or type(seconds) not in (int, float)
+        or seconds < 0
+        or not math.isfinite(seconds)
+    ):
         raise ValueError("effort.charge: required named finite nonnegative CPU seconds")
     if type(rss) is not int or rss < 0:
         raise ValueError("effort.charge: required nonnegative integer measured RSS")

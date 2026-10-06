@@ -40,7 +40,6 @@ class SourceKeyTests(TempCase):
         self.project.compiler_for = lambda unit: compiler
         self.project.versions = ("us", "eu")
 
-
     def key(self, version: str = "us") -> str:
         return facts.source_key(self.project, self.host, ("alpha", self.source, version), facts.Snapshot(self.project))
 

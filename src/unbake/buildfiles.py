@@ -184,8 +184,12 @@ def units_mk(project: Project) -> str:
     for name in names:
         targets = f"build/%/src/{name}.key build/%/units/{name}.bin"
         compiler = project.compiler_for(name)
-        effective = [*(f"-I{relative(project, path)}" for path in project.include), *compiler.cflags,
-                     "-DUNBAKE_VERSION_PLACEHOLDER", *project.unit_flags.get(name, ())]
+        effective = [
+            *(f"-I{relative(project, path)}" for path in project.include),
+            *compiler.cflags,
+            "-DUNBAKE_VERSION_PLACEHOLDER",
+            *project.unit_flags.get(name, ()),
+        ]
         prep, _ = drivers.stage_flags(compiler.kind, effective)
         rendered = words(list(prep)).replace("-DUNBAKE_VERSION_PLACEHOLDER", "$(VERSION_DEFINES) $(CONSUMER)")
         lines.append(f"{targets}: PREPROCESS_FLAGS = {rendered}\n")
@@ -228,7 +232,10 @@ def _kind_recipes(kind: str) -> str:
         prep = f"{_recipe(preprocess)} -MMD {depend} {output}"
     else:
         dependency = _recipe(("{cc}", "{preprocess}", "-M", "{source}"))
-        prep = f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$@:|' $(@D)/$(*F).deps > $(@D)/$(*F).d && rm $(@D)/$(*F).deps && {_recipe(preprocess)} {output}"
+        prep = (
+            f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$@:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
+            f" && rm $(@D)/$(*F).deps && {_recipe(preprocess)} {output}"
+        )
     commands = [_recipe(compile_)]
     if template["assemble"] is not None:
         commands.append(_recipe(template["assemble"]))

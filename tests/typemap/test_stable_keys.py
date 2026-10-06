@@ -1,6 +1,5 @@
 """Keys that must survive a moved copy: declared-text facts, header-render environment."""
 
-import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -79,6 +78,7 @@ class StableKeyTests(TempCase):
 
     def test_environment_is_the_same_at_two_roots(self) -> None:
         from tests.project_fixture import make
+
         keys = []
         for name in ("a", "b"):
             root = self.root / name

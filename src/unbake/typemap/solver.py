@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
@@ -29,7 +28,7 @@ MACHINE_SCHEMA = 3
 _MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")
 
 
-_RANKS = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
+_RANKS: dict[str | None, int] = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
 
 
 def _rank(record: dict[str, Any]) -> int:
@@ -97,12 +96,15 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
     deferred: dict[tuple[int, int], declarations.ProvenStructs] = {}
 
     def flush() -> None:
-        for ident, receipt in deferred.items():
+        for _ident, receipt in deferred.items():
             for name, origin in receipt.template.items():
                 previous = records[name]
                 if _RANKS.get(receipt.provenance.get("kind"), 1) >= _rank(previous):
-                    records[name] = {**origin, "provenance": receipt.provenance,
-                                     "declaration_conflict": bool(previous.get("declaration_conflict"))}
+                    records[name] = {
+                        **origin,
+                        "provenance": receipt.provenance,
+                        "declaration_conflict": bool(previous.get("declaration_conflict")),
+                    }
         deferred.clear()
 
     index = 0
@@ -193,9 +195,13 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
             meanings[name] = _comparable(record, key, aliases, canonical)
             spellings[name] = _stripped(record, key), aliases
             accepted[name] = origin, aliases
-        if proven and len(graph.facts) == conflicts_before and all(
-            accepted.get(name, (None, None))[0] is origin and accepted[name][1] is aliases
-            for name, origin in shared.template.items()
+        if (
+            proven
+            and len(graph.facts) == conflicts_before
+            and all(
+                accepted.get(name, (None, None))[0] is origin and accepted[name][1] is aliases
+                for name, origin in shared.template.items()
+            )
         ):
             assert ident is not None
             bulk[ident] = shared.template, aliases
@@ -902,11 +908,23 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
         path for name in project.versions for path in (project.version(name).split, project.version(name).symbols)
     ]
     from unbake.typemap import facts as source_facts
-    parts: list[str] = ["types", str(SCHEMA), json.dumps(storage.identity(project), sort_keys=True),
-                        inputs.digest(project.build / "map/facts.json"), facts["shard_sha256"],
-                        json.dumps(facts.get("abi_supplement")),
-                        json.dumps([source_facts.FACTS_SCHEMA, source_facts.SOURCE_SCHEMA, source_facts.HEADER_SCHEMA,
-                                    source_facts.ASSEMBLED_SCHEMA])]
+
+    parts: list[str] = [
+        "types",
+        str(SCHEMA),
+        json.dumps(storage.identity(project), sort_keys=True),
+        inputs.digest(project.build / "map/facts.json"),
+        facts["shard_sha256"],
+        json.dumps(facts.get("abi_supplement")),
+        json.dumps(
+            [
+                source_facts.FACTS_SCHEMA,
+                source_facts.SOURCE_SCHEMA,
+                source_facts.HEADER_SCHEMA,
+                source_facts.ASSEMBLED_SCHEMA,
+            ]
+        ),
+    ]
     if policy is not None:
         parts.append(json.dumps([str(policy.cpp), *project.cppflags]))
     parts.extend(fact_keys)
@@ -930,17 +948,33 @@ def readiness(project: Project, host: Host | None) -> Readiness:
 
     paths = {project.root / "config.toml", project.root / "layout.toml", project.build / "map/facts.json"}
     paths.update(path for root in (*project.include, project.src) for path in root.rglob("*") if path.is_file())
-    paths.update(path for version in project.versions for path in
-                 (project.version(version).split, project.version(version).symbols))
+    paths.update(
+        path
+        for version in project.versions
+        for path in (project.version(version).split, project.version(version).symbols)
+    )
     paths.update(path for path in (project.build / "types/abi.json",) if path.is_file())
     paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
     # Every map/ABI shard and evidence receipt is included; a missing current key is not relocation.
-    paths.update(path for directory in (project.build / "map", project.build / "types")
-                 for path in directory.glob("*") if path.is_file())
-    policy = None if host is None else tuple((field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field))))
-                                            for field in ("cpp", "m2c"))
+    paths.update(
+        path
+        for directory in (project.build / "map", project.build / "types")
+        for path in directory.glob("*")
+        if path.is_file()
+    )
+    policy = (
+        None
+        if host is None
+        else tuple(
+            (field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field)))) for field in ("cpp", "m2c")
+        )
+    )
     map_inputs = tuple(sorted(storage.map_inputs(project).items()))
-    snapshot = tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)), map_inputs, policy
+    snapshot = (
+        tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)),
+        map_inputs,
+        policy,
+    )
 
     def current() -> Readiness:
         facts = refine(project, refresh_map(project, host))
@@ -982,9 +1016,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution. Inputs identical to the
     last published solution's leave it standing."""
     from unbake.layout import header_step
-    from unbake.typemap import facts as source_facts
     from unbake.typemap import types_db
-    from unbake.typemap.abi_facts import refine
 
     database = types_db.path(project)
     current = readiness(project, policy)
@@ -997,8 +1029,12 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
             raise Held("solve", "types.sqlite.meta.revision: invalid JSON metadata") from error
         if type(revision) is not int or revision < 0:
             raise Held("solve", "types.sqlite.meta.revision: expected nonnegative integer")
-    if (stored.is_file() and stored.read_text() == current.key and database.is_file()
-            and not header_step.missing(project)):
+    if (
+        stored.is_file()
+        and stored.read_text() == current.key
+        and database.is_file()
+        and not header_step.missing(project)
+    ):
         tui.line("The type inputs did not change, so the last solution stands")
         return {"changes": {}, "reused": True}
     previous = types_db.summary(database) if database.is_file() else {}

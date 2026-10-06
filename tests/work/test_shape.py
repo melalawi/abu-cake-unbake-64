@@ -1,6 +1,5 @@
 """work.shape: shared rules judged against each compiler family's Shape (the adapter built from its cflags)."""
 
-import dataclasses
 import unittest
 
 from unbake.compilers.families.gcc import Gcc
@@ -45,8 +44,16 @@ def words(text: str) -> bytes:
 
 def owned(data: bytes, address: int, target):
     from unbake.layout import boundary
-    return boundary.evidence({i * 4: word for i, word in enumerate(shape.words_of(data))},
-                             0, len(data), address, {"fixture-placement"}, set(), target)
+
+    return boundary.evidence(
+        {i * 4: word for i, word in enumerate(shape.words_of(data))},
+        0,
+        len(data),
+        address,
+        {"fixture-placement"},
+        set(),
+        target,
+    )
 
 
 class ShapeRuleTests(unittest.TestCase):
@@ -54,8 +61,9 @@ class ShapeRuleTests(unittest.TestCase):
         multiple = words("10800003 00000000 03e00008 00801025 03e00008 00001025")
         bundled = words("03e00008 00000000 27bdfff0 afbf000c 8fbf000c 03e00008 27bd0010")
         for target in SHAPES.values():
-            self.assertEqual(shape.classify(multiple, 0x80001000, target, EMITTED,
-                             owned(multiple, 0x80001000, target))[0], "drafter")
+            self.assertEqual(
+                shape.classify(multiple, 0x80001000, target, EMITTED, owned(multiple, 0x80001000, target))[0], "drafter"
+            )
             route, cause = shape.classify(bundled, 0x80001000, target, EMITTED, owned(bundled, 0x80001000, target))
             self.assertEqual(route, "boundary")
             self.assertIn("unowned-code-or-data-island", cause)
@@ -63,12 +71,12 @@ class ShapeRuleTests(unittest.TestCase):
     def test_native_capability_rules_remain_after_boundary_proof(self) -> None:
         data = words("bd100000 03e00008 00000000")
         target = SHAPES["ido-7.1"]
-        self.assertEqual(shape.classify(data, 0x80001000, target, EMITTED,
-                         owned(data, 0x80001000, target))[0], "original")
+        self.assertEqual(
+            shape.classify(data, 0x80001000, target, EMITTED, owned(data, 0x80001000, target))[0], "original"
+        )
 
     def test_adapter_fields_come_from_the_effective_flags(self) -> None:
-        for family, flags, level in [(Gcc(), ("-mips2", "-mips3", "-mgp32"), 3),
-                                      (Ido(), ("-G0", "-mips2", "-O2"), 2)]:
+        for family, flags, level in [(Gcc(), ("-mips2", "-mips3", "-mgp32"), 3), (Ido(), ("-G0", "-mips2", "-O2"), 2)]:
             target = family.shape("fixture", flags)
             self.assertEqual((target.isa_level, target.object_alignment), (level, 16))
         with self.assertRaises(Held):

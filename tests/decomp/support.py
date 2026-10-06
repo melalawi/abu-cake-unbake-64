@@ -21,8 +21,6 @@ def fixture(
     from tests.preprocessor import output
     from unbake import process
     from unbake.layout import map as ownership
-    from unbake.layout import structs
-    from unbake.typemap import declarations
 
     project, host = make(directory, words, versions)
 

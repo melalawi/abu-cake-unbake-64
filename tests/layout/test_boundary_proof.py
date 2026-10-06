@@ -1,4 +1,5 @@
 """Executable ownership uses exact paths, not return counts or nearby restores."""
+
 import struct
 import unittest
 from pathlib import Path
@@ -13,13 +14,24 @@ TARGET = SHAPES["gcc-2.8.1-sn64"]
 
 def prove(text, *, tables=None, known=(), target=TARGET):
     values = [int(word, 16) for word in text.split()]
-    return boundary.evidence({i * 4: w for i, w in enumerate(values)}, 0, len(values) * 4,
-                             0x80001000, {"native-fixture-entry"}, set(known), target, tables)
+    return boundary.evidence(
+        {i * 4: w for i, w in enumerate(values)},
+        0,
+        len(values) * 4,
+        0x80001000,
+        {"native-fixture-entry"},
+        set(known),
+        target,
+        tables,
+    )
 
 
 class BoundaryProofTests(unittest.TestCase):
     def test_native_guarded_division_and_multiple_exits_close(self):
-        division = "0085001a 00001012 14a00002 00000000 0007000d 2401ffff 14a10004 3c018000 14810002 00000000 0006000d 03e00008 00000000"
+        division = (
+            "0085001a 00001012 14a00002 00000000 0007000d 2401ffff 14a10004 "
+            "3c018000 14810002 00000000 0006000d 03e00008 00000000"
+        )
         multiple = "10800003 00000000 03e00008 00801025 03e00008 00001025"
         for text in (division, multiple):
             verdict = prove(text)
@@ -75,7 +87,7 @@ class BoundaryProofTests(unittest.TestCase):
         self.assertEqual(sum(row["end"] - row["start"] for row in padding), 12)
 
     def test_unknown_partition_and_unproved_publication_fail_by_name(self):
-        image = struct.pack(">4I", 0x03e00008, 0, 0x24020001, 0x24020002)
+        image = struct.pack(">4I", 0x03E00008, 0, 0x24020001, 0x24020002)
         candidate = Function("us", "unknown", 0, len(image), 0x80001000, "unknown", "asm", ())
         with self.assertRaisesRegex(Held, "layout.partition: us unknown"):
             planner.normalized_functions(image, [candidate], {0: {"disassembler-entry"}}, SHAPES, [])

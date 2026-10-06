@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from tests.work.test_shape import EMITTED, SHAPES, words, owned
+from tests.work.test_shape import EMITTED, SHAPES, owned, words
 from unbake.typemap import declarations
-from unbake.work import plan, shape
+from unbake.work import plan
 
 TARGET = SHAPES["gcc-2.8.1-sn64"]
 FRAMED = words("27bdffe8 afbf0014 0c000000 00000000 8fbf0014 27bd0018 03e00008 00000000")
@@ -17,10 +17,11 @@ OPEN = words("27bdffe8 afbf0014 0c000000 00000000")
 
 class DrafterVerdictTests(unittest.TestCase):
     def test_each_verdict_equals_the_serial_rules(self) -> None:
-        placements = [((FRAMED, 0x80001000),), ((FILLER, 0x8008EC78),),
-                      ((FRAMED, 0x80001000), (FILLER, 0x8008EC78))]
-        groups = [(TARGET, EMITTED, tuple((body, address, owned(body, address, TARGET))
-                  for body, address in bodies)) for bodies in placements]
+        placements = [((FRAMED, 0x80001000),), ((FILLER, 0x8008EC78),), ((FRAMED, 0x80001000), (FILLER, 0x8008EC78))]
+        groups = [
+            (TARGET, EMITTED, tuple((body, address, owned(body, address, TARGET)) for body, address in bodies))
+            for bodies in placements
+        ]
         self.assertEqual([plan._drafter(group) for group in groups], [True, False, False])
 
 

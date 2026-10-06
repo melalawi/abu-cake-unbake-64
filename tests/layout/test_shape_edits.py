@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.layout.test_split import ProjectFixture
-from unbake.layout import shape_edits, split
+from unbake.layout import shape_edits
 
 ROWS = [
     (0x10, "asm", "func_80001000"),  # a framed function
@@ -54,7 +54,6 @@ class ShapeEditTests(unittest.TestCase):
             lines = shape_edits.run(self.fixture, SimpleNamespace())
         self.commits = commit.call_count
         return lines
-
 
     def test_refusals_leave_the_split_alone(self) -> None:
         cases = {

@@ -841,9 +841,16 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                     staged = overlay / source.relative_to(project.root)
                     output = overlay / f"proof-{index}-{int(nonmatching)}.o"
                     try:
-                        commands = drivers.from_flags(compiler.kind, str(compiler.cc), tuple(options), project.cppflags,
-                            drivers.gnu_as_flags(project), output.stem, str(staged),
-                            drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link)))
+                        commands = drivers.from_flags(
+                            compiler.kind,
+                            str(compiler.cc),
+                            tuple(options),
+                            project.cppflags,
+                            drivers.gnu_as_flags(project),
+                            output.stem,
+                            str(staged),
+                            drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link)),
+                        )
                         expanded = run_tool(list(commands.preprocess), overlay, "structs")
                         atomic_files.text(overlay / f"{output.stem}.i", expanded)
                         run_tool(list(commands.compile), overlay, "structs")

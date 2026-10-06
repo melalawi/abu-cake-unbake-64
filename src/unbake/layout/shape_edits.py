@@ -203,8 +203,7 @@ def run(project: Project, host: Host) -> list[str]:
 
 
 def _relabel(project: Project, renamed: dict[str, str]) -> None:
-    """Carry renames into the files that list function names: layout.toml members and the exclusions manifest.
-"""
+    """Carry renames into the files that list function names: layout.toml members and the exclusions manifest."""
     import json
     import tomllib
 

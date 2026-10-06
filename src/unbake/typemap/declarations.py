@@ -152,7 +152,7 @@ def _unit_bodies_blanked(source: str) -> str:
                 if token == ";":
                     assigned = False
         previous = token
-    pieces = []
+    pieces: list[str] = []
     cursor = 0
     for begin, end in spans:
         pieces.extend((source[cursor:begin], re.sub(r"[^\n]", " ", source[begin:end])))

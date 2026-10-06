@@ -195,8 +195,11 @@ def functions(
 
 
 def normalized_functions(
-    image: bytes, ff: list[split.Function], seeds: dict[int, set[str]],
-    shapes: dict[str, Any], spans: list[rodata_owners.Span],
+    image: bytes,
+    ff: list[split.Function],
+    seeds: dict[int, set[str]],
+    shapes: dict[str, Any],
+    spans: list[rodata_owners.Span],
 ) -> list[split.Function]:
     """Disassembler entries and compiler shapes nominate; closure alone promotes bodies."""
     from unbake.work.shape import _frame_open
@@ -204,32 +207,74 @@ def normalized_functions(
     result = []
     known = set(seeds) | {f.start for f in ff}
     for parent in ff:
-        code = {at: int.from_bytes(image[at:at + 4], "big") for at in range(parent.start, parent.end, 4)}
+        code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(parent.start, parent.end, 4)}
         nominations = {parent.start, *(at for at in known if parent.start <= at < parent.end)}
         nominations.update(at for at, word in code.items() if _frame_open(word))
         cursor = parent.start
         while cursor < parent.end:
             # Padding is accepted only as the proved trailing alignment of the preceding body.
             if cursor not in nominations:
-                raise Held("setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: entry source missing")
-            candidate = split.Function(parent.version, parent.name if cursor == parent.start else f"func_{parent.address + cursor - parent.start:08X}",
-                                       cursor, parent.end, parent.address + cursor - parent.start, parent.path, parent.kind, ())
+                raise Held(
+                    "setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: entry source missing"
+                )
+            candidate = split.Function(
+                parent.version,
+                parent.name if cursor == parent.start else f"func_{parent.address + cursor - parent.start:08X}",
+                cursor,
+                parent.end,
+                parent.address + cursor - parent.start,
+                parent.path,
+                parent.kind,
+                (),
+            )
             constants = carve(image, [candidate], spans)
             tables = table_edges(image, candidate, constants)
-            reached, _, failures = boundary.closure(code, cursor, parent.end, parent.address - parent.start, known | nominations, tables)
+            reached, _, failures = boundary.closure(
+                code, cursor, parent.end, parent.address - parent.start, known | nominations, tables
+            )
             if failures:
-                raise Held("setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(failures))
+                raise Held(
+                    "setup",
+                    f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(failures),
+                )
             stop = max(reached, default=cursor - 4) + 4
             next_entry = min((at for at in nominations if at >= stop), default=parent.end)
-            verdicts = [(ident, boundary.evidence(code, cursor, next_entry, parent.address - parent.start,
-                          seeds.get(cursor, {"disassembler-entry"} if cursor == parent.start else {"compiler-entry-candidate"}),
-                          known | nominations, target, tables)) for ident, target in shapes.items()]
+            verdicts = [
+                (
+                    ident,
+                    boundary.evidence(
+                        code,
+                        cursor,
+                        next_entry,
+                        parent.address - parent.start,
+                        seeds.get(
+                            cursor, {"disassembler-entry"} if cursor == parent.start else {"compiler-entry-candidate"}
+                        ),
+                        known | nominations,
+                        target,
+                        tables,
+                    ),
+                )
+                for ident, target in shapes.items()
+            ]
             proved = [(ident, verdict) for ident, verdict in verdicts if verdict.proven]
             if not proved:
                 causes = sorted({cause for _, verdict in verdicts for cause in verdict.unproven})
-                raise Held("setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(causes))
-            result.append(split.Function(candidate.version, candidate.name, cursor, stop, candidate.address,
-                                         candidate.name, candidate.kind, ()))
+                raise Held(
+                    "setup", f"layout.partition: {parent.version} {parent.name} ROM 0x{cursor:X}: " + "; ".join(causes)
+                )
+            result.append(
+                split.Function(
+                    candidate.version,
+                    candidate.name,
+                    cursor,
+                    stop,
+                    candidate.address,
+                    candidate.name,
+                    candidate.kind,
+                    (),
+                )
+            )
             cursor = next_entry
     return result
 
@@ -240,7 +285,10 @@ def require_boundaries(layout: LayoutManifest) -> None:
         for function in row["functions"]:
             owned = function["evidence"].get("boundary")
             if not isinstance(owned, dict) or type(owned.get("unproven")) not in (list, tuple) or owned["unproven"]:
-                raise Held("setup", f"layout.function_boundary: {version} {function['name']}: required proved executable partition")
+                raise Held(
+                    "setup",
+                    f"layout.function_boundary: {version} {function['name']}: required proved executable partition",
+                )
 
 
 def correspondence(
@@ -521,7 +569,11 @@ def table_edges(image: bytes, f: split.Function, providers: list[ProviderRecord]
 
 
 def complete_providers(
-    image: bytes, ff: list[split.Function], constants: list[ProviderRecord], ranges: tuple[split.Function, ...], shapes: dict[str, Any]
+    image: bytes,
+    ff: list[split.Function],
+    constants: list[ProviderRecord],
+    ranges: tuple[split.Function, ...],
+    shapes: dict[str, Any],
 ) -> list[ProviderRecord]:
     providers = list(constants)
     for f in ff:
@@ -536,15 +588,26 @@ def complete_providers(
                 evidence={"source": "pinned disassembler", "assembly": True},
             )
         )
+
     def aligned_gap(begin: int, end: int) -> bool:
         previous = next((f for f in ff if f.end == begin), None)
         if previous is None:
             return False
         bias = previous.address - previous.start
-        code = {at: int.from_bytes(image[at:at + 4], "big") for at in range(previous.start, end, 4)}
-        return any(boundary.evidence(code, previous.start, end, bias, {"proved-executable-entry"},
-                   {f.address - bias for f in ff}, target, table_edges(image, previous, constants)).proven
-                   for target in shapes.values())
+        code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(previous.start, end, 4)}
+        return any(
+            boundary.evidence(
+                code,
+                previous.start,
+                end,
+                bias,
+                {"proved-executable-entry"},
+                {f.address - bias for f in ff},
+                target,
+                table_edges(image, previous, constants),
+            ).proven
+            for target in shapes.values()
+        )
 
     ordered = sorted(providers, key=lambda p: p["start"])
     result: list[ProviderRecord] = []
@@ -655,8 +718,8 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
     if executable is None:
         raise Held("setup", "policy.splat: missing executable")
     project.build.mkdir(parents=True, exist_ok=True)
-    from unbake.compilers.registry import registry
     from unbake.compilers.families import family_for
+    from unbake.compilers.registry import registry
 
     candidate_shapes = {ident: family_for(ident).shape(ident, spec.cflags) for ident, spec in registry().items()}
     if not candidate_shapes:
@@ -754,8 +817,15 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
             seeds = {}
             for span in ranges_by_version[version]:
                 seeds.update(boundary.entries(image, span.start, span.end, span.address - span.start, signatures))
-            inventories[version] = normalized_functions(image, nominated, seeds, candidate_shapes,
-                constant_spans(image, mappings(image, ranges_by_version[version])[0], ranges_by_version[version], measured))
+            inventories[version] = normalized_functions(
+                image,
+                nominated,
+                seeds,
+                candidate_shapes,
+                constant_spans(
+                    image, mappings(image, ranges_by_version[version])[0], ranges_by_version[version], measured
+                ),
+            )
             loaded_by_version[version] = mappings(image, ranges_by_version[version])
             del image
     identity: dict[str, dict[int, str]] = {}

@@ -12,6 +12,7 @@ def after(context: Context, error: Held) -> str:
     if "C identifier" in error.reason:
         return "stop: choose a valid C function identifier from unbake next"
     from unbake.process import fault
+
     pending = [fault(error)]
     while pending:
         value = pending.pop()
