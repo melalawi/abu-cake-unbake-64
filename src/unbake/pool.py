@@ -19,6 +19,7 @@ import contextlib
 import multiprocessing
 import os
 import pickle
+import queue
 import resource
 import select
 import shutil
@@ -29,7 +30,6 @@ import threading
 import time
 import traceback
 import uuid
-from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
@@ -370,7 +370,8 @@ class Pool:
         if broken is not None and self._executor is not broken and self._executor is not None:
             return self._executor
         if self._executor is not None:
-            self._executor.shutdown(cancel_futures=True)
+            # Recycling after an allocation failure must retain queued siblings.
+            self._executor.shutdown()
         self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job)
         return self._executor
 
@@ -460,24 +461,40 @@ class Pool:
                 path.unlink(missing_ok=True)
 
     def map(self, fn: Callable[[T], R], items: Sequence[T], *, charge: str | None = None) -> Iterator[R]:
-        """Results in item order; at most `size` tasks in flight. Each task's CPU is charged to charge, else fn."""
+        """Refill admitted work on completion; deliver results and failures in input order.
+
+        At most size tasks run at once. Completed later results wait for earlier
+        ones; run() already retains the complete ordered result collection.
+        """
         from unbake import effort
 
         name = charge or effort.name_of(fn)
+        completed: queue.SimpleQueue[tuple[int, Future[Any]]] = queue.SimpleQueue()
+        pending: dict[int, tuple[T, Future[Any], int, ProcessPoolExecutor | None]] = {}
+        ready: dict[int, tuple[R | None, Exception | None]] = {}
+        source = iter(enumerate(items))
+        next_result = 0
+        refused = False
 
-        def submit(item: T) -> Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]]:
-            return self._submit(_measured, (fn, item))
+        def submit(index: int, item: T, attempt: int) -> None:
+            future = self._submit(_measured, (fn, item))
+            pending[index] = item, future, attempt, self._executor
+            future.add_done_callback(lambda done: completed.put((index, done)))
 
-        pending: deque[
-            tuple[T, Future[tuple[R | None, float, int, dict[str, tuple[int, int]], BaseException | None]], int]
-        ] = deque()
-        source = iter(items)
-        for item in source:
-            pending.append((item, submit(item), 0))
-            if len(pending) >= self.size:
-                break
+        def fill() -> None:
+            if refused:
+                return
+            while len(pending) < self.size:
+                try:
+                    index, item = next(source)
+                except StopIteration:
+                    return
+                submit(index, item, 0)
+
+        fill()
         while pending:
-            item, future, attempt = pending.popleft()
+            index, future = completed.get()
+            item, _, attempt, executor = pending.pop(index)
             try:
                 result, seconds, rss, counts, fault = future.result()
                 effort.charge(name + (".failed" if fault is not None else ""), seconds, rss, counts)
@@ -500,17 +517,28 @@ class Pool:
                         }
                     )
                     diagnostic["configured_cap_bytes"] = self.memory_worker_bytes
-                    raise TaskFailed(failure, diagnostic) from error
-                effort.count("worker.retry", 1, 1)
-                self._fresh()
-                if isinstance(error, BrokenProcessPool):
-                    pending = deque((i, submit(i), a) for i, _, a in pending)
-                pending.appendleft((item, submit(item), 1))
-                continue
-            yield cast(R, result)
-            for item in source:
-                pending.append((item, submit(item), 0))
-                break
+                    terminal = TaskFailed(failure, diagnostic)
+                    terminal.__cause__ = error
+                    ready[index] = None, terminal
+                    refused = True
+                else:
+                    effort.count("worker.retry", 1, 1)
+                    # Only failed tasks retry. Successful siblings keep their
+                    # outputs, and failures from the same executor share its replacement.
+                    self._fresh(executor)
+                    submit(index, item, 1)
+            except Exception as error:
+                ready[index] = None, error
+                refused = True
+            else:
+                ready[index] = result, None
+            fill()
+            while next_result in ready:
+                result, refused_error = ready.pop(next_result)
+                if refused_error is not None:
+                    raise refused_error
+                yield cast(R, result)
+                next_result += 1
 
 
 _shared: Pool | None = None
