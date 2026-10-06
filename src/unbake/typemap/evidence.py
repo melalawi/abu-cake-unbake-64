@@ -312,6 +312,10 @@ def abi(
         # or a declaration disambiguates; an FP value alone has no precedence.
         consumed = used_returns & return_regs
         returned = consumed or return_regs
+        if returned:
+            # An undefined incidental register does not invalidate the
+            # selected result. Check that result at every exit below.
+            return_incomplete = False
         if len(returned) > 1:
             conflicts.append(
                 "callers disagree on integer versus floating return ABI"

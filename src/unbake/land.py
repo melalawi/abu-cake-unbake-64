@@ -239,7 +239,7 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     """A nonmatching body cannot use byte equality to excuse an invented entry ABI."""
     from unbake.decomp.draft_abi import mapped_body
     from unbake.layout import redeclarations
-    from unbake.typemap import declarations, header_names, types_db
+    from unbake.typemap import declarations, header_names, o32, types_db
 
     if mapped_body(project, function, version) is None:
         raise Held("land", f"land.fuzzy_identity: {function} VERSION {version}: no current mapped entry")
@@ -249,18 +249,26 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     expected = record.get("prototype") if record.get("state") == "known" else None
     if (
         expected is None
+        and record.get("state") != "conflict"
         and abi.get("arity_known")
         and abi.get("return_known")
         and not abi.get("conflicts")
         and not abi.get("missing")
     ):
         expected = record.get("abi_declaration", {}).get("prototype")
-    if not expected or re.search(r"\b" + re.escape(function) + r"\s*\(\s*\)", expected):
-        raise Held("land", f"land.fuzzy_abi: {function}: canonical entry signature is unresolved")
-    expected = header_names.rewrite(expected, types_db.meta(database, "shared_aliases"), set())
     actual = declarations.extract(source, {"function": function, "version": version}, definitions=True)
     own = actual["functions"].get(function)
     aliases = {name: declarations.canonical(type_, {}) for name, type_ in actual["aliases"].items()}
+    if (
+        record.get("state") != "known"
+        and own is not None
+        and o32.admits(source, own, record.get("machine_signature", {}), aliases)
+    ):
+        _fuzzy_calls(function, source)
+        return
+    if not expected or re.search(r"\b" + re.escape(function) + r"\s*\(\s*\)", expected):
+        raise Held("land", f"land.fuzzy_abi: {function}: canonical entry signature is unresolved")
+    expected = header_names.rewrite(expected, types_db.meta(database, "shared_aliases"), set())
     if own is None or not redeclarations.equivalent(own["prototype"], expected, aliases):
         raise Held(
             "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"

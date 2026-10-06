@@ -74,7 +74,9 @@ class Constraints:
         """
         kinds: dict[str, set[str]] = defaultdict(set)
         for node, types in self.seeds.items():
-            kinds[self.root(node)].update(types)
+            kinds[self.root(node)].update(
+                type_ for type_, rows in types.items() if any(not row.get("word_transport") for row in rows)
+            )
         sites: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
         for site, interface, proof in self.links:
             sites[interface].append((site, proof))
@@ -83,8 +85,8 @@ class Constraints:
             roots = {callee, *(self.root(site) for site, _ in rows)}
             if len(roots) > 1 and len(set().union(*(kept_types(kinds.get(root, ())) for root in roots))) > 1:
                 continue
-            for site, evidence in rows:
-                self.connect(site, interface, evidence)
+            for site, proof in rows:
+                self.connect(site, interface, proof)
         self.links.clear()
 
     def connect(self, left: str, right: str, evidence: dict[str, Any]) -> None:
@@ -152,7 +154,7 @@ def _identity(evidence: dict[str, Any]) -> str:
 
 
 def _machine_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
-    keys = ("kind", "function", "version", "instruction", "rom_offset", "common_base", "indexed_base")
+    keys = ("kind", "function", "version", "instruction", "rom_offset", "common_base", "indexed_base", "word_transport")
     return {key: evidence[key] for key in keys if key in evidence}
 
 
@@ -181,6 +183,14 @@ def resolve(
     highest = max((rank(p) for rows in found.values() for p in rows), default=0)
     kept = {t: [p for p in rows if rank(p) == highest] for t, rows in found.items()}
     kept = {t: rows for t, rows in kept.items() if rows}
+    if highest == 0 and any(t in kept for t in ("float", "double")):
+        # LW/SW move raw O32 words. Unlike integer arithmetic, their signed
+        # load opcode does not contradict subsequent floating consumption.
+        kept = {
+            t: rows
+            for t, rows in kept.items()
+            if t not in ("int", "unsigned int") or any(not p.get("word_transport") for p in rows)
+        }
     if highest == 0 and any(t.endswith(" *") for t in kept):
         # A word load can carry a pointer; narrow/FP uses are incompatible.
         specific = any(t.startswith("struct Shape_") for t in kept)
@@ -339,6 +349,8 @@ def _function_body(
                 node = origin_node(value, addresses[version])
                 result_node = f"result:{function}:{reg}"
                 graph.use(result_node, function)
+                for type_ in value.get("types", []):
+                    graph.seed(result_node, type_, {"kind": "machine", **returned})
                 if value.get("constant") is not None and reg == "r2":
                     graph.seed(result_node, "int", {"kind": "machine", **returned})
                 if node is not None:
@@ -459,13 +471,19 @@ def _access(
             scalar = evidence.scalar(memory)
             if scalar:
                 formal = evidence.stack_argument(memory, function) or f"stack{slot}"
-                graph.seed(f"param:{function}:{formal}", scalar, {"kind": "machine", **memory})
+                loaded = origin_node(memory.get("loaded", {}), addresses[version])
+                # A reload after a spill describes its source value, not a
+                # fresh incoming parameter occupying the spill's stack slot.
+                formal_node = loaded or f"param:{function}:{formal}"
+                graph.seed(
+                    formal_node, scalar, {"kind": "machine", **memory, "word_transport": memory["opcode"] == 0x23}
+                )
                 if formal != f"stack{slot}":
                     graph.connect(f"param:{function}:stack{slot}", f"param:{function}:{formal}", memory)
         return
     scalar = evidence.scalar(memory)
     if memory["direction"] == "read" and scalar:
-        graph.seed(value_node, scalar, {"kind": "machine", **memory})
+        graph.seed(value_node, scalar, {"kind": "machine", **memory, "word_transport": memory["opcode"] == 0x23})
     if memory.get("indexed") is not None:
         indexed = memory["indexed"]
         names = addresses[version].get(indexed["anchor"], [])
@@ -496,7 +514,7 @@ def _access(
         graph.seed(origin, "void *", {"kind": "machine", **memory})
     graph.use(cell, function)
     if scalar:
-        graph.seed(cell, scalar, {"kind": "machine", **memory})
+        graph.seed(cell, scalar, {"kind": "machine", **memory, "word_transport": memory["opcode"] == 0x23})
     if memory["direction"] == "read":
         graph.connect(cell, value_node, memory)
         if memory.get("indexed") is None:

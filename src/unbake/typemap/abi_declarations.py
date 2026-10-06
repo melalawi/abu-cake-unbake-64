@@ -54,13 +54,10 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
     if not unspecified:
         expected = declarations.parameter_registers([{"type": t} for t in carriers], aliases)
         if expected != ordered:
-            for i, (reg, expected_reg) in enumerate(zip(ordered or [], expected, strict=True)):
-                if reg != expected_reg and reg.startswith("r") and carriers[i] == "float":
-                    carriers[i] = "int"
-                    reasons.append(f"types.abi.bits: {reg}: floating bits carried in one O32 word")
-            if declarations.parameter_registers([{"type": t} for t in carriers], aliases) != ordered:
-                unspecified = True
-                reasons.append("types.abi.parameters: C argument convention unresolved; argument list unspecified")
+            unspecified = True
+            reasons.append(
+                "types.abi.parameters: scalar C convention differs from measured slots; argument list unspecified"
+            )
     if not unspecified and not carriers and abi.get("caller_arguments"):
         # The callee reads no argument, but a caller passes one (a K&R call): (void) would refuse that call.
         unspecified = True

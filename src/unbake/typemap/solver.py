@@ -19,10 +19,10 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 7
+SCHEMA = 8
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
-ABI_SCHEMA = 4
-MACHINE_SCHEMA = 4
+ABI_SCHEMA = 5
+MACHINE_SCHEMA = 5
 
 
 _MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")
@@ -648,6 +648,27 @@ def infer(
             "provenance": [signature["provenance"]] if signature else [],
             "prototype": prototype,
         }
+        if signature is None:
+            # A complete register signature need not have a unique C spelling:
+            # leading floating words in GPRs can belong to by-value aggregates.
+            # Preserve slot semantics; never invent aggregate boundaries.
+            slot_known = (
+                abi["machine_arity_known"]
+                and abi["machine_return_known"]
+                and ordered is not None
+                and returned["state"] == "known"
+                and all(p["state"] == "known" for p in params)
+                and not abi["missing"]
+                and all(
+                    reason == "parameter ABI disagrees with observed scalar representations"
+                    for reason in abi["conflicts"]
+                )
+            )
+            output_functions[name]["machine_signature"] = {
+                "state": "known" if slot_known else "unknown",
+                "params": [{"register": p["register"], "type": p["type"]} for p in params],
+                "return": {"register": abi["return_register"], "type": returned.get("type")},
+            }
         if not known:
             output_functions[name]["abi_declaration"] = (
                 {

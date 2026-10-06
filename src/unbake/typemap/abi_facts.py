@@ -77,18 +77,16 @@ def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
                         name, version, body["address"], body["start"], words, targets[version], symbols[version]
                     ).run()
                     record = {
+                        "register_inputs": result["register_inputs"],
+                        "register_outputs": result["register_outputs"],
+                        "value_types": result["value_types"],
+                        "memory": {str(row["instruction"]): row for row in result["memory"]},
                         "calls": {
-                            str(call["instruction"]): {
-                                reg: {key: value[key] for key in ("defined", "dependencies")}
-                                for reg, value in call["arguments"].items()
-                            }
+                            str(call["instruction"]): {reg: value for reg, value in call["arguments"].items()}
                             for call in result["calls"]
                         },
                         "returns": {
-                            str(exit_["instruction"]): {
-                                reg: {key: value[key] for key in ("defined", "dependencies")}
-                                for reg, value in exit_["values"].items()
-                            }
+                            str(exit_["instruction"]): {reg: value for reg, value in exit_["values"].items()}
                             for exit_ in result["returns"]
                         },
                     }
@@ -132,6 +130,10 @@ class Functions(Mapping[str, dict[str, Any]]):
         records = self.supplement[name]["versions"]
         for version, body in item["versions"].items():
             record = records[version]
+            for key in ("register_inputs", "register_outputs", "value_types"):
+                body[key] = record[key]
+            for memory in body["memory"]:
+                memory.update(record["memory"].get(str(memory["instruction"]), {}))
             for call in body["calls"]:
                 for reg, value in call["arguments"].items():
                     value.update(record["calls"].get(str(call["instruction"]), {}).get(reg, {"defined": False}))

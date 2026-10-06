@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 # Width describes the access, not the semantic C storage type.
@@ -48,6 +48,7 @@ class Value:
     dependencies: tuple[str, ...] = ()
     # Origins of a pointer this value was advanced from by an untracked index (offset unknown).
     based: tuple[str, ...] = ()
+    types: tuple[str, ...] = ()
 
     def shift(self, offset: int) -> Value:
         if self.constant is not None:
@@ -57,20 +58,24 @@ class Value:
             defined=self.defined,
             dependencies=self.dependencies,
             based=self.based,
+            types=self.types,
         )
 
     def merge(self, other: Value) -> Value:
         if self == other:
             return self
         dependencies = tuple(sorted(set(self.dependencies + other.dependencies)))
+        left_types = self.types or (("int",) if self.constant is not None else ())
+        right_types = other.types or (("int",) if other.constant is not None else ())
+        types = tuple(sorted(set(left_types + right_types))) if left_types and right_types else ()
         if not self.origins or not other.origins:
             based = tuple(sorted(set(self.based + other.based))) if not self.origins and not other.origins else ()
-            return Value(defined=self.defined and other.defined, dependencies=dependencies, based=based)
+            return Value(defined=self.defined and other.defined, dependencies=dependencies, based=based, types=types)
         origins = tuple(sorted(set(self.origins + other.origins)))
         return (
-            Value(origins, defined=self.defined and other.defined, dependencies=dependencies)
+            Value(origins, defined=self.defined and other.defined, dependencies=dependencies, types=types)
             if len(origins) <= 4
-            else Value(defined=self.defined and other.defined, dependencies=dependencies)
+            else Value(defined=self.defined and other.defined, dependencies=dependencies, types=types)
         )
 
     def data(self) -> dict[str, Any]:
@@ -81,6 +86,7 @@ class Value:
             "defined": self.defined,
             "dependencies": list(self.dependencies),
             "based": list(self.based),
+            "types": list(self.types),
         }
 
 
@@ -219,10 +225,18 @@ class Analysis:
                     value = Value((("global:" + self.symbols[base.constant][0], 0),))
                 else:
                     value = Value(((f"memory:{self.function}:{self.version}:{index}", 0),))
+                if op in (0x31, 0x35):
+                    type_ = "float" if width == 4 else "double"
+                    self.hint(value, type_, index, record)
+                    value = replace(value, types=(type_,))
+                if record:
+                    self.memory[index]["loaded"] = value.data()
                 if width == 8 and operand >= 32 and operand + 1 < 64:
                     regs[operand + 1] = UNKNOWN
             else:
                 read.append(operand)
+                if op in (0x39, 0x3D) and not regs[operand].types:
+                    self.hint(regs[operand], "float" if width == 4 else "double", index, record)
                 if slot is not None and len(base.origins) == 1:
                     # A write invalidates every overlapping spill, irrespective of width.
                     state.stack = {
@@ -308,18 +322,18 @@ class Analysis:
                 or (op == 17 and rs >= 16 and fn < 0x30)
             )
         ):
-            value = Value(
-                ((f"value:{self.function}:{self.version}:{index}", 0),),
-                defined=all(regs[item].defined for item in read),
-                dependencies=tuple(sorted({dependency for item in read for dependency in regs[item].dependencies})),
-            )
+            output_type = "int"
             if op == 17 and rs >= 16:
                 output_type = "double" if (fn == 0x21 or (rs == 17 and fn not in (0x20, 0x24, 0x25))) else "float"
                 if fn in (0x24, 0x25, 0x0C, 0x0D, 0x0E, 0x0F):
                     output_type = "int"
-                self.hint(value, output_type, index, record)
-            else:
-                self.hint(value, "int", index, record)
+            value = Value(
+                ((f"value:{self.function}:{self.version}:{index}", 0),),
+                types=(output_type,),
+                defined=all(regs[item].defined for item in read),
+                dependencies=tuple(sorted({dependency for item in read for dependency in regs[item].dependencies})),
+            )
+            self.hint(value, output_type, index, record)
         if op == 17 and rs >= 16:
             input_type = {16: "float", 17: "double", 20: "int", 21: "long long"}.get(rs)
             if input_type:
