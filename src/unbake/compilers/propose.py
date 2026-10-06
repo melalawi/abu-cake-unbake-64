@@ -67,11 +67,11 @@ def _inputs(
             {
                 name: compiler_files.sha(Path(__file__).with_name(name))
                 for name in (
-                    "compiler_proposal.py",
-                    "compiler_profiles.py",
-                    "compiler_probes.py",
+                    "propose.py",
+                    "profiles.py",
+                    "probe.py",
                     "fingerprint.py",
-                    "proposal_accept.py",
+                    "accept.py",
                 )
             }
         ),

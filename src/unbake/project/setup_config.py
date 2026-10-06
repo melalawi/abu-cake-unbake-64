@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import tomllib
-from pathlib import Path
 from typing import Any
 
 import toml  # type: ignore[import-untyped]
@@ -98,29 +97,7 @@ def render_ready(
 
 
 def canonical(text: str) -> str:
-    """Rewrite a ready config.toml as configuration only.
-
-    Measurements are not configuration: tool state and the build own them. A
-    unit whose value is not a configured compiler, or equals the default, is
-    not an exception. A default that is not a configured compiler becomes the
-    compiler most units already use, the same rule the compiler proposal applies.
-    """
-    from collections import Counter
-
+    """Retain current configuration, including explicit per-unit flags, without measurement state."""
     from unbake.config import CONFIG_SECTIONS
 
-    data = {key: value for key, value in tomllib.loads(text).items() if key in CONFIG_SECTIONS}
-    compilers = data.get("compilers", {})
-    concrete = {name: ident for name, ident in data.get("units", {}).items() if ident in compilers}
-    default = data["project"].get("default_compiler")
-    if default not in compilers:
-        counts = Counter(concrete.values())
-        if not counts:
-            raise Held("setup", "project.default_compiler: no configured compiler; run unbake setup --redo-compilers")
-        default = min(counts, key=lambda ident: (-counts[ident], ident))
-        data["project"]["default_compiler"] = default
-    data.pop("units", None)
-    units = exception_units(default, {Path(name).stem: ident for name, ident in concrete.items()})
-    if units:
-        data["units"] = units
-    return str(toml.dumps(data))
+    return str(toml.dumps({key: value for key, value in tomllib.loads(text).items() if key in CONFIG_SECTIONS}))

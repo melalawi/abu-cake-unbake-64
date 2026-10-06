@@ -72,7 +72,7 @@ def dumps(records: dict[str, Record]) -> str:
 
 def prove(project: Project, row: split.Function, data: bytes) -> shape.Original:
     """The original-asm proof of ROW's bytes against every configured compiler; refused when no rule holds."""
-    found = shape.original(shape.words_of(data), shape.emitters(project.compilers.values()))
+    found = shape.original(shape.words_of(data), shape.configured(project)[1])
     if found is None:
         raise Held("original-asm", f"original.not_original: {row.version} {row.name}: no original-asm rule holds")
     return found

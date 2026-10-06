@@ -101,7 +101,7 @@ def _similar(project: Project, host: Host, function: str) -> list[dict[str, Any]
             "function": item.function,
             "distance": round(item.distance, 6),
             "edits": item.edit_distance,
-            "source": item.source,
+            "source": str(item.source),
         }
         for item in examples
     ]

@@ -14,7 +14,7 @@ from unbake.config import Held
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
-    from unbake.config import Compiler
+    from unbake.config import Compiler, Project
     from unbake.layout.boundary import Boundary
 
 JR_RA, NOP = 0x03E00008, 0
@@ -48,6 +48,15 @@ def emitters(shapes: Iterable[Shape]) -> Shape:
     from unbake.compilers.families.mips import emitters as combined
 
     return combined(shapes)
+
+
+def configured(project: Project) -> tuple[dict[str, Shape], Shape]:
+    targets = {
+        unit: for_compiler(project.compiler_for(unit), (*project.compiler_for(unit).cflags, *flags))
+        for unit, flags in project.unit_flags.items()
+    }
+    base = {ident: for_compiler(compiler, compiler.cflags) for ident, compiler in project.compilers.items()}
+    return {**base, **targets}, emitters([*base.values(), *targets.values()])
 
 
 def words_of(data: bytes) -> list[int]:

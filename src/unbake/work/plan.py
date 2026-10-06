@@ -10,7 +10,7 @@ from unbake.cache import Cache
 from unbake.config import Host, Project
 from unbake.cycle import rank
 from unbake.decomp import checks, exclusions
-from unbake.layout import split, boundary
+from unbake.layout import boundary, split
 from unbake.work import attempts, inventory, shape
 
 if TYPE_CHECKING:
@@ -36,8 +36,8 @@ def _drafter(verdict: Verdict) -> bool:
 
 def _placement(project: Project, item: split.Function, data: bytes, target: Shape) -> boundary.Boundary:
     """Selection consumes the existing boundary and table-provider proof for this placement."""
-    from unbake.layout import planner, rodata_owners
     from unbake import cache, inputs
+    from unbake.layout import planner, rodata_owners
 
     configured = project.version(item.version)
 
@@ -48,25 +48,34 @@ def _placement(project: Project, item: split.Function, data: bytes, target: Shap
         for segment in split.layout(configured.split)[2]:
             for row in segment.rows:
                 if row.kind in ("data", "rodata", "rdata") and "vram" in segment.fields:
-                    pools.append(rodata_owners.Span(split.address(row, configured.split), row.start, split.end(row), 0, "copied"))
+                    pools.append(
+                        rodata_owners.Span(split.address(row, configured.split), row.start, split.end(row), 0, "copied")
+                    )
         return rows, image, planner.carve(image, rows, pools)
 
-    rows, image, constants = cache.memo("boundary.placements", (configured.baserom, inputs.signature(configured.baserom),
-        configured.split, inputs.signature(configured.split), configured.symbols, inputs.signature(configured.symbols)), load,
-        keep=len(project.versions))
+    rows, image, constants = cache.memo(
+        "boundary.placements",
+        (
+            configured.baserom,
+            inputs.signature(configured.baserom),
+            configured.split,
+            inputs.signature(configured.split),
+            configured.symbols,
+            inputs.signature(configured.symbols),
+        ),
+        load,
+        keep=len(project.versions),
+    )
     return boundary.evidence(
         {item.start + index * 4: word for index, word in enumerate(shape.words_of(data))},
-        item.start, item.end, item.address - item.start, {"layout-placement"},
-        {row.address - (item.address - item.start) for row in rows}, target,
+        item.start,
+        item.end,
+        item.address - item.start,
+        {"layout-placement"},
+        {row.address - (item.address - item.start) for row in rows},
+        target,
         planner.table_edges(image, item, constants),
     )
-
-
-def _shapes(project: Project) -> tuple[dict[str, Shape], Shape]:
-    targets = {unit: shape.for_compiler(project.compiler_for(unit), (*project.compiler_for(unit).cflags, *flags))
-               for unit, flags in project.unit_flags.items()}
-    base = {ident: shape.for_compiler(compiler, compiler.cflags) for ident, compiler in project.compilers.items()}
-    return {**base, **targets}, shape.emitters([*base.values(), *targets.values()])
 
 
 def candidates(project: Project, host: Host) -> list[rank.Candidate]:
@@ -79,7 +88,7 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
     _, functions, bodies = inventory.inventory(project)
     carry = {name for name in attempts.functions(project) if attempts.path(project, name).is_file()}
     history = attempts.summaries(project)
-    shapes, emitted = _shapes(project)
+    shapes, emitted = shape.configured(project)
     picked: list[tuple[split.Function, tuple[split.Function, ...]]] = []
     verdicts: list[Verdict] = []
     for group in inventory.groups(functions, bodies):
@@ -95,9 +104,20 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
             continue
         target = shapes.get(canonical.name, shapes[compiler.id])
         picked.append((canonical, tuple(items)))
-        verdicts.append((target, emitted, tuple(
-            (bodies[item.version, item.name], item.address, _placement(project, item, bodies[item.version, item.name], target))
-            for item in items)))
+        verdicts.append(
+            (
+                target,
+                emitted,
+                tuple(
+                    (
+                        bodies[item.version, item.name],
+                        item.address,
+                        _placement(project, item, bodies[item.version, item.name], target),
+                    )
+                    for item in items
+                ),
+            )
+        )
     drafters = pool.run(host, _drafter, verdicts)
     result = []
     for (canonical, items), drafter in zip(picked, drafters, strict=True):
@@ -134,14 +154,23 @@ def originals(project: Project) -> list[tuple[str, str]]:
     """Unlanded original-asm functions as (name, rule evidence): asm in every holding version, one name, and an
     original-asm route (work.shape.original) in each. They land as src/NAME.s, never as drafts."""
     _, functions, bodies = inventory.inventory(project)
-    shapes, emitted = _shapes(project)
+    shapes, emitted = shape.configured(project)
     result = []
     for items in inventory.groups(functions, bodies):
         names = {item.name for item in items}
         if len(names) != 1 or any(item.kind != "asm" for item in items):
             continue
         target = shapes.get(items[0].name, shapes[project.compiler_for(items[0].name).id])
-        routes = [shape.classify(bodies[item.version, item.name], item.address, target, emitted, _placement(project, item, bodies[item.version, item.name], target)) for item in items]
+        routes = [
+            shape.classify(
+                bodies[item.version, item.name],
+                item.address,
+                target,
+                emitted,
+                _placement(project, item, bodies[item.version, item.name], target),
+            )
+            for item in items
+        ]
         if all(route == "original" for route, _ in routes):
             result.append((items[0].name, routes[0][1]))
     return sorted(result)
@@ -170,14 +199,19 @@ def refusal(project: Project, name: str) -> str:
     _, functions, bodies = inventory.inventory(project)
     if not any(name in (item.name, *item.aliases) for item in functions):
         return "unknown function"
-    shapes, emitted = _shapes(project)
+    shapes, emitted = shape.configured(project)
     reasons = []
     for item in functions:
         if name not in (item.name, *item.aliases):
             continue
         target = shapes.get(item.name, shapes[project.compiler_for(item.name).id])
-        route, cause = shape.classify(bodies[item.version, item.name], item.address, target, emitted,
-                                      _placement(project, item, bodies[item.version, item.name], target))
+        route, cause = shape.classify(
+            bodies[item.version, item.name],
+            item.address,
+            target,
+            emitted,
+            _placement(project, item, bodies[item.version, item.name], target),
+        )
         reasons.append(f"{item.version} {item.name} @0x{item.address:X}: {route}: {cause}")
     return "; ".join(reasons)
 

@@ -34,11 +34,32 @@ REQUIRED = {
 
 
 def fields(event: str) -> dict:
-    values = {"workers": 2, "cores": 2, "memory_total_bytes": 1000, "bytes": 12, "tries": 1,
-              "landed_bytes": 12, "pid": 1, "signal": 9, "cap_bytes": 1000, "exit": 0,
-              "versions": ["us"], "functions": ["alpha"], "methods": ["types"], "landed": [], "held": [],
-              "carryovers": [], "ok": True, "carryover": False, "exact": True, "retried": False,
-              "returned_to_worker": True, "seconds": 0.1, "best_percent": None, "per_version": {}}
+    values = {
+        "workers": 2,
+        "cores": 2,
+        "memory_total_bytes": 1000,
+        "bytes": 12,
+        "tries": 1,
+        "landed_bytes": 12,
+        "pid": 1,
+        "signal": 9,
+        "cap_bytes": 1000,
+        "exit": 0,
+        "versions": ["us"],
+        "functions": ["alpha"],
+        "methods": {"types": 50.0},
+        "landed": [],
+        "held": [],
+        "carryovers": [],
+        "ok": True,
+        "carryover": False,
+        "exact": True,
+        "retried": False,
+        "returned_to_worker": True,
+        "seconds": 0.1,
+        "best_percent": None,
+        "per_version": {},
+    }
     return {name: values.get(name, "x") for name in events.SCHEMA[event][0]}
 
 
@@ -94,8 +115,10 @@ class FirstDifferenceTests(unittest.TestCase):
 class TypedDeliveryTests(unittest.TestCase):
     def test_malformed_fields_fail_before_sequence_or_output_changes(self):
         emitter = events.Emitter(io.StringIO())
-        for fields_ in ({"function": 17, "key": [], "reason": {}, "next": 3},
-                        {"function": "a", "key": "x", "reason": "bad", "next": 3}):
+        for fields_ in (
+            {"function": 17, "key": [], "reason": {}, "next": 3},
+            {"function": "a", "key": "x", "reason": "bad", "next": 3},
+        ):
             with self.assertRaises(events.SchemaError):
                 emitter.emit("fn.held", **fields_)
         with self.assertRaises(events.SchemaError):
@@ -106,6 +129,7 @@ class TypedDeliveryTests(unittest.TestCase):
 
     def test_concurrent_and_reentrant_listeners_observe_stdout_sequence(self):
         import threading
+
         entered, release = threading.Event(), threading.Event()
         emitter = events.Emitter(io.StringIO())
         seen = []
