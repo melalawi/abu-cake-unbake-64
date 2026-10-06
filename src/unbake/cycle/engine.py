@@ -112,7 +112,7 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
             "seconds": time.monotonic() - started,
         }
     return {
-        "ok": True,
+        "ok": not measured.faults,
         "sha256": measured.source_sha256,
         "per_version": {
             v: {
@@ -123,7 +123,7 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
             }
             for v, c in measured.compares.items()
         },
-        "best_percent": measured.best_percent,
+        "best_percent": None if measured.faults else measured.best_percent,
         "exact": measured.exact,
         "diagnostic": next((first_difference(c.lines) for c in measured.compares.values() if not c.exact), "")
         or next((f"rule broken: {line}" for line in measured.rule_lines), ""),
@@ -861,11 +861,12 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
     row.tries += 1
     if not result["ok"]:
         row.stage, row.diagnostic = "waiting for edit", result["diagnostic"]
+        row.best_percent = None
         emitter.emit(
             "fn.compare.done",
             function=row.function,
             sha256=row.sha256,
-            per_version={},
+            per_version=result.get("per_version", {}),
             best_percent=None,
             tries=row.tries,
             seconds=round(result["seconds"], 3),
