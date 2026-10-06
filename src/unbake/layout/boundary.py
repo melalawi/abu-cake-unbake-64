@@ -244,6 +244,10 @@ def evidence(
     alignment = compiler_shape.object_alignment
     seen, tags, failures = closure(words, start, end, bias, known, jump_tables)
     reasons = list(failures)
+    from unbake.work.shape import filler
+    leading = filler([words[offset] for offset in range(start, end, 4) if offset in words], start + bias, compiler_shape)
+    if leading:
+        reasons.append(f"compiler-alignment-before-entry:0x{start + bias + leading * 4:X}")
     result = [*sorted(sources), *shape(words, start, end), *tags]
     if not sources:
         reasons.append("entry-source-missing")

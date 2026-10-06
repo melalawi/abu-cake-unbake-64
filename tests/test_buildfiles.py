@@ -49,10 +49,11 @@ class BuildfileTests(ProjectCase):
         for name in ("alpha", "beta"):
             self.publish(name, self.versions)
         plain = buildfiles.units_mk(config.load(self.project.root))
-        self.assertNotIn("alpha", plain)
+        self.assertIn("alpha.key", plain)
+        self.assertIn("PREPROCESS_FLAGS", plain)
         flagged = buildfiles.units_mk(replace(config.load(self.project.root), unit_flags={"alpha": ("-O1",)}))
         self.assertIn("build/%/src/alpha.key build/%/units/alpha.bin: UNIT_CODEGEN := -O1", flagged)
-        self.assertNotIn("beta", flagged)
+        self.assertNotIn("beta.bin: UNIT_CODEGEN", flagged)
 
     def test_makefile_builds_every_version_in_one_graph(self) -> None:
         for versions in (("us",), ("us", "eu", "eu-x", "de", "us-rev1")):
@@ -94,8 +95,11 @@ class BuildfileTests(ProjectCase):
                 recipe = buildfiles._kind_recipes(kind)
                 preprocess = recipe.splitlines()[0]
                 self.assertEqual("-MMD" in preprocess, not depend_pass)
-                self.assertEqual("-MM -MG" in preprocess, depend_pass)
-                self.assertIn("-MP -MT $@ -MF $(@D)/$(*F).d", preprocess)
+                if kind == "ido":
+                    self.assertIn(" -M $<", preprocess)
+                    self.assertNotIn("$(CPP)", preprocess)
+                else:
+                    self.assertIn("-MP -MT $@ -MF $(@D)/$(*F).d", preprocess)
                 self.assertTrue(preprocess.endswith("> $(@D)/$(*F).i"))
 
     def test_flags_with_shell_characters_are_refused(self) -> None:

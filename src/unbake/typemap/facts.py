@@ -294,7 +294,7 @@ def unit_key(project: Project, policy: Host | None, source: Path, version: str, 
 def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Snapshot) -> str:
     """A header part: the header's bytes, authored includes' bytes, generated includes' interface only (unit_key's
     scheme, keyed on the header's own identifiers)."""
-    command = _command(project, policy, version, source, marked=True)
+    command = _command(project, policy, version, header, marked=True)
     roots = (header, *_forced(project, command))
     parts: list[str | bytes] = [
         HEADER,

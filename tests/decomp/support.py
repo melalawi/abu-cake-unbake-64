@@ -42,7 +42,7 @@ def fixture(
             return subprocess.CompletedProcess(command, 0, "", "")
         return script_output([str(executable), *command[1:]], **kwargs)
 
-    for module, execute in ((structs, output), (declarations, output), (process, frontend)):
+    for module, execute in ((process, frontend),):
         mock = boundary(module, execute)
         mock.start()
         case.addCleanup(mock.stop)

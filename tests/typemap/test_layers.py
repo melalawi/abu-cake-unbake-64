@@ -243,8 +243,7 @@ class UnitLifetimeTests(unittest.TestCase):
         spans = ((str(SOURCE), 1, None), (TYPES[0], 1, None))
 
         def own(type_):
-            return {"contracts": {kind: [] for kind in ("functions", "globals", "arrays")},
-                    "definitions": {kind: [] for kind in ("functions", "globals", "arrays")},
+            return {"contracts": [], "definitions": [],
                     "typedefs": [(1, "Local", type_)], "aliases": [], "layouts": []}
 
         self.assertEqual(context.facts(spans, own("int"))["aliases"]["Local"], "int")

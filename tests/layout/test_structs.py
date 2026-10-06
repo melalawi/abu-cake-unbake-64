@@ -152,7 +152,8 @@ class DeclarationTests(unittest.TestCase):
                 cppflags=("-undef", "-nostdinc"),
                 root=root,
                 include=(include,),
-                compiler_for=lambda path: SimpleNamespace(cflags=("-DOTHER=1",)),
+                compiler_for=lambda path: SimpleNamespace(id="gcc-2.8.1-sn64", kind="sn64", cc=root / "fixture-cc", cflags=("-DOTHER=1",)),
+                unit_flags={}, sn64_asflags=(),
                 version=lambda version: SimpleNamespace(macros=("ACTIVE=1",)),
             )
             policy = SimpleNamespace(cpp=Path(cpp))
@@ -195,7 +196,8 @@ class FoldTests(unittest.TestCase):
                 root=root,
                 include=(include,),
                 versions=("us", "eu"),
-                compiler_for=lambda path: SimpleNamespace(cflags=()),
+                compiler_for=lambda path: SimpleNamespace(id="gcc-2.8.1-sn64", kind="sn64", cc=root / "fixture-cc", cflags=()),
+                unit_flags={}, sn64_asflags=(),
                 version=lambda version: SimpleNamespace(
                     macros=(), split=root / (version + ".yaml"), symbols=root / (version + ".txt")
                 ),

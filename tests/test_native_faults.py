@@ -32,3 +32,12 @@ class NativeFaultTests(TempCase):
             with self.assertRaises(Held) as caught:
                 process.run_tool(["cc"], self.root, "compile")
         self.assertEqual((caught.exception.fault["exit"], caught.exception.fault["signal"]), (None, 9))
+
+
+    def test_guidance_finds_native_context_through_an_owning_wrapper(self):
+        from unbake.cli.guidance import after
+        from types import SimpleNamespace
+        cause = Held("compile", "compile.cc: denied", fault={"category": "native-os", "errno": errno.EACCES})
+        wrapper = Held("draft", "draft.unit: compiler prerequisite failed")
+        wrapper.__cause__ = cause
+        self.assertIn("stop: correct the native tool failure", after(SimpleNamespace(command="draft"), wrapper))

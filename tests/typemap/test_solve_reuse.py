@@ -24,7 +24,7 @@ class SolveReuseTests(ProjectCase):
         self.published = MagicMock(side_effect=self.publish)
 
     def publish(self, project, result, previous, **named):
-        staged, _ = types_db.stage(self.database, result, {}, {})
+        staged, _ = types_db.stage(self.database, types_db.encode(result), {}, {})
         types_db.install(self.database, staged)
 
     def solve(self, publish=None):

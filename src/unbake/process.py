@@ -21,6 +21,8 @@ class NativeResult:
     stderr: str
     category: str
     errno: int | None
+    encoding: str
+    errors: str
     context: dict[str, Any]
 
 
@@ -31,12 +33,12 @@ def run_native(argv: list[str], work: Path, phase: str, *, context: dict[str, An
     try:
         completed = subprocess.run(argv, cwd=work, env=environment, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
     except OSError as error:
-        result = NativeResult(tuple(argv), str(work), None, None, "", str(error), "native-os", error.errno, context or {})
+        result = NativeResult(tuple(argv), str(work), None, None, "", str(error), "native-os", error.errno, "utf-8", "surrogateescape", context or {})
         raise Held(phase, f"{key}: {Path(argv[0]).name}: {error.strerror}", fault=asdict(result)) from error
     status = completed.returncode
     result = NativeResult(tuple(argv), str(work), status if status >= 0 else None,
                           -status if status < 0 else None, completed.stdout, completed.stderr,
-                          "success" if status == 0 else "native-signal" if status < 0 else "native-exit", None, context or {})
+                          "success" if status == 0 else "native-signal" if status < 0 else "native-exit", None, "utf-8", "surrogateescape", context or {})
     if status:
         detail = next(iter((completed.stderr or completed.stdout).strip().splitlines()), "no diagnostic")
         cause = f"signal {-status}" if status < 0 else f"exit {status}"

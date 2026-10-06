@@ -11,8 +11,18 @@ def after(context: Context, error: Held) -> str:
     key = error.key
     if "C identifier" in error.reason:
         return "stop: choose a valid C function identifier from unbake next"
-    if error.fault and error.fault.get("category") in ("native-os", "native-signal", "native-exit"):
-        return "stop: correct the native tool failure captured with this result before retrying"
+    from unbake.process import fault
+    pending = [fault(error)]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("category") in ("native-os", "native-signal", "native-exit"):
+                return "stop: correct the native tool failure captured with this result before retrying"
+            pending.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            pending.extend(value)
+    if key in ("worker.memory", "worker.crash"):
+        return "stop: review the failing unit and measured worker fault captured with this result"
     if error.phase == "usage":
         return context.cmd(context.command, "--help")
     if key.startswith("unbake.toml"):

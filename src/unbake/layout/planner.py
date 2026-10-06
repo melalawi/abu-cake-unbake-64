@@ -536,6 +536,16 @@ def complete_providers(
                 evidence={"source": "pinned disassembler", "assembly": True},
             )
         )
+    def aligned_gap(begin: int, end: int) -> bool:
+        previous = next((f for f in ff if f.end == begin), None)
+        if previous is None:
+            return False
+        bias = previous.address - previous.start
+        code = {at: int.from_bytes(image[at:at + 4], "big") for at in range(previous.start, end, 4)}
+        return any(boundary.evidence(code, previous.start, end, bias, {"proved-executable-entry"},
+                   {f.address - bias for f in ff}, target, table_edges(image, previous, constants)).proven
+                   for target in shapes.values())
+
     ordered = sorted(providers, key=lambda p: p["start"])
     result: list[ProviderRecord] = []
     cursor = 0
@@ -545,13 +555,7 @@ def complete_providers(
         if p["start"] > cursor:
             containing = next((f for f in ranges if f.start <= cursor < p["start"] <= f.end), None)
             address = containing.address + cursor - containing.start if containing else None
-            previous_body = next((f for f in ff if f.end == cursor), None)
-            padding = False
-            if previous_body is not None:
-                code = {at: int.from_bytes(image[at:at + 4], "big") for at in range(previous_body.start, p["start"], 4)}
-                padding = any(boundary.evidence(code, previous_body.start, p["start"], previous_body.address - previous_body.start,
-                              {"proved-executable-entry"}, {f.start for f in ff}, target,
-                              table_edges(image, previous_body, constants)).proven for target in shapes.values())
+            padding = aligned_gap(cursor, p["start"])
             result.append(
                 ProviderRecord(
                     start=cursor,
@@ -566,15 +570,18 @@ def complete_providers(
         result.append(p)
         cursor = p["end"]
     if cursor < len(image):
+        containing = next((f for f in ranges if f.start <= cursor < len(image) <= f.end), None)
+        address = containing.address + cursor - containing.start if containing else None
+        padding = aligned_gap(cursor, len(image))
         result.append(
             ProviderRecord(
                 start=cursor,
                 end=len(image),
-                address=None,
+                address=address,
                 name=f"retained_{cursor:X}",
-                kind="bin",
+                kind="unresolved" if address else "bin",
                 owners=[],
-                evidence={"classification": "unmapped bytes retained"},
+                evidence={"classification": "proved compiler alignment" if padding else "unmapped bytes retained"},
             )
         )
     merged: list[ProviderRecord] = []
