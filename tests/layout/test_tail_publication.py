@@ -126,3 +126,31 @@ class TailPublicationTests(ProjectCase):
         self.assertNotIn("beta", changed.unit_flags)
         self.assertNotIn("beta", changed.units)
         self.assertEqual(changed.unit_flags["alpha"], ("-DUNIT=1",))
+
+    def test_a_complete_framed_entry_is_not_absorbed_by_an_incomplete_predecessor(self):
+        for version in self.project.versions:
+            configured = self.project.version(version)
+            configured.split.write_text(
+                configured.split.read_text()
+                .replace("[0x54, asm, gamma]", "[0x68, asm, gamma]")
+                .replace("[0x64]", "[0x74]")
+            )
+            words = [
+                0x24040001,
+                0x24050002,
+                0x27BDFFE0,
+                0xAFB00018,
+                0xAFBF001C,
+                0x24020003,
+                0x8FB00018,
+                0x8FBF001C,
+                0x03E00008,
+                0x27BD0020,
+                0x24020004,
+                0x03E00008,
+                0,
+            ]
+            configured.baserom.write_bytes(bytes(0x40) + struct.pack(">13I", *words))
+        before = {v: self.project.version(v).split.read_bytes() for v in self.project.versions}
+        self.run_edits()
+        self.assertEqual({v: self.project.version(v).split.read_bytes() for v in self.project.versions}, before)

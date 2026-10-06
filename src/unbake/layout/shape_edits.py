@@ -67,11 +67,14 @@ def scan(job: tuple[Project, str]) -> Scan:
     taken = {entry[0] for entry in symbols.values()}
     found, blocked = [], []
     segment_of = {r.start: id(segment) for segment in split.layout(config.split)[2] for r in segment.rows}
-    _, emitted = shape.configured(project)
+    targets, emitted = shape.configured(project)
     consumed: set[int] = set()
 
     def continuation(index: int, target: Shape) -> list[Finding]:
         if index == 0 or "tail" not in target.rules:
+            return []
+        first = shape.words_of(image[rows[index].start : rows[index].end])
+        if any(shape._frame_open(word) for word in first) or not shape._reads_unset(first, target):
             return []
         previous = rows[index - 1]
         if previous.kind != "asm" or previous.start in consumed:
@@ -88,6 +91,7 @@ def scan(job: tuple[Project, str]) -> Scan:
         end = previous.end
         for following in rows[index:]:
             name = Path(following.path).name
+            words = first if following is rows[index] else shape.words_of(image[following.start : following.end])
             if (
                 following.kind != "asm"
                 or following.start != end
@@ -95,7 +99,8 @@ def scan(job: tuple[Project, str]) -> Scan:
                 or following.address - following.start != bias
                 or project.compiler_for(name) != compiler
                 or project.unit_flags.get(name, ()) != flags
-                or not shape._reads_unset(shape.words_of(image[following.start : following.end]), target)
+                or any(shape._frame_open(word) for word in words)
+                or not shape._reads_unset(words, target)
             ):
                 break
             group.append(following)
@@ -129,7 +134,7 @@ def scan(job: tuple[Project, str]) -> Scan:
         if row.kind != "asm" or row.start in consumed:
             continue
         compiler = project.compiler_for(Path(row.path).name)
-        target = shape.for_compiler(compiler, (*compiler.cflags, *project.unit_flags.get(Path(row.path).name, ())))
+        target = targets.get(Path(row.path).name, targets[compiler.id])
         data = image[row.start : row.end]
         name = Path(row.path).name
         continued = continuation(index, target)
