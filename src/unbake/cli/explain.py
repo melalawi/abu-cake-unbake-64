@@ -16,7 +16,8 @@ Explain one function or draft file. Without --section, every section is shown.
   unbake explain func_80012345
   unbake explain build/work/func_80012345/func_80012345.c --section order
 
-Sections: status (versions, sizes, best attempt), types (the solved type context the draft uses),
+Sections: status (versions, sizes, best attempt, cycle eligibility before the size window),
+types (the solved type context the draft uses),
 rodata (which constants the function owns), needs (missing declarations and fields),
 order (instruction order differences), similar (already matched functions that look alike).
 """
