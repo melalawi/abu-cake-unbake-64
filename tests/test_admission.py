@@ -299,3 +299,112 @@ class AdmissionOrderTests(TempCase):
             result = main._run(["--project", str(self.root), "publish", "a.c"], io.StringIO())
         self.assertEqual(result.status, "ok")
         self.assertEqual(order, ["admitted", "locked"])
+
+
+class StandaloneAdmissionTests(TempCase):
+    def setUp(self):
+        super().setUp()
+        values = host_values(self.root)
+        values["resources"]["domain"] = "standalone"
+        self.host = Host.from_values(values, "compare")
+        self.host.require_command("compare")
+        self.addCleanup(admission.receipt.clear)
+
+    def test_standalone_does_not_read_a_manifest_touch_cgroups_or_open_a_socket(self):
+        admission.receipt.update(group="stale", measurement_error="stale")
+        with (
+            patch.object(admission.Domain, "read", side_effect=AssertionError("manifest read")),
+            patch.object(admission, "Groups", side_effect=AssertionError("cgroup access")),
+            patch.object(admission, "_membership", side_effect=AssertionError("membership read")),
+            patch.object(admission.socket, "socket", side_effect=AssertionError("socket opened")),
+            patch.object(Path, "write_text", side_effect=AssertionError("cgroup move")),
+            admission.command(self.host),
+        ):
+            self.assertEqual(admission.receipt, {"domain": "standalone", "cores": 4, "memory_bytes": 8_000})
+        self.assertNotIn("group", admission.receipt)
+
+    def test_standalone_pool_and_make_keep_configured_limits(self):
+        from unbake import build
+
+        for cores, workers, total, parent, worker, size in (
+            (1, 10, 8_000, 1_000, 2_000, 1),
+            (12, 2, 8_000, 1_000, 2_000, 2),
+            (12, 10, 8_000, 1_000, 2_000, 3),
+        ):
+            with self.subTest(cores=cores, workers=workers):
+                values = {
+                    **self.host.values,
+                    "resources": {
+                        "domain": "standalone",
+                        "cores": cores,
+                        "workers": workers,
+                        "memory_total_bytes": total,
+                        "memory_parent_bytes": parent,
+                        "memory_worker_bytes": worker,
+                    },
+                }
+                host = Host.from_values(values, "check")
+                host.require_command("check")
+                with admission.command(host):
+                    self.assertEqual(pool.Pool.from_host(host).size, size)
+                    self.assertEqual(pool.describe(host), {"workers": size})
+                    self.assertIn(f"-j{cores}", build.make_command(host, "check"))
+
+    def test_standalone_preserves_command_failure_and_next_admission_clears_receipt(self):
+        with self.assertRaisesRegex(Held, "compare failed"), admission.command(self.host):
+            raise Held("compare", "compare failed")
+        with admission.command(None):
+            self.assertEqual(admission.receipt, {})
+
+    def test_public_compare_reaches_verb_without_broker_or_writer_lock(self):
+        import io
+
+        from unbake.cli import main
+        from unbake.cli.output import Result
+
+        with (
+            patch.object(main.config, "load_host", return_value=self.host),
+            patch.object(admission.Domain, "read", side_effect=AssertionError("manifest read")),
+            patch.object(admission.socket, "socket", side_effect=AssertionError("socket opened")),
+            patch("unbake.lock.project_lock", side_effect=AssertionError("writer lock")),
+            patch.object(main.compare, "run", return_value=Result.ok("compare", {}, [], None)) as run,
+        ):
+            result = main._run(["--project", str(self.root), "compare", "draft.c"], io.StringIO())
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(run.call_args.args[0].host.domain, "standalone")
+
+    def test_manifest_mode_still_connects_moves_and_measures(self):
+        grant = {"domain": "digest", "group": str(self.root / "jobs" / "command"), "cores": 4, "memory_bytes": 8_000}
+        values = {
+            **self.host.values,
+            "resources": {**self.host.values["resources"], "domain": str(self.root / "domain.toml")},
+        }
+        host = Host.from_values(values, "compare")
+        with (
+            patch.object(admission.Domain, "read") as read,
+            patch.object(admission.Groups, "check_client") as check,
+            patch.object(admission.socket, "socket") as socket_mock,
+            patch.object(Path, "write_text") as move,
+        ):
+            domain = read.return_value
+            domain.jobs, domain.digest, domain.address = self.root / "jobs", "digest", b"broker"
+            connection = socket_mock.return_value.__enter__.return_value
+            connection.getsockopt.return_value = admission.struct.pack("3i", os.getpid(), os.getuid(), 0)
+            connection.recv.side_effect = [json.dumps(grant).encode(), b'{"cpu_seconds":1.5}']
+            with admission.command(host):
+                self.assertEqual(admission.receipt, grant)
+            read.assert_called_once_with(self.root / "domain.toml")
+            domain.request.assert_called_once_with(4, 8_000)
+            check.assert_called_once_with(os.getpid())
+            connection.connect.assert_called_once_with(b"broker")
+            move.assert_called_once_with(str(os.getpid()))
+            self.assertEqual(
+                json.loads(connection.send.call_args_list[0].args[0]),
+                {
+                    "domain": "digest",
+                    "cores": 4,
+                    "memory_bytes": 8_000,
+                },
+            )
+            self.assertEqual(admission.receipt["cpu_seconds"], 1.5)
+            self.assertEqual(admission.receipt["measurement_scope"], "command-tree-before-result-emission")

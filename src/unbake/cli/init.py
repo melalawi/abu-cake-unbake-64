@@ -21,6 +21,8 @@ MyGame/config.toml, and run `unbake setup` inside MyGame.
 
 When no host config exists yet (--config FILE, $UNBAKE_CONFIG or ~/.config/unbake/unbake.toml),
 init writes the full example there with every value commented out. An existing file is never touched.
+Set [resources].domain = "standalone" to run alone, or an absolute broker manifest path,
+and fill in the machine limits and tools before running setup.
 """
 PROJECT = "none"
 

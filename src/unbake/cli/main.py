@@ -53,6 +53,10 @@ DESCRIPTION = """\
 Decompile N64 games one function at a time. Every command prints one JSON
 result on stdout and human-readable text on stderr.
 
+Host config (--config FILE, $UNBAKE_CONFIG or ~/.config/unbake/unbake.toml)
+must set [resources].domain = "standalone" to run alone, or an absolute broker
+manifest path to share an allocation. Cores, workers and memory bound each command.
+
 Typical session:
   unbake next                      # what to do now
   unbake draft FUNC                # writes build/work/FUNC/FUNC.c
@@ -66,7 +70,12 @@ Or let one command run the whole loop:
 def make_parser() -> Parser:
     parser = Parser(prog="unbake", description=DESCRIPTION)
     parser.add_argument("--project", type=Path, metavar="DIR", help="Project root (default: found from cwd).")
-    parser.add_argument("--config", type=Path, metavar="FILE", help="Host config file (default: unbake.toml).")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="FILE",
+        help="Host config file (otherwise $UNBAKE_CONFIG or ~/.config/unbake/unbake.toml).",
+    )
     verbs = parser.add_subparsers(dest="command", required=True, metavar="COMMAND", parser_class=Parser)
     for verb in VERBS:
         # argparse lists a subcommand in help whenever a help= keyword is given, even None.

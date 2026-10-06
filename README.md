@@ -37,7 +37,11 @@ Install [WSL](https://learn.microsoft.com/windows/wsl/install) with Ubuntu and f
 ## Config
 
 unbake reads machine facts from `--config FILE`, `$UNBAKE_CONFIG` or `~/.config/unbake/unbake.toml`.
-`unbake init` writes a full example. A missing key is refused by name.
+`unbake init` writes a full example. Fill in its machine limits and tools before `setup`.
+Set `[resources] domain = "standalone"` to run one command alone with its own pool:
+workers are bounded by `cores`, `workers` and the parent/worker memory budgets; make uses `cores`.
+Or set `domain` to an absolute [broker manifest path](docs/resource-domain.md) for shared cgroup admission.
+Missing `domain` refuses; project overrides may change limits but may never set `domain`.
 
 ## Start
 
@@ -68,5 +72,7 @@ make check
 ## Development
 
 Run `bin/dev-setup` once, then `bin/test`, `bin/lint` and `bin/hygiene`.
+Unit tests mock external tools; use `bin/test -p 'test_config.py'` to select an affected module.
+Process and real build proofs belong in `bin/integration`, outside the unit runner.
 
 Licensed under [GNU GPL version 3 or later](LICENSE).

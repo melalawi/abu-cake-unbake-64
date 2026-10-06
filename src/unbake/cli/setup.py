@@ -14,6 +14,8 @@ NAME = "setup"
 HELP = "Read the ROMs and make the project ready (compilers, layout, first build)."
 DESCRIPTION = """\
 Read every ROM in roms/, name the versions, plan the function layout and propose a compiler per unit.
+The host config must set [resources].domain = "standalone" to run alone, or an absolute
+broker manifest path, plus the machine limits and tools from the init example.
 The first run stops with a proposal; review it, then confirm it with the digest it prints:
 
   unbake setup

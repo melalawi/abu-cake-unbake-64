@@ -511,11 +511,11 @@ def load(root: Path, *, text: str | None = None) -> Project:
 # ---------------------------------------------------------------------------
 # Host configuration: unbake.toml.
 
-Kind = Literal["int", "path", "exe", "dirs", "fraction", "hex64", "text"]
+Kind = Literal["domain", "int", "path", "exe", "dirs", "fraction", "hex64", "text"]
 
 HOST_KEYS: dict[str, dict[str, Kind]] = {
     "resources": {
-        "domain": "path",
+        "domain": "domain",
         "cores": "int",
         "workers": "int",
         "memory_total_bytes": "int",
@@ -732,7 +732,8 @@ class Host:
             raise Held("config", f"{self._label(dotted)}: unknown key")
         table = self.values.get(section, {})
         if key not in table:
-            raise Held("config", f"{self._label(dotted)}: missing value (needed by {self.command})")
+            choices = '; set "standalone" or an absolute broker manifest path' if dotted == "resources.domain" else ""
+            raise Held("config", f"{self._label(dotted)}: missing value (needed by {self.command}){choices}")
         return table[key]
 
     def has(self, dotted: str) -> bool:
@@ -744,6 +745,12 @@ class Host:
         kind = HOST_KEYS[section][key]
         value = self.raw(dotted)
         label = self._label(dotted)
+        if kind == "domain":
+            if value == "standalone":
+                return value
+            if not isinstance(value, str) or not value.strip() or not Path(value).expanduser().is_absolute():
+                raise Held("config", f'{label}: expected "standalone" or an absolute broker manifest path')
+            return Path(value).expanduser()
         if kind == "int":
             return _positive(value, label, integer=True)
         if kind == "fraction":
@@ -770,6 +777,7 @@ class Host:
         return path
 
     # Typed accessors, one per key.
+    domain = property(lambda self: self.get("resources.domain"))
     cores = property(lambda self: self.get("resources.cores"))
     workers = property(lambda self: self.get("resources.workers"))
     memory_total_bytes = property(lambda self: self.get("resources.memory_total_bytes"))

@@ -1,7 +1,8 @@
 """Whole-command resource leases; Pool and native adapters still execute all work.
 
-The deployment owns the cgroup domain. Commands start in its bounded control
-subtree, acquire CPU and memory together, then move themselves into their grant
+Explicit standalone commands use only their host's Pool and native job limits.
+For a broker manifest, the deployment owns the cgroup domain. Commands start in
+its bounded control subtree, acquire CPU and memory together, then move themselves into their grant
 before loading project data or starting a forkserver. Capacity is released only
 after the command PID exits and its entire native subtree has drained.
 """
@@ -412,7 +413,11 @@ def command(host: Host | None) -> Iterator[None]:
     if host is None:
         yield
         return
-    domain = Domain.read(host.get("resources.domain"))
+    if host.domain == "standalone":
+        receipt.update(domain="standalone", cores=host.cores, memory_bytes=host.memory_total_bytes)
+        yield
+        return
+    domain = Domain.read(host.domain)
     domain.request(host.cores, host.memory_total_bytes)
     Groups(domain).check_client(os.getpid())
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:

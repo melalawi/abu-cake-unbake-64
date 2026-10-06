@@ -66,6 +66,7 @@ def python_visible(host: Host) -> str | None:
 
 
 def make_command(host: Host, target: str) -> list[str]:
+    """Use the command's configured cores in standalone and broker modes alike."""
     return [
         str(host.make),
         f"-j{host.cores}",

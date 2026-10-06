@@ -322,6 +322,7 @@ class Pool:
 
     @classmethod
     def from_host(cls, host: Host) -> Pool:
+        """Use the command's host limits in standalone and broker modes alike."""
         return cls(
             min(host.workers, host.cores),
             host.memory_total_bytes,

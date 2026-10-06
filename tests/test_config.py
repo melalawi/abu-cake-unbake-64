@@ -10,6 +10,7 @@ from unbake import config
 from unbake.config import Held, Host
 
 BAD_VALUES = {
+    "domain": ["relative/domain.toml", "Standalone", "", "  ", 3, True, [], {}],
     "int": [0, -1, "3", True, 1.5],
     "path": ["relative/dir"],
     "dirs": [[], ["relative"], ["/nonexistent-dir-for-unbake-tests"]],
@@ -18,6 +19,7 @@ BAD_VALUES = {
     "text": ["", "  "],
 }
 SAMPLE_KEY = {
+    "domain": "resources.domain",
     "int": "resources.cores",
     "path": "cache.machine_root",
     "dirs": "tools.path",
@@ -76,9 +78,19 @@ class LoadHostTests(TempCase):
     def test_a_project_cannot_split_itself_into_another_machine_resource_domain(self) -> None:
         user = self.write(self.root / "user.toml", host_values(self.root))
         project = self.root / "project"
-        self.write(project / ".unbake/unbake.toml", {"resources": {"domain": "/other/domain.toml"}})
-        with self.assertRaisesRegex(Held, r"\[resources\].domain: machine domain belongs to the host file"):
-            config.load_host(user, project, "check")
+        for domain in ("/other/domain.toml", "standalone"):
+            with self.subTest(domain=domain):
+                self.write(project / ".unbake/unbake.toml", {"resources": {"domain": domain}})
+                with self.assertRaisesRegex(Held, r"\[resources\].domain: machine domain belongs to the host file"):
+                    config.load_host(user, project, "check")
+
+    def test_standalone_host_loads_for_every_resource_command(self) -> None:
+        values = edited(host_values(self.root), "resources.domain", "standalone")
+        user = self.write(self.root / "user.toml", values)
+        for command, keys in config.NEEDS.items():
+            if "resources.domain" in keys:
+                with self.subTest(command=command):
+                    self.assertEqual(config.load_host(user, None, command).domain, "standalone")
 
     def test_missing_file(self) -> None:
         missing = self.root / "none.toml"
@@ -121,6 +133,8 @@ class HostRefusalTests(TempCase):
                 host = Host.from_values(edited(self.values, dotted), command)
                 section, key = dotted.split(".")
                 expected = f"unbake.toml [{section}].{key}: missing value (needed by {command})"
+                if dotted == "resources.domain":
+                    expected += '; set "standalone" or an absolute broker manifest path'
                 with self.assertRaises(Held) as raised:
                     host.require_command(command)
                 self.assertEqual(raised.exception.reason, expected)
@@ -157,6 +171,26 @@ class HostRefusalTests(TempCase):
         self.assertEqual(host.same_game_similarity, 0.5)
         self.assertEqual(host.permuter_sha256, "b" * 64)
         self.assertEqual(host.tool_path, (self.root / "bin",))
+
+    def test_domain_preserves_standalone_and_absolute_manifest_paths(self) -> None:
+        for raw, expected in (
+            ("standalone", "standalone"),
+            (str(self.root / "domain.toml"), self.root / "domain.toml"),
+            ("~/domain.toml", Path.home() / "domain.toml"),
+        ):
+            with self.subTest(domain=raw):
+                host = Host.from_values(edited(self.values, "resources.domain", raw), "compare")
+                self.assertEqual(host.domain, expected)
+
+    def test_invalid_domain_names_both_choices(self) -> None:
+        for value in BAD_VALUES["domain"]:
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(
+                    Held, r'\[resources\]\.domain: expected "standalone" or an absolute broker manifest path'
+                ),
+            ):
+                Host.from_values(edited(self.values, "resources.domain", value), "next").require_command("next")
 
     def test_cross_key_rules(self) -> None:
         cache = ["cache.max_bytes", "cache.trim_to_bytes"]
