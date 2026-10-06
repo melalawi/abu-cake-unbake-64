@@ -173,6 +173,7 @@ class FuzzyPublishTests(ProjectCase):
             patch("unbake.typemap.types_db.meta", return_value={}),
         ):
             land._fuzzy_signature(self.project, "alpha", "us", SOURCE)
+            land._fuzzy_signature(self.project, "alpha", "us", "typedef signed int s32; s32 alpha(void) { return 1; }")
             with self.assertRaisesRegex(Held, "definition differs from canonical"):
                 land._fuzzy_signature(self.project, "alpha", "us", "int alpha(int value) { return value; }")
 

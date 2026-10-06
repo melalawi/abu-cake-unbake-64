@@ -261,7 +261,8 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     expected = header_names.rewrite(expected, types_db.meta(database, "shared_aliases"), set())
     actual = declarations.extract(source, {"function": function, "version": version}, definitions=True)
     own = actual["functions"].get(function)
-    if own is None or not redeclarations.equivalent(own["prototype"], expected, actual["aliases"]):
+    aliases = {name: declarations.canonical(type_, {}) for name, type_ in actual["aliases"].items()}
+    if own is None or not redeclarations.equivalent(own["prototype"], expected, aliases):
         raise Held(
             "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"
         )
