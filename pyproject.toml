@@ -24,7 +24,7 @@ where = ["src"]
 include = ["unbake", "unbake.*"]
 
 [tool.setuptools.package-data]
-"unbake.project" = ["policy.toml", "compilers.toml"]
+"unbake.compilers" = ["registry.toml"]
 "unbake.templates" = ["*"]
 
 [tool.ruff]
