@@ -59,6 +59,7 @@ class Row:
     held: bool = False
     commit: str = ""
     fuzzy: bool = False
+    fuzzy_final: str = "needs creative"
     # The bytes of the last generated draft: a draft still holding them is drafted again after the steps change.
     drafted_sha: str = ""
     # Where the mechanical search ladder stands; a fresh compare of the tree or a human edit starts it over.
@@ -537,7 +538,8 @@ def run(
                         atomic_files.text(candidate, content)
                         row.commit = land.land(current_project, host, candidate, fuzzy=True, on_commit=committed)
                 except Held as error:
-                    row.stage, row.diagnostic = "waiting for edit", error.reason
+                    row.stage = row.fuzzy_final
+                    row.diagnostic = error.reason if row.stage != "held" else f"{row.diagnostic}; {error.reason}"
                     emitter.emit(
                         "fn.land_failed",
                         function=row.function,
@@ -547,7 +549,7 @@ def run(
                         returned_to_worker=False,
                     )
                     return
-                row.stage = "needs creative"
+                row.stage = row.fuzzy_final
                 if row.function not in fuzzy_landed:
                     fuzzy_landed.append(row.function)
                 emitter.emit(
@@ -579,6 +581,7 @@ def run(
                     start(row)
                 else:
                     row.stage = "waiting for edit"
+                    retain(row)
                 return
             row.stage, row.commit = "landed", commit
             landed.append(row.function)
@@ -604,6 +607,13 @@ def run(
             emitter.emit("fn.search.start", function=row.function, method=method)
             submit(row.function, Task("search", row.file, method=method))
 
+        def retain(row: Row) -> None:
+            """Keep the best admitted draft even when comparison or a search tool is unavailable."""
+            row.fuzzy_final = row.stage
+            row.fuzzy, row.stage = True, "landing"
+            ready.append(row.function)
+            drain()
+
         def creative(row: Row) -> None:
             file = Path(row.file)
             row.stage = "needs creative"
@@ -616,9 +626,7 @@ def run(
                 methods={**row.ladder.tried, **{name: f"skipped: {why}" for name, why in row.ladder.skipped.items()}},
                 trouble=str(trouble),
             )
-            row.fuzzy, row.stage = True, "landing"
-            ready.append(row.function)
-            drain()
+            retain(row)
 
         def restore(row: Row) -> None:
             """A method that gained nothing leaves the best text in the file."""
@@ -667,6 +675,7 @@ def run(
                     **({"fault": result["fault"]} if "fault" in result else {}),
                     next=next_words("search-variants", row.file, "--method", method),
                 )
+                retain(row)
                 return
             if not result["mutations"]:
                 # Nothing to mutate (no pseudo register to move, no statement to reorder): the method does not
@@ -763,16 +772,26 @@ def run(
                         outcome = _compared(rows[function], _result(done), emitter, stopper)
                         if outcome == "exact":
                             rows[function].fuzzy = False
+                            rows[function].ladder.best = 100.0
+                            file = Path(rows[function].file)
+                            atomic_files.text(ladder.snapshot_path(file), file.read_text())
                             rows[function].stage = "landing"
                             ready.append(function)
                             drain()
                         elif outcome == "short" and function not in deferred:
                             climb(rows[function], rows[function].best_percent or 0.0)
-                        elif rows[function].best_percent == 100 and rows[function].stage == "waiting for edit":
+                        elif (
+                            function not in deferred
+                            and rows[function].stage == "waiting for edit"
+                            and _sha(Path(rows[function].file)) == rows[function].sha256
+                        ):
                             row = rows[function]
-                            row.ladder.best = 100.0
-                            atomic_files.text(ladder.snapshot_path(Path(row.file)), Path(row.file).read_text())
-                            creative(row)
+                            if row.best_percent == 100:
+                                row.ladder.best = 100.0
+                                atomic_files.text(ladder.snapshot_path(Path(row.file)), Path(row.file).read_text())
+                                creative(row)
+                            else:
+                                retain(row)
                     if function in deferred and not ready:
                         submit(function, deferred[function])
                 elif kind == "edit":

@@ -36,6 +36,7 @@ class SingleWriterTests(TempCase):
         *,
         land_steps: list[object],
         edit_beta: bool = False,
+        compare_fault: bool = False,
         queue_beta_draft: bool = False,
         search: Callable[[int, str, str], str | dict | None] | None = None,
     ) -> Run:
@@ -83,6 +84,8 @@ class SingleWriterTests(TempCase):
             compares[function] = compares.get(function, 0) + 1
             log.append(f"compare {function}")
             text = path.read_text()
+            if function == "beta" and compare_fault:
+                return {"ok": False, "key": "compare", "diagnostic": "measurement unavailable", "seconds": 0.0}
             exact = function == "alpha" or ("land alpha" in log and search is None) or "EXACT" in text
             if function == "beta" and edit_beta and compares[function] == 1:
                 inboxes[0].put(("edit", str(path)))  # saved by hand after this compare started
@@ -341,6 +344,8 @@ class SingleWriterTests(TempCase):
         held = run.names("fn.held", "beta")[0]
         self.assertEqual(held["reason"], "search.registers: registers broke")
         self.assertEqual(run.result.data["held"], ["beta"])
+        self.assertEqual(run.result.data["fuzzy"], ["beta"])
+        self.assertIn("draft 1", run.published["beta"])
 
     def test_a_method_with_nothing_to_mutate_is_skipped_and_the_next_one_runs(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: "SKIP" if n == 1 else None)
@@ -373,3 +378,11 @@ class SingleWriterTests(TempCase):
         self.assertEqual(run.names("fn.fuzzy_landed")[0]["commit"], "commit-beta")
         self.assertEqual(run.names("fn.committed", "beta")[0]["proof"]["kind"], "fuzzy")
         self.assertFalse(any(line.startswith("ensure ") for line in run.log[run.log.index("fuzzy beta") + 1 :]))
+
+    def test_unavailable_comparison_still_offers_source_to_fuzzy_admission(self) -> None:
+        run = self.cycle(land_steps=[[]], compare_fault=True)
+        self.assertEqual(run.result.data["fuzzy"], ["beta"])
+        self.assertEqual(run.result.data["landed"], ["alpha"])
+        self.assertEqual(run.searches, [])
+        self.assertEqual(run.names("fn.compare.done", "beta")[0]["best_percent"], None)
+        self.assertEqual(run.names("cycle.end")[0]["landed_bytes"], 8)
