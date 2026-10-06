@@ -163,13 +163,13 @@ def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     from unbake import config, runner
     from unbake.decomp import checks
     from unbake.layout import split
-    from unbake.work import compare
 
     root, host, function = spec
     project = config.load(root)
     try:
-        for version in split.holding_versions(project, function):
-            row = compare.row_of(project, function, version)
+        for version, row in split.member_owners(project, function).items():
+            if row.kind != "c":
+                raise Held("match", f"{function}: containing unit {row.path} is not C in VERSION {version}")
             data = runner.build_unit(project, host, Path(row.path).name, version)
             if data != split.words(project, row):
                 return {

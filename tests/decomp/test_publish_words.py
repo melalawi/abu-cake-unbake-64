@@ -93,15 +93,14 @@ class RecheckTests(TempCase):
         (self.root / "src/merged.c").write_text(TEXT)
         with (
             patch("unbake.config.load", return_value=project),
-            patch("unbake.layout.split.holding_versions", return_value=["us"]),
-            patch("unbake.work.compare.row_of", side_effect=lambda *a: rows[0]),
+            patch("unbake.layout.split.member_owners", return_value={"us": rows[0]}),
             patch("unbake.runner.build_unit", return_value=built),
             patch("unbake.layout.split.words", return_value=b"\x01\x02\x03\x04"),
         ):
             return engine._recheck_task((self.root, SimpleNamespace(), "alpha"))
 
     def test_a_function_inside_a_merged_unit_is_exact_and_a_difference_is_plain(self) -> None:
-        rows = [SimpleNamespace(path="merged")]
+        rows = [SimpleNamespace(path="merged", kind="c")]
         self.assertEqual(
             self.recheck(b"\x01\x02\x03\x04", rows), {"exact": True, "best_percent": 100.0, "diagnostic": ""}
         )

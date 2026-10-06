@@ -501,6 +501,24 @@ def members(project: Project, v: str) -> list[Function]:
     return result
 
 
+def member_owners(project: Project, function: str) -> dict[str, Function]:
+    """Current build rows containing a named function, including measured merged entries."""
+    result = {}
+    for version in project.versions:
+        rows = [
+            row
+            for row in functions(project, version)
+            if function in row.aliases or any(name == function for name, _ in row.entries)
+        ]
+        if len(rows) > 1:
+            raise Held("match", f"{function}: ambiguous containing unit in VERSION {version}")
+        if rows:
+            result[version] = rows[0]
+    if not result:
+        raise Held("match", f"{function}: function identity missing in every VERSION")
+    return result
+
+
 def replace_row(
     line: str, match: re.Match[str], *, start: str | None = None, kind: str | None = None, path: str | None = None
 ) -> str:
