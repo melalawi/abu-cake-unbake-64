@@ -55,3 +55,15 @@ class SemanticRegenerationTests(ProjectCase):
         after = effort.counted()["validation.rows"]
         self.assertEqual(after[0] - before[0], 0)
         self.assertGreater(after[1] - before[1], 0)
+
+    def test_owned_conditional_types_follow_effective_unit_macros_without_importing_header_names(self):
+        from tests.preprocessor import output
+        from unbake import process
+        from unbake.typemap import header_names
+        source = self.project.src / 'alpha.c'
+        source.write_text('#include "types.h"\n#ifdef PRIVATE\ntypedef int Private;\n#endif\nint alpha(void) { return 0; }\n')
+        project = replace(self.project, unit_flags={'alpha': ('-DPRIVATE=1',)})
+        with patch.object(process.subprocess, 'run', side_effect=output):
+            names, tags = header_names._owned((project, self.host, source, source.read_text()))
+        self.assertIn('Private', names)
+        self.assertNotIn('s32', names)
