@@ -3,9 +3,14 @@
 import importlib
 import runpy
 import sys
+from pathlib import Path
 
 
 def main() -> None:
+    executable = sys.argv.pop(1)
+    # Match the configured entry point's script import root before importing m2c.
+    # This adapter lives beside unbake's own m2c.py, which is not that package.
+    sys.path[0] = str(Path(executable).resolve().parent)
     MipsArch = importlib.import_module("m2c.arch_mips").MipsArch
     Register = importlib.import_module("m2c.asm_instruction").Register
 
@@ -17,7 +22,6 @@ def main() -> None:
     MipsArch.temp_regs = [*MipsArch.temp_regs, *temporary]
     MipsArch.saved_regs = [*MipsArch.saved_regs, *saved]
     MipsArch.all_regs = [*MipsArch.all_regs, *temporary, *saved]
-    executable = sys.argv.pop(1)
     sys.argv[0] = executable
     runpy.run_path(executable, run_name="__main__")
 
