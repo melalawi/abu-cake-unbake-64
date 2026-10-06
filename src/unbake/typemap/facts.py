@@ -20,6 +20,7 @@ import functools
 import hashlib
 import itertools
 import json
+import pickle
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
@@ -30,6 +31,7 @@ from unbake import inputs, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
 from unbake.typemap import declarations, layers, storage
+from unbake.typemap.closure import load as closure_load
 
 FACTS = "facts"
 SHARED = "facts-shared"
@@ -956,6 +958,44 @@ def published_keys(project: Project, policy: Host | None) -> list[str]:
     return [keys[source, version] for _, source, version in tasks]
 
 
+def _header_keys_job(
+    shared: tuple[Project, Host, Snapshot], item: tuple[str, list[Path]]
+) -> list[tuple[str, Path, str]]:
+    project, host, snapshot = shared
+    version, headers = item
+    return [(version, path, header_key(project, host, path, version, snapshot)) for path in headers]
+
+
+def _bundle_key(
+    project: Project,
+    host: Host,
+    versions: list[list[tuple[int, str, Task]]],
+    header_keys: dict[str, dict[str, str]],
+    snapshot: Snapshot,
+) -> str:
+    """A physical source's complete facts: inputs of both layers, include edges and ownership."""
+    spell = _spell(project, host)
+    parts = [str(FACTS_SCHEMA), str(SOURCE_SCHEMA), str(HEADER_SCHEMA), str(ASSEMBLED_SCHEMA)]
+    for group in versions:
+        _, content, (_, source, version) = group[0]
+        command = _command(project, host, version, source, marked=True)
+        paths = snapshot.closure((source, *_forced(project, command)), command)
+        parts.extend((content, json.dumps([function for _, _, (function, _, _) in group])))
+        for path in paths:
+            parts.extend(
+                (
+                    storage.relative(project, path),
+                    header_keys[version].get(spell(str(path)), snapshot.digest(path)),
+                    str(path in snapshot.generated()),
+                )
+            )
+    return key(*parts)
+
+
+def _decode_job(rows: list[tuple[int, bytes]]) -> list[tuple[int, list[dict[str, Any]]]]:
+    return [(index, json.loads(data)) for index, data in rows]
+
+
 def published(project: Project, policy: Host | None, output: Store, keys: list[str]) -> list[dict[str, Any]]:
     """Seeds of every published source in inventory order; keys come from published_keys."""
     tasks = declarations.published_sources(project)
@@ -965,11 +1005,22 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     versions = sorted({version for _, _, version in tasks})
     header_keys: dict[str, dict[str, str]] = {version: {} for version in versions}
     missing_headers: dict[str, list[tuple[str, Path]]] = {version: [] for version in versions}
+    from unbake import pool
+
     if policy is not None:
         spell = _spell(project, policy)
-        for version in versions:
-            for header in _headers(project):
-                content_key = header_key(project, policy, header, version, snapshot)
+        headers = _headers(project)
+        for path in sorted(snapshot.generated()):
+            if path.is_file():
+                snapshot.parsed(path)
+        jobs = [
+            (version, headers[start : start + HEADERS_PER_JOB])
+            for version in versions
+            for start in range(0, len(headers), HEADERS_PER_JOB)
+        ]
+        rows = pool.run(policy, _header_keys_job, jobs, (project, policy, snapshot))
+        for batch in rows:
+            for version, header, content_key in batch:
                 header_keys[version][spell(str(header))] = content_key
                 if output.json_path(HEADER, content_key) is None:
                     missing_headers[version].append((content_key, header))
@@ -981,8 +1032,6 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     for group in sorted(groups, key=lambda group: group[1]):
         by_source.setdefault(group[0], []).append(groups[group])
     ordered = [by_source[source] for source in sorted(by_source, key=_include_order)]
-    from unbake import pool
-
     header_jobs = [
         (project, policy, version, headers[start : start + HEADERS_PER_JOB])
         for version, headers in missing_headers.items()
@@ -990,22 +1039,47 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     ]
     generated = frozenset(_spell(project, policy)(str(header)) for header in snapshot.generated())
     shared = (project, policy, header_keys, generated)
+    encoded: dict[int, bytes] = {}
+    bundles: list[tuple[str, list[int]]] = []
+    pending = []
+    for versions_ in ordered:
+        indices = [index for group in versions_ for index, _, _ in group]
+        if policy is None or output.cache is None:
+            pending.append(versions_)
+            continue
+        bundle = _bundle_key(project, policy, versions_, header_keys, snapshot)
+        cached = output.cache.get("facts-unit", bundle)
+        if cached is not None:
+            rows = closure_load(cached)
+            if len(rows) != len(indices):
+                raise Held("solve", "facts.unit: cached task inventory disagrees with its key")
+            encoded.update(zip(indices, rows, strict=True))
+        else:
+            pending.append(versions_)
+            bundles.append((bundle, indices))
     if policy is None or output.cache is None:
-        results = [_unit_job(shared, versions) for versions in ordered]
+        results = [_unit_job(shared, versions_) for versions_ in pending]
     else:
         with tui.task("Reading the C files", len(groups)):
             pool.run(policy, _header_job, header_jobs)
-            results = pool.run(policy, _unit_job, ordered, shared)
-    encoded: dict[int, bytes] = {}
+            results = pool.run(policy, _unit_job, pending, shared)
     counts = {"sources": 0, "whole": 0}
     for found, spent in results:
         encoded.update(found)
         for name, value in spent.items():
             counts[name] += value
+    if output.cache is not None:
+        for bundle, indices in bundles:
+            data = pickle.dumps([encoded[index] for index in indices], protocol=5)
+            output.cache.produce("facts-unit", bundle, functools.partial(_write, data=data))
     from unbake import effort
 
     effort.count("facts", counts["sources"], len(groups))
     seeds: list[dict[str, Any]] = []
-    for index in range(len(tasks)):
-        seeds.extend(output.decode(row) for row in json.loads(encoded[index]))
+    rows_ = [(index, encoded[index]) for index in range(len(tasks))]
+    jobs_ = [rows_[start : start + 256] for start in range(0, len(rows_), 256)]
+    decoded = pool.run(policy, _decode_job, jobs_) if policy is not None else [_decode_job(job) for job in jobs_]
+    for decoded_batch in decoded:
+        for _, seed_rows in decoded_batch:
+            seeds.extend(output.decode(row) for row in seed_rows)
     return seeds

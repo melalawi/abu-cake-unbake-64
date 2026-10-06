@@ -44,10 +44,10 @@ from unbake.config import Held, Host
 T = TypeVar("T")
 R = TypeVar("R")
 
-RECYCLE_AFTER = 64
+RECYCLE_AFTER = 256
 # run() batches items into jobs: at most this many items per job (neighbouring items share a worker's memos),
 # and at least this many jobs per worker so a small fill still spreads over every worker.
-ITEMS_PER_JOB = 24
+ITEMS_PER_JOB = 8
 JOBS_PER_WORKER = 4
 SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 

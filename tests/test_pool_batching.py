@@ -101,4 +101,5 @@ class PhysicalRetirement(unittest.TestCase):
             pool._executor(2, 512_000_000, 24)
         child_jobs = executor.call_args.kwargs["max_tasks_per_child"]
         self.assertLessEqual(child_jobs * 24, pool.RECYCLE_AFTER)
+        self.assertGreaterEqual(child_jobs, 8)
         self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000,))
