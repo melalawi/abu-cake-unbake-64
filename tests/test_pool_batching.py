@@ -98,8 +98,8 @@ if __name__ == "__main__":
 class PhysicalRetirement(unittest.TestCase):
     def test_existing_retirement_budget_counts_items_inside_batches(self):
         with patch.object(pool, "ProcessPoolExecutor") as executor:
-            pool._executor(2, 512_000_000, 24)
+            pool._executor(2, 512_000_000, pool.ITEMS_PER_JOB)
         child_jobs = executor.call_args.kwargs["max_tasks_per_child"]
-        self.assertLessEqual(child_jobs * 24, pool.RECYCLE_AFTER)
+        self.assertLessEqual(child_jobs * pool.ITEMS_PER_JOB, pool.RECYCLE_AFTER)
         self.assertGreaterEqual(child_jobs, 8)
         self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000,))
