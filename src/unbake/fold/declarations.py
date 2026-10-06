@@ -220,7 +220,7 @@ def fold_source(
         text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
     text = imports.resolve(project, headers, text, function)
     text = pool_literals.lower(project, function, text, versions)
-    parsers = source_views.parsers(project, policy, text, versions, headers)
+    parsers = source_views.parsers(project, policy, text, versions, function, headers)
     text, tag_only = _layout_names(
         project,
         policy,
@@ -234,7 +234,7 @@ def fold_source(
             text.count("\n", 0, text.index("/* unbake declaration evidence boundary */")) + 1 if evidence_end else 0
         ),
     )
-    parsers = source_views.parsers(project, policy, text, versions, headers)
+    parsers = source_views.parsers(project, policy, text, versions, function, headers)
     records = [record for parser in parsers for record in _records(parser)]
     records = [replace(record, aliases=()) if record.name in tag_only else record for record in records]
     from unbake.layout import map

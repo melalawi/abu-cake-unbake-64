@@ -361,9 +361,9 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
         lines = declaration_source(text).splitlines(keepends=True)
         views = set()
         for version in project.versions:
-            active = _version_lines(project, policy, text, version)
+            active = _version_lines(project, policy, text, version, path.stem)
             if active is None:
-                active = _preprocessed_lines(project, policy, text, version)
+                active = _preprocessed_lines(project, policy, text, version, path.stem)
             views.add("".join(line for index, line in enumerate(lines) if index in active))
     owned: set[str] = set()
     tags: set[str] = set()

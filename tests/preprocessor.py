@@ -99,7 +99,12 @@ def output(command, **kwargs):
         source = (cwd / command[-1]).read_text()
     for index, flag in enumerate(command):
         if flag == "-include":
-            source = (cwd / command[index + 1]).read_text() + "\n" + source
+            source = (
+                f'#line 1 "{cwd / command[index + 1]}"\n'
+                + (cwd / command[index + 1]).read_text()
+                + f'\n#line 1 "{command[-1]}"\n'
+                + source
+            )
     result = expand(
         source,
         roots,

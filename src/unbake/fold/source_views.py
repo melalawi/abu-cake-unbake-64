@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,12 +13,11 @@ from typing import Any
 from unbake import atomic as atomic_files
 from unbake.cdecl import LayoutParser
 from unbake.config import Host, Project
-from unbake.fold.common import held
 from unbake.layout.header_context import Headers
 
 
 def parsers(
-    project: Project, policy: Host, text: str, versions: tuple[str, ...], headers: Headers | None = None
+    project: Project, policy: Host, text: str, versions: tuple[str, ...], unit: str, headers: Headers | None = None
 ) -> list[LayoutParser]:
     """Ask cpp to select branches without expanding tokens or changing edit spans."""
     context = headers if headers is not None else Headers.read(project)
@@ -38,9 +36,9 @@ def parsers(
     # Versions selecting the same lines share one parse.
     parsed: dict[frozenset[int], LayoutParser] = {}
     for version in versions:
-        active = _version_lines(project, policy, text, version)
+        active = _version_lines(project, policy, text, version, unit)
         if active is None:
-            active = _preprocessed_lines(project, policy, text, version, context)
+            active = _preprocessed_lines(project, policy, text, version, unit, context)
         key = frozenset(active)
         if key not in parsed:
             view = "".join(
@@ -163,7 +161,7 @@ def header_includes(project: Project, headers: Headers, directory: Path) -> tupl
 
 
 def _preprocessed_lines(
-    project: Project, policy: Host, text: str, version: str, headers: Headers | None = None
+    project: Project, policy: Host, text: str, version: str, unit: str, headers: Headers | None = None
 ) -> set[int]:
     lines = text.splitlines(keepends=True)
     with tempfile.TemporaryDirectory(prefix="match-view-") as temporary:
@@ -177,20 +175,19 @@ def _preprocessed_lines(
             if not any((root / name).is_file() for root in (*include, *project.include, absent)):
                 (absent / name).parent.mkdir(parents=True, exist_ok=True)
                 atomic_files.fresh(absent / name, b"")
-        command = [
-            str(policy.cpp),
-            *(f"-I{root}" for root in (*include, *project.include, absent)),
-            *(flag for flag in project.cppflags if flag != "-P"),
-            "-fdirectives-only",
-            *(f"-D{macro}" for macro in project.version(version).macros),
-            str(source),
-        ]
-        completed = subprocess.run(command, cwd=project.root, capture_output=True, text=True)
-    if completed.returncode:
-        held(f"VERSION {version}: declaration preprocessing: {completed.stderr.strip()}")
+        from unbake.compilers import drivers
+        from unbake.process import run_tool
+
+        local = replace(project, work_include=(*include, *project.work_include))
+        command = drivers.preprocess_command(
+            local, str(policy.cpp), version, unit, source, non_matching=False, line_markers=True
+        )
+        command[1:1] = [f"-I{project.src}"]
+        command[-1:-1] = [f"-I{absent}"]
+        output = run_tool(command, project.root, "solve", context={"function": unit, "version": version})
     active: set[int] = set()
     current, number = "", 1
-    for line in completed.stdout.splitlines():
+    for line in output.splitlines():
         marker = re.match(r'^#\s+(\d+)\s+"([^"]+)"', line)
         if marker:
             number, current = int(marker[1]), marker[2]
@@ -204,22 +201,36 @@ def _preprocessed_lines(
 _DIRECTIVE = re.compile(r"^\s*#\s*(\w+)\s*(.*?)\s*$")
 
 
-def _version_lines(project: Project, policy: Host, text: str, version: str) -> set[int] | None:
+def _version_lines(project: Project, policy: Host, text: str, version: str, unit: str) -> set[int] | None:
     """Select conditional branches whose tests name only VERSION and command-line macros.
 
     Returns None whenever a header could influence a test; cpp then decides.
     """
     code = re.sub(r"/\*.*?\*/", lambda match: re.sub(r"[^\n]", " ", match[0]), text, flags=re.S)
     code = re.sub(r"//[^\n]*", "", code)
-    if "\\\n" in code:
+    if "\\\n" in code or re.search(r"^\s*#\s*include\b", code, re.M):
         return None
-    macros: dict[str, int | None] = {macro: 1 for macro in project.version(version).macros}
-    known = {macro for name in project.versions for macro in project.version(name).macros} | {"NON_MATCHING"}
-    for flag in project.cppflags:
-        if flag.startswith("-D"):
-            name, _, value = flag[2:].partition("=")
+    from unbake.compilers import drivers
+
+    compiler = project.compiler_for(unit)
+    values = [*(project.cppflags if compiler.kind == "sn64" else ()), *drivers.flags(project, version, unit)]
+    preprocess, _ = drivers._options(values)
+    if "-include" in preprocess or "-imacros" in preprocess:
+        return None
+    macros: dict[str, int | None] = {}
+    known = {macro.partition("=")[0] for name in project.versions for macro in project.version(name).macros} | {
+        "NON_MATCHING"
+    }
+    options = iter(preprocess)
+    for flag in options:
+        value = next(options) if flag in drivers.PREPROCESSOR_PAIRS else flag[2:]
+        if flag.startswith(("-D", "-U")):
+            name, separator, spelling = value.partition("=")
             known.add(name)
-            macros[name] = int(value) if re.fullmatch(r"\d+", value) else 1
+            if flag.startswith("-U"):
+                macros.pop(name, None)
+            else:
+                macros[name] = int(spelling) if re.fullmatch(r"\d+", spelling) else (None if separator else 1)
     stack: list[tuple[bool, bool]] = []  # (taking this branch, some branch already taken)
     active: set[int] = set()
 
