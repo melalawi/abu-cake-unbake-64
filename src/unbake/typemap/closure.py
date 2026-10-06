@@ -24,6 +24,9 @@ from unbake.config import Held, Host
 from unbake.typemap import evidence, shards, storage
 
 RANKS = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
+# The first page is never mapped: a constant below it is a number or NULL, not the address of an object. Treating
+# every `return 0` or NULL argument as the address of one global joined all of them into a single type component.
+NULL_PAGE = 0x1000
 
 
 class Constraints:
@@ -180,7 +183,7 @@ def origin_node(value: dict[str, Any], addresses: dict[int, list[str]]) -> str |
     if len(origins) == 1 and origins[0]["offset"] == 0:
         return str(origins[0]["id"])
     constant = value.get("constant")
-    if constant is None:
+    if constant is None or constant < NULL_PAGE:
         return None
     names = addresses.get(constant, [])
     return "address:" + names[0] if len(names) == 1 else None
@@ -425,6 +428,8 @@ def _access(
     elif len(memory.get("symbols", [])) == 1:
         cell = "global:" + memory["symbols"][0]
     elif memory.get("address") is not None:
+        if memory["address"] < NULL_PAGE:
+            return
         cell = f"global:address:{version}:{memory['address']:08X}"
     else:
         origins = memory["base"]["origins"]

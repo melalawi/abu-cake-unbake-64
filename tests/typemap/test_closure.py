@@ -89,3 +89,30 @@ class IndexedPointerTests(unittest.TestCase):
         self.assertEqual(closure.resolve(["n"], seeds, {})["type"], "void *")
         seeds = {"n": {"int *": [{"kind": "machine"}], "float *": [{"kind": "machine"}]}}
         self.assertEqual(closure.resolve(["n"], seeds, {})["state"], "conflict")
+
+
+class NullPageTests(unittest.TestCase):
+    """A constant inside the unmapped first page is a number or NULL, never the address of an object."""
+
+    def test_small_constants_name_no_object_even_when_an_access_recorded_that_address(self) -> None:
+        for constant in (0, 4, closure.NULL_PAGE - 1):
+            with self.subTest(constant=constant):
+                self.assertIsNone(closure.origin_node({"constant": constant}, {constant: ["x"]}))
+
+    def test_a_mapped_address_still_names_its_one_global(self) -> None:
+        self.assertEqual(
+            closure.origin_node({"constant": 0x80100000}, {0x80100000: ["D_80100000"]}), "address:D_80100000"
+        )
+        names = {closure.NULL_PAGE: ["D_1"]}
+        self.assertEqual(closure.origin_node({"constant": closure.NULL_PAGE}, names), "address:D_1")
+
+    def test_returning_zero_from_two_functions_does_not_join_their_results(self) -> None:
+        graph = closure.Constraints()
+        for function in ("f", "g"):
+            body = {"calls": [], "memory": [], "returns": [{"values": {"r2": {"constant": 0}}}]}
+            item = {"versions": {"us": body}}
+            signatures = {function: {"registers": []}}
+            closure._function_body(
+                graph, function, item, signatures, {}, {"us": {0: ["address:us:00000000"]}}, {}, {}, {}, {}
+            )
+        self.assertNotEqual(graph.root("result:f:r2"), graph.root("result:g:r2"))
