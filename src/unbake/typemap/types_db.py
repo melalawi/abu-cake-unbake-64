@@ -16,11 +16,16 @@ import json
 import os
 import sqlite3
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from unbake.config import Held, Project
+
+DB_SCHEMA = 1
+REUSE_META = ("revision", "inference_key", "inference_receipts", "inference_publication")
+_MISSING = object()
 
 KINDS = ("functions", "globals", "structs", "arrays", "dependencies")
 SCHEMA = (
@@ -79,12 +84,9 @@ def solution(file: Path) -> str | None:
     """The installed solution's digest; None for a missing database or one written before it was recorded."""
     if not file.is_file():
         return None
-    connection = _connect(file)
-    try:
+    with _connection(file) as connection:
         row = connection.execute("SELECT value FROM meta WHERE key = 'solution_sha256'").fetchone()
-    finally:
-        connection.close()
-    return None if row is None else str(json.loads(row[0]))
+        return None if row is None else str(json.loads(row[0]))
 
 
 def _connect(file: Path) -> sqlite3.Connection:
@@ -92,6 +94,49 @@ def _connect(file: Path) -> sqlite3.Connection:
         return sqlite3.connect(f"file:{file}?mode=ro", uri=True)
     except sqlite3.Error as error:
         raise Held("types", f"types.sqlite: {file}: {error}") from error
+
+
+@contextmanager
+def _connection(file: Path) -> Iterator[sqlite3.Connection]:
+    connection = _connect(file)
+    try:
+        yield connection
+    except (sqlite3.Error, ValueError, KeyError, TypeError) as error:
+        raise Held("types", f"types.sqlite: {file}: corrupt database: {error}") from error
+    finally:
+        connection.close()
+
+
+def compatible(file: Path) -> bool:
+    """Older storage contracts are stale; a broken current contract is corruption.
+
+    user_version zero is the unversioned generation that omitted inference receipts.
+    Check before every reuse path, including the solver's warm marker and step readiness.
+    """
+    if not file.is_file():
+        return False
+    with _connection(file) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not {"meta", "entries"} <= tables:
+            raise Held("types", f"types.sqlite: {file}: corrupt database: missing meta/entries tables")
+        keys = (*REUSE_META, "schema")
+        placeholders = ",".join("?" for _ in keys)
+        metadata = {
+            key: json.loads(value)
+            for key, value in connection.execute(f"SELECT key, value FROM meta WHERE key IN ({placeholders})", keys)
+        }
+        if "schema" in metadata and type(metadata["schema"]) is not int:
+            raise Held("types", f"types.sqlite: {file}: corrupt database: invalid meta schema")
+        if version != DB_SCHEMA or metadata.get("schema", 1) != 1:
+            return False
+        for table in ("summary", "redraft"):
+            if table not in tables:
+                raise Held("types", f"types.sqlite: {file}: corrupt database: missing {table} table")
+        for key in REUSE_META:
+            if key not in metadata:
+                raise Held("types", f"types.sqlite: {file}: corrupt database: missing meta {key}")
+        return True
 
 
 def stage(
@@ -110,6 +155,7 @@ def stage(
         staged.unlink()
         connection = sqlite3.connect(staged)
         with connection:
+            connection.execute(f"PRAGMA user_version = {DB_SCHEMA}")
             for statement in SCHEMA:
                 connection.execute(statement)
             meta = {key: item for key, item in encoded.items() if key not in KINDS}
@@ -143,15 +189,14 @@ def install(destination: Path, staged: Path) -> None:
     _full.pop(destination, None)
 
 
-def meta(file: Path, key: str) -> Any:
-    connection = _connect(file)
-    try:
+def meta(file: Path, key: str, *, default: Any = _MISSING) -> Any:
+    with _connection(file) as connection:
         row = connection.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-    finally:
-        connection.close()
-    if row is None:
-        raise Held("types", f"types.sqlite: {file}: missing meta {key}")
-    return json.loads(row[0])
+        if row is None:
+            if default is not _MISSING:
+                return default
+            raise Held("types", f"types.sqlite: {file}: corrupt database: missing meta {key}")
+        return json.loads(row[0])
 
 
 def entries(file: Path, kind: str, names: Iterable[str]) -> dict[str, Any]:
@@ -159,8 +204,7 @@ def entries(file: Path, kind: str, names: Iterable[str]) -> dict[str, Any]:
     wanted = sorted(set(names))
     if not wanted:
         return {}
-    connection = _connect(file)
-    try:
+    with _connection(file) as connection:
         result = {}
         for start in range(0, len(wanted), 500):
             chunk = wanted[start : start + 500]
@@ -170,8 +214,6 @@ def entries(file: Path, kind: str, names: Iterable[str]) -> dict[str, Any]:
             ):
                 result[name] = json.loads(value)
         return result
-    finally:
-        connection.close()
 
 
 def read(file: Path) -> dict[str, Any]:
@@ -181,39 +223,38 @@ def read(file: Path) -> dict[str, Any]:
     cached = _full.get(file)
     if cached is not None and cached[0] == stamp:
         return cached[1]
-    connection = _connect(file)
-    try:
+    with _connection(file) as connection:
         value: dict[str, Any] = {key: json.loads(row) for key, row in connection.execute("SELECT key, value FROM meta")}
         value.pop("content_sha256", None)
         for kind in KINDS:
             value[kind] = {}
         for kind, name, row in connection.execute("SELECT kind, name, value FROM entries"):
             value[kind][name] = json.loads(row)
-    finally:
-        connection.close()
     _full[file] = (stamp, value)
     return value
 
 
 def summary(file: Path) -> dict[str, Any]:
-    connection = _connect(file)
-    try:
+    with _connection(file) as connection:
+        if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = ?", ("summary",)
+        ).fetchone() and not compatible(file):
+            return {}
         result: dict[str, Any] = {kind: {} for kind in KINDS if kind != "dependencies"}
         for kind, name, semantic, users in connection.execute("SELECT kind, name, semantic_sha256, users FROM summary"):
             result.setdefault(kind, {})[name] = {"semantic_sha256": semantic, "users": json.loads(users)}
         return result
-    finally:
-        connection.close()
 
 
 def redrafts(file: Path) -> dict[str, Any]:
-    connection = _connect(file)
-    try:
+    with _connection(file) as connection:
+        if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = ?", ("redraft",)
+        ).fetchone() and not compatible(file):
+            return {}
         return {
             function: json.loads(value) for function, value in connection.execute("SELECT function, value FROM redraft")
         }
-    finally:
-        connection.close()
 
 
 def set_redrafts(file: Path, marks: dict[str, Any]) -> None:

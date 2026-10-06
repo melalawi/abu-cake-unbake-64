@@ -174,11 +174,11 @@ def _types_key(project: Project, host: Host) -> str:
 
 def _types(project: Project, host: Host) -> dict[str, Any]:
     from unbake.layout import header_step
-    from unbake.typemap import solver
+    from unbake.typemap import solver, types_db
 
     # The solve preprocesses published sources, which include generated headers: a tree missing any is first
     # regenerated from the recorded solution.
-    if header_step.missing(project):
+    if types_db.compatible(types_db.path(project)) and header_step.missing(project):
         header_step.run(project, host)
     changes: dict[str, Any] = solver.solve(project, host)["changes"]
     return changes

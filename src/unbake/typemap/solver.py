@@ -19,7 +19,7 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 6
+SCHEMA = 7
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 4
 MACHINE_SCHEMA = 4
@@ -999,7 +999,13 @@ def readiness(project: Project, host: Host | None) -> Readiness:
 
 
 def input_key(project: Project, host: Host | None) -> str:
-    return readiness(project, host).key
+    from unbake.typemap import types_db
+
+    current = readiness(project, host).key
+    database = types_db.path(project)
+    if database.is_file() and not types_db.compatible(database):
+        return content_cache.key(current, "stale types database", str(types_db.DB_SCHEMA))
+    return current
 
 
 def marker(project: Project) -> Path:
@@ -1050,18 +1056,20 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
     from unbake.typemap import types_db
 
     database = types_db.path(project)
+    compatible = types_db.compatible(database)
     current = readiness(project, policy)
     stored = marker(project)
     revision = 0  # The current schema initializes a new database explicitly at revision one.
     if database.is_file():
         try:
-            revision = types_db.meta(database, "revision")
+            revision = types_db.meta(database, "revision", default=0)
         except ValueError as error:
             raise Held("solve", "types.sqlite.meta.revision: invalid JSON metadata") from error
         if type(revision) is not int or revision < 0:
             raise Held("solve", "types.sqlite.meta.revision: expected nonnegative integer")
     if (
-        stored.is_file()
+        compatible
+        and stored.is_file()
         and stored.read_text() == current.key
         and database.is_file()
         and not header_step.missing(project)
@@ -1110,7 +1118,7 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
         ):
             result = compute()
         if (
-            database.is_file()
+            compatible
             and stored.is_file()
             and types_db.meta(database, "inference_key") == inference_key
             and types_db.meta(database, "inference_receipts") == receipts_key
