@@ -897,6 +897,8 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
 
 
 def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
+    from unbake.pool import WorkerMemory
+
     if done.cancelled():
         return {"ok": False, "key": "cycle.cancelled", "diagnostic": "superseded", "seconds": 0.0}
     error = done.exception()
@@ -916,7 +918,7 @@ def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
                 (error.fault or {}).get("wall_seconds")
                 if isinstance(error, Held)
                 else error.args[0].get("wall_seconds")
-                if isinstance(error, pool.WorkerMemory)
+                if isinstance(error, WorkerMemory)
                 else None
             ),
             "fault": cause_fault(error),

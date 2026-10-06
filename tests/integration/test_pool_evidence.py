@@ -80,9 +80,18 @@ class PoolEvidenceTests(unittest.TestCase):
     def test_abrupt_child_exit_reports_observed_submission_wall(self):
         with self.workers() as workers:
             future = workers.submit(always, None)
-            with self.assertRaises(Exception):
+            with self.assertRaises(Held):
                 future.result()
             row = _result(future)
         self.assertEqual(row["key"], "worker.crash")
         self.assertGreaterEqual(row["seconds"], 0.03)
         self.assertEqual(row["fault"]["chain"][0]["fault"]["wall_scope"], "submission-to-completion")
+
+    def test_submit_allocation_failure_retains_measured_worker_wall(self):
+        with self.workers() as workers:
+            future = workers.submit(allocation, None)
+            with self.assertRaises(MemoryError):
+                future.result()
+            result = _result(future)
+        self.assertEqual(result["key"], "worker.memory")
+        self.assertGreaterEqual(result["seconds"], 0.03)
