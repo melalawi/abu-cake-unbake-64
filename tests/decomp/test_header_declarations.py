@@ -34,6 +34,15 @@ class HeaderDeclarationsTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaisesRegex(Held, "attribute"):
                 declarations(source)
 
+    def test_a_target_selects_only_the_headers_its_symbols_need(self) -> None:
+        contents = {
+            Path("types.h"): "typedef int s32;",
+            Path("a.h"): "typedef struct Used { s32 x; } Used; extern Used D_800D3C48;",
+            Path("b.h"): "typedef struct Other { s32 y; } Other; extern Other D_80000000;",
+        }
+        selected = required_headers(contents, "func_8\nlw $v0, %lo(D_800D3C48)($a0)\n")
+        self.assertEqual(selected, {Path("types.h"), Path("a.h")})
+
     def test_attribute_mask_preserves_offsets_strings_and_rewrite_targets(self):
         from unbake.typemap.header_names import alias_types, rewrite
 

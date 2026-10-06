@@ -92,7 +92,7 @@ def share(
             raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
         offset = int(literal, 0)
         scalar = LayoutParser(pointer[:-1].strip() + " measured;")
-        scalar.types = parser.types.copy()
+        scalar.types = parser.types  # a measured declaration defines no type
         try:
             member = scalar.declaration()[0]
             type_name = scalar.type_name(member.base, member.operations)

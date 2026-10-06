@@ -133,7 +133,12 @@ def _draft(
     # Shared headers own the types. Similar units' private declarations can
     # collide with canonical tags or leak typedefs unavailable to the draft's
     # include graph; retain those units in the similarity comments instead.
-    atomic_files.text(context, _context(headers, {path for path, _ in headers}) + type_context, encoding="utf-8")
+    # The first context holds only the declarations the target and the solved context name (and what those
+    # need), not every project header: a draft's parsers and caches then scale with the function.
+    contents = {path: read_text(path, "m2c") for path, _ in headers}
+    needed = required_headers(contents, f"{function}\n{assembly_text}\n{type_context}")
+    del contents
+    atomic_files.text(context, _context(headers, needed) + type_context, encoding="utf-8")
     atomic_files.text(
         context, preprocess_context(context, project, policy, v, function) + "\n" + examples_context, encoding="utf-8"
     )
