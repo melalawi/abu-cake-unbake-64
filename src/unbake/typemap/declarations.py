@@ -6,7 +6,7 @@ import copy
 import hashlib
 import json
 import re
-import subprocess
+import tempfile
 import weakref
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -27,7 +27,7 @@ from unbake.typemap import storage, unit_layouts
 _BOUNDARY = "extern int __unbake_feedback_boundary;"
 # One source's facts parse the same unit up to four times (scoped then full, contracts then definition).
 UNIT_MEMO = 2
-_C_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|^[ \t]*#[^\n]*|[A-Za-z_]\w*|\S', re.M)
+_C_TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\'|^[ \t]*#(?:\\\n|[^\n])*|[A-Za-z_]\w*|\S', re.M | re.S)
 
 
 def _outer_guard(text: str) -> str | None:
@@ -115,29 +115,28 @@ def _unit_bodies_blanked(source: str) -> str:
     None contributes to declaration evidence. Blank bodies without moving line
     markers; aggregate definitions and file-scope initializers remain intact.
     """
-    tokens = list(_C_TOKEN.finditer(source))
-    edits = []
+    tokens = iter(_C_TOKEN.finditer(source))
+    spans: list[tuple[int, int]] = []
     depth = parens = 0
     assigned = False
     previous = ""
-    index = 0
-    while index < len(tokens):
-        token = tokens[index][0]
-        if token.startswith("#"):
-            index += 1
+    for match in tokens:
+        token = match[0]
+        if token.startswith(("#", "/*", "//")):
             continue
         if token == "{" and depth == 0 and previous == ")" and not assigned:
-            begin = tokens[index].end()
-            level = 1
-            index += 1
-            while index < len(tokens) and level:
-                level += (tokens[index][0] == "{") - (tokens[index][0] == "}")
-                index += 1
-            if level:
+            begin, level = match.end(), 1
+            for closing in tokens:
+                word = closing[0]
+                if word.startswith(("#", "/*", "//")):
+                    continue
+                level += (word == "{") - (word == "}")
+                if level == 0:
+                    spans.append((begin, closing.start()))
+                    break
+            else:
                 raise Held("solve", "types.declaration: unclosed function body")
-            edits.append((begin, tokens[index - 1].start()))
-            assigned = False
-            previous = "}"
+            assigned, previous = False, "}"
             continue
         if token == "{":
             depth += 1
@@ -150,11 +149,13 @@ def _unit_bodies_blanked(source: str) -> str:
                 if token == ";":
                     assigned = False
         previous = token
-        index += 1
-    for begin, end in reversed(edits):
-        body = source[begin:end]
-        source = source[:begin] + re.sub(r"[^\n]", " ", body) + source[end:]
-    return source
+    pieces = []
+    cursor = 0
+    for begin, end in spans:
+        pieces.extend((source[cursor:begin], re.sub(r"[^\n]", " ", source[begin:end])))
+        cursor = end
+    pieces.append(source[cursor:])
+    return "".join(pieces)
 
 
 def clean(source: str, *, line_markers: bool = False) -> str:
@@ -252,47 +253,51 @@ def _headers(
 
 
 def _cpp_command(project: Project, policy: Host, version: str, *, extra: bool, line_markers: bool) -> list[str]:
-    flags: list[str] = []
-    pending = iter(project.compilers[project.default_compiler].cflags)
-    for flag in pending:
-        if flag in ("-D", "-U", "-include", "-isystem"):
-            value = next(pending, None)
-            if value is None:
-                raise Held("solve", f"compiler.cflags.{flag}: missing argument")
-            flags.extend((flag, value))
-        elif flag.startswith(("-D", "-U")):
-            flags.append(flag)
-    return [
-        str(policy.cpp),
-        *(f"-I{root}" for root in project.include),
-        *(flag for flag in project.cppflags if not line_markers or flag != "-P"),
-        *flags,
-        *(("-P",) if not extra and not line_markers else ()),
-        "-x",
-        "c",
-        *(f"-D{macro}" for macro in project.version(version).macros),
-        *(("-DUNBAKE_PROTOTYPES_H",) if extra else ()),
-        "-",
-    ]
+    from unbake.compilers import drivers
+
+    compiler = project.compilers[project.default_compiler]
+    effective = [*(f"-I{root}" for root in project.include), *compiler.cflags,
+                 *(f"-D{macro}" for macro in project.version(version).macros)]
+    preprocess, _ = drivers.stage_flags(compiler.kind, effective)
+    options = [*preprocess, *(("-DUNBAKE_PROTOTYPES_H",) if extra else ())]
+    if compiler.kind == "ido":
+        return [str(compiler.cc), *options, "-E", "-"]
+    return [str(policy.cpp), *(flag for flag in project.cppflags if not line_markers or flag != "-P"),
+            *options, "-x", "c", "-"]
 
 
 def _preprocess(project: Project, command: list[str], source: str) -> str:
-    try:
-        result = subprocess.run(command, input=source, text=True, capture_output=True, cwd=project.root)
-    except OSError as error:
-        raise Held("solve", f"policy.cpp: {error}") from error
-    if result.returncode:
-        raise Held("solve", "types.declaration: " + result.stderr.strip())
-    return str(result.stdout)
+    from unbake.process import run_tool
+
+    project.build.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".headers-", dir=project.build) as temporary:
+        wrapper = Path(temporary) / "context.c"
+        wrapper.write_text(source)
+        return run_tool([*command[:-1], str(wrapper)], project.root, "solve").replace(str(wrapper), "<unbake-context>")
 
 
 def source_unit(
     project: Project, policy: Host | None, version: str, source: Path, *, line_markers: bool = False
 ) -> str:
     """One source preprocessed with only its own includes, split by the source boundary."""
-    return _headers(
-        project, policy, version, {}, source, line_markers=line_markers, ordered=[], raw=True, include_generated=False
-    )
+    if policy is None:
+        return _headers(project, policy, version, {}, source, line_markers=line_markers,
+                        ordered=[], raw=True, include_generated=False)
+    from unbake.compilers import drivers
+    from unbake.process import run_tool
+
+    unit = source.stem
+    # A header uses the explicitly configured compiler's contract, never a guessed C unit.
+    if source.suffix != ".c":
+        command = _cpp_command(project, policy, version, extra=True, line_markers=line_markers)
+        return _preprocess(project, command, _BOUNDARY + "\n" + f'#include "{source}"\n')
+    project.build.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".unit-", dir=project.build) as temporary:
+        wrapper = Path(temporary) / "unit.c"
+        wrapper.write_text(_BOUNDARY + "\n" + f'#include "{source}"\n')
+        command = drivers.preprocess_command(project, str(policy.cpp), version, unit, wrapper, non_matching=False,
+                                              line_markers=line_markers)
+        return run_tool(command, project.root, "solve").replace(str(wrapper), "<unbake-unit>")
 
 
 class ProvenStructs(Mapping[str, Any]):

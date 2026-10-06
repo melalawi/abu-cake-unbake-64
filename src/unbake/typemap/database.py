@@ -711,11 +711,18 @@ def validate_headers(
     bundle_key = key(
         environment,
         abi_context,
-        *(part for path, text in authored.items() for part in (str(path), text)),
-        *(part for path, content in outputs.items() if isinstance(content, bytes) for part in (str(path), content)),
+        *(part for path, text in authored.items() for part in (storage.relative(project, path), text)),
+        *(part for path, content in outputs.items() if isinstance(content, bytes) for part in (storage.relative(project, path), content)),
     )
-    if cache.get("typemap-validation", bundle_key) is not None:
+    bundle = cache.get("typemap-validation", bundle_key)
+    if bundle is not None:
+        total = json.loads(bundle.read_bytes())["rows"]
+        if type(total) is not int or total < 0:
+            raise Held("solve", "types.validation.rows: expected nonnegative integer")
+        effort.count("validation.rows", 0, total)
+        effort.count("validation.bundle_hit", 1, 1)
         return
+    effort.count("validation.bundle_hit", 0, 1)
     try:
         contents, closures, abi = regeneration.validation_inputs(project, outputs, abi_context, authored=authored)
     except Held as error:
@@ -727,7 +734,7 @@ def validate_headers(
     rows: list[tuple[str, set[Path], str]] = []
 
     def signature(name: str, inputs: set[Path]) -> str:
-        pinned = sorted((str(dep), digests[dep]) for dep in inputs)
+        pinned = sorted((storage.relative(project, dep), digests[dep]) for dep in inputs)
         return memo(
             "typemap-validation-signature",
             (environment, name, tuple(pinned)),
@@ -742,7 +749,7 @@ def validate_headers(
         # each carry their own certificates.
         body = re.sub(r"^[ \t]*#[^\n]*|/\*.*?\*/|//[^\n]*", "", contents[path].decode(), flags=re.M | re.S)
         inputs = closure if body.strip() else {path, *(dep for dep in closure if dep not in outputs)}
-        rows.append((signature(str(path), inputs), closure, ""))
+        rows.append((signature(storage.relative(project, path), inputs), closure, ""))
     rows.extend((signature(text, closure), closure, text) for text, closure in abi)
     from unbake import pool
 
@@ -790,7 +797,7 @@ def validate_headers(
         validated.update(job.pending)
 
     def complete(path: Path) -> None:
-        atomic_files.fresh(path, b"validated\n")
+        atomic_files.fresh(path, storage.encoded({"rows": len(rows) * len(project.versions)}))
 
     cache.produce("typemap-validation", bundle_key, complete)
 

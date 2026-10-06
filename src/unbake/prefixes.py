@@ -120,3 +120,12 @@ def concatenated(kind: str, text: str, transform: Callable[[str], str]) -> str:
 
 def forget() -> None:
     _stores.clear()
+
+
+def release_units() -> None:
+    """Keep reusable checkpoint contracts, releasing each pass's full previous unit."""
+    parsers = [kind for kind in _stores if kind.startswith("cdecl.parse.")]
+    for kind in parsers[:-PREFIXES_KEPT]:
+        del _stores[kind]
+    for store in _stores.values():
+        store.previous = max(store.states, key=len, default="")

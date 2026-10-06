@@ -20,8 +20,8 @@ from unbake.layout import map as layout_map
 from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
-SOURCE_NAMES_SCHEMA = 2
-RENDER_SCHEMA = 2
+SOURCE_NAMES_SCHEMA = 3
+RENDER_SCHEMA = 3
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
@@ -71,18 +71,16 @@ def environment(project: Project, policy: Host | None) -> str:
     """Pin generator code, configuration, version/compiler flags and actual tools."""
     code = Path(__file__).parents[1]
     sources = sorted(code.rglob("*.py"))
-    tools: list[str] = []
+    tools: list[str | Path] = []
     if policy is not None:
         for field in ("cpp", "m2c"):
-            path = getattr(policy, field, None)
-            if path and Path(path).is_file():
-                tools.extend((str(path), key(Path(path))))
-    config = project.root / "config.toml"
+            path = Path(getattr(policy, field))
+            tools.extend((field, path))
+    for ident, compiler in sorted(project.compilers.items()):
+        tools.extend((ident, compiler.cc, compiler.sha256))
     return key(
-        *(path for path in sources),
-        config,
+        "semantic-environment-v3", *(path for path in sources),
         json.dumps(storage.relocatable(asdict(project), project.root), default=str, sort_keys=True),
-        json.dumps(policy.values if policy is not None else None, default=str, sort_keys=True),
         *tools,
     )
 
@@ -101,14 +99,35 @@ class Session:
         }
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
         self.ownership = layout_map.load(project)
+        from unbake.cdecl import declarations as parsed_names
+        from unbake.typemap import declarations
+
+        exported: set[str] = set()
+        for path in {*self.authored, *layout_index.headers(project)}:
+            row = parsed_names(self.authored.get(path) or path.read_text())
+            exported.update(row.typedefs | row.exports | row.tags)
+        self.source_words = {path: set(re.findall(r"\b[A-Za-z_]\w*\b", text)) for path, text in self.sources.items()}
+        self.projections: dict[Path, Any] = {}
+        for path, text in self.sources.items():
+            def project_source(path: Path = path, text: str = text) -> Any:
+                owned, tags = header_names._owned((project, policy, path, text))
+                from unbake.cdecl import declaration_source
+
+                outside = declarations._unit_bodies_blanked(declaration_source(text))
+                directives = re.findall(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M)
+                # Token spelling retains declarations/directives, but implementation whitespace has no meaning.
+                tokens = [match[0] for match in declarations._C_TOKEN.finditer(outside)]
+                return {"declarations": tokens, "directives": directives, "owned": owned, "tags": tags,
+                        "dependencies": sorted(self.source_words[path] & exported)}
+
+            self.projections[path] = artifact(self.cache, "typemap-source-names", key(
+                str(SOURCE_NAMES_SCHEMA), self.environment, storage.relative(project, path), text,
+                storage.encoded(sorted(exported))), project_source)
         self.inputs = key(
-            self.environment,
-            layout_map.encoded(self.ownership),
-            *(
-                part
-                for path, text in {**self.authored, **self.sources}.items()
-                for part in (storage.relative(self.project, path), text)
-            ),
+            self.environment, layout_map.encoded(self.ownership),
+            *(part for path, text in self.authored.items() for part in (storage.relative(project, path), text)),
+            *(part for path, projection in self.projections.items()
+              for part in (storage.relative(project, path), storage.encoded(projection))),
         )
         self.reserved: set[str] = set()
         self.consumer_names: dict[Path, set[str]] = {}
@@ -220,6 +239,9 @@ class Session:
             for kind, keys in self._PROJECTED.items()
         }
         projection.update((field, value.get(field, {})) for field in self._CARRIED)
+        names = set().union(*(set(value[kind]) for kind in self._PROJECTED), set(value.get("typedefs", {})))
+        projection["source_dependencies"] = {storage.relative(self.project, path): sorted(words & names)
+                                               for path, words in self.source_words.items()}
         return key(str(RENDER_SCHEMA), self.inputs, storage.encoded(projection)), projection
 
     def render(
@@ -254,6 +276,7 @@ class Session:
             result = delta()
             if result is not None:
                 return result
+            effort.count("render.compute", 1, 1)
             outputs = compute()
             return {
                 "outputs": {
@@ -272,7 +295,10 @@ class Session:
                 },
             }
 
+        before_compute = effort.counted().get("render.compute", (0, 0))[0]
         result = artifact(self.cache, "typemap-render", content_key, make)
+        computed = effort.counted().get("render.compute", (0, 0))[0] != before_compute
+        effort.count("render.reused", int(not computed), 1)
         state_content = storage.encoded({"projection": projection, "content_key": content_key})
         if not state.is_file() or state.read_bytes() != state_content:
             storage.write(state, state_content, durable=False)
@@ -288,7 +314,7 @@ class Session:
             self.cache.produce("typemap-render", stored_key, same)
         outputs = {self.project.root / p: data.encode() for p, data in result["outputs"].items()}
         effort.count(
-            "render.headers",
+            "render.unchanged_headers",
             sum(path.is_file() and path.read_bytes() == data for path, data in outputs.items()),
             len(outputs),
         )

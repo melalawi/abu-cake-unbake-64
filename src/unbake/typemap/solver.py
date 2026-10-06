@@ -7,19 +7,20 @@ import json
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import cache as content_cache
 from unbake import inputs, tui
 from unbake.cache import Cache
-from unbake.config import Host, Project
+from unbake.config import Held, Host, Project
 from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, shards, storage
 from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
+SCHEMA = 4
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 3
 MACHINE_SCHEMA = 3
@@ -91,6 +92,19 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
     # Per name, the record object last accepted and the alias map it came with (held, so the identities hold): a
     # seed repeating that very object in that very map changes nothing, so it is skipped before any comparison.
     accepted: dict[str, tuple[Any, dict[str, str]]] = {}
+    bulk: dict[tuple[int, int], tuple[Any, Any]] = {}
+    owners: dict[str, set[tuple[int, int]]] = defaultdict(set)
+    deferred: dict[tuple[int, int], declarations.ProvenStructs] = {}
+
+    def flush() -> None:
+        for ident, receipt in deferred.items():
+            for name, origin in receipt.template.items():
+                previous = records[name]
+                if _RANKS.get(receipt.provenance.get("kind"), 1) >= _rank(previous):
+                    records[name] = {**origin, "provenance": receipt.provenance,
+                                     "declaration_conflict": bool(previous.get("declaration_conflict"))}
+        deferred.clear()
+
     index = 0
     while index < len(seeds):
         seed = seeds[index]
@@ -101,7 +115,16 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
         shared = seed[key]
         proven = isinstance(shared, declarations.ProvenStructs)
         incoming_rank = _RANKS.get(shared.provenance.get("kind"), 1) if proven else 0
+        ident = (id(shared.template), id(aliases)) if proven else None
+        if proven and ident in bulk:
+            previous_receipt = deferred.get(ident)
+            if previous_receipt is None or incoming_rank >= _RANKS.get(previous_receipt.provenance.get("kind"), 1):
+                deferred[ident] = shared
+            continue
+        flush()
         for name in shared:
+            for changed in owners.pop(name, ()):
+                bulk.pop(changed, None)
             # A layout template's record is shared by every receipt of it: its identity, not the receipt's fresh
             # per-name copy, says whether this name was already merged in this alias map.
             origin = shared.template[name] if proven else shared[name]
@@ -170,18 +193,16 @@ def _merge_records(seeds: list[dict[str, Any]], key: str, graph: Constraints) ->
             meanings[name] = _comparable(record, key, aliases, canonical)
             spellings[name] = _stripped(record, key), aliases
             accepted[name] = origin, aliases
-        if proven and len(graph.facts) == conflicts_before:
-            # An uninterrupted run of identical layouts only replaces provenance.
-            # Keep the first merge (confidence/conflict handling) and the last
-            # receipt. A conflicting run retains every diagnostic as before.
-            last = index
-            while last < len(seeds):
-                following = seeds[last][key]
-                if not isinstance(following, declarations.ProvenStructs) or following.template is not shared.template:
-                    break
-                last += 1
-            if last > index:
-                index = last - 1
+        if proven and len(graph.facts) == conflicts_before and all(
+            accepted.get(name, (None, None))[0] is origin and accepted[name][1] is aliases
+            for name, origin in shared.template.items()
+        ):
+            assert ident is not None
+            bulk[ident] = shared.template, aliases
+            for name in shared:
+                owners[name].add(ident)
+    flush()
+
     return records
 
 
@@ -880,7 +901,12 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
     files += [
         path for name in project.versions for path in (project.version(name).split, project.version(name).symbols)
     ]
-    parts: list[str] = ["types", str(SCHEMA), facts["shard_sha256"], json.dumps(facts.get("abi_supplement"))]
+    from unbake.typemap import facts as source_facts
+    parts: list[str] = ["types", str(SCHEMA), json.dumps(storage.identity(project), sort_keys=True),
+                        inputs.digest(project.build / "map/facts.json"), facts["shard_sha256"],
+                        json.dumps(facts.get("abi_supplement")),
+                        json.dumps([source_facts.FACTS_SCHEMA, source_facts.SOURCE_SCHEMA, source_facts.HEADER_SCHEMA,
+                                    source_facts.ASSEMBLED_SCHEMA])]
     if policy is not None:
         parts.append(json.dumps([str(policy.cpp), *project.cppflags]))
     parts.extend(fact_keys)
@@ -890,52 +916,46 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
     return content_cache.key(*parts)
 
 
-def input_key(project: Project, host: Host | None) -> str:
-    """The types step's trigger: every input of merge, infer and header publication."""
+@dataclass(frozen=True)
+class Readiness:
+    key: str
+    facts: dict[str, Any]
+    source_keys: list[str]
+
+
+def readiness(project: Project, host: Host | None) -> Readiness:
+    """A complete current input snapshot, reused only while all owning file pins stand."""
     from unbake.typemap import facts as source_facts
     from unbake.typemap.abi_facts import refine
 
-    facts = refine(project, refresh_map(project, host))
-    return _types_key(project, host, facts, source_facts.published_keys(project, host))
+    paths = {project.root / "config.toml", project.root / "layout.toml", project.build / "map/facts.json"}
+    paths.update(path for root in (*project.include, project.src) for path in root.rglob("*") if path.is_file())
+    paths.update(path for version in project.versions for path in
+                 (project.version(version).split, project.version(version).symbols))
+    paths.update(path for path in (project.build / "types/abi.json",) if path.is_file())
+    paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
+    # Every map/ABI shard and evidence receipt is included; a missing current key is not relocation.
+    paths.update(path for directory in (project.build / "map", project.build / "types")
+                 for path in directory.glob("*.json") if path.is_file())
+    policy = None if host is None else tuple((field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field))))
+                                            for field in ("cpp", "m2c"))
+    snapshot = tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)), policy
+
+    def current() -> Readiness:
+        facts = refine(project, refresh_map(project, host))
+        source_keys = source_facts.published_keys(project, host)
+        return Readiness(_types_key(project, host, facts, source_keys), facts, source_keys)
+
+    return content_cache.memo("types.readiness", (str(project.root), SCHEMA, snapshot), current, keep=2)
+
+
+def input_key(project: Project, host: Host | None) -> str:
+    return readiness(project, host).key
 
 
 def marker(project: Project) -> Path:
     """Where the digest of the inputs of the last published solution is kept."""
     return project.build / "types" / "solve-input.sha256"
-
-
-def _plain(value: Any) -> Any:
-    """JSON for a seed's values: layouts with their receipt, sets in order, paths as text."""
-    if isinstance(value, declarations.ProvenStructs):
-        return {"template": value.template, "provenance": value.provenance}
-    if isinstance(value, (set, frozenset)):
-        return sorted(value)
-    if isinstance(value, Path):
-        return str(value)
-    raise TypeError(f"types.input: {type(value).__name__} is not part of a seed")
-
-
-def _seeds_digest(seeds: list[dict[str, Any]]) -> bytes:
-    """The digest of every seed in one pass. Seeds share interned alias maps and layout templates, so each shared
-    object is hashed once."""
-    memo: dict[int, tuple[Any, bytes]] = {}
-
-    def digest(value: Any) -> bytes:
-        found = memo.get(id(value))
-        if found is None or found[0] is not value:
-            if isinstance(value, declarations.ProvenStructs):
-                body = digest(value.template) + json.dumps(value.provenance, sort_keys=True).encode()
-            else:
-                body = json.dumps(value, sort_keys=True, default=_plain).encode()
-            found = memo[id(value)] = value, hashlib.sha256(body).digest()
-        return found[1]
-
-    whole = hashlib.sha256()
-    for seed in seeds:
-        for name in sorted(seed):
-            whole.update(name.encode() + b"\0" + digest(seed[name]))
-        whole.update(b"\1")
-    return whole.digest()
 
 
 def _evidence(project: Project) -> tuple[dict[str, str], dict[str, str], dict[str, list[str]]]:
@@ -957,32 +977,6 @@ def _evidence(project: Project) -> tuple[dict[str, str], dict[str, str], dict[st
     )
 
 
-def solve_input_key(
-    project: Project,
-    policy: Host | None,
-    facts: dict[str, Any],
-    seeds: list[dict[str, Any]],
-    evidence: tuple[dict[str, str], dict[str, str], dict[str, list[str]]] | None = None,
-) -> str:
-    """The digest of everything infer and publish read: a solve with the same key as the last published one gives
-    the same solution. EVIDENCE is _evidence(project) when the caller already read it."""
-    feedback, published, homes = evidence if evidence is not None else _evidence(project)
-    parts: list[str | bytes] = [
-        "solve-input",
-        str(SCHEMA),
-        json.dumps(storage.identity(project), sort_keys=True),
-        facts["shard_sha256"],
-        json.dumps(facts.get("abi_supplement"), sort_keys=True),
-        inputs.digest(project.build / "map/facts.json"),
-        _seeds_digest(seeds),
-        json.dumps([feedback, published, homes], sort_keys=True),
-        json.dumps([str(policy.cpp), *project.cppflags] if policy is not None else None),
-        inputs.digest(project.root / "config.toml"),
-        inputs.digest(project.root / "layout.toml"),
-    ]
-    return content_cache.key(*parts)
-
-
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution. Inputs identical to the
     last published solution's leave it standing."""
@@ -992,21 +986,25 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     from unbake.typemap.abi_facts import refine
 
     database = types_db.path(project)
-    previous = types_db.summary(database) if database.is_file() else {}
-    facts = refine(project, refresh_map(project, policy))
-    fact_keys = source_facts.published_keys(project, policy)
-    seeds = declarations.collect(project, policy, fact_keys)
-    evidence = _evidence(project)
-    content_key = solve_input_key(project, policy, facts, seeds, evidence)
+    current = readiness(project, policy)
     stored = marker(project)
-    if (
-        stored.is_file()
-        and stored.read_text() == content_key
-        and database.is_file()
-        and not header_step.missing(project)
-    ):
+    revision = 0  # The current schema initializes a new database explicitly at revision one.
+    if database.is_file():
+        try:
+            revision = types_db.meta(database, "revision")
+        except ValueError as error:
+            raise Held("solve", "types.sqlite.meta.revision: invalid JSON metadata") from error
+        if type(revision) is not int or revision < 0:
+            raise Held("solve", "types.sqlite.meta.revision: expected nonnegative integer")
+    if (stored.is_file() and stored.read_text() == current.key and database.is_file()
+            and not header_step.missing(project)):
         tui.line("The type inputs did not change, so the last solution stands")
         return {"changes": {}, "reused": True}
+    previous = types_db.summary(database) if database.is_file() else {}
+    facts, fact_keys = current.facts, current.source_keys
+    seeds = declarations.collect(project, policy, fact_keys)
+    evidence = _evidence(project)
+    content_key = current.key
     result = infer(
         project,
         facts,
@@ -1016,7 +1014,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
         policy=policy,
     )
     result["declaration_evidence"], result["published_declarations"], result["published_homes"] = evidence
-    revision = int(previous.get("revision", 0)) + 1
+    revision += 1
     result = {
         **storage.identity(project),
         "map_sha256": inputs.digest(project.build / "map/facts.json"),

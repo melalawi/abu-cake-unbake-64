@@ -387,7 +387,7 @@ class Context:
         contributed = _within(part.get("aliases", []), start, stop)
         found["contributed"] = [*base["contributed"], *contributed] if contributed else base["contributed"]
         found["final"] = base["final"] if not layouts and not contributed else None
-        if own is None or part is not own:
+        if all(name in self.headers for name, _, _ in spans):
             self._built[spans] = found
         return found
 

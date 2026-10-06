@@ -37,10 +37,10 @@ SOURCE = "facts-source"
 HEADER = "facts-header"
 ASSEMBLED = "facts-assembled"
 # Bump a kind's number when the value it stores changes for the same inputs. Keys never digest the tool's code.
-FACTS_SCHEMA = 3
-SOURCE_SCHEMA = 4
-HEADER_SCHEMA = 3
-ASSEMBLED_SCHEMA = 1
+FACTS_SCHEMA = 4
+SOURCE_SCHEMA = 5
+HEADER_SCHEMA = 4
+ASSEMBLED_SCHEMA = 2
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
@@ -252,17 +252,22 @@ def _forced(project: Project, command: list[str]) -> list[Path]:
     return [path for path in forced if path.is_file()]
 
 
-def _command(project: Project, policy: Host | None, version: str, *, marked: bool = False) -> list[str]:
+def _command(project: Project, policy: Host | None, version: str, source: Path, *, marked: bool = False) -> list[str]:
     if policy is None:
         return ["in-memory", version, *project.version(version).macros]
-    command = declarations._cpp_command(project, policy, version, extra=True, line_markers=marked)
-    return [part.replace(str(project.root), ".") for part in command]
+    from unbake.compilers import drivers
+
+    command = (drivers.preprocess_command(project, str(policy.cpp), version, source.stem, Path("@unit.c"), non_matching=False, line_markers=marked)
+               if source.suffix == ".c" else declarations._cpp_command(project, policy, version, extra=True, line_markers=marked))
+    compiler = project.compiler_for(source.stem) if source.suffix == ".c" else project.compilers[project.default_compiler]
+    pins = ["@compiler=" + inputs.digest(compiler.sha256), "@preprocessor=" + inputs.digest(Path(command[0]))]
+    return [part.replace(str(project.root), ".") for part in command] + pins
 
 
 def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snapshot) -> str:
     """The whole-unit facts of one task: every byte of the include closure counts."""
     function, source, version = task
-    command = _command(project, policy, version)
+    command = _command(project, policy, version, source)
     roots = (source, *_forced(project, command))
     parts: list[str | bytes] = [FACTS, str(FACTS_SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
@@ -274,7 +279,7 @@ def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snap
 
 def unit_key(project: Project, policy: Host | None, source: Path, version: str, snapshot: Snapshot) -> str:
     """A source part: the source's bytes, authored headers' bytes and generated headers' interface only."""
-    command = _command(project, policy, version, marked=True)
+    command = _command(project, policy, version, source, marked=True)
     roots = (source, *_forced(project, command))
     parts: list[str | bytes] = [SOURCE, str(SOURCE_SCHEMA), "unit", version, json.dumps(command)]
     parts.extend((storage.relative(project, source), source.read_bytes()))
@@ -289,7 +294,7 @@ def unit_key(project: Project, policy: Host | None, source: Path, version: str, 
 def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Snapshot) -> str:
     """A header part: the header's bytes, authored includes' bytes, generated includes' interface only (unit_key's
     scheme, keyed on the header's own identifiers)."""
-    command = _command(project, policy, version, marked=True)
+    command = _command(project, policy, version, source, marked=True)
     roots = (header, *_forced(project, command))
     parts: list[str | bytes] = [
         HEADER,
@@ -469,12 +474,18 @@ def _provenance(project: Project, function: str, version: str, source: Path) -> 
 
 def _unit_seeds(text: str, provenance: dict[str, Any], source: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """The contracts a unit consumes and every definition it owns (all functions)."""
-    contract = declarations.published(text, provenance, source, contracts=True, compact=True)
-    consumed = declarations.consumed_contracts(contract, source.read_text())
-    # The definition owns the function contract; imported prototypes are
-    # dependencies, and cannot override a ROM-proven definition elsewhere.
-    definition = declarations.published(text, {**provenance, "kind": "proven"}, source, compact=True)
-    return consumed, definition
+    from unbake.pool import WorkerMemory, memory_fault
+
+    expanded_bytes = len(text) if text.isascii() else len(text.encode())
+    try:
+        contract = declarations.published(text, provenance, source, contracts=True, compact=True)
+        consumed = declarations.consumed_contracts(contract, source.read_text())
+        # The definition owns the function contract; imported prototypes are
+        # dependencies, and cannot override a ROM-proven definition elsewhere.
+        definition = declarations.published(text, {**provenance, "kind": "proven"}, source, compact=True)
+        return consumed, definition
+    except MemoryError as error:
+        raise WorkerMemory(memory_fault(error, expanded_bytes=expanded_bytes)) from error
 
 
 def _owned(definition: dict[str, Any], function: str) -> dict[str, Any]:
@@ -499,24 +510,40 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
     """Encoded facts of every task of one source: each distinct unit text is extracted once."""
     source = tasks[0][1]
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)
-    units: dict[str, tuple[bytes, dict[str, Any]]] = {}
-    texts = {version: declarations.source_unit(project, policy, version, source) for version in {t[2] for t in tasks}}
+    units: dict[tuple[str, str], tuple[bytes, dict[str, bytes]]] = {}
+    expansions: dict[str, str] = {}
+    snapshot = Snapshot(project)
     result = []
     for function, task_source, version in tasks:
         if task_source != source:
             raise Held("solve", f"facts.source: {task_source} grouped with {source}")
-        text = texts[version]
-        if text not in units:
-            try:
-                consumed, definition = _unit_seeds(text, placeholder, source)
-            except Held:
-                # A refusal names the task's own provenance, exactly as a single extraction does.
-                extract(project, policy, (function, source, version))
-                raise
-            units[text] = output.encoded([consumed]), definition
-        consumed_data, definition = units[text]
-        owned = output.encoded([_owned(definition, function)])
-        result.append(_stamp(consumed_data[:-1] + b"," + owned[1:], function, version))
+        command = _command(project, policy, version, source)
+        # Only identical actual expansion inputs can share preprocessing. Version names alone are not inputs.
+        contract = key(json.dumps(command), source, *(part for path in snapshot.closure((source, *_forced(project, command)))
+                        for part in (storage.relative(project, path), snapshot.digest(path))))
+        digest = expansions.get(contract)
+        if digest is None:
+            text = declarations.source_unit(project, policy, version, source)
+            digest = key(text)
+            expansions[contract] = digest
+            # ABI/ISA and compiler pins remain part of the parse contract even when expansion bytes match.
+            compiler = project.compiler_for(source.stem)
+            parse_contract = key(json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]), compiler.sha256)
+            identity = digest, parse_contract
+            if identity not in units:
+                try:
+                    consumed, definition = _unit_seeds(text, placeholder, source)
+                except Held:
+                    extract(project, policy, (function, source, version))
+                    raise
+                owned = {name: output.encoded([_owned(definition, name)]) for name in dict.fromkeys(task[0] for task in tasks)}
+                units[identity] = output.encoded([consumed]), owned
+                del consumed, definition
+            del text
+        compiler = project.compiler_for(source.stem)
+        parse_contract = key(json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]), compiler.sha256)
+        consumed_data, owned = units[digest, parse_contract]
+        result.append(_stamp(consumed_data[:-1] + b"," + owned[function][1:], function, version))
     return result
 
 
@@ -611,6 +638,15 @@ def _source_tasks(
     SHARED holds the source's parts by unit text and header-part content: the versions of one source mostly
     preprocess alike, and a part is extracted once for all of them (placeholders keep it version-free)."""
     _, content_key, (_, source, version) = group[0]
+    if host is not None:
+        from unbake.compilers import drivers
+        compiler = project.compiler_for(source.stem)
+        default = project.compilers[project.default_compiler]
+        unit_options, unit_codegen = drivers._options(list(project.unit_flags.get(source.stem, ())))
+        baseline, _ = drivers.stage_flags(default.kind, list(default.cflags))
+        effective, _ = drivers.stage_flags(compiler.kind, [*compiler.cflags, *unit_options, *unit_codegen])
+        if compiler.cc != default.cc or effective != baseline:
+            return None  # Header parts parsed in a different macro/language contract cannot be substituted.
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)
     spell = _spell(project, host)
     own = spell(str(source))
@@ -709,7 +745,7 @@ Shared = tuple[Project, Host | None, dict[str, dict[str, str]]]
 _session: tuple[Shared, Store, dict[str, _Parts], dict[str, layers.Context], frozenset[str]] | None = None
 
 
-def _unit_job(
+def _unit_work(
     shared: Shared, versions: list[list[tuple[int, str, Task]]]
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
     """Worker body: encoded facts of each task of one source (with all its versions), extracting only missing
@@ -735,7 +771,35 @@ def _unit_job(
             result.extend(found)
     if whole:
         result.extend(_whole_tasks(project, host, output, whole, counts))
+    output.written.clear()
+    if output.cache is not None:
+        output.shared.clear()
+    from unbake import cache, prefixes
+
+    cache.forget(["decl.unit", "decl.clean.published", "decl.clean.layouts", "decl.tree", "decl.layouts", "decl.records"])
+    prefixes.release_units()
     return result, counts
+
+
+def _unit_job(shared: Shared, versions: list[list[tuple[int, str, Task]]]) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
+    from dataclasses import asdict
+    from unbake.pool import TaskIdentity, WorkerMemory, memory_fault
+
+    project = shared[0]
+    tasks = [task for group in versions for _, _, task in group]
+    source = tasks[0][1]
+    identity = TaskIdentity("types", storage.relative(project, source), tuple(dict.fromkeys(task[0] for task in tasks)),
+                            tuple(dict.fromkeys(task[2] for task in tasks)), source.stat().st_size, inputs.digest(source),
+                            tuple(content for group in versions for _, content, _ in group))
+    try:
+        return _unit_work(shared, versions)
+    except MemoryError as error:
+        fault = dict(error.args[0]) if isinstance(error, WorkerMemory) else memory_fault(error)
+        fault.update(action="types", identity=asdict(identity), configured_cap_bytes=None if shared[1] is None else shared[1].memory_worker_bytes)
+        raise WorkerMemory(fault) from error
+    except Held as error:
+        fault = {**(error.fault or {}), "action": "types", "identity": asdict(identity)}
+        raise Held(error.phase, f"{identity.source}: {error.reason}", fault=fault) from error
 
 
 # The worker's include snapshot for published_keys, built once per shared value.
