@@ -1037,6 +1037,15 @@ def _publication_key(project: Project, evidence: Any) -> str:
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution. Inputs identical to the
     last published solution's leave it standing."""
+    if policy is None:
+        return _solve(project, policy)
+    from unbake import pool
+
+    with pool.session(policy):
+        return _solve(project, policy)
+
+
+def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
     from unbake.layout import header_step
     from unbake.typemap import types_db
 
@@ -1061,7 +1070,10 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
         return {"changes": {}, "reused": True}
     previous = types_db.summary(database) if database.is_file() else {}
     facts, fact_keys = current.facts, current.source_keys
-    seeds = declarations.collect(project, policy, fact_keys)
+    from unbake.typemap import facts as source_facts
+
+    output = source_facts.store(project, policy)
+    seeds = declarations.collect(project, policy, fact_keys, store=output)
     evidence = _evidence(project)
     publication_key = _publication_key(project, evidence)
     content_key = current.key
@@ -1089,6 +1101,7 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
             [str(SCHEMA), str(ABI_SCHEMA), str(MACHINE_SCHEMA), *_map_parts(facts, inventory)],
             seeds,
             compute,
+            output=output,
         )
         if not all(
             _installed(project, Cache(project.cache), row)

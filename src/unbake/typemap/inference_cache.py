@@ -7,10 +7,10 @@ from collections.abc import Callable
 from typing import Any
 
 from unbake.cache import Cache, key, serialized
-from unbake.config import Project
+from unbake.config import Held, Project
 from unbake.typemap import closure, facts
 
-SCHEMA = 1
+SCHEMA = 2
 
 
 class Receipts:
@@ -39,9 +39,16 @@ class Receipts:
             return [self.inputs(row) for row in value]
         return value
 
-    def _transform(self, value: Any, *, thaw: bool) -> Any:
-        # Components share large user and evidence lists across their nodes. Keep
-        # those references shared in the cached graph instead of copying them per node.
+    def freeze(self, value: Any) -> tuple[Any, list[dict[str, Any]]]:
+        """The graph with every receipt row replaced by one placeholder object per receipt, and those objects.
+
+        Components share large user and evidence lists across their nodes: references stay shared in the cached
+        graph instead of being copied per node. A pickle keeps each placeholder one object however many nodes name
+        it, which is what lets thaw rebind the receipts without visiting the graph."""
+        objects: list[dict[str, Any]] = [dict(row) for row in self.rows]
+        return self._transform(value, objects), objects
+
+    def _transform(self, value: Any, objects: list[dict[str, Any]]) -> Any:
         known: dict[int, Any] = {}
 
         def visit(row: Any) -> Any:
@@ -52,10 +59,8 @@ class Receipts:
                 return found
             result: Any
             if isinstance(row, dict):
-                if thaw and set(row) == {"$receipt"}:
-                    result = self.rows[row["$receipt"]]
-                elif not thaw and "sha256" in row and (index := self.indices.get(serialized(row))) is not None:
-                    result = {"$receipt": index}
+                if "sha256" in row and (index := self.indices.get(serialized(row))) is not None:
+                    result = objects[index]
                 else:
                     result = {name: visit(item) for name, item in row.items()}
             else:
@@ -65,11 +70,15 @@ class Receipts:
 
         return visit(value)
 
-    def freeze(self, value: Any) -> Any:
-        return self._transform(value, thaw=False)
-
-    def thaw(self, value: Any) -> Any:
-        return self._transform(value, thaw=True)
+    def thaw(self, frozen: tuple[Any, list[dict[str, Any]]]) -> Any:
+        """The cached graph with this run's receipts: each placeholder takes its row, in place."""
+        graph, objects = frozen
+        if len(objects) != len(self.rows):
+            raise Held("solve", f"types.cache: {len(objects)} cached receipts for {len(self.rows)} current ones")
+        for placeholder, row in zip(objects, self.rows, strict=True):
+            placeholder.clear()
+            placeholder.update(row)
+        return graph
 
 
 def infer(
@@ -78,9 +87,12 @@ def infer(
     parts: list[str],
     seeds: list[dict[str, Any]],
     compute: Callable[[], dict[str, Any]],
+    *,
+    output: facts.Store | None = None,
 ) -> tuple[dict[str, Any], str, str]:
-    """All input facts and their order count; only evidence hashes are rebound on a hit."""
-    output = facts.Store(project, cache)
+    """All input facts and their order count; only evidence hashes are rebound on a hit. OUTPUT is the store the
+    seeds were decoded with, which knows their shared values' digests."""
+    output = facts.Store(project, cache) if output is None else output
     receipts = Receipts()
     digest = hashlib.sha256()
     for seed in seeds:

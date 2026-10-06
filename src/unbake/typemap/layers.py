@@ -15,6 +15,7 @@ keeps the whole-unit extraction: its own layouts depend on header layouts.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -41,10 +42,16 @@ def spelling(project: Project, machine_root: Path, text: str) -> str:
     A path under the project root is its posix path from the root; one under the machine root is `@machine/` and
     its path from that root. A path with no root (cpp keeps the -I route it took) is taken from the project root.
     Any other path is refused."""
+    return _spell_in(project.root, machine_root, text)
+
+
+@functools.lru_cache(maxsize=1 << 17)
+def _spell_in(project_root: Path, machine_root: Path, text: str) -> str:
+    """The spelling of one path, kept: every source's keys name the same few thousand headers."""
     clean = os.path.normpath(text)
     if not os.path.isabs(clean):
         return clean
-    for root, prefix in ((project.root, ""), (machine_root, "@machine/")):
+    for root, prefix in ((project_root, ""), (machine_root, "@machine/")):
         try:
             return prefix + Path(clean).relative_to(root).as_posix()
         except ValueError:

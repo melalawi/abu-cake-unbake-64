@@ -556,6 +556,17 @@ def sharing(pool: Pool) -> Iterator[None]:
         _shared = previous
 
 
+@contextlib.contextmanager
+def session(host: Host) -> Iterator[None]:
+    """One pool for everything run inside: the open shared pool if there is one, else a pool opened here. Without
+    it every run() starts its own workers, and a step of several fan-outs starts them again for each."""
+    if _shared is not None:
+        yield
+        return
+    with Pool.from_host(host) as opened, sharing(opened):
+        yield
+
+
 def run(host: Host, fn: Callable[..., R], items: Sequence[T], shared: Any = None) -> list[R]:
     """Run fn over items in the shared pool, else the host's pool; a single item runs in this process.
     With SHARED, fn takes it first: fn(shared, item)."""

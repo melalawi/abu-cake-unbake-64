@@ -131,3 +131,13 @@ class FactReuseTests(SolveReuseFixture):
         solver.marker(self.project).unlink()
         self.solve()
         self.assertEqual(self.published.call_count, 3)
+
+    def test_one_pool_serves_every_phase_of_a_solve_and_closes_with_it(self):
+        from unbake import pool
+
+        seen = []
+        self.collect.side_effect = lambda *args, **named: seen.append(pool._shared) or [{"functions": {}}]
+        self.solve()
+        self.assertEqual(len(seen), 1)
+        self.assertIsInstance(seen[0], pool.Pool)
+        self.assertIsNone(pool._shared)

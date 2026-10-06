@@ -424,6 +424,8 @@ class Store:
             value = self.shared[digest] = memo(
                 "facts.shared", digest, lambda: self._read_shared(digest), keep=SHARED_KEPT
             )
+        # Encoding the decoded value again must not serialize it to find the digest it came from.
+        self.written[id(value)] = value, digest
         return value
 
     def _read_shared(self, digest: str) -> Any:
@@ -968,6 +970,14 @@ def _header_keys_job(
     return [(version, path, header_key(project, host, path, version, snapshot)) for path in headers]
 
 
+def _bundle_job(
+    shared: tuple[Project, Host, dict[str, dict[str, str]], Snapshot], versions: list[list[tuple[int, str, Task]]]
+) -> str:
+    """One physical source's bundle key, derived in a worker beside the others."""
+    project, host, header_keys, snapshot = shared
+    return _bundle_key(project, host, versions, header_keys, snapshot)
+
+
 def _bundle_key(
     project: Project,
     host: Host,
@@ -1044,13 +1054,19 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     encoded: dict[int, bytes] = {}
     bundles: list[tuple[str, list[int]]] = []
     pending = []
-    for versions_ in ordered:
+    cache = output.cache
+    bundle_keys = (
+        pool.run(policy, _bundle_job, ordered, (project, policy, header_keys, snapshot))
+        if policy is not None and cache is not None
+        else []
+    )
+    for position, versions_ in enumerate(ordered):
         indices = [index for group in versions_ for index, _, _ in group]
-        if policy is None or output.cache is None:
+        if cache is None:
             pending.append(versions_)
             continue
-        bundle = _bundle_key(project, policy, versions_, header_keys, snapshot)
-        cached = output.cache.get("facts-unit", bundle)
+        bundle = bundle_keys[position]
+        cached = cache.get("facts-unit", bundle)
         if cached is not None:
             rows = closure_load(cached)
             if len(rows) != len(indices):

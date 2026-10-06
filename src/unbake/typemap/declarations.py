@@ -898,12 +898,15 @@ def _version_texts(
     return dict(zip(project.versions, pool.run(policy, _version_text, jobs), strict=True))
 
 
-def collect(project: Project, policy: Host | None, keys: list[str]) -> list[dict[str, Any]]:
-    """Declared header seeds per version, declaration evidence, then every published source's facts."""
+def collect(
+    project: Project, policy: Host | None, keys: list[str], *, store: Any | None = None
+) -> list[dict[str, Any]]:
+    """Declared header seeds per version, declaration evidence, then every published source's facts. STORE is the
+    one the caller keys the seeds with afterwards: it already knows the digest of every shared value they hold."""
     from unbake.typemap import facts
 
     project.build.mkdir(parents=True, exist_ok=True)
-    return _collect(project, policy, facts.store(project, policy), keys)
+    return _collect(project, policy, facts.store(project, policy) if store is None else store, keys)
 
 
 def _collect(project: Project, policy: Host | None, store: Any, keys: list[str]) -> list[dict[str, Any]]:

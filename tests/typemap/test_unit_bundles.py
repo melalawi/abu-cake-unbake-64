@@ -70,3 +70,15 @@ class UnitBundleTests(ProjectCase):
         results = self.collect()
         self.assertEqual(results[1:], first)
         self.assertEqual(self.calls, ["aardvark"])
+
+    def test_bundle_keys_are_derived_by_the_pool_not_the_parent(self):
+        names = []
+        original = self.run_inline
+
+        def run(host, fn, jobs, shared=None):
+            names.append(getattr(fn, "__name__", ""))
+            return original(host, fn, jobs, shared)
+
+        self.run_inline = run
+        self.collect()
+        self.assertIn("_bundle_job", names)
