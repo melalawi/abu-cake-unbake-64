@@ -107,6 +107,7 @@ class Session:
         for path in {*self.authored, *layout_index.headers(project)}:
             row = parsed_names(self.authored.get(path) or path.read_text())
             exported.update(row.typedefs | row.exports | row.tags)
+        exported_names = storage.encoded(sorted(exported))
         self.source_words = {path: set(re.findall(r"\b[A-Za-z_]\w*\b", text)) for path, text in self.sources.items()}
         self.projections: dict[Path, Any] = {}
         snapshot = facts.Snapshot(project)
@@ -148,7 +149,7 @@ class Session:
                     self.environment,
                     storage.relative(project, path),
                     text,
-                    storage.encoded(sorted(exported)),
+                    exported_names,
                     *(
                         facts.unit_key(project, policy, path, version, snapshot)
                         for version in project.versions

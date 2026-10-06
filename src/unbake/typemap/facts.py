@@ -875,17 +875,11 @@ def _unit_job(
         raise Held("solve", f"types.source: {identity.source}: {type(error).__name__}: {error}", fault=fault) from error
 
 
-# The worker's include snapshot for published_keys, built once per shared value.
-_keying: tuple[tuple[Project, Host | None], Snapshot] | None = None
-
-
-def _unit_key_job(shared: tuple[Project, Host | None], item: tuple[Path, tuple[str, ...]]) -> list[str]:
-    """One physical source's version keys, sharing its include snapshot in the worker."""
-    global _keying
-    if _keying is None or _keying[0] is not shared:
-        _keying = (shared, Snapshot(shared[0]))
+def _unit_key_job(shared: tuple[Project, Host | None, Snapshot], item: tuple[Path, tuple[str, ...]]) -> list[str]:
+    """One physical source's version keys, reusing the pool's shared include snapshot."""
+    project, host, snapshot = shared
     source, versions = item
-    return [unit_key(shared[0], shared[1], source, version, _keying[1]) for version in versions]
+    return [unit_key(project, host, source, version, snapshot) for version in versions]
 
 
 def published_keys(project: Project, policy: Host | None) -> list[str]:
@@ -897,7 +891,13 @@ def published_keys(project: Project, policy: Host | None) -> list[str]:
     for _, source, version in tasks:
         versions.setdefault(source, {})[version] = None
     jobs = [(source, tuple(names)) for source, names in versions.items()]
-    shared = (project, policy)
+    if not jobs:
+        return []
+    snapshot = Snapshot(project)
+    for path in sorted(snapshot.generated()):
+        if path.is_file():
+            snapshot.parsed(path)
+    shared = (project, policy, snapshot)
     rows = (
         [_unit_key_job(shared, item) for item in jobs]
         if policy is None

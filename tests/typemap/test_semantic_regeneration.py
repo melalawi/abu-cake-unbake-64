@@ -90,3 +90,22 @@ class SemanticRegenerationTests(ProjectCase):
             after = regeneration.Session(self.project, self.host)
         self.assertEqual(before.inputs, after.inputs)
         self.assertIn("alpha", before.projections[source]["declarations"]["us"])
+
+    def test_shared_export_catalogue_is_encoded_once_for_many_source_projections(self):
+        from unbake.typemap import storage
+
+        for index in range(32):
+            (self.project.src / f"unit{index}.c").write_text(f"s32 unit{index}(void) {{ return {index}; }}\n")
+        real = storage.encoded
+        shared_encodings = []
+
+        def encoded(value):
+            if value == ["s32"]:
+                shared_encodings.append(value)
+            return real(value)
+
+        with patch.object(storage, "encoded", side_effect=encoded):
+            current = regeneration.Session(self.project, self.host)
+        self.assertEqual(len(current.projections), 32)
+        self.assertTrue(all(row["dependencies"] == ["s32"] for row in current.projections.values()))
+        self.assertEqual(len(shared_encodings), 1)

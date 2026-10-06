@@ -120,3 +120,30 @@ class PhysicalSourceKeyTests(ProjectCase):
         self.assertNotEqual(first, second)
         self.assertGreater(visits, 0)
         self.assertEqual(repeated, visits)
+
+    def test_shared_header_interfaces_are_not_reparsed_by_each_key_worker(self):
+        import pickle
+
+        header = self.project.include[0] / "types.h"
+        tasks = []
+        for index in range(8):
+            source = self.project.src / f"unit{index}.c"
+            source.write_text('#include "types.h"\ns32 function(void) { return 0; }\n')
+            tasks.append((f"unit{index}", source, "us"))
+
+        def independent_workers(host, function, items, shared):
+            return [function(pickle.loads(pickle.dumps(shared)), item) for item in items]
+
+        with patch("unbake.layout.index.headers", return_value=frozenset({header})):
+            expected = [
+                facts.unit_key(self.project, self.host, path, version, facts.Snapshot(self.project))
+                for _, path, version in tasks
+            ]
+            with (
+                patch.object(facts.declarations, "published_sources", return_value=tasks),
+                patch.object(facts, "parse", wraps=facts.parse) as parsed,
+                patch("unbake.pool.run", side_effect=independent_workers),
+            ):
+                found = facts.published_keys(self.project, self.host)
+        self.assertEqual(found, expected)
+        self.assertEqual(parsed.call_count, 1)
