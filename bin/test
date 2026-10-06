@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[[ -x .venv/bin/python ]] || { echo "run bin/dev-setup first" >&2; exit 1; }
 export PYTHONPATH=src
-exec python3 -m tests.runner discover -s tests -t . "$@"
+exec .venv/bin/python -m tests.runner discover -s tests -t . "$@"

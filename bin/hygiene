@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[[ -x .venv/bin/python ]] || { echo "run bin/dev-setup first" >&2; exit 1; }
 export PYTHONPATH=src
-python3 -m unbake.project.write_hygiene
+.venv/bin/python -m unbake.project.write_hygiene
 status=0
 rg -n -i --glob '!hygiene' --glob '!**/__pycache__/**' \
     --glob '!*.pyc' --glob '!*.egg-info/**' \

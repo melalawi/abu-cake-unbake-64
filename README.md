@@ -67,6 +67,6 @@ make check
 
 ## Development
 
-Run `bin/test`, `bin/lint` and `bin/hygiene`.
+Run `bin/dev-setup` once, then `bin/test`, `bin/lint` and `bin/hygiene`.
 
 Licensed under [GNU GPL version 3 or later](LICENSE).
