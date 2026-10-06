@@ -21,7 +21,7 @@ from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
 SOURCE_NAMES_SCHEMA = 4
-RENDER_SCHEMA = 4
+RENDER_SCHEMA = 5
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
@@ -99,6 +99,9 @@ class Session:
             if not storage.generated(project, path)
         }
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
+        from unbake.typemap.declaration_evidence import published_snapshot
+
+        self.published, self.published_homes = published_snapshot(project, sources=self.sources)
         self.ownership = layout_map.load(project)
         from unbake.cdecl import declarations as parsed_names
         from unbake.typemap import declarations, facts
@@ -162,6 +165,15 @@ class Session:
             self.environment,
             layout_map.encoded(self.ownership),
             *(part for path, text in self.authored.items() for part in (storage.relative(project, path), text)),
+            *(
+                part
+                for path, text in sorted(self.published.items())
+                for part in (
+                    storage.relative(project, path),
+                    text,
+                    storage.encoded(sorted(storage.relative(project, p) for p in self.published_homes[path])),
+                )
+            ),
             *(
                 part
                 for path, projection in self.projections.items()
@@ -264,10 +276,11 @@ class Session:
             "typedefs",
             "reason",
             "common_base",
+            "provenance",
         ),
-        "functions": ("state", "prototype"),
-        "globals": ("state", "declaration"),
-        "arrays": ("state", "partial", "type"),
+        "functions": ("state", "prototype", "provenance"),
+        "globals": ("state", "declaration", "provenance"),
+        "arrays": ("state", "partial", "type", "provenance"),
     }
     _CARRIED = ("typedefs", "declaration_evidence", "published_declarations", "published_homes")
 

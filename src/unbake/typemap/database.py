@@ -138,15 +138,27 @@ def _render(
     replacements = {"M2C_UNK": "s32", **{f"M2C_UNK{width}": f"s{width}" for width in (8, 16, 32, 64)}}
     # Retention follows installed C dependencies independently of the current
     # inference facts, including typedefs used only inside function bodies.
-    from unbake.typemap.declaration_evidence import published_snapshot
-
-    retained_components, retained_homes = published_snapshot(project, sources=session.sources)
+    retained_components, retained_homes = session.published, session.published_homes
     published = value.setdefault("published_declarations", {})
     published_homes = value.setdefault("published_homes", {})
+    from unbake.layout.header_loss import declared
+
+    # Installed contracts are canonical. Replace a stored copy of the same
+    # declaration when the installed spelling changed, while keeping stored
+    # providers for declarations absent from a partial installed tree.
+    installed_paths = {path.relative_to(root).as_posix() for path in retained_components}
+    installed_names = set().union(*(declared(text) for text in retained_components.values()))
+    for name, text in list(published.items()):
+        if name not in installed_paths and declared(text) & installed_names:
+            published.pop(name)
+            published_homes.pop(name, None)
     for path, text in retained_components.items():
         relative = path.relative_to(root).as_posix()
-        published.setdefault(relative, text)
-        published_homes.setdefault(relative, sorted(home.relative_to(root).as_posix() for home in retained_homes[path]))
+        published[relative] = text
+        published_homes[relative] = sorted(home.relative_to(root).as_posix() for home in retained_homes[path])
+    from unbake.typemap.declaration_evidence import validate_published
+
+    validate_published(project, value, published, context=tuple(session.authored.values()))
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     components.update({root / path: text for path, text in value.get("published_declarations", {}).items()})
@@ -281,6 +293,7 @@ def _render(
         for record in value["structs"].values()
         if record["state"] == "known"
         for alias in record.get("aliases", [])
+        if alias not in authored_aliases
     }
     prerequisites: dict[str, str] = dict(private)
     for alias, type_ in {**value.get("typedefs", {}), **alias_targets}.items():
@@ -299,7 +312,6 @@ def _render(
     for path in (
         *authored,
         *(root / name for name in value.get("declaration_evidence", {})),
-        *(root / name for name in value.get("published_declarations", {})),
     ):
         components[path] = session.rewrite(components[path], replacements, reserved)
     rendered = dict(components)
@@ -349,11 +361,6 @@ def _render(
     void_pattern = void_calls(passed)
     for name in passed & declarations_by_name.keys():
         declarations_by_name[name] = without_void(declarations_by_name[name], void_pattern)
-    for name in value.get("published_declarations", {}):
-        path = root / name
-        if path in components:
-            components[path] = without_void(components[path], void_pattern)
-            rendered[path] = without_void(rendered[path], void_pattern)
     for name, record in sorted(value["globals"].items()):
         if record["state"] == "known" and record["declaration"]:
             declarations_by_name[name] = session.rewrite(record["declaration"], replacements, reserved)
@@ -409,12 +416,6 @@ def _render(
     for name, declaration in list(declarations_by_name.items()):
         if source_private(declaration, source_owned_tags, source_owned_typedefs):
             declarations_by_name.pop(name)
-    for path in retained_contracts:
-        if path in components and source_owned_tags & set(
-            re.findall(r"\b(?:struct|union|enum)\s+(\w+)", declaration_source(components[path]))
-        ):
-            components.pop(path)
-            rendered.pop(path, None)
     # An authored provider is already imported through the graph.
     for name in authored_declarations:
         declarations_by_name.pop(name, None)

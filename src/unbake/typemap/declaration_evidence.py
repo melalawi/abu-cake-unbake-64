@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from unbake.cache import memo
 from unbake.cdecl import LayoutParser, declaration_source, declarations
@@ -55,7 +56,6 @@ def units(contents: dict[Path, str]) -> tuple[Unit, ...]:
     for path, text in sorted(contents.items()):
         # SDK/system declarations already have live providers. Evidence is an
         # explicit include tree, but only authored declarations are consumed.
-        text = imports._without_comments(text)
         try:
             statements = split.statements(_body(text))
         except Held:
@@ -307,6 +307,68 @@ def published_components(project: Project) -> dict[Path, str]:
     return published_snapshot(project)[0]
 
 
+def validate_published(
+    project: Project, value: dict[str, Any], published: dict[str, str], *, context: tuple[str, ...] = ()
+) -> None:
+    """Carried contracts yield only to compatible proven evidence, never silently.
+
+    Machine inference can lose a spelling or offer a weaker alternative. Only
+    a proved C contract contradicting an installed consumer contract is a hold.
+    """
+    from unbake.layout import redeclarations
+
+    def proven(provenance: object) -> bool:
+        if isinstance(provenance, dict):
+            return provenance.get("kind") == "proven"
+        return isinstance(provenance, list) and any(proven(item) for item in provenance)
+
+    contents = {project.include[0] / path: text for path, text in published.items()}
+    contracts = units(contents)
+    by_name: dict[tuple[str, str], set[Unit]] = {}
+    for unit in contracts:
+        for namespace, names in (("tag", unit.tags), ("ordinary", unit.names)):
+            for name in names:
+                by_name.setdefault((namespace, name), set()).add(unit)
+    mapping = redeclarations.aliases([*context, *contents.values()])
+    for kind, field in (("structs", "declaration"), ("functions", "prototype"), ("globals", "declaration")):
+        for name, record in value.get(kind, {}).items():
+            candidate = record.get(field)
+            if record.get("state") != "known" or not candidate or not proven(record.get("provenance")):
+                continue
+            proposed = declarations(candidate)
+            matches = set().union(
+                *(by_name.get(("tag", tag), set()) for tag in proposed.tags),
+                *(by_name.get(("ordinary", symbol), set()) for symbol in proposed.typedefs | proposed.declared),
+            )
+            for unit in sorted(matches, key=lambda unit: (unit.path, unit.text)):
+                tags = proposed.tags & unit.tags
+                ordinary = (proposed.typedefs | proposed.declared) & unit.names
+                if not tags and not ordinary:
+                    continue
+                if tags:
+                    old_bodies = redeclarations.tag_definitions(unit.text)
+                    new_bodies = redeclarations.tag_definitions(candidate)
+                    agrees = all(
+                        redeclarations._body_signature(unit.text[a:b], mapping)
+                        == redeclarations._body_signature(candidate[c:d], mapping)
+                        for tag in tags
+                        for a, b in old_bodies.get(tag, ())
+                        for c, d in new_bodies.get(tag, ())
+                    )
+                else:
+                    agrees = redeclarations.equivalent(unit.text, candidate, mapping)
+                if not agrees:
+                    homes = value.get("published_homes", {}).get(
+                        unit.path.relative_to(project.include[0]).as_posix(), []
+                    )
+                    raise Held(
+                        "headers",
+                        f"headers.declaration: {name}: published `{unit.text.strip()}` "
+                        f"({', '.join(homes) or str(unit.path)}) is incompatible with proven "
+                        f"`{candidate}` ({record.get('provenance')})",
+                    )
+
+
 def published_snapshot(
     project: Project, *, sources: dict[Path, str] | None = None
 ) -> tuple[dict[Path, str], dict[Path, set[Path]]]:
@@ -342,22 +404,24 @@ def published_snapshot(
                 for variant in redeclarations.variants(text[start:end])
             )
         )
-        pending = set(re.findall(r"\b[A-Za-z_]\w*\b", imports._without_comments(text)))
+        pending = {(name, False) for name in re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))}
         seen = set()
         while pending:
-            name = pending.pop()
-            if name in seen:
+            name, dependency = pending.pop()
+            if (name, dependency) in seen:
                 continue
-            seen.add(name)
+            seen.add((name, dependency))
             for unit in by_name.get(name, ()):
-                if unit.tags & local_tags or unit.types & local_types:
+                if not dependency and (unit.tags & local_tags or unit.types & local_types):
                     continue
                 digest = hashlib.sha256(unit.text.encode()).hexdigest()[:24]
                 label = "published_" + digest
                 virtual = project.include[0] / ("." + label + ".h")
                 homes.setdefault(virtual, set()).add(unit.path)
                 selected[virtual] = f"/* unbake published declaration: {label} */\n" + unit.text
-                pending.update(unit.uses - seen)
+                # Prerequisites need providers in header scope even if this
+                # consumer also defines a private same-named type.
+                pending.update((used, True) for used in unit.uses)
     return selected, homes
 
 

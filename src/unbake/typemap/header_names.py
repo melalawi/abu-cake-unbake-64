@@ -373,7 +373,9 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
                 row = parser.parse()
             except Held as error:
                 raise Held("solve", f"types.header_parse: {path}: {error.reason}") from error
-            atomic_files.text(output, json.dumps({"names": sorted(parser.names), "tags": sorted(row.tags)}))
+            # Tags and typedefs occupy separate namespaces. A forward tag
+            # cannot reserve an alias used by another published consumer.
+            atomic_files.text(output, json.dumps({"names": sorted(row.typedefs), "tags": sorted(row.tags)}))
 
         row = json.loads(cache.produce("typemap-owned-names", content_key, compute).read_bytes())
         owned.update(row["names"])

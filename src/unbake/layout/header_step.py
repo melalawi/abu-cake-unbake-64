@@ -1,6 +1,6 @@
 """The `headers` step: regenerate group headers and source include lines from layout.toml and the type solution.
 
-- Merge-only: a header change or deletion that would remove a name published C spells is refused by name.
+- Carry installed declaration dependencies used by published C; refuse incompatible proven evidence by name.
 - Only files whose bytes change are written; the index is installed last (layout.apply.install).
 - Before writing, every affected unit is compiled for each version that builds its C, against staged copies of
   the changed headers and sources in build/work/_headers/ (a draft view shadowing include/ by relative name).
@@ -23,7 +23,7 @@ from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 5
+SCHEMA = 6
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 

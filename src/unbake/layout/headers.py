@@ -250,7 +250,16 @@ class Layout:
 
             local = set(redeclarations.declared(source, text))
             self.local_names.setdefault(owner.header, set()).update(local)
-            for provider in required_providers(text, self.providers, self.tags, self.aliases, local):
+            local_types = set().union(
+                *(
+                    declarations(variant).typedefs
+                    for start, end in redeclarations.spans(text)
+                    for variant in redeclarations.variants(text[start:end])
+                )
+            )
+            for provider in required_providers(
+                text, self.providers, self.tags, self.aliases, local | local_types, redeclarations.local_tags(text)
+            ):
                 if provider not in fixed:
                     users[provider].add(owner.header)
                     source_providers.setdefault(root / owner.header, set()).add(provider)
