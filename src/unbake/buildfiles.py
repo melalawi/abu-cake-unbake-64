@@ -22,7 +22,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 4
+SCHEMA = 5
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -276,7 +276,7 @@ build/$1/src/%.key: src/%.c Makefile units.mk | verify build/$1/src build/cas
 	$$(Q)$$(UNIT_KEY)
 build/$1/units/%.bin: build/$1/src/%.key versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/units
 	$$(Q)$$(UNIT_BIN)
-build/$1/hasm/%.bin: src/%.s versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
+build/$1/hasm/%.bin: src/%.s Makefile versions/$1/symbols.ld versions/$1/$$(NAME).ld | build/$1/hasm
 	$$(Q)$$(HASM_BIN)
 build/$1/slices/%.bin: $$($1.BASEROM) versions/$1/slices.mk | build/$1/slices
 	$$(Q)$$(SLICE)
