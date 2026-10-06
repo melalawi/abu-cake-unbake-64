@@ -16,6 +16,56 @@ if TYPE_CHECKING:
 
 
 class Ido:
+    def analysis_flags(
+        self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Use the pinned native driver's implicit C environment for host token analysis.
+
+        IDO has no macro-dump switch. Its -show output exposes the actual cfe
+        definitions/search roots, including definitions applied after user flags.
+        Keep native ordering; remove the host provider's unrelated predefined names.
+        """
+        import re
+        import shlex
+        import tempfile
+        from dataclasses import asdict
+
+        from unbake import atomic, inputs, process
+        from unbake.cache import memo
+        from unbake.config import Held
+
+        native = self.preprocess_flags((), codegen)
+
+        def observed() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+            with tempfile.TemporaryDirectory(prefix="ido-analysis-") as temporary:
+                source = Path(temporary) / "empty.c"
+                atomic.fresh(source, b"")
+                result = process.run_native([str(compiler), *native, "-E", "-show", str(source)], root, "compile")
+                lines = [line for line in result.stderr.splitlines() if line.startswith("/usr/lib/cfe ")]
+                if len(lines) != 1 or str(source) not in lines[0]:
+                    raise Held(
+                        "compile",
+                        "compile.analysis_environment: IDO did not report one cfe invocation",
+                        fault=asdict(result),
+                    )
+                before, _, after = lines[0].partition(str(source))
+                before_words, after_words = shlex.split(before), shlex.split(after)
+                defines = tuple(word for word in before_words if word.startswith(("-D", "-U")))
+                final = tuple(word for word in after_words if word.startswith(("-D", "-U")))
+                includes = tuple(word for word in before_words if word.startswith("-I") and len(word) > 2)
+                macros = process.run_tool([cpp, "-undef", "-nostdinc", "-dM", "-x", "c", str(source)], root, "compile")
+                removed = tuple("-U" + name for name in re.findall(r"^#define\s+(\w+)", macros, re.M))
+                return defines, final, includes, removed
+
+        defines, final, includes, removed = memo(
+            "ido.analysis-environment",
+            (compiler, inputs.signature(compiler), cpp, inputs.signature(Path(cpp)), native),
+            observed,
+            keep=16,
+        )
+        # Both pinned cfe versions evaluate high-bit character constants unsigned.
+        return ("-undef", "-nostdinc", "-funsigned-char", *removed, *defines, *preprocess, *includes, *final)
+
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
         """Language/macro input, excluding code generation optimization."""
         for flag in codegen:

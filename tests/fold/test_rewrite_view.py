@@ -245,7 +245,10 @@ class PrepareTests(ProjectCase):
             self.project,
             version_map={**self.project.version_map, "us": replace(self.project.version("us"), macros=("VERSION_US",))},
         )
-        view = rewrite_view.prepare(self.project, self.host, source, "us", path, preprocess=run)
+        from tests.preprocessor import output as tool_output
+
+        with patch("unbake.process.subprocess.run", side_effect=tool_output):
+            view = rewrite_view.prepare(self.project, self.host, source, "us", path, preprocess=run)
         project, command, unit = run.call_args.args
         self.assertIs(project, self.project)
         for flag in ("-P", "-fdebug-cpp", "-ftrack-macro-expansion=2", "-ftabstop=1", "-DVERSION_US"):
@@ -293,3 +296,25 @@ class HeaderOutputSkipTests(unittest.TestCase):
         ):
             with self.subTest(output=output):
                 self.assertEqual(rewrite_view._source_output(output, 30), output)
+
+
+class BuiltinTokenTests(unittest.TestCase):
+    def test_builtin_without_a_spelling_location_still_participates_in_the_parse_view(self):
+        source = "int value[__STDC__];"
+        prefix = dump(
+            [
+                (rewrite_view._BOUNDARY, "<stdin>", 1, 12),
+                (";", "<stdin>", 1, 37),
+                ("int", "/source.c", 1, 1),
+                ("value", "/source.c", 1, 5),
+                ("[", "/source.c", 1, 10),
+            ]
+        )
+        # Actual host cpp -fdebug-cpp output for __STDC__, not an editable source token.
+        builtin = "{P:;F:;L:-1;C:-1;S:-1;M:(nil);E:-1,LOC:1,R:1}1"
+        view = rewrite_view.decode(
+            prefix + builtin + dump([("]", "/source.c", 1, 20), (";", "/source.c", 1, 21)]), source, "/source.c"
+        )
+        self.assertEqual(view.text, "int\nvalue\n[\n1\n]\n;\n")
+        self.assertIsNone(view.origins[3])
+        self.assertEqual(view.locations[3].line, -1)

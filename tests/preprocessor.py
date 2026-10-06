@@ -89,6 +89,11 @@ def expand(
 def output(command, **kwargs):
     import subprocess
 
+    if "-show" in command:
+        # Native IDO's observed cfe protocol, supplied by the fake tool boundary.
+        return subprocess.CompletedProcess(
+            command, 0, "", f"/usr/lib/cfe -D__sgi -I/usr/include {command[-1]} -E -D_LANGUAGE_C -std\n"
+        )
     cwd = Path(kwargs.get("cwd", Path.cwd()))
     roots = [cwd / flag[2:] for flag in command if flag.startswith("-I")]
     macros = dict(

@@ -276,11 +276,11 @@ def analysis_command(project: Project, cpp: str, version: str, unit: str) -> lis
     The analysis provider is host cpp even for an IDO unit. Native compilation
     remains owned by that unit's family; GCC analysis switches never reach IDO.
     """
-    from unbake.compilers.families.gcc import Gcc
+    from unbake.compilers.families import family_for
 
     compiler = project.compiler_for(unit)
     preprocess, codegen = _options(flags(project, version, unit))
-    options = Gcc().preprocess_flags(tuple(preprocess), tuple(codegen))
+    options = family_for(compiler).analysis_flags(compiler.cc, cpp, project.root, tuple(preprocess), tuple(codegen))
     return [cpp, *(project.cppflags if compiler.kind == "sn64" else ()), *options, "-x", "c", "-"]
 
 

@@ -16,6 +16,12 @@ if TYPE_CHECKING:
 
 
 class Gcc:
+    def analysis_flags(
+        self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """The build already preprocesses with this host provider."""
+        return self.preprocess_flags(preprocess, codegen)
+
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
         """Language/macro input, excluding code generation optimization."""
         return (
