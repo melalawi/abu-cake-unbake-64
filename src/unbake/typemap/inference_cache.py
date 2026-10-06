@@ -39,23 +39,36 @@ class Receipts:
             return [self.inputs(row) for row in value]
         return value
 
+    def _transform(self, value: Any, *, thaw: bool) -> Any:
+        # Components share large user and evidence lists across their nodes. Keep
+        # those references shared in the cached graph instead of copying them per node.
+        known: dict[int, Any] = {}
+
+        def visit(row: Any) -> Any:
+            if not isinstance(row, (dict, list, tuple)):
+                return row
+            found = known.get(id(row))
+            if found is not None:
+                return found
+            if isinstance(row, dict):
+                if thaw and set(row) == {"$receipt"}:
+                    result = self.rows[row["$receipt"]]
+                elif not thaw and "sha256" in row and (index := self.indices.get(serialized(row))) is not None:
+                    result = {"$receipt": index}
+                else:
+                    result = {name: visit(item) for name, item in row.items()}
+            else:
+                result = [visit(item) for item in row]
+            known[id(row)] = result
+            return result
+
+        return visit(value)
+
     def freeze(self, value: Any) -> Any:
-        if isinstance(value, dict):
-            if "sha256" in value and (index := self.indices.get(serialized(value))) is not None:
-                return {"$receipt": index}
-            return {name: self.freeze(row) for name, row in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [self.freeze(row) for row in value]
-        return value
+        return self._transform(value, thaw=False)
 
     def thaw(self, value: Any) -> Any:
-        if isinstance(value, dict):
-            if set(value) == {"$receipt"}:
-                return self.rows[value["$receipt"]]
-            return {name: self.thaw(row) for name, row in value.items()}
-        if isinstance(value, list):
-            return [self.thaw(row) for row in value]
-        return value
+        return self._transform(value, thaw=True)
 
 
 def infer(

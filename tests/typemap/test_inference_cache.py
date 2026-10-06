@@ -89,3 +89,10 @@ class InferenceCacheTests(TempCase):
         expected = solver.infer(self.project, mapped, changed)
         self.assertEqual(actual, expected)
         self.assertEqual(compute.call_count, 1)
+
+    def test_shared_component_lists_stay_shared_in_the_cached_graph(self):
+        users = ["a", "b"]
+        compute = MagicMock(return_value={"nodes": {"a": {"users": users}, "b": {"users": users}}})
+        for _ in range(2):
+            result, _, _ = inference_cache.infer(self.project, self.cache, [], [self.seed()], compute)
+            self.assertIs(result["nodes"]["a"]["users"], result["nodes"]["b"]["users"])
