@@ -13,7 +13,7 @@ from pathlib import Path
 from unbake.cdecl import LayoutParser
 from unbake.config import Held, Host, Project
 from unbake.decomp import gbi_recover, needs
-from unbake.fold import imports, pool_literals, rewrite_view, source_views, type_rewrite
+from unbake.fold import imports, pool_literals, rewrite_view, self_prototype, source_views, type_rewrite
 from unbake.fold import notes as reporting
 from unbake.fold.common import held
 from unbake.layout import entries, shared, split, structs
@@ -280,6 +280,13 @@ def fold_source(
         {**headers.texts, **{edit.path: edit.after for edit in edits}},
         authored=authored,
     )
+    by_path = {edit.path: edit for edit in edits}
+    for edit in self_prototype.unqualify(
+        {**headers.texts, **{edit.path: edit.after for edit in edits}}, final, function, versions
+    ):
+        previous = by_path.get(edit.path)
+        by_path[edit.path] = replace(edit, before=previous.before) if previous is not None else edit
+    edits = list(by_path.values())
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
         group = entries.owners(project, policy, project.src / f"{function}.c", version, text=text)
