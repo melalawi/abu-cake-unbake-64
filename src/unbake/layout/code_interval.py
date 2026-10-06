@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from unbake import scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import boundary, split
 from unbake.layout.rodata_references import collect
@@ -28,7 +29,9 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
     if start >= end or start % 4 or end % 4 or end > min(split.end(row), len(image)):
         raise Held("split", "split.code.interval: required increasing word-aligned offsets within one data row")
     address = split.address(row, configured.split) + start - row.start
-    with tempfile.NamedTemporaryFile(prefix="code-", suffix=".bin") as target:
+    with tempfile.NamedTemporaryFile(
+        prefix="code-", suffix=".bin", dir=scratch.root(policy, project, "split")
+    ) as target:
         target.write(image[start:end])
         target.flush()
         decoded = subprocess.run(

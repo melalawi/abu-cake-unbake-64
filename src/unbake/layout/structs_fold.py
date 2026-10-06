@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import re
-import tempfile
 from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from itertools import pairwise
@@ -12,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import scratch
 from unbake.cdecl import LayoutParser
 from unbake.config import Held, Host, Project
 from unbake.layout import shared
@@ -793,13 +792,9 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
     if not includers:
         return
     label = ", ".join(str(edit.path) for edit in edits)
-    # TMPDIR must be explicit and outside the project; never stage a proposed
-    # header over the live one, even transiently.
-    temporary_root = os.environ.get("TMPDIR")
-    if not temporary_root or Path(temporary_root).resolve().is_relative_to(project.root):
-        held(label, "header compile proof requires TMPDIR outside project.root")
+    # A private host-cache overlay never stages proposed headers in the live project.
     try:
-        with tempfile.TemporaryDirectory(prefix="structs-proof-", dir=temporary_root) as temporary:
+        with scratch.temporary(policy, project, "structs", prefix="structs-proof-") as temporary:
             overlay = Path(temporary)
             for root in project.include:
                 atomic_files.copytree(root, overlay / root.relative_to(project.root), dirs_exist_ok=True)

@@ -16,13 +16,12 @@ lines, then their bodies in address order. It is proved like a land: in every ho
 from __future__ import annotations
 
 import re
-import tempfile
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, runner
+from unbake import cache, runner, scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import map as layout_map
 from unbake.layout import split
@@ -118,7 +117,7 @@ def prove(
     versions = split.holding_versions(project, first) if versions is None else versions
     if not versions:
         return False
-    with tempfile.TemporaryDirectory(prefix="merge-") as temporary:
+    with scratch.temporary(host, project, "merge", prefix="merge-") as temporary:
         work = Path(temporary)
         file = work / f"{first}.c"
         atomic_files.text(file, source)

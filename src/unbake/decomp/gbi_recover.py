@@ -8,11 +8,11 @@ Unsupported definitions and partial packets are deliberately held.
 from __future__ import annotations
 
 import re
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import scratch
 from unbake.config import Held, Host, Project
 from unbake.decomp import checks
 from unbake.decomp.gbi import LEXICAL, PAIR
@@ -394,7 +394,7 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
     from unbake.process import run_tool
 
     # The SDK catalogue is a host-cpp analysis of the actual unit environment.
-    command = drivers.analysis_command(project, str(policy.cpp), version, unit.stem)
+    command = drivers.analysis_command(project, policy, version, unit.stem)
     headers = [
         path
         for root in project.include
@@ -419,7 +419,7 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
                 break
         if re.match(r"\s*#\s*(?:define|undef)\b", line):
             directives.append(line)
-    with tempfile.TemporaryDirectory(prefix="gbi-sdk-") as temporary:
+    with scratch.temporary(policy, project, "gbi", prefix="gbi-sdk-") as temporary:
         work = Path(temporary)
         probe = work / "sdk.c"
         atomic_files.text(probe, "\n".join([*directives, *(f'#include "{path}"' for path in sorted(headers))]) + "\n")
@@ -452,7 +452,7 @@ def proven(
     before = import_aliases(project, source, headers, sdk_aliases=False)
     source = import_aliases(project, source, headers)
 
-    with tempfile.TemporaryDirectory(prefix="gbi-recovery-") as temporary:
+    with scratch.temporary(policy, project, "gbi", prefix="gbi-recovery-") as temporary:
         root = Path(temporary)
         staged = replaced(project, work_include=(root / "include", *project.work_include))
         for path, text in headers.items():

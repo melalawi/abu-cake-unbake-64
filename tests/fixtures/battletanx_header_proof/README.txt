@@ -1,0 +1,1 @@
+Small verbatim BattleTanx payloads from the func_800942A8_us fuzzy-publish blocker: the draft, staged span_1000/code_80091A60.h, and its types.h/common type dependencies. The test renames a padding member in the proposed header, expands the real include graph and parses the real C at the mocked native compiler boundary. No live project or compiler execution is needed.

@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from unbake import atomic as atomic_files
-from unbake import process
+from unbake import process, scratch
 from unbake.compilers.families.mips import ORIGINAL_RULES
 from unbake.config import Held
 from unbake.layout import split
@@ -213,7 +212,7 @@ def write_source(project: Project, host: Host, row: split.Function, data: bytes,
     replaced by its `.word` (at most three passes); refused if the result still differs from the ROM."""
     words = shape.words_of(data)
     name = Path(row.path).name
-    with tempfile.TemporaryDirectory(prefix="original-") as temporary:
+    with scratch.temporary(host, project, "original-asm", prefix="original-") as temporary:
         work = Path(temporary)
         instructions, labels = body(data, row.address, _disassemble(host, data, row.address, work))
         for _ in range(3):

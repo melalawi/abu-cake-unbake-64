@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from unbake import atomic as atomic_files
+from unbake import scratch
 from unbake.config import Held
 from unbake.decomp.needs import Need, PlacementNeed
 from unbake.layout import split, split_edits
@@ -51,7 +52,6 @@ def _rename(project: Any, need: PlacementNeed) -> list[split.Edit]:
 
 def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
     """Compose placement needs into edits without writing project files."""
-    from tempfile import TemporaryDirectory
     from types import SimpleNamespace
 
     from unbake.decomp.needs import PlacementNeed
@@ -62,7 +62,7 @@ def resolve(needs: list[Need], project: Any, policy: Any) -> list[split.Edit]:
     if not selected:
         return []
     # The temporary view lets successive cuts and renames share one edit base.
-    with TemporaryDirectory(prefix="placement-") as temporary:
+    with scratch.temporary(policy, project, "layout", prefix="placement-") as temporary:
         root = Path(temporary)
         versions = {}
         originals = {}

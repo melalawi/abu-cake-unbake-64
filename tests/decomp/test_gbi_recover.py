@@ -136,19 +136,21 @@ class RecoveryTests(unittest.TestCase):
     def test_existing_proof_checks_all_versions_modes_and_byte_order(self):
         from unbake.decomp import gbi_proof
 
-        project = SimpleNamespace(versions=("us", "eu"))
-        row = SimpleNamespace(aliases=("alpha",))
-        with patch("unbake.layout.split.functions", return_value=[row]), patch.object(gbi_proof, "code") as code:
-            code.return_value = ((".text", b"\x01\x02", ()),)
-            gbi_proof.preserve(project, None, Path("alpha.c"), "before", "after")
-            self.assertEqual(
-                [(c.args[2], c.args[4]) for c in code.call_args_list],
-                [("us", 0), ("us", 0), ("us", 1), ("us", 1), ("eu", 0), ("eu", 0), ("eu", 1), ("eu", 1)],
-            )
-            for change in [b"\x02\x01", b"\x01\x03", b"\x01\x02\x03"]:
-                code.side_effect = [((".text", b"\x01\x02", ()),), ((".text", change, ()),)]
-                with self.subTest(change=change), self.assertRaisesRegex(Held, "changes codegen"):
-                    gbi_proof.preserve(project, None, Path("alpha.c"), "before", "after")
+        with tempfile.TemporaryDirectory() as temporary:
+            project = SimpleNamespace(versions=("us", "eu"), root=Path(temporary) / "project")
+            policy = SimpleNamespace(cache_machine_root=Path(temporary) / "cache")
+            row = SimpleNamespace(aliases=("alpha",))
+            with patch("unbake.layout.split.functions", return_value=[row]), patch.object(gbi_proof, "code") as code:
+                code.return_value = ((".text", b"\x01\x02", ()),)
+                gbi_proof.preserve(project, policy, Path("alpha.c"), "before", "after")
+                self.assertEqual(
+                    [(c.args[2], c.args[4]) for c in code.call_args_list],
+                    [("us", 0), ("us", 0), ("us", 1), ("us", 1), ("eu", 0), ("eu", 0), ("eu", 1), ("eu", 1)],
+                )
+                for change in [b"\x02\x01", b"\x01\x03", b"\x01\x02\x03"]:
+                    code.side_effect = [((".text", b"\x01\x02", ()),), ((".text", change, ()),)]
+                    with self.subTest(change=change), self.assertRaisesRegex(Held, "changes codegen"):
+                        gbi_proof.preserve(project, policy, Path("alpha.c"), "before", "after")
 
     def test_equivalent_evidence_sdk_and_scalar_include_aliases(self):
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as temporary:

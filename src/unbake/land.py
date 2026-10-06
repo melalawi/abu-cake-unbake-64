@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
-import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -25,7 +24,7 @@ from typing import Any
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import buildfiles, process, runner, steps
+from unbake import buildfiles, process, runner, scratch, steps
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.work import attempts, compare
@@ -209,7 +208,7 @@ def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[bo
     row = compare.row_of(project, function, version)
     with (
         runner.compile_unit(view, host, file, version, unit=function) as obj,
-        tempfile.TemporaryDirectory(prefix="land-") as temporary,
+        scratch.temporary(host, project, "land", prefix="land-") as temporary,
     ):
         work = Path(temporary)
         placed = work / "placed.o"

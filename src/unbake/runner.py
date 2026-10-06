@@ -10,13 +10,12 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, inputs, process
+from unbake import cache, inputs, process, scratch
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -76,7 +75,7 @@ def compile_unit(
     name = Path(unit).name
 
     def make(destination: Path) -> None:
-        with tempfile.TemporaryDirectory(prefix="compile-") as temporary:
+        with scratch.temporary(host, project, "compile", prefix="compile-") as temporary:
             work = Path(temporary)
             atomic_files.text(work / f"{name}.i", preprocessed)
             process.run_tool(
@@ -91,7 +90,7 @@ def compile_unit(
                 )
             atomic_files.copyfile(work / f"{name}.o", destination)
 
-    with tempfile.TemporaryDirectory(prefix="object-") as temporary:
+    with scratch.temporary(host, project, "compile", prefix="object-") as temporary:
         output = Path(temporary) / f"{name}.o"
         try:
             cached = cache.Cache(project.cache).produce("object", content_key, make)
@@ -249,7 +248,7 @@ def link_function(
     from unbake.objects import rodata
     from unbake.objects.elf import Object
 
-    with tempfile.TemporaryDirectory(prefix="link-") as temporary:
+    with scratch.temporary(host, project, "compile", prefix="link-") as temporary:
         work = Path(temporary)
         placed = work / "placed.o"
         problems = place(project, host, obj, version, row, placed, score=True)
@@ -270,7 +269,7 @@ def build_unit(project: Project, host: Host, unit: str, version: str, *, source:
     file = project.src / f"{unit}.c" if source is None else source
     with (
         compile_unit(project, host, file, version, unit=unit) as obj,
-        tempfile.TemporaryDirectory(prefix="build-") as temporary,
+        scratch.temporary(host, project, "compile", prefix="build-") as temporary,
     ):
         work = Path(temporary)
         placed = work / "placed.o"

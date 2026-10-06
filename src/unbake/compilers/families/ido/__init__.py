@@ -23,7 +23,13 @@ class Ido:
         return dependency_rules(output)
 
     def analysis_flags(
-        self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
+        self,
+        compiler: Path,
+        cpp: str,
+        root: Path,
+        preprocess: tuple[str, ...],
+        codegen: tuple[str, ...],
+        temporary_root: Path,
     ) -> tuple[str, ...]:
         """Use the pinned native driver's implicit C environment for host token analysis.
 
@@ -43,7 +49,7 @@ class Ido:
         native = self.preprocess_flags((), codegen)
 
         def observed() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-            with tempfile.TemporaryDirectory(prefix="ido-analysis-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="ido-analysis-", dir=temporary_root) as temporary:
                 source = Path(temporary) / "empty.c"
                 atomic.fresh(source, b"")
                 result = process.run_native([str(compiler), *native, "-E", "-show", str(source)], root, "compile")

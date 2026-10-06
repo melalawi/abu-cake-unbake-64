@@ -1,10 +1,9 @@
 """Prove GBI source rewrites through the ordinary cached compiler path."""
 
-import tempfile
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import runner
+from unbake import runner, scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.objects.elf import Object
@@ -38,7 +37,7 @@ def preserve(
     versions = tuple(holding) if versions is None else versions
     if not versions or set(versions) - set(holding):
         raise Held("gbi", f"{unit.stem}: no owning VERSION for codegen proof")
-    with tempfile.TemporaryDirectory(prefix="gbi-proof-") as temporary:
+    with scratch.temporary(policy, project, "gbi", prefix="gbi-proof-") as temporary:
         root = Path(temporary)
         original, candidate = root / "before" / unit.name, root / "after" / unit.name
         for path, text in ((original, before), (candidate, after)):

@@ -29,7 +29,13 @@ class Gcc:
         )
 
     def analysis_flags(
-        self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
+        self,
+        compiler: Path,
+        cpp: str,
+        root: Path,
+        preprocess: tuple[str, ...],
+        codegen: tuple[str, ...],
+        temporary_root: Path,
     ) -> tuple[str, ...]:
         """The build already preprocesses with this host provider."""
         return self.preprocess_flags(preprocess, codegen)

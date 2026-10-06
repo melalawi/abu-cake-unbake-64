@@ -129,7 +129,7 @@ def prepare(
     prelude += "".join(f"#include {json.dumps(str(path))}\n" for path in declarations._generated_context(project))
     filename = str(source_path)
     unit = prelude + f"extern int {_BOUNDARY};\n#line 1 {json.dumps(filename)}\n" + source
-    command = drivers.analysis_command(project, str(policy.cpp), version, source_path.stem)
+    command = drivers.analysis_command(project, policy, version, source_path.stem)
     command[-1:-1] = [
         "-DUNBAKE_PROTOTYPES_H",
         "-P",

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake.config import Held, Project
+from unbake.config import Held, Host, Project
 
 PREPROCESSOR_PAIRS = frozenset({"-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"})
 GNU_AS_FLAGS = ("-march=vr4300", "-mabi=32", "-EB", "-G0", "--no-pad-sections")
@@ -270,17 +270,21 @@ def preprocess_command(
     return argv
 
 
-def analysis_command(project: Project, cpp: str, version: str, unit: str) -> list[str]:
+def analysis_command(project: Project, policy: Host, version: str, unit: str) -> list[str]:
     """GCC token-location analysis with the actual unit's ordered macro/include environment.
 
     The analysis provider is host cpp even for an IDO unit. Native compilation
     remains owned by that unit's family; GCC analysis switches never reach IDO.
     """
+    from unbake import scratch
     from unbake.compilers.families import family_for
 
+    cpp = str(policy.cpp)
     compiler = project.compiler_for(unit)
     preprocess, codegen = _options(flags(project, version, unit))
-    options = family_for(compiler).analysis_flags(compiler.cc, cpp, project.root, tuple(preprocess), tuple(codegen))
+    options = family_for(compiler).analysis_flags(
+        compiler.cc, cpp, project.root, tuple(preprocess), tuple(codegen), scratch.root(policy, project, "compile")
+    )
     return [cpp, *(project.cppflags if compiler.kind == "sn64" else ()), *options, "-x", "c", "-"]
 
 

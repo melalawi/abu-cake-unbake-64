@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
+from unbake import scratch
 from unbake.cdecl import LayoutParser
 from unbake.config import Held, Host, Project
 from unbake.decomp import gbi_recover, needs
@@ -365,7 +365,7 @@ def _layout_names(
         def effective_project() -> Project:
             nonlocal context_project
             if context_project is None:
-                temporary = cleanup.enter_context(tempfile.TemporaryDirectory(prefix="match-types-"))
+                temporary = cleanup.enter_context(scratch.temporary(policy, project, "fold", prefix="match-types-"))
                 roots = source_views.header_includes(project, headers, Path(temporary))
                 context_project = replace(project, work_include=tuple(roots))
             return context_project

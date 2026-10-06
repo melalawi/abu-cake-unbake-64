@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import scratch
 from unbake.cdecl import LayoutParser
 from unbake.config import Host, Project
 from unbake.layout.header_context import Headers
@@ -81,7 +81,7 @@ def typed_context(
     )
 
     def compute() -> str:
-        with tempfile.TemporaryDirectory(prefix="match-types-") as temporary:
+        with scratch.temporary(policy, project, "fold", prefix="match-types-") as temporary:
             local = context_project
             if local is None:
                 roots = header_includes(project, headers, Path(temporary))
@@ -101,9 +101,9 @@ def typed_context(
 
 
 @contextmanager
-def shared_includes(project: Project, headers: Headers) -> Iterator[None]:
+def shared_includes(project: Project, headers: Headers, policy: Host) -> Iterator[None]:
     """Own an incrementally materialized include snapshot for serial folding."""
-    with tempfile.TemporaryDirectory(prefix="match-includes-") as temporary:
+    with scratch.temporary(policy, project, "fold", prefix="match-includes-") as temporary:
         headers.__dict__["_shared_includes"] = (project.root, Path(temporary), {})
         try:
             yield
@@ -165,7 +165,7 @@ def _preprocessed_lines(
     project: Project, policy: Host, text: str, version: str, unit: str, headers: Headers | None = None
 ) -> set[int]:
     lines = text.splitlines(keepends=True)
-    with tempfile.TemporaryDirectory(prefix="match-view-") as temporary:
+    with scratch.temporary(policy, project, "fold", prefix="match-view-") as temporary:
         source = Path(temporary) / "source.c"
         atomic_files.text(source, text)
         include = header_includes(project, headers, Path(temporary)) if headers is not None else ()
