@@ -12,6 +12,7 @@ import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -475,7 +476,7 @@ def _ensure(
             started = time.monotonic()
             effort.window()
             spent = effort.mark()
-            current = step.key(project, host)
+            current = _reading_current(project, partial(step.key, project, host))
             same = recorded(project, name) == current
             changed = altered(project, name) if same and step.outputs is not None else []
             if not (force and attempt == 0 and name in requested) and same and not changed:
@@ -487,7 +488,7 @@ def _ensure(
             changes: dict[str, Any] = {}
             try:
                 with tui.task(step.label) as shown:
-                    changes = step.run(project, host) or {}
+                    changes = _reading_current(project, partial(step.run, project, host)) or {}
                     if name == "types":
                         count = sum(kind["count"] for kind in changes.values())
                         shown.note = (
@@ -532,6 +533,36 @@ def _ensure(
     raise Held(
         "steps", f"steps.{ran[0]}: input key changes on every run ({', '.join(ran)}); a step rewrites its inputs"
     )
+
+
+VANISHED_RETRIES = 3
+
+
+def _vanished(project: Project, error: BaseException) -> bool:
+    """Whether ERROR (or a cause in its chain) is a project file that disappeared under the step."""
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        name = getattr(error, "filename", None) if isinstance(error, FileNotFoundError) else None
+        if name is not None and Path(name).is_relative_to(project.root):
+            return True
+        # A worker's refusal crosses the process boundary without its cause: its fault names the exception.
+        if isinstance(error, Held) and (error.fault or {}).get("cause") == "FileNotFoundError":
+            return f"{project.root}/" in error.reason
+        error = error.__cause__ or error.__context__  # type: ignore[assignment]
+    return False
+
+
+def _reading_current(project: Project, call: Callable[[], Any]) -> Any:
+    """CALL, again when a project file it listed vanished: a checkout, rebase or land under a running command
+    changes the inputs, and the retry lists them again. A file still missing after the retries is refused."""
+    for attempt in range(VANISHED_RETRIES + 1):
+        try:
+            return call()
+        except (Held, OSError) as error:
+            if attempt == VANISHED_RETRIES or not _vanished(project, error):
+                raise
+    raise AssertionError("unreachable")
 
 
 def _checked(host: Host, results: list[StepResult], chain: effort.Mark, *, force: bool) -> list[StepResult]:

@@ -367,3 +367,50 @@ class BudgetTests(TempCase):
         self.run_chain({})
         results = self.run_chain({"unchanged_seconds": 1e-9})
         self.assertEqual([line.split(":")[0] for line in results[-1].findings], ["budget.unchanged_seconds"])
+
+
+class VanishedInputTests(TempCase):
+    """A project file that disappears under a running step (a rebase or checkout) is listed again, not a crash."""
+
+    def flaky(self, failures: int, error: BaseException):
+        calls = []
+
+        def call() -> str:
+            calls.append(1)
+            if len(calls) <= failures:
+                raise error
+            return "done"
+
+        return call, calls
+
+    def test_a_vanished_project_file_is_retried_in_every_error_shape(self) -> None:
+        project = SimpleNamespace(root=self.root)
+        gone = str(self.root / "src" / "f.c")
+        worker = Held(
+            "pool", f"unit_key: FileNotFoundError at facts.py:1: {gone}", fault={"cause": "FileNotFoundError"}
+        )
+        for label, error in [
+            ("direct", FileNotFoundError(2, "No such file", gone)),
+            ("worker refusal without its cause", worker),
+            ("wrapped cause", Held("steps", "x").with_traceback(None)),
+        ]:
+            with self.subTest(label):
+                if label == "wrapped cause":
+                    error.__cause__ = FileNotFoundError(2, "No such file", gone)
+                call, calls = self.flaky(2, error)
+                self.assertEqual(steps._reading_current(project, call), "done")
+                self.assertEqual(len(calls), 3)
+
+    def test_other_failures_and_persistent_absence_are_raised(self) -> None:
+        project = SimpleNamespace(root=self.root)
+        outside = FileNotFoundError(2, "No such file", "/elsewhere/f.c")
+        for label, error, failures, expected_calls in [
+            ("outside the project", outside, 1, 1),
+            ("not a missing file", Held("steps", "bad"), 1, 1),
+            ("still missing", FileNotFoundError(2, "No such file", str(self.root / "a.c")), 9, 4),
+        ]:
+            with self.subTest(label):
+                call, calls = self.flaky(failures, error)
+                with self.assertRaises((Held, FileNotFoundError)):
+                    steps._reading_current(project, call)
+                self.assertEqual(len(calls), expected_calls)
