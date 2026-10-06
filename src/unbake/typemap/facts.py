@@ -792,25 +792,25 @@ def _whole_tasks(
     return result
 
 
-Shared = tuple[Project, Host | None, dict[str, dict[str, str]]]
+Shared = tuple[Project, Host | None, dict[str, dict[str, str]], frozenset[str]]
 
-# The worker's header parts, layer contexts and generated header spellings, built once per shared value.
-_session: tuple[Shared, Store, dict[str, _Parts], dict[str, layers.Context], frozenset[str]] | None = None
+# The worker's header parts and layer contexts, built once per shared value.
+_session: tuple[Shared, Store, dict[str, _Parts], dict[str, layers.Context]] | None = None
 
 
 def _unit_work(
     shared: Shared, versions: list[list[tuple[int, str, Task]]]
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
     """Worker body: encoded facts of each task of one source (with all its versions), extracting only missing
-    source parts, each distinct one once. SHARED is the project, host and every version's header part keys."""
+    source parts, each distinct one once. SHARED carries the project, host, header part keys and the validated
+    generated-header inventory."""
     global _session
-    project, host, header_keys = shared
+    project, host, header_keys, generated = shared
     if _session is None or _session[0] is not shared:
         output = store(project, host)
-        generated = frozenset(_spell(project, host)(str(header)) for header in Snapshot(project).generated())
         parts = {version: _Parts(output, keys) for version, keys in header_keys.items()}
-        _session = (shared, output, parts, {}, generated)
-    _, output, parts, contexts, generated = _session
+        _session = (shared, output, parts, {})
+    _, output, parts, contexts = _session
     counts: dict[str, int] = {"sources": 0, "whole": 0}
     result = []
     sharing: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
@@ -943,7 +943,8 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         for version, headers in missing_headers.items()
         for start in range(0, len(headers), HEADERS_PER_JOB)
     ]
-    shared = (project, policy, header_keys)
+    generated = frozenset(_spell(project, policy)(str(header)) for header in snapshot.generated())
+    shared = (project, policy, header_keys, generated)
     if policy is None or output.cache is None:
         results = [_unit_job(shared, versions) for versions in ordered]
     else:

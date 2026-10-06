@@ -56,7 +56,7 @@ class SourceFactsTests(TempCase):
             patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
             self.assertRaises(facts.Held) as raised,
         ):
-            facts._unit_job((project, None, {"us": {}}), [[(0, stale, task)]])
+            facts._unit_job((project, None, {"us": {}}, frozenset()), [[(0, stale, task)]])
         self.assertIn("facts.inputs: src/alpha.c changed during the solve", str(raised.exception))
 
     def test_source_key_follows_schema_not_tool_code(self) -> None:
@@ -101,7 +101,7 @@ class SharedVersionsTests(TempCase):
             patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
             patch.object(facts, "_whole_tasks", lambda p, h, o, group, c: whole.append(group) or []),
         ):
-            _, counts = facts._unit_job((project, None, {v: {} for v in texts}), groups)
+            _, counts = facts._unit_job((project, None, {v: {} for v in texts}, frozenset()), groups)
         self.assertEqual(sorted(parts), sorted(set(texts.values())))
         self.assertEqual(counts["sources"], 2)
         self.assertEqual([len(group) for group in whole], [4])  # one whole call for all four versions
@@ -119,7 +119,7 @@ class UnitFaultIdentityTests(TempCase):
             [(1, "other-key", ("func_804069F4_de", source, "us"))],
         ]
         with patch.object(facts, "_unit_work", side_effect=MemoryError), self.assertRaises(WorkerMemory) as caught:
-            facts._unit_job((project, None, {}), tasks)
+            facts._unit_job((project, None, {}, frozenset()), tasks)
         identity = caught.exception.args[0]["identity"]
         self.assertEqual(identity["source"], "804069F4_de.c")
         self.assertEqual(identity["functions"], ("func_804069F4_de",))
@@ -136,7 +136,7 @@ class UnitFaultIdentityTests(TempCase):
             patch.object(facts, "_unit_work", side_effect=SystemError("compile returned NULL without exception")),
             self.assertRaises(Held) as caught,
         ):
-            facts._unit_job((SimpleNamespace(root=self.root), None, {}), tasks)
+            facts._unit_job((SimpleNamespace(root=self.root), None, {}, frozenset()), tasks)
         self.assertEqual(caught.exception.fault["identity"]["source"], "actual.c")
         self.assertEqual(caught.exception.fault["identity"]["versions"], ("de",))
         self.assertIsInstance(caught.exception.__cause__, SystemError)
