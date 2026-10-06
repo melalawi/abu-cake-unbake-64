@@ -116,6 +116,59 @@ class UnitKeyTests(SourceKeyTests):
                     used.write_text(original)
             self.assertEqual(self.key(), base)
 
+    def test_generated_include_edges_with_no_selected_interface_do_not_churn(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include/used.h"
+        nested = self.root / "include/nested.h"
+        unrelated = self.root / "include/unrelated.h"
+        guard = "#ifndef GENERATED_H\n#define GENERATED_H\n"
+        used.write_text(guard + "typedef int Used;\n#endif\n")
+        nested.write_text("#ifndef NESTED_H\n#define NESTED_H\ntypedef long Other;\n#endif\n")
+        with patch.object(index, "headers", return_value=frozenset({used, nested, unrelated})):
+            before = self.key()
+            used.write_text(guard + '#include "nested.h"\ntypedef int Used;\n#endif\n')
+            self.assertEqual(self.key(), before)
+            nested.write_text("typedef char Other;\n")
+            self.assertEqual(self.key(), before)
+            nested.write_text("#define COUNT 2\n")
+            self.assertNotEqual(self.key(), before)
+
+    def test_added_include_selecting_a_transitive_typedef_changes_key(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include/used.h"
+        nested = self.root / "include/nested.h"
+        used.write_text("typedef Nested Used;\n")
+        with patch.object(index, "headers", return_value=frozenset({used, nested})):
+            before = self.key()
+            used.write_text('#include "nested.h"\ntypedef Nested Used;\n')
+            self.assertNotEqual(self.key(), before)
+            before = self.key()
+            nested.write_text("typedef long Nested;\n")
+            self.assertNotEqual(self.key(), before)
+
+    def test_referenced_guard_and_conditional_directives_remain_inputs(self) -> None:
+        from unittest.mock import patch
+
+        from unbake.layout import index
+
+        used = self.root / "include/used.h"
+        self.source.write_text('#include "used.h"\n#ifdef GUARD_H\nint alpha;\n#endif\n')
+        with patch.object(index, "headers", return_value=frozenset({used})):
+            used.write_text("#ifndef GUARD_H\n#define GUARD_H\n#endif\n")
+            before = self.key()
+            used.write_text("#ifndef OTHER_H\n#define OTHER_H\n#endif\n")
+            self.assertNotEqual(self.key(), before)
+            used.write_text("#if VERSION_US\ntypedef int Unused;\n#endif\n")
+            before = self.key()
+            used.write_text("#if VERSION_EU\ntypedef int Unused;\n#endif\n")
+            self.assertNotEqual(self.key(), before)
+
     def test_generated_header_bytes_stay_in_the_key(self) -> None:
         """Overridden: generated header bytes are the header layer's input, not the source part's."""
 
@@ -157,24 +210,25 @@ class InterfaceTests(TempCase):
     DIRECTIVES: ClassVar[list[str]] = ["#ifndef GUARD", "#define GUARD", "#endif"]
 
     def lines(self, *names: str) -> list[str]:
-        return facts.interface(self.TEXT, names).split("\n")
+        return facts.interface(self.TEXT, names).splitlines()
 
-    def test_no_names_keeps_only_the_directives(self) -> None:
-        self.assertEqual(self.lines(), self.DIRECTIVES)
-        self.assertEqual(self.lines("value", "int", "unsigned", "a", "b", "Hidden"), self.DIRECTIVES)
+    def test_no_names_omits_the_unreferenced_guard(self) -> None:
+        self.assertEqual(self.lines(), [])
+        self.assertEqual(self.lines("GUARD"), self.DIRECTIVES)
+        self.assertEqual(self.lines("value", "int", "unsigned", "a", "b", "Hidden"), [])
 
     def test_a_name_selects_the_statement_that_declares_it(self) -> None:
-        self.assertEqual(self.lines("Pair"), [*self.DIRECTIVES, "typedef struct Pair { int a; } Pair;"])
-        self.assertEqual(self.lines("Body"), [*self.DIRECTIVES, "struct Body { int b; };"])
-        self.assertEqual(self.lines("Fn"), [*self.DIRECTIVES, "typedef int (*Fn)(int);"])
-        self.assertEqual(self.lines("u32"), [*self.DIRECTIVES, "typedef unsigned int u32;"])
+        self.assertEqual(self.lines("Pair"), ["typedef struct Pair { int a; } Pair;"])
+        self.assertEqual(self.lines("Body"), ["struct Body { int b; };"])
+        self.assertEqual(self.lines("Fn"), ["typedef int (*Fn)(int);"])
+        self.assertEqual(self.lines("u32"), ["typedef unsigned int u32;"])
 
     def test_an_enumerator_selects_its_enum(self) -> None:
-        self.assertEqual(self.lines("B"), [*self.DIRECTIVES, "typedef enum { A, B } E;"])
+        self.assertEqual(self.lines("B"), ["typedef enum { A, B } E;"])
 
     def test_statements_keep_the_text_order(self) -> None:
         self.assertEqual(
-            self.lines("u32", "Pair")[3:], ["typedef struct Pair { int a; } Pair;", "typedef unsigned int u32;"]
+            self.lines("u32", "Pair"), ["typedef struct Pair { int a; } Pair;", "typedef unsigned int u32;"]
         )
 
 

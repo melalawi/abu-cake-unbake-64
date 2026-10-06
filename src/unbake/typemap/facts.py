@@ -38,9 +38,9 @@ HEADER = "facts-header"
 ASSEMBLED = "facts-assembled"
 # Bump a kind's number when the value it stores changes for the same inputs. Keys never digest the tool's code.
 FACTS_SCHEMA = 4
-SOURCE_SCHEMA = 5
-HEADER_SCHEMA = 4
-ASSEMBLED_SCHEMA = 3
+SOURCE_SCHEMA = 6
+HEADER_SCHEMA = 5
+ASSEMBLED_SCHEMA = 4
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
@@ -56,6 +56,15 @@ Task = tuple[str, Path, str]
 @functools.cache
 def _includes(path: Path, stamp: tuple[int, int, int, int, int]) -> tuple[tuple[str, str], ...]:
     return tuple((match[1], match[2]) for match in _INCLUDE.finditer(path.read_text(errors="replace")))
+
+
+@functools.cache
+def _topology(path: Path, stamp: tuple[int, int, int, int, int]) -> tuple[tuple[int, str], ...]:
+    return tuple(
+        (line, text.strip())
+        for line, text in enumerate(path.read_text().splitlines(), 1)
+        if re.match(r"[ \t]*#[ \t]*(?:include|ifndef|define|endif)\b", text)
+    )
 
 
 class Snapshot:
@@ -160,13 +169,16 @@ class Parsed(NamedTuple):
     directives: tuple[str, ...]
     statements: tuple[Statement, ...]
     by_name: dict[str, tuple[int, ...]]
+    guard: str | None = None
 
 
 def parse(text: str) -> Parsed:
     from unbake.cdecl import declaration_source
 
     code = declaration_source(text)
-    directives = tuple(line.strip() for line in re.findall(r"^[ \t]*#.*$", text, re.M))
+    directives = tuple(
+        line.strip() for line in re.findall(r"^[ \t]*#.*$", text, re.M) if not re.match(r"#\s*include\b", line.strip())
+    )
     statements: list[Statement] = []
     depth = 0
     start = 0
@@ -185,7 +197,12 @@ def parse(text: str) -> Parsed:
     for index, statement in enumerate(statements):
         for name in statement.declared:
             by_name.setdefault(name, []).append(index)
-    return Parsed(directives, tuple(statements), {name: tuple(rows) for name, rows in by_name.items()})
+    return Parsed(
+        directives,
+        tuple(statements),
+        {name: tuple(rows) for name, rows in by_name.items()},
+        declarations._outer_guard(text),
+    )
 
 
 def _statement(text: str) -> Statement:
@@ -212,7 +229,14 @@ def interface(text: str, names: Iterable[str], *, parsed: Parsed | None = None) 
     parsed = parsed or parse(text)
     wanted = set(names)
     rows = sorted({index for name in wanted & parsed.by_name.keys() for index in parsed.by_name[name]})
-    return "\n".join([*parsed.directives, *(parsed.statements[index].text for index in rows)])
+    return "\n".join([*_directives(parsed, wanted), *(parsed.statements[index].text for index in rows)])
+
+
+def _directives(parsed: Parsed, names: set[str]) -> tuple[str, ...]:
+    """Include edges are keyed separately; an unreferenced outer guard only prevents duplicate includes."""
+    if parsed.guard is not None and parsed.guard not in names:
+        return parsed.directives[2:-1]
+    return parsed.directives
 
 
 def _interfaces(
@@ -228,7 +252,7 @@ def _interfaces(
         if path not in generated or path == own:
             names |= snapshot.identifiers(path)
     for path in headers:
-        for directive in snapshot.parsed(path).directives:
+        for directive in _directives(snapshot.parsed(path), names):
             names.update(_IDENTIFIER.findall(directive))
     taken: dict[Path, set[int]] = {path: set() for path in headers}
     grown = True
@@ -247,6 +271,7 @@ def _interfaces(
         if path in taken
         else (path, None)
         for path in closure
+        if path not in taken or interface("", names, parsed=snapshot.parsed(path))
     ]
 
 
@@ -718,12 +743,30 @@ def _source_tasks(
             raise Held("solve", f"facts.inputs: {storage.relative(project, source)} changed during the solve; rerun")
         return shared[identity]
 
-    stub = output.json(SOURCE, content_key)
+    # The source interface can stand while generated include edges move. Refresh its
+    # line-marker runs independently, without parsing its owned declarations again.
+    command = _command(project, host, version, source, marked=True)
+    closure = snapshot.closure((source, *_forced(project, command)), command)
+    topology = [
+        (storage.relative(project, path), _topology(path, inputs.signature(path)))
+        for path in closure
+        if path in snapshot.generated()
+    ]
+    run_key = key(SOURCE, "runs", content_key, json.dumps(topology))
+    stub = output.json(SOURCE, run_key)
+    if stub is None:
+        previous_stub = output.json(SOURCE, content_key)
+        if previous_stub is not None and not previous_stub.get("wide"):
+            text = declarations.source_unit(project, host, version, source, line_markers=True)
+            runs = layers.Marked(layers.suffix(text), own, spell).runs
+            stub = {**previous_stub, "runs": runs}
+            output.put_json(SOURCE, run_key, stub)
     part = None
     if stub is None:
         part = extracted()
         stub = {"wide": True} if part is None else {"runs": part["runs"], "named": part["named"]}
         output.put_json(SOURCE, content_key, stub)
+        output.put_json(SOURCE, run_key, stub)
     if stub.get("wide"):
         return None
     # What the join of this source part and its header parts gives is cached whole: a warm solve reads it
@@ -733,6 +776,7 @@ def _source_tasks(
         SOURCE,
         str(ASSEMBLED_SCHEMA),
         content_key,
+        json.dumps(stub["runs"]),
         json.dumps(sorted((name, parts[version].identity(name)) for name in run_names if name in parts[version])),
         json.dumps(sorted(generated & run_names)),
         json.dumps([function for _, _, (function, _, _) in group]),
@@ -754,6 +798,7 @@ def _source_tasks(
             output.put_json(SOURCE, part_key, part)
     else:
         output.put_json(SOURCE, part_key, part)
+    part = {**part, "runs": stub["runs"]}
     source_text = source.read_text()
     result = []
     for index, _, (function, _, _) in group:
