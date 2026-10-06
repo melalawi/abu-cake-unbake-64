@@ -393,10 +393,8 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
     from unbake.compilers import drivers
     from unbake.process import run_tool
 
-    contract = drivers.parts(project, version, unit.stem)
-    # Host macro catalogue is an explicit SDK-analysis facility; native expansion uses its family stage.
-    options, _ = drivers._options(list(contract.effective))
-    options = [*project.cppflags, *options]
+    # The SDK catalogue is a host-cpp analysis of the actual unit environment.
+    command = drivers.analysis_command(project, str(policy.cpp), version, unit.stem)
     headers = [
         path
         for root in project.include
@@ -425,18 +423,10 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
         work = Path(temporary)
         probe = work / "sdk.c"
         atomic_files.text(probe, "\n".join([*directives, *(f'#include "{path}"' for path in sorted(headers))]) + "\n")
-        command = [
-            str(policy.cpp),
-            "-dM",
-            "-undef",
-            "-nostdinc",
-            *(f"-I{root}" for root in project.include),
-            *options,
-            str(probe),
-        ]
+        command = [*command[:-1], "-dM", "-undef", "-nostdinc", str(probe)]
         from unbake.cache import memo
 
-        definitions = run_tool(command, work, "gbi")
+        definitions = run_tool(command, project.root, "gbi")
         return memo("gbi.sdk.patterns", definitions, lambda: patterns(definitions))
 
 

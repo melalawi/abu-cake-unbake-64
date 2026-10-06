@@ -26,9 +26,11 @@ class NativeResult:
     context: dict[str, Any]
 
 
-def run_native(argv: list[str], work: Path, phase: str, *, context: dict[str, Any] | None = None) -> NativeResult:
+def run_native(
+    argv: list[str], work: Path, phase: str, *, context: dict[str, Any] | None = None, env: dict[str, str] | None = None
+) -> NativeResult:
     """The one native result/fault boundary, retaining both streams and exact invocation."""
-    environment = dict(os.environ, TMPDIR=str(work), TMP=str(work), TEMP=str(work), LC_ALL="C")
+    environment = dict(os.environ if env is None else env, TMPDIR=str(work), TMP=str(work), TEMP=str(work), LC_ALL="C")
     key = f"{phase}.{Path(argv[0]).name}"
     try:
         completed = subprocess.run(

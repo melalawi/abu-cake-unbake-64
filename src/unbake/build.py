@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from unbake import steps
+from unbake import process, steps
 from unbake.config import Held, Host, Project
 
 
@@ -19,6 +19,7 @@ class Outcome:
     findings: list[str] = field(default_factory=list)
     make_tail: list[str] = field(default_factory=list)
     seconds: float = 0.0
+    fault: dict[str, Any] | None = None
 
     def document(self) -> dict[str, Any]:
         return {
@@ -27,6 +28,7 @@ class Outcome:
             "findings": list(self.findings),
             "make_tail": list(self.make_tail),
             "seconds": round(self.seconds, 3),
+            **({"fault": self.fault} if self.fault is not None else {}),
         }
 
     def lines(self) -> list[str]:
@@ -92,12 +94,15 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
     if python is not None:
         raise Held("check", f"tools.path: {python} is visible; [tools].path must not contain Python")
     try:
-        result = subprocess.run(
-            make_command(host, "check"), cwd=project.root, env=environment(host), capture_output=True, text=True
+        process.run_native(
+            make_command(host, "check"),
+            project.root,
+            "check",
+            env=environment(host),
+            context={"target": "check", "versions": list(project.versions)},
         )
-    except OSError as error:
-        raise Held("check", f"tools.make: {host.make}: {error}") from error
-    output = (result.stdout + result.stderr).splitlines()
-    tail = output[-20:] if result.returncode else []
-    ok = result.returncode == 0 and not findings
-    return Outcome(ok, True, findings, tail, time.monotonic() - started)
+    except Held as error:
+        native = error.fault or {}
+        output = (native.get("stdout", "") + native.get("stderr", "")).splitlines()
+        return Outcome(False, True, findings, output[-20:], time.monotonic() - started, process.fault(error))
+    return Outcome(not findings, True, findings, [], time.monotonic() - started)

@@ -69,3 +69,42 @@ class PublicFaultTests(ProjectCase):
         result = engine._result(future)
         self.assertEqual(result["fault"], process.fault(error))
         self.assertEqual(result["key"], error.key)
+
+    def test_make_failure_keeps_native_streams_and_the_clean_build_environment(self):
+        import os
+        import subprocess
+
+        from unbake import build
+        from unbake.project import hygiene
+
+        stdout, stderr = "first diagnostic\n" + "detail\n" * 30, "last diagnostic\n"
+        with (
+            patch.object(build.steps, "ensure"),
+            patch.object(hygiene, "tracked_findings", return_value=[]),
+            patch.object(build, "python_visible", return_value=None),
+            patch.object(
+                process.subprocess, "run", return_value=subprocess.CompletedProcess(["make"], 7, stdout, stderr)
+            ) as native,
+        ):
+            result = build.check(self.project, self.host)
+        fault = result.document()["fault"]["chain"][0]["fault"]
+        self.assertEqual((fault["exit"], fault["stdout"], fault["stderr"]), (7, stdout, stderr))
+        self.assertEqual(native.call_args.kwargs["env"]["PATH"], os.pathsep.join(map(str, self.host.tool_path)))
+        self.assertNotIn("PYTHONPATH", native.call_args.kwargs["env"])
+
+    def test_extraction_failure_keeps_separate_complete_native_streams(self):
+        import subprocess
+
+        from unbake import extract
+
+        def failed(argv, **named):
+            stdout, stderr = "splat output\n", "splat refusal\n"
+            if not named.get("text"):
+                stdout, stderr = stdout.encode(), stderr.encode()
+            return subprocess.CompletedProcess(argv, 5, stdout, stderr)
+
+        with patch.object(process.subprocess, "run", side_effect=failed), self.assertRaises(Held) as caught:
+            extract._make_archive(self.project, self.host, "us", self.root / "extract.tar")
+        self.assertEqual(caught.exception.fault["exit"], 5)
+        self.assertEqual(caught.exception.fault["stdout"], "splat output\n")
+        self.assertEqual(caught.exception.fault["stderr"], "splat refusal\n")

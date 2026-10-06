@@ -14,7 +14,6 @@ import json
 import os
 import posixpath
 import re
-import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
@@ -162,15 +161,14 @@ def _make_archive(project: Project, host: Host, version: str, destination: Path)
         atomic_files.text(
             overlay, "options:\n" + "".join(f"  {name}: {json.dumps(value)}\n" for name, value in options.items())
         )
-        result = subprocess.run(
+        from unbake.process import run_native
+
+        run_native(
             [str(host.splat), "split", str(config), str(overlay)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=project.root,
+            project.root,
+            "extract",
+            context={"version": version, "split": str(configured.split)},
         )
-        if result.returncode:
-            tail = result.stdout.decode(errors="replace").strip().splitlines()[-5:]
-            raise Held("extract", f"extract.splat.{version}: splat exited {result.returncode}: " + " | ".join(tail))
         from unbake.typemap import storage
 
         # splat names its generated macro files by the staging path it was given: store that path from the project.
