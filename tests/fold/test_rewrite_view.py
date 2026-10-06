@@ -250,7 +250,9 @@ class PrepareTests(ProjectCase):
         self.assertIs(project, self.project)
         for flag in ("-P", "-fdebug-cpp", "-ftrack-macro-expansion=2", "-ftabstop=1", "-DVERSION_US"):
             self.assertIn(flag, command)
-        self.assertIn("-I" + str(self.project.include[0]), command)
+        self.assertIn(
+            self.project.include[0], [self.project.root / flag[2:] for flag in command if flag.startswith("-I")]
+        )
         self.assertIn('#line 1 "/authored/alpha.c"\n' + source, unit)
         self.assertEqual(view.origins, (0,))
 

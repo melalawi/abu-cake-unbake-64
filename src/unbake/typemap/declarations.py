@@ -27,7 +27,10 @@ from unbake.typemap import storage, unit_layouts
 _BOUNDARY = "extern int __unbake_feedback_boundary;"
 # One source's facts parse the same unit up to four times (scoped then full, contracts then definition).
 UNIT_MEMO = 2
-_C_TOKEN = re.compile(r'/\*.*?\*/|//[^\n]*|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\'|^[ \t]*#(?:\\\n|[^\n])*|[A-Za-z_]\w*|\S', re.M | re.S)
+_C_TOKEN = re.compile(
+    r'/\*.*?\*/|//[^\n]*|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\'|^[ \t]*#(?:\\\n|[^\n])*|[A-Za-z_]\w*|\S',
+    re.M | re.S,
+)
 
 
 def _outer_guard(text: str) -> str | None:
@@ -247,23 +250,45 @@ def _headers(
         if raw:
             source += _BOUNDARY + "\n"
         source += f'#include "{extra}"\n'
-    command = _cpp_command(project, policy, version, extra=extra is not None, line_markers=line_markers)
+    command = _cpp_command(
+        project,
+        policy,
+        version,
+        extra=extra is not None,
+        line_markers=line_markers,
+        unit=extra.stem if extra is not None and extra.suffix == ".c" else None,
+    )
     text = _preprocess(project, command, source)
     return text if raw else clean(text, line_markers=extra is not None or line_markers)
 
 
-def _cpp_command(project: Project, policy: Host, version: str, *, extra: bool, line_markers: bool) -> list[str]:
+def _cpp_command(
+    project: Project, policy: Host, version: str, *, extra: bool, line_markers: bool, unit: str | None = None
+) -> list[str]:
     from unbake.compilers import drivers
 
-    compiler = project.compilers[project.default_compiler]
-    effective = [*(f"-I{root}" for root in project.include), *compiler.cflags,
-                 *(f"-D{macro}" for macro in project.version(version).macros)]
+    compiler = project.compilers[project.default_compiler] if unit is None else project.compiler_for(unit)
+    effective = (
+        drivers.flags(project, version, unit)
+        if unit is not None
+        else [
+            *(f"-I{root}" for root in project.include),
+            *compiler.cflags,
+            *(f"-D{macro}" for macro in project.version(version).macros),
+        ]
+    )
     preprocess, _ = drivers.stage_flags(compiler.kind, effective)
     options = [*preprocess, *(("-DUNBAKE_PROTOTYPES_H",) if extra else ())]
     if compiler.kind == "ido":
         return [str(compiler.cc), *options, "-E", "-"]
-    return [str(policy.cpp), *(flag for flag in project.cppflags if not line_markers or flag != "-P"),
-            *options, "-x", "c", "-"]
+    return [
+        str(policy.cpp),
+        *(flag for flag in project.cppflags if not line_markers or flag != "-P"),
+        *options,
+        "-x",
+        "c",
+        "-",
+    ]
 
 
 def _preprocess(project: Project, command: list[str], source: str) -> str:
@@ -272,7 +297,7 @@ def _preprocess(project: Project, command: list[str], source: str) -> str:
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".headers-", dir=project.build) as temporary:
         wrapper = Path(temporary) / "context.c"
-        wrapper.write_text(source)
+        atomic_files.fresh(wrapper, source.encode())
         return run_tool([*command[:-1], str(wrapper)], project.root, "solve").replace(str(wrapper), "<unbake-context>")
 
 
@@ -281,8 +306,17 @@ def source_unit(
 ) -> str:
     """One source preprocessed with only its own includes, split by the source boundary."""
     if policy is None:
-        return _headers(project, policy, version, {}, source, line_markers=line_markers,
-                        ordered=[], raw=True, include_generated=False)
+        return _headers(
+            project,
+            policy,
+            version,
+            {},
+            source,
+            line_markers=line_markers,
+            ordered=[],
+            raw=True,
+            include_generated=False,
+        )
     from unbake.compilers import drivers
     from unbake.process import run_tool
 
@@ -294,9 +328,10 @@ def source_unit(
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".unit-", dir=project.build) as temporary:
         wrapper = Path(temporary) / "unit.c"
-        wrapper.write_text(_BOUNDARY + "\n" + f'#include "{source}"\n')
-        command = drivers.preprocess_command(project, str(policy.cpp), version, unit, wrapper, non_matching=False,
-                                              line_markers=line_markers)
+        atomic_files.fresh(wrapper, (_BOUNDARY + "\n" + f'#include "{source}"\n').encode())
+        command = drivers.preprocess_command(
+            project, str(policy.cpp), version, unit, wrapper, non_matching=False, line_markers=line_markers
+        )
         return run_tool(command, project.root, "solve").replace(str(wrapper), "<unbake-unit>")
 
 

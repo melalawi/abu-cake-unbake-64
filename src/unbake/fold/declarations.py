@@ -371,7 +371,7 @@ def _layout_names(
 
         def typed_context(version: str) -> str:
             return source_views.typed_context(
-                project, policy, headers, version, source_context=True, context_project=effective_project()
+                project, policy, headers, version, function, context_project=effective_project()
             )
 
         def expanded_context(parser: LayoutParser, version: str) -> rewrite_view.View:

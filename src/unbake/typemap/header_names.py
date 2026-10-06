@@ -346,7 +346,7 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
     import json
 
     from unbake.cache import Cache, key
-    from unbake.fold.source_views import _preprocessed_lines, _version_lines
+    from unbake.fold.source_views import active_source
     from unbake.typemap.declarations import clean
 
     project, policy, path, text = item
@@ -358,13 +358,9 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
     if views and re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
         if policy is None:
             raise Held("solve", f"types.header_parse: {path}: policy.cpp required for conditional source names")
-        lines = declaration_source(text).splitlines(keepends=True)
         views = set()
         for version in project.versions:
-            active = _version_lines(project, policy, text, version, path.stem)
-            if active is None:
-                active = _preprocessed_lines(project, policy, text, version, path.stem)
-            views.add("".join(line for index, line in enumerate(lines) if index in active))
+            views.add(active_source(project, policy, text, version, path.stem))
     owned: set[str] = set()
     tags: set[str] = set()
     for view in views:

@@ -1,8 +1,10 @@
 """Per-source ownership projections reuse exact output across irrelevant lexical/policy changes."""
+
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
-from tests.project_fixture import ProjectCase, make
+
+from tests.project_fixture import ProjectCase
 from unbake import effort
 from unbake.config import Host
 from unbake.typemap import database, regeneration
@@ -13,7 +15,7 @@ class SemanticRegenerationTests(ProjectCase):
 
     def test_local_rename_reuses_render_but_declaration_or_dependency_change_invalidates(self):
         source = self.project.src / "alpha.c"
-        source.write_text('int alpha(void) { int temp_v0 = 1; return temp_v0; }\n')
+        source.write_text("int alpha(void) { int temp_v0 = 1; return temp_v0; }\n")
         before = regeneration.Session(self.project, self.host)
         source.write_text(source.read_text().replace("temp_v0", "renamed_local"))
         after = regeneration.Session(self.project, self.host)
@@ -30,7 +32,7 @@ class SemanticRegenerationTests(ProjectCase):
         with patch.object(regeneration.layout_index, "load", return_value={"headers": {}}):
             second = after.render(value, lambda: self.fail("lexical edit rerendered identical headers"))
         self.assertEqual(first, second)
-        source.write_text('int alpha(int value) { return value; }\n')
+        source.write_text("int alpha(int value) { return value; }\n")
         changed = regeneration.Session(self.project, self.host)
         self.assertNotEqual(changed.inputs, before.inputs)
 
@@ -49,7 +51,9 @@ class SemanticRegenerationTests(ProjectCase):
         output = self.project.include[0] / "alpha.h"
         session = regeneration.Session(self.project, None)
         with patch.object(database, "_validate_version", return_value="parsed"):
-            database.validate_headers(self.project, {output: b"int alpha(void);\n"}, None, abi_context="", session=session)
+            database.validate_headers(
+                self.project, {output: b"int alpha(void);\n"}, None, abi_context="", session=session
+            )
         before = effort.counted().get("validation.rows", (0, 0))
         database.validate_headers(self.project, {output: b"int alpha(void);\n"}, None, abi_context="", session=session)
         after = effort.counted()["validation.rows"]
@@ -60,10 +64,29 @@ class SemanticRegenerationTests(ProjectCase):
         from tests.preprocessor import output
         from unbake import process
         from unbake.typemap import header_names
-        source = self.project.src / 'alpha.c'
-        source.write_text('#include "types.h"\n#ifdef PRIVATE\ntypedef int Private;\n#endif\nint alpha(void) { return 0; }\n')
-        project = replace(self.project, unit_flags={'alpha': ('-DPRIVATE=1',)})
-        with patch.object(process.subprocess, 'run', side_effect=output):
-            names, tags = header_names._owned((project, self.host, source, source.read_text()))
-        self.assertIn('Private', names)
-        self.assertNotIn('s32', names)
+
+        source = self.project.src / "alpha.c"
+        source.write_text(
+            '#include "types.h"\n#ifdef PRIVATE\ntypedef int Private;\n#endif\nint alpha(void) { return 0; }\n'
+        )
+        project = replace(self.project, unit_flags={"alpha": ("-DPRIVATE=1",)})
+        with patch.object(process.subprocess, "run", side_effect=output):
+            names, _tags = header_names._owned((project, self.host, source, source.read_text()))
+        self.assertIn("Private", names)
+        self.assertNotIn("s32", names)
+
+    def test_conditionals_inside_a_body_do_not_make_the_declaration_projection_unbalanced(self):
+        from tests.preprocessor import output
+        from unbake import process
+
+        source = self.project.src / "alpha.c"
+        source.write_text(
+            "int alpha(int value) {\n#ifdef VERSION_US\nif (value) {\n#else\n"
+            "if (value > 1) {\n#endif\nreturn 1;\n}\nreturn 0;\n}\n"
+        )
+        with patch.object(process.subprocess, "run", side_effect=output):
+            before = regeneration.Session(self.project, self.host)
+            source.write_text(source.read_text().replace("return 1;", "return 2;"))
+            after = regeneration.Session(self.project, self.host)
+        self.assertEqual(before.inputs, after.inputs)
+        self.assertIn("alpha", before.projections[source]["declarations"]["us"])

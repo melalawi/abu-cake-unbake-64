@@ -114,6 +114,7 @@ def prepare(
     contents: dict[Path, str] | None = None,
 ) -> View:
     """Expand the fold's effective headers, compiler defines and source macros."""
+    from unbake.compilers import drivers
     from unbake.decomp.draft_context import ordered_headers
     from unbake.project.headers import include_headers
     from unbake.typemap import declarations, storage
@@ -128,8 +129,9 @@ def prepare(
     prelude += "".join(f"#include {json.dumps(str(path))}\n" for path in declarations._generated_context(project))
     filename = str(source_path)
     unit = prelude + f"extern int {_BOUNDARY};\n#line 1 {json.dumps(filename)}\n" + source
-    command = declarations._cpp_command(project, policy, version, extra=True, line_markers=False)
+    command = drivers.analysis_command(project, str(policy.cpp), version, source_path.stem)
     command[-1:-1] = [
+        "-DUNBAKE_PROTOTYPES_H",
         "-P",
         "-fdebug-cpp",
         "-ftrack-macro-expansion=2",

@@ -31,23 +31,27 @@ def parsers(
 
     if not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
         return [contextual(text)]
-    lines = text.splitlines(keepends=True)
     result = []
-    # Versions selecting the same lines share one parse.
-    parsed: dict[frozenset[int], LayoutParser] = {}
+    parsed: dict[str, LayoutParser] = {}
     for version in versions:
-        active = _version_lines(project, policy, text, version, unit)
-        if active is None:
-            active = _preprocessed_lines(project, policy, text, version, unit, context)
-        key = frozenset(active)
-        if key not in parsed:
-            view = "".join(
-                line if index in active else "".join("\n" if char == "\n" else " " for char in line)
-                for index, line in enumerate(lines)
-            )
-            parsed[key] = contextual(view)
-        result.append(parsed[key])
+        view = active_source(project, policy, text, version, unit, context)
+        if view not in parsed:
+            parsed[view] = contextual(view)
+        result.append(parsed[view])
     return result
+
+
+def active_source(
+    project: Project, policy: Host, text: str, version: str, unit: str, headers: Headers | None = None
+) -> str:
+    """Select source-owned lines while keeping original tokens and edit offsets."""
+    active = _version_lines(project, policy, text, version, unit)
+    if active is None:
+        active = _preprocessed_lines(project, policy, text, version, unit, headers)
+    return "".join(
+        line if index in active else "".join("\n" if char == "\n" else " " for char in line)
+        for index, line in enumerate(text.splitlines(keepends=True))
+    )
 
 
 def typed_context(
@@ -55,12 +59,13 @@ def typed_context(
     policy: Host,
     headers: Headers,
     version: str,
+    unit: str,
     *,
-    source_context: bool = False,
     context_project: Project | None = None,
 ) -> str:
     """Reuse preprocessing for an effective header set and selected version."""
     from unbake.cache import memo
+    from unbake.compilers import drivers
     from unbake.typemap import declarations as typed_declarations
 
     selection = (
@@ -69,9 +74,10 @@ def typed_context(
         tuple(headers.texts.items()),
         policy.cpp,
         project.cppflags,
-        project.compilers[project.default_compiler].cflags,
+        project.compiler_for(unit).id,
+        project.compiler_for(unit).cc,
+        tuple(drivers.flags(project, version, unit)),
         project.version(version).macros,
-        source_context,
     )
 
     def compute() -> str:
@@ -80,15 +86,10 @@ def typed_context(
             if local is None:
                 roots = header_includes(project, headers, Path(temporary))
                 local = replace(project, work_include=tuple(roots))
-            if source_context:
-                # Source context includes promoted components excluded from header-only evidence.
-                source = Path(temporary) / "rewrite-context.c"
-                atomic_files.text(source, "")
-                return typed_declarations.headers(
-                    local, policy, version, extra=source, contents=authored_contents(project, headers, local)
-                )
+            source = Path(temporary) / f"{unit}.c"
+            atomic_files.text(source, "")
             return typed_declarations.headers(
-                local, policy, version, contents=authored_contents(project, headers, local)
+                local, policy, version, extra=source, contents=authored_contents(project, headers, local)
             )
 
     cached: dict[tuple[Any, ...], str] = headers.__dict__.setdefault("_typed_contexts", {})

@@ -13,14 +13,14 @@ from typing import Any, ClassVar
 from unbake import atomic as atomic_files
 from unbake import effort, inputs
 from unbake.cache import Cache, key, memo
-from unbake.config import Host, Project
+from unbake.config import Held, Host, Project
 from unbake.layout import headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
 from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
-SOURCE_NAMES_SCHEMA = 3
+SOURCE_NAMES_SCHEMA = 4
 RENDER_SCHEMA = 3
 
 
@@ -116,12 +116,24 @@ class Session:
                 owned, tags = header_names._owned((project, policy, path, text))
                 from unbake.cdecl import declaration_source
 
-                outside = declarations._unit_bodies_blanked(declaration_source(text))
+                def tokens(view: str) -> list[str]:
+                    outside = declarations._unit_bodies_blanked(declaration_source(view))
+                    return [match[0] for match in declarations._C_TOKEN.finditer(outside)]
+
+                try:
+                    declared: Any = tokens(text)
+                except Held as error:
+                    if policy is None or not re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M):
+                        raise Held("solve", f"types.declaration: {path}: {error.reason}") from error
+                    from unbake.fold.source_views import active_source
+
+                    declared = {
+                        version: tokens(active_source(project, policy, text, version, path.stem))
+                        for version in project.versions
+                    }
                 directives = re.findall(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M)
-                # Token spelling retains declarations/directives, but implementation whitespace has no meaning.
-                tokens = [match[0] for match in declarations._C_TOKEN.finditer(outside)]
                 return {
-                    "declarations": tokens,
+                    "declarations": declared,
                     "directives": directives,
                     "owned": owned,
                     "tags": tags,

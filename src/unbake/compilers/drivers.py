@@ -13,6 +13,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake.config import Held, Project
 
 PREPROCESSOR_PAIRS = frozenset({"-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"})
@@ -127,12 +128,18 @@ def _options(values: list[str]) -> tuple[list[str], list[str]]:
 
 def _supported(kind: str, values: list[str]) -> None:
     import re
-    from unbake.compilers.registry import REGISTRY_PATH
     import tomllib
 
+    from unbake.compilers.registry import REGISTRY_PATH
+
     definitions = tomllib.loads(REGISTRY_PATH.read_text())["compilers"]
-    supported = {flag for spec in definitions.values() if spec["kind"] == kind
-                 for flags in [spec["cflags"], *spec["flag_variants"]] for flag in flags}
+    supported = {
+        flag
+        for spec in definitions.values()
+        if spec["kind"] == kind
+        for flags in [spec["cflags"], *spec["flag_variants"]]
+        for flag in flags
+    }
     supported.update({"-ansi", "-fsigned-char"})
     for flag in values:
         if flag in supported or re.fullmatch(r"-G[0-9]+|-mips[1-4]|-O[0-3s]?|-g[0-3]?", flag):
@@ -205,22 +212,43 @@ def parts(project: Project, version: str, unit: str, *, non_matching: bool = Fal
 def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
     """The commands for UNIT from SOURCE (a path relative to the project root, or any quoted word)."""
     owned = parts(project, version, unit, non_matching=non_matching)
-    return from_flags(owned.kind, owned.cc, owned.effective, project.cppflags, gnu_as_flags(project), unit, source, tools)
+    return from_flags(
+        owned.kind, owned.cc, owned.effective, project.cppflags, gnu_as_flags(project), unit, source, tools
+    )
 
 
-def from_flags(kind: str, cc: str, effective: tuple[str, ...], cppflags: tuple[str, ...], asflags: tuple[str, ...],
-               unit: str, source: str, tools: Tools) -> Steps:
+def from_flags(
+    kind: str,
+    cc: str,
+    effective: tuple[str, ...],
+    cppflags: tuple[str, ...],
+    asflags: tuple[str, ...],
+    unit: str,
+    source: str,
+    tools: Tools,
+) -> Steps:
     """Render the one ordered native stage contract, including overlay proofs."""
     preprocess, codegen = stage_flags(kind, list(effective))
     values = {
-        "cc": (cc,), "cpp": (tools.cpp,), "as": (tools.mips_as,), "n64link": (tools.n64link,),
-        "preprocess": preprocess, "codegen": codegen, "cppflags": cppflags, "asflags": asflags,
-        "source": (source,), "name": (Path(unit).name,),
+        "cc": (cc,),
+        "cpp": (tools.cpp,),
+        "as": (tools.mips_as,),
+        "n64link": (tools.n64link,),
+        "preprocess": preprocess,
+        "codegen": codegen,
+        "cppflags": cppflags,
+        "asflags": asflags,
+        "source": (source,),
+        "name": (Path(unit).name,),
     }
     template = TEMPLATES[kind]
     assemble = template["assemble"]
-    return Steps(kind, render(template["preprocess"] or (), values), render(template["compile"] or (), values),
-                 render(assemble, values) if assemble is not None else None)
+    return Steps(
+        kind,
+        render(template["preprocess"] or (), values),
+        render(template["compile"] or (), values),
+        render(assemble, values) if assemble is not None else None,
+    )
 
 
 def preprocess_command(
@@ -236,14 +264,33 @@ def preprocess_command(
     return argv
 
 
+def analysis_command(project: Project, cpp: str, version: str, unit: str) -> list[str]:
+    """GCC token-location analysis with the actual unit's ordered macro/include environment.
+
+    The analysis provider is host cpp even for an IDO unit. Native compilation
+    remains owned by that unit's family; GCC analysis switches never reach IDO.
+    """
+    from unbake.compilers.families.gcc import Gcc
+
+    compiler = project.compiler_for(unit)
+    preprocess, codegen = _options(flags(project, version, unit))
+    options = Gcc().preprocess_flags(tuple(preprocess), tuple(codegen))
+    return [cpp, *(project.cppflags if compiler.kind == "sn64" else ()), *options, "-x", "c", "-"]
+
+
 def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: str, phase: str) -> str:
     """Preprocess in-memory C through the same family stage, with source ownership supplied."""
     import tempfile
+
     from unbake.process import run_tool
 
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".preprocess-", dir=project.build) as temporary:
         source = Path(temporary) / "unit.c"
-        source.write_text(text)
-        return run_tool(preprocess_command(project, cpp, version, unit, source, non_matching=True), project.root, phase,
-                        context={"function": unit, "version": version})
+        atomic_files.fresh(source, text.encode())
+        return run_tool(
+            preprocess_command(project, cpp, version, unit, source, non_matching=True),
+            project.root,
+            phase,
+            context={"function": unit, "version": version},
+        )
