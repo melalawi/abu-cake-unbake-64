@@ -286,6 +286,14 @@ def land(project: Project, host: Host, file: Path) -> str:
         versions, dependencies = prove(project, host, function, folded.source, headers, stage)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+    # A private work directory can retain declarations from an abandoned draft.
+    # Only native prerequisites follow the source; explicit shared fold edits
+    # still belong to their separately validated consumers.
+    headers = {
+        name: text
+        for name, text in headers.items()
+        if name in folded.headers or project.include[-1] / name in dependencies
+    }
     written: dict[Path, bytes | None] = {}
 
     def put(path: Path, content: bytes) -> None:

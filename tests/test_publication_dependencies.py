@@ -11,6 +11,34 @@ from unbake.layout import split
 
 
 class PublicationDependencyTests(ProjectCase):
+    def test_private_header_publication_follows_native_reads_not_work_directory_contents(self):
+        file = self.project.work / "alpha/alpha.c"
+        file.parent.mkdir(parents=True)
+        source = '#include "needed.h"\nint alpha(void) { return VALUE; }\n'
+        file.write_text(source)
+        private = file.parent / "include"
+        private.mkdir()
+        (private / "needed.h").write_text("#define VALUE 1\n")
+        (private / "abandoned.h").write_text("struct Abandoned { int value; };\n")
+        staged = []
+        with (
+            patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
+            patch("unbake.fold.apply.fold", return_value=Folded("alpha", source, {}, ())),
+            patch.object(land, "_prove_versions", return_value={self.project.work / "_land/alpha/include/needed.h"}),
+            patch("unbake.layout.header_step.validate"),
+            patch.object(land, "_commit", side_effect=lambda project, host, paths, message: staged.extend(paths)),
+            patch.object(land, "_git", return_value="committed\n"),
+            patch.object(land.buildfiles, "write", return_value=[]),
+            patch.object(land.steps, "record"),
+            patch("unbake.report.progress.write", return_value=[]),
+        ):
+            land.land(self.project, self.host, file)
+        root = self.project.include[-1]
+        self.assertEqual((root / "needed.h").read_text(), "#define VALUE 1\n")
+        self.assertIn(root / "needed.h", staged)
+        self.assertFalse((root / "abandoned.h").exists())
+        self.assertNotIn(root / "abandoned.h", staged)
+
     def test_native_transitive_version_inputs_land_without_unrelated_headers(self):
         include = self.project.include[-1]
         headers = {
