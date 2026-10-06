@@ -393,14 +393,10 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
     from unbake.compilers import drivers
     from unbake.process import run_tool
 
-    flags = [*project.cppflags, *drivers.preprocessor_options(project, version, unit.stem, absolute=True)]
-    options: list[str] = []
-    iterator = iter(flags)
-    for flag in iterator:
-        if flag in {"-D", "-U", "-I"}:
-            options.extend((flag, next(iterator, "")))
-        elif flag.startswith(("-D", "-U", "-I")):
-            options.append(flag)
+    contract = drivers.parts(project, version, unit.stem)
+    # Host macro catalogue is an explicit SDK-analysis facility; native expansion uses its family stage.
+    options, _ = drivers._options(list(contract.effective))
+    options = [*project.cppflags, *options]
     headers = [
         path
         for root in project.include

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, cast
@@ -56,33 +55,11 @@ def preprocess(source: Path, project: Any, policy: Any, version: str) -> str:
         held("project.include", "missing include directories")
     if not policy.cpp:
         held("policy.cpp", "missing executable")
-    compiler = project.compiler_for(source)
-    flags: list[str] = []
-    options = iter(compiler.cflags)
-    for option in options:
-        if option in ("-I", "-D", "-U", "-include", "-isystem"):
-            value = next(options, None)
-            if value is None:
-                held(option, "missing preprocessing argument")
-            flags.extend((option, value))
-        elif option.startswith(("-I", "-D", "-U")):
-            flags.append(option)
-    command = [
-        str(policy.cpp),
-        *project.cppflags,
-        "-P",
-        *flags,
-        *(f"-I{path}" for path in project.include),
-        *(f"-D{macro}" for macro in project.version(version).macros),
-        str(source.resolve()),
-    ]
-    try:
-        result = subprocess.run(command, cwd=project.root, capture_output=True, text=True)
-    except OSError as error:
-        held("policy.cpp", str(error))
-    if result.returncode:
-        held(str(source), result.stderr.strip() or f"preprocessing exit {result.returncode}")
-    return result.stdout
+    from unbake.compilers import drivers
+    from unbake.process import run_tool
+
+    return run_tool(drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source.resolve(), non_matching=True),
+                    project.root, "structs", context={"source": str(source), "version": version})
 
 
 def layouts(source: str | Path, *, project: Any = None, policy: Any = None, version: str | None = None) -> list[Layout]:

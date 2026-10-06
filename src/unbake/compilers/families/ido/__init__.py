@@ -16,6 +16,14 @@ if TYPE_CHECKING:
 
 
 class Ido:
+    def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
+        """Language/macro input, excluding code generation optimization."""
+        for flag in codegen:
+            if not (flag.startswith(("-O", "-G", "-g", "-mips")) or flag in ("-non_shared", "-shared", "-ansi", "-signed", "-unsigned", "-Xc", "-Xansi")):
+                from unbake.config import Held
+                raise Held("compile", f"compile.flags: {flag}: unsupported by the ido driver")
+        return (*preprocess, *(flag for flag in codegen if not flag.startswith(("-O", "-g"))))
+
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
         """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments.
 

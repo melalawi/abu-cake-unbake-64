@@ -78,7 +78,7 @@ def preprocess(project: Project, policy: Host, source: Path, version: str, deadl
     """Use the selected unit's build preprocessor, includes and VERSION flags."""
     from unbake.compilers import drivers
 
-    command = drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source)
+    command = drivers.preprocess_command(project, str(policy.cpp), version, source.stem, source, non_matching=True)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise Held("search", "context.deadline: preprocessing budget exhausted")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from itertools import pairwise
 from pathlib import Path
 
@@ -18,18 +17,9 @@ from unbake.typemap.declarations import clean
 
 def definitions(project: Project, policy: Host, source: Path, version: str, text: str) -> set[str]:
     """Read active global C definitions, excluding declarations and static helpers."""
-    options = drivers.preprocessor_options(project, version, source.stem, absolute=False)
-    result = subprocess.run(
-        [str(policy.cpp), *project.cppflags, *options, "-DNON_MATCHING=1", "-x", "c", "-"],
-        cwd=project.root,
-        input=text,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode:
-        raise Held("try", "trial.entries_source: " + result.stderr.strip())
+    expanded = drivers.preprocess_text(project, str(policy.cpp), version, source.stem, text, "try")
     try:
-        tree = cdecl.parse(clean(result.stdout))
+        tree = cdecl.parse(clean(expanded))
     except cdecl.ParseError as error:
         raise Held("try", f"trial.entries_source: {error}") from error
     return {

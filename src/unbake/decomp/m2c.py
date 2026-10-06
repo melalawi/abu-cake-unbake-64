@@ -13,6 +13,7 @@ from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
 from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
 from unbake.decomp.draft_fp import command, register_pairs
+from unbake.compilers import drivers
 from unbake.decomp.draft_input import (
     assembly_source,
     canonical_aliases,
@@ -193,7 +194,7 @@ def _draft(
     if signatures:
         with atomic_files.stream(context, "a") as stream:
             stream.write("\n" + signatures + "\n")
-    atomic_files.text(assembly, register_pairs(body, compiler.cflags, function), encoding="utf-8")
+    atomic_files.text(assembly, register_pairs(body, tuple(drivers.flags(project, v, function)), function), encoding="utf-8")
     output = run_tool(
         [
             *command(executable_path, assembly.read_text()),

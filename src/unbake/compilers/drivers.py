@@ -34,17 +34,17 @@ MAKE_TOOLS = Tools("$(CPP)", "$(AS)", "$(N64LINK)")
 # preprocess writes UNIT.i on stdout from the project root; compile and assemble run in the object's directory.
 TEMPLATES: dict[str, dict[str, tuple[str, ...] | None]] = {
     "ido": {
-        "preprocess": ("{cc}", "{includes}", "{codegen}", "{defines}", "-E", "{source}"),
+        "preprocess": ("{cc}", "{preprocess}", "-E", "{source}"),
         "compile": ("{cc}", "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
         "assemble": None,
     },
     "sn64": {
-        "preprocess": ("{cpp}", "{includes}", "{cppflags}", "{defines}", "{source}"),
+        "preprocess": ("{cpp}", "{cppflags}", "{preprocess}", "{source}"),
         "compile": ("{cc}", "-quiet", "{codegen}", "{name}.i", "-o", "{name}.s"),
         "assemble": ("{n64link}", "asn64", "--as", "{as}", "{asflags}", "{name}.s", "-o", "{name}.o"),
     },
 }
-DEPEND = ("{cpp}", "-MM", "-MG", "{includes}", "{defines}", "{source}")
+DEPEND = ("{cpp}", "-MM", "-MG", "{cppflags}", "{preprocess}", "{source}")
 # Kinds whose objects keep trailing zero padding after the last function (n64link place --trim otherwise).
 UNTRIMMED = frozenset({"sn64"})
 
@@ -68,6 +68,8 @@ class Parts:
     includes: tuple[str, ...]
     codegen: tuple[str, ...]
     defines: tuple[str, ...]
+    preprocess: tuple[str, ...]
+    effective: tuple[str, ...]
 
 
 def render(template: tuple[str, ...], values: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
@@ -91,12 +93,11 @@ def consumer_define(project: Project, unit: str) -> str | None:
 def flags(project: Project, version: str, unit: str, *, non_matching: bool = False) -> list[str]:
     """Include roots, compiler flags, version macros, the consumer guard and the unit's own flags."""
     root = project.root
+    unit = Path(unit).stem
     result = [
         f"-I{include.relative_to(root) if include.is_relative_to(root) else include}" for include in project.include
     ]
-    for flag in project.compiler_for(unit).cflags:
-        if flag not in result:
-            result.append(flag)
+    result.extend(project.compiler_for(unit).cflags)
     result.extend("-D" + macro for macro in project.version(version).macros)
     if non_matching:
         result.append("-DNON_MATCHING=1")
@@ -107,42 +108,66 @@ def flags(project: Project, version: str, unit: str, *, non_matching: bool = Fal
     return result
 
 
-def codegen_flags(values: list[str]) -> list[str]:
-    """Remove preprocessing options: a .i input is already preprocessed."""
-    result = []
-    skip = False
+def _options(values: list[str]) -> tuple[list[str], list[str]]:
+    """Ordered preprocessing options and code generation options, with named pair errors."""
+    preprocess, codegen = [], []
+    pending = iter(values)
+    for flag in pending:
+        if flag in PREPROCESSOR_PAIRS:
+            value = next(pending, None)
+            if value is None or not value or value.startswith("-"):
+                raise Held("compile", f"compile.flags: {flag}: missing value")
+            preprocess.extend((flag, value))
+        elif flag.startswith(("-I", "-D", "-U")):
+            preprocess.append(flag)
+        elif flag != "-c":
+            codegen.append(flag)
+    return preprocess, codegen
+
+
+def _supported(kind: str, values: list[str]) -> None:
+    import re
+    from unbake.compilers.registry import REGISTRY_PATH
+    import tomllib
+
+    definitions = tomllib.loads(REGISTRY_PATH.read_text())["compilers"]
+    supported = {flag for spec in definitions.values() if spec["kind"] == kind
+                 for flags in [spec["cflags"], *spec["flag_variants"]] for flag in flags}
+    supported.update({"-ansi", "-fsigned-char"})
     for flag in values:
-        if skip:
-            skip = False
-        elif flag in PREPROCESSOR_PAIRS:
-            skip = True
-        elif not flag.startswith(("-I", "-D", "-U")) and flag != "-c":
-            result.append(flag)
-    if skip:
-        raise Held("compile", "compile.flags: a preprocessor option is missing its value")
-    return result
+        if flag in supported or re.fullmatch(r"-G[0-9]+|-mips[1-4]|-O[0-3s]?|-g[0-3]?", flag):
+            continue
+        raise Held("compile", f"compile.flags: {flag}: unsupported by the {kind} driver")
+
+
+def codegen_flags(values: list[str]) -> list[str]:
+    return _options(values)[1]
 
 
 def partition_sn64(values: list[str]) -> tuple[list[str], list[str]]:
-    """(preprocessor flags, cc1 flags) for the sn64 kind; any other flag is refused by name."""
-    preprocess, compile_ = [], []
-    previous = False
-    for flag in values:
-        if previous:
-            preprocess.append(flag)
-            previous = False
-        elif flag in {"-I", "-D", "-U", "-include"}:
-            preprocess.append(flag)
-            previous = True
-        elif flag.startswith(("-I", "-D", "-U")):
-            preprocess.append(flag)
-        elif flag.startswith(("-G", "-m", "-f", "-O", "-g", "-d")):
-            compile_.append(flag)
-        elif flag != "-c":
+    preprocess, compile_ = _options(values)
+    for flag in compile_:
+        if not flag.startswith(("-G", "-m", "-f", "-O", "-g", "-d")) and flag not in ("-ansi",) and not flag.startswith("-std="):
             raise Held("compile", f"compile.flags: {flag}: unsupported by the sn64 driver")
-    if previous:
-        raise Held("compile", "compile.flags: a preprocessor option is missing its value")
     return preprocess, compile_
+
+
+def stage_flags(kind: str, values: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The family's explicit stage contract, shared by all native consumers."""
+    from unbake.compilers.families.gcc import Gcc
+    from unbake.compilers.families.ido import Ido
+
+    preprocess, codegen = _options(values)
+    _supported(kind, codegen)
+    adapter: Gcc | Ido
+    if kind == "sn64":
+        partition_sn64(values)
+        adapter = Gcc()
+    elif kind == "ido":
+        adapter = Ido()
+    else:
+        raise Held("compile", f"compile.kind: {kind}: unsupported driver")
+    return adapter.preprocess_flags(tuple(preprocess), tuple(codegen)), tuple(codegen)
 
 
 def gnu_as_flags(project: Project) -> tuple[str, ...]:
@@ -152,22 +177,14 @@ def gnu_as_flags(project: Project) -> tuple[str, ...]:
 
 def _split(values: list[str]) -> tuple[list[str], list[str], list[str]]:
     """(includes, codegen, defines) in their original relative order."""
-    includes: list[str] = []
-    codegen: list[str] = []
-    defines: list[str] = []
-    pending = iter(values)
+    preprocess, codegen = _options(values)
+    includes, defines = [], []
+    pending = iter(preprocess)
     for flag in pending:
-        if flag in ("-I", "-D", "-U", "-include", "-isystem", "-iquote", "-imacros"):
-            value = next(pending, None)
-            if value is None:
-                raise Held("compile", f"compile.flags: {flag}: missing value")
-            (includes if flag not in ("-D", "-U") else defines).extend((flag, value))
-        elif flag.startswith("-I"):
-            includes.append(flag)
-        elif flag.startswith(("-D", "-U")):
-            defines.append(flag)
-        elif flag != "-c":
-            codegen.append(flag)
+        destination = defines if flag.startswith(("-D", "-U")) else includes
+        destination.append(flag)
+        if flag in PREPROCESSOR_PAIRS:
+            destination.append(next(pending))
     return includes, codegen, defines
 
 
@@ -187,21 +204,11 @@ def parts(project: Project, version: str, unit: str, *, non_matching: bool = Fal
     if compiler.kind not in TEMPLATES:
         raise Held("compile", f"compiler.{compiler.id}.kind: {compiler.kind}: no driver")
     root = project.root
-    project_includes = [f"-I{p.relative_to(root) if p.is_relative_to(root) else p}" for p in project.include]
-    c_includes, c_codegen, c_defines = compiler_parts(project, compiler.id)
-    u_includes, u_codegen, u_defines = unit_parts(project, unit)
-    defines = [*c_defines, *("-D" + macro for macro in project.version(version).macros)]
-    if non_matching:
-        defines.append("-DNON_MATCHING=1")
-    guard = consumer_define(project, unit)
-    if guard is not None:
-        defines.append(guard)
-    defines.extend(u_defines)
-    codegen = [*c_codegen, *u_codegen]
-    if compiler.kind == "sn64":
-        partition_sn64(codegen)
+    effective = flags(project, version, unit, non_matching=non_matching)
+    preprocess, codegen = stage_flags(compiler.kind, effective)
+    includes, _, defines = _split(effective)
     cc = str(compiler.cc.relative_to(root) if compiler.cc.is_relative_to(root) else compiler.cc)
-    return Parts(compiler.kind, cc, (*project_includes, *c_includes, *u_includes), tuple(codegen), tuple(defines))
+    return Parts(compiler.kind, cc, tuple(includes), codegen, tuple(defines), preprocess, tuple(effective))
 
 
 def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
@@ -214,6 +221,7 @@ def steps(project: Project, version: str, unit: str, source: str, tools: Tools, 
         "n64link": (tools.n64link,),
         "includes": unit_parts_.includes,
         "codegen": unit_parts_.codegen,
+        "preprocess": unit_parts_.preprocess,
         "defines": unit_parts_.defines,
         "cppflags": project.cppflags,
         "asflags": gnu_as_flags(project),
@@ -230,35 +238,27 @@ def steps(project: Project, version: str, unit: str, source: str, tools: Tools, 
     )
 
 
-def preprocessor_options(project: Project, version: str, unit: str, *, absolute: bool) -> list[str]:
-    """The unit's -I/-D/-U/-include/-isystem options; absolute include paths for callers outside the root."""
-    result: list[str] = []
-    pending = iter(flags(project, version, unit))
-    for flag in pending:
-        if flag in ("-I", "-D", "-U", "-include", "-isystem"):
-            value = next(pending, None)
-            if value is None:
-                raise Held("compile", f"compile.flags: {flag}: missing value")
-            if absolute and flag in ("-I", "-include", "-isystem") and not Path(value).is_absolute():
-                value = str(project.root / value)
-            result.extend((flag, value))
-        elif flag.startswith(("-I", "-D", "-U")):
-            if absolute and flag.startswith("-I") and not Path(flag[2:]).is_absolute():
-                flag = "-I" + str(project.root / flag[2:])
-            result.append(flag)
-    return result
-
-
 def preprocess_command(
-    project: Project, cpp: str, version: str, unit: str, source: Path, *, line_markers: bool = False
+    project: Project, cpp: str, version: str, unit: str, source: Path, *, non_matching: bool, line_markers: bool = False
 ) -> list[str]:
-    """Preprocess SOURCE as the build would for UNIT (with NON_MATCHING defined), runnable from any directory."""
-    compiler = project.compiler_for(unit)
-    options = preprocessor_options(project, version, unit, absolute=True)
-    if compiler.kind == "sn64":
-        cppflags = [flag for flag in project.cppflags if not (line_markers and flag == "-P")]
-        return [cpp, *cppflags, *options, "-DNON_MATCHING=1", str(source)]
-    codegen = [
-        flag for flag in flags(project, version, unit) if flag != "-c" and not flag.startswith(("-I", "-D", "-U"))
-    ]
-    return [str(compiler.cc), *codegen, *options, "-DNON_MATCHING=1", "-E", str(source)]
+    """Exactly the build stage; callers run from the project root."""
+    commands = steps(project, version, unit, str(source), Tools(cpp, "", ""), non_matching=non_matching)
+    argv = list(commands.preprocess)
+    if commands.kind == "ido":
+        argv[0] = str(project.compiler_for(unit).cc)
+    elif line_markers:
+        argv = [flag for flag in argv if flag != "-P"]
+    return argv
+
+
+def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: str, phase: str) -> str:
+    """Preprocess in-memory C through the same family stage, with source ownership supplied."""
+    import tempfile
+    from unbake.process import run_tool
+
+    project.build.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".preprocess-", dir=project.build) as temporary:
+        source = Path(temporary) / "unit.c"
+        source.write_text(text)
+        return run_tool(preprocess_command(project, cpp, version, unit, source, non_matching=True), project.root, phase,
+                        context={"function": unit, "version": version})

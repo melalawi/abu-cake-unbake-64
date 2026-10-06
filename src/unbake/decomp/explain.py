@@ -246,7 +246,7 @@ def allocation(project: Project, policy: Host, source: Path, version: str) -> Al
 def _absolute_includes(project: Project, flags: list[str] | tuple[str, ...]) -> list[str]:
     values = list(flags)
     for index, flag in enumerate(values):
-        if flag in ("-I", "-include", "-isystem"):
+        if flag in ("-I", "-include", "-isystem", "-imacros", "-iquote"):
             if index + 1 >= len(values):
                 raise Held("explain", f"compiler.cflags.{flag}: missing value")
             path = Path(values[index + 1])
@@ -271,9 +271,9 @@ def gcc_input(
     else:
         codeflags = [flag for flag in flags if flag != "-c"]
     command = drivers.preprocess_command(
-        project, str(policy.cpp), version, source.stem, source, line_markers=preserve_lines
+        project, str(policy.cpp), version, source.stem, source, non_matching=True, line_markers=preserve_lines
     )
-    expanded = run_tool(command, work, "explain")
+    expanded = run_tool(command, project.root, "explain", context={"source": str(source), "version": version})
     if not preserve_lines:
         expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
     return expanded, codeflags

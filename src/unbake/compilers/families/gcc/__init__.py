@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 
 
 class Gcc:
+    def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
+        """Language/macro input, excluding code generation optimization."""
+        return (*preprocess, *(flag for flag in codegen if flag in ("-funsigned-char", "-fsigned-char", "-ansi") or flag.startswith("-std=")))
+
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
         """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments.
 

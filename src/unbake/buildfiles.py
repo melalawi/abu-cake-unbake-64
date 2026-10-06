@@ -36,6 +36,7 @@ MAKE_VALUES: dict[str, tuple[str, ...]] = {
     "n64link": ("$(N64LINK)",),
     "includes": ("$(INCLUDES) $(COMPILER_INCLUDES) $(UNIT_INCLUDES)",),
     "codegen": ("$(CODEGEN) $(UNIT_CODEGEN)",),
+    "preprocess": ("$(PREPROCESS_FLAGS)",),
     "defines": ("$(COMPILER_DEFINES) $(VERSION_DEFINES) $(CONSUMER) $(UNIT_DEFINES)",),
     "cppflags": ("$(CPPFLAGS)",),
     "asflags": ("$(SN64_ASFLAGS)",),
@@ -183,6 +184,11 @@ def units_mk(project: Project) -> str:
     for name in names:
         targets = f"build/%/src/{name}.key build/%/units/{name}.bin"
         compiler = project.compiler_for(name)
+        effective = [*(f"-I{relative(project, path)}" for path in project.include), *compiler.cflags,
+                     "-DUNBAKE_VERSION_PLACEHOLDER", *project.unit_flags.get(name, ())]
+        prep, _ = drivers.stage_flags(compiler.kind, effective)
+        rendered = words(list(prep)).replace("-DUNBAKE_VERSION_PLACEHOLDER", "$(VERSION_DEFINES) $(CONSUMER)")
+        lines.append(f"{targets}: PREPROCESS_FLAGS = {rendered}\n")
         if compiler.id != default.id:
             c_includes, c_codegen, c_defines = drivers.compiler_parts(project, compiler.id)
             lines.append(f"{targets}: KIND := {compiler.kind}\n")
@@ -221,7 +227,8 @@ def _kind_recipes(kind: str) -> str:
     if preprocess[0] == "{cpp}":
         prep = f"{_recipe(preprocess)} -MMD {depend} {output}"
     else:
-        prep = f"{_recipe(drivers.DEPEND)} {depend} && {_recipe(preprocess)} {output}"
+        dependency = _recipe(("{cc}", "{preprocess}", "-M", "{source}"))
+        prep = f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$@:|' $(@D)/$(*F).deps > $(@D)/$(*F).d && rm $(@D)/$(*F).deps && {_recipe(preprocess)} {output}"
     commands = [_recipe(compile_)]
     if template["assemble"] is not None:
         commands.append(_recipe(template["assemble"]))
@@ -326,6 +333,7 @@ def setup_recipe(project: Project) -> list[str]:
 def makefile(project: Project, host: Host) -> str:
     default = project.compilers[project.default_compiler]
     c_includes, c_codegen, c_defines = drivers.compiler_parts(project, default.id)
+    default_preprocess, _ = drivers.stage_flags(default.kind, list(default.cflags))
     includes = [f"-I{relative(project, path)}" for path in project.include]
     kinds = sorted({compiler.kind for compiler in project.compilers.values()})
     text = [
@@ -349,6 +357,7 @@ def makefile(project: Project, host: Host) -> str:
         "N64LINK := n64link\n",
         f"INCLUDES := {words(includes)}\n",
         f"CPPFLAGS := {words(list(project.cppflags))}\n",
+        f"PREPROCESS_FLAGS = $(INCLUDES) {words(list(default_preprocess))} $(VERSION_DEFINES) $(CONSUMER)\n",
         f"SN64_ASFLAGS := {words(list(drivers.gnu_as_flags(project)))}\n",
         f"HASM_ASFLAGS := {words(list(project.asflags))}\n",
         f"KIND := {default.kind}\n",
