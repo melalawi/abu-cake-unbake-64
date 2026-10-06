@@ -266,17 +266,14 @@ def gcc_input(
 
     compiler = project.compiler_for(source.stem)
     flags = _absolute_includes(project, drivers.flags(project, version, source.stem))
-    if compiler.kind == "sn64":
-        _, codeflags = drivers.partition_sn64(flags)
-    else:
-        codeflags = [flag for flag in flags if flag != "-c"]
+    _, codeflags = drivers.stage_flags(compiler.kind, flags)
     command = drivers.preprocess_command(
         project, str(policy.cpp), version, source.stem, source, non_matching=True, line_markers=preserve_lines
     )
     expanded = run_tool(command, project.root, "explain", context={"source": str(source), "version": version})
     if not preserve_lines:
         expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
-    return expanded, codeflags
+    return expanded, list(codeflags)
 
 
 def order(project: Project, policy: Host, source: Path, version: str) -> Schedule:

@@ -29,7 +29,7 @@ def run_native(argv: list[str], work: Path, phase: str, *, context: dict[str, An
     environment = dict(os.environ, TMPDIR=str(work), TMP=str(work), TEMP=str(work), LC_ALL="C")
     key = f"{phase}.{Path(argv[0]).name}"
     try:
-        completed = subprocess.run(argv, cwd=work, env=environment, capture_output=True, text=True)
+        completed = subprocess.run(argv, cwd=work, env=environment, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape")
     except OSError as error:
         result = NativeResult(tuple(argv), str(work), None, None, "", str(error), "native-os", error.errno, context or {})
         raise Held(phase, f"{key}: {Path(argv[0]).name}: {error.strerror}", fault=asdict(result)) from error

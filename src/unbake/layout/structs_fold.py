@@ -841,21 +841,14 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                     staged = overlay / source.relative_to(project.root)
                     output = overlay / f"proof-{index}-{int(nonmatching)}.o"
                     try:
-                        if compiler.kind == "sn64":
-                            cppflags, codeflags = drivers.partition_sn64(options)
-                            cpp = str(policy.cpp)
-                            expanded = run_tool([cpp, *project.cppflags, *cppflags, str(staged)], overlay, "structs")
-                            preprocessed = output.with_suffix(".i")
-                            atomic_files.text(preprocessed, expanded)
-                            run_tool(
-                                [str(compiler.cc), "-quiet", *codeflags, str(preprocessed), "-o", str(output)],
-                                overlay,
-                                "structs",
-                            )
-                        else:
-                            run_tool(
-                                [str(compiler.cc), *options, "-c", str(staged), "-o", str(output)], overlay, "structs"
-                            )
+                        commands = drivers.from_flags(compiler.kind, str(compiler.cc), tuple(options), project.cppflags,
+                            drivers.gnu_as_flags(project), output.stem, str(staged),
+                            drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link)))
+                        expanded = run_tool(list(commands.preprocess), overlay, "structs")
+                        atomic_files.text(overlay / f"{output.stem}.i", expanded)
+                        run_tool(list(commands.compile), overlay, "structs")
+                        if commands.assemble is not None:
+                            run_tool(list(commands.assemble), overlay, "structs")
                     except Held as error:
                         held(
                             label,

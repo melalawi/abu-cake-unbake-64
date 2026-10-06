@@ -936,10 +936,11 @@ def readiness(project: Project, host: Host | None) -> Readiness:
     paths.update(path for compiler in project.compilers.values() for path in (compiler.sha256, compiler.cc))
     # Every map/ABI shard and evidence receipt is included; a missing current key is not relocation.
     paths.update(path for directory in (project.build / "map", project.build / "types")
-                 for path in directory.glob("*.json") if path.is_file())
+                 for path in directory.glob("*") if path.is_file())
     policy = None if host is None else tuple((field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field))))
                                             for field in ("cpp", "m2c"))
-    snapshot = tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)), policy
+    map_inputs = tuple(sorted(storage.map_inputs(project).items()))
+    snapshot = tuple((str(path), inputs.signature(path) if path.is_file() else None) for path in sorted(paths)), map_inputs, policy
 
     def current() -> Readiness:
         facts = refine(project, refresh_map(project, host))

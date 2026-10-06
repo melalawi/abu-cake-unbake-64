@@ -144,14 +144,6 @@ def codegen_flags(values: list[str]) -> list[str]:
     return _options(values)[1]
 
 
-def partition_sn64(values: list[str]) -> tuple[list[str], list[str]]:
-    preprocess, compile_ = _options(values)
-    for flag in compile_:
-        if not flag.startswith(("-G", "-m", "-f", "-O", "-g", "-d")) and flag not in ("-ansi",) and not flag.startswith("-std="):
-            raise Held("compile", f"compile.flags: {flag}: unsupported by the sn64 driver")
-    return preprocess, compile_
-
-
 def stage_flags(kind: str, values: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The family's explicit stage contract, shared by all native consumers."""
     from unbake.compilers.families.gcc import Gcc
@@ -161,7 +153,6 @@ def stage_flags(kind: str, values: list[str]) -> tuple[tuple[str, ...], tuple[st
     _supported(kind, codegen)
     adapter: Gcc | Ido
     if kind == "sn64":
-        partition_sn64(values)
         adapter = Gcc()
     elif kind == "ido":
         adapter = Ido()
@@ -213,29 +204,23 @@ def parts(project: Project, version: str, unit: str, *, non_matching: bool = Fal
 
 def steps(project: Project, version: str, unit: str, source: str, tools: Tools, *, non_matching: bool = False) -> Steps:
     """The commands for UNIT from SOURCE (a path relative to the project root, or any quoted word)."""
-    unit_parts_ = parts(project, version, unit, non_matching=non_matching)
+    owned = parts(project, version, unit, non_matching=non_matching)
+    return from_flags(owned.kind, owned.cc, owned.effective, project.cppflags, gnu_as_flags(project), unit, source, tools)
+
+
+def from_flags(kind: str, cc: str, effective: tuple[str, ...], cppflags: tuple[str, ...], asflags: tuple[str, ...],
+               unit: str, source: str, tools: Tools) -> Steps:
+    """Render the one ordered native stage contract, including overlay proofs."""
+    preprocess, codegen = stage_flags(kind, list(effective))
     values = {
-        "cc": (unit_parts_.cc,),
-        "cpp": (tools.cpp,),
-        "as": (tools.mips_as,),
-        "n64link": (tools.n64link,),
-        "includes": unit_parts_.includes,
-        "codegen": unit_parts_.codegen,
-        "preprocess": unit_parts_.preprocess,
-        "defines": unit_parts_.defines,
-        "cppflags": project.cppflags,
-        "asflags": gnu_as_flags(project),
-        "source": (source,),
-        "name": (Path(unit).name,),
+        "cc": (cc,), "cpp": (tools.cpp,), "as": (tools.mips_as,), "n64link": (tools.n64link,),
+        "preprocess": preprocess, "codegen": codegen, "cppflags": cppflags, "asflags": asflags,
+        "source": (source,), "name": (Path(unit).name,),
     }
-    template = TEMPLATES[unit_parts_.kind]
+    template = TEMPLATES[kind]
     assemble = template["assemble"]
-    return Steps(
-        unit_parts_.kind,
-        render(template["preprocess"] or (), values),
-        render(template["compile"] or (), values),
-        render(assemble, values) if assemble is not None else None,
-    )
+    return Steps(kind, render(template["preprocess"] or (), values), render(template["compile"] or (), values),
+                 render(assemble, values) if assemble is not None else None)
 
 
 def preprocess_command(

@@ -165,6 +165,11 @@ def closure(
         seen.add(offset)
         op, rt, rs = word >> 26, word >> 16 & 31, word >> 21 & 31
         indirect = op == 0 and word & 63 in (8, 9)
+        link_register = word >> 11 & 31 if indirect and word & 63 == 9 else None
+        if link_register not in (None, 0, 31):
+            failures.add(f"unresolved-call-link-register:${link_register}:{at(offset)}")
+            continue
+        nonlinking = indirect and (word & 63 == 8 or link_register == 0)
         branch = op in (1, 4, 5, 6, 7, 20, 21, 22, 23) or (op == 17 and rs == 8)
         if op in (2, 3) or branch or indirect:
             delay = words.get(offset + 4)
@@ -176,7 +181,7 @@ def closure(
                 continue
             likely = op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3, 18, 19)) or (op == 17 and rt & 2 != 0)
             unconditional = op in (4, 20) and rs == rt or op == 1 and rs == 0 and rt in (1, 3, 17, 19)
-            linking = op == 3 or indirect and word & 63 == 9 or op == 1 and rt in (16, 17, 18, 19)
+            linking = op == 3 or indirect and link_register == 31 or op == 1 and rt in (16, 17, 18, 19)
             taken = replace(frame, ra=False) if linking else frame
             if branch and not unconditional and likely:
                 taken = replace(taken, guarded=True)
@@ -203,8 +208,8 @@ def closure(
                         terminal(offset, delayed, delayed, target)
                     else:
                         failures.add(f"merge-or-unresolved-tail:{at(target)}")
-                elif indirect and word & 63 == 8:
-                    if word == 0x03E00008:
+                elif nonlinking:
+                    if rs == 31:
                         terminal(offset, frame, delayed)
                     elif jump_tables and jump_tables.get(offset):
                         targets = jump_tables[offset]
