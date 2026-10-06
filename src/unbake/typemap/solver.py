@@ -19,7 +19,7 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 5
+SCHEMA = 6
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 4
 MACHINE_SCHEMA = 3
@@ -1013,6 +1013,14 @@ def _evidence(project: Project) -> tuple[dict[str, str], dict[str, str], dict[st
     )
 
 
+def _publication_key(project: Project, evidence: Any) -> str:
+    paths = [project.root / "config.toml", project.root / "layout.toml"]
+    paths.extend(path for v in project.versions for path in (project.version(v).split, project.version(v).symbols))
+    return content_cache.key(
+        storage.encoded(evidence), *(inputs.digest(p) if p.is_file() else "missing" for p in paths)
+    )
+
+
 def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     """Merge cached per-source facts with the map and infer types; publish the solution. Inputs identical to the
     last published solution's leave it standing."""
@@ -1042,15 +1050,50 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
     facts, fact_keys = current.facts, current.source_keys
     seeds = declarations.collect(project, policy, fact_keys)
     evidence = _evidence(project)
+    publication_key = _publication_key(project, evidence)
     content_key = current.key
-    result = infer(
-        project,
-        facts,
-        seeds,
-        cache=None if policy is None else Cache(project.cache),
-        shard_dir=project.build / "types",
-        policy=policy,
-    )
+
+    def compute() -> dict[str, Any]:
+        return infer(
+            project,
+            facts,
+            seeds,
+            cache=None if policy is None else Cache(project.cache),
+            shard_dir=project.build / "types",
+            policy=policy,
+        )
+
+    inference_key = receipts_key = None
+    if policy is None:
+        result = compute()
+    else:
+        from unbake.typemap import inference_cache
+
+        inventory = getattr(facts["functions"], "inventory", facts["functions"])
+        result, inference_key, receipts_key = inference_cache.infer(
+            project,
+            Cache(project.cache),
+            [str(SCHEMA), str(ABI_SCHEMA), str(MACHINE_SCHEMA), *_map_parts(facts, inventory)],
+            seeds,
+            compute,
+        )
+        if not all(
+            _installed(project, Cache(project.cache), row)
+            for row in result["constraints"]
+            if row.get("kind") == "shard"
+        ):
+            result = compute()
+        if (
+            database.is_file()
+            and stored.is_file()
+            and types_db.meta(database, "inference_key") == inference_key
+            and types_db.meta(database, "inference_receipts") == receipts_key
+            and types_db.meta(database, "inference_publication") == publication_key
+            and not header_step.missing(project)
+        ):
+            atomic_files.text(stored, content_key)
+            tui.line("The type facts did not change, so the last solution stands")
+            return {"changes": {}, "reused": True}
     result["declaration_evidence"], result["published_declarations"], result["published_homes"] = evidence
     revision += 1
     result = {
@@ -1060,6 +1103,9 @@ def solve(project: Project, policy: Host | None = None) -> dict[str, Any]:
         "map_shard_sha256": facts["shard_sha256"],
         "abi_supplement": facts.get("abi_supplement"),
         "revision": revision,
+        "inference_key": inference_key,
+        "inference_receipts": receipts_key,
+        "inference_publication": publication_key,
         **result,
     }
     from unbake.typemap.database import publish

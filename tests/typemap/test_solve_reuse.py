@@ -9,7 +9,7 @@ from unbake.config import Held
 from unbake.typemap import declarations, facts, solver, types_db
 
 
-class SolveReuseTests(ProjectCase):
+class SolveReuseFixture(ProjectCase):
     versions = ("us",)
 
     def setUp(self):
@@ -29,6 +29,8 @@ class SolveReuseTests(ProjectCase):
         staged, _ = types_db.stage(self.database, types_db.encode(result), {}, {})
         types_db.install(self.database, staged)
 
+
+class SolveReuseTests(SolveReuseFixture):
     def solve(self, publish=None):
         mapped = {"shard_sha256": "s", "shard": {}, "abi_supplement": None}
         with (
@@ -82,3 +84,50 @@ class SolveReuseTests(ProjectCase):
         with self.assertRaises(RuntimeError):
             self.solve(MagicMock(side_effect=RuntimeError("install failed")))
         self.assertFalse(solver.marker(self.project).exists())
+
+
+class FactReuseTests(SolveReuseFixture):
+    def solve(self, publish=None):
+        mapped = {"shard_sha256": "s", "shard": {}, "abi_supplement": None, "functions": {}, "globals": {}}
+        self.infer.return_value = {"constraints": []}
+        with (
+            patch.object(solver, "refresh_map", return_value={}),
+            patch("unbake.typemap.abi_facts.refine", return_value=mapped),
+            patch.object(facts, "published_keys", side_effect=lambda *args: [inputs.digest(self.source)]),
+            patch.object(declarations, "collect", self.collect),
+            patch.object(solver, "_evidence", self.evidence),
+            patch.object(solver, "infer", self.infer),
+            patch("unbake.typemap.database.publish", publish or self.published),
+            patch("unbake.layout.header_step.missing", side_effect=lambda project: self.missing),
+        ):
+            return solver.solve(self.project, self.host)
+
+    def test_header_feedback_without_new_facts_skips_inference_and_publication(self):
+        self.solve()
+        header = self.project.include[0] / "feedback.h"
+        header.write_text("/* generated include spelling changed */\n")
+        with patch("sys.stderr", io.StringIO()):
+            result = self.solve()
+        self.assertTrue(result["reused"])
+        self.assertEqual(self.infer.call_count, 1)
+        self.assertEqual(self.published.call_count, 1)
+        self.assertEqual(types_db.meta(self.database, "revision"), 1)
+        tui.stop()
+
+    def test_evidence_changes_still_publish_with_an_unchanged_inference(self):
+        self.solve()
+        self.evidence.return_value = ({"new.h": "extern int x;"}, {}, {})
+        self.source.write_text("int alpha(void) { return 4; }\n")
+        self.solve()
+        self.assertEqual(self.infer.call_count, 1)
+        self.assertEqual(self.published.call_count, 2)
+        self.assertEqual(types_db.meta(self.database, "revision"), 2)
+
+    def test_layout_changes_and_a_forced_solve_still_publish(self):
+        self.solve()
+        (self.project.root / "layout.toml").write_text("# owning groups changed\n")
+        self.solve()
+        self.assertEqual(self.published.call_count, 2)
+        solver.marker(self.project).unlink()
+        self.solve()
+        self.assertEqual(self.published.call_count, 3)
