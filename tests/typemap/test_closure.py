@@ -1,7 +1,9 @@
 """infer over a cached machine graph equals infer from scratch, for every declared seed set."""
 
+import json
 import shutil
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from tests.kit import TempCase
@@ -116,3 +118,17 @@ class NullPageTests(unittest.TestCase):
                 graph, function, item, signatures, {}, {"us": {0: ["address:us:00000000"]}}, {}, {}, {}, {}
             )
         self.assertNotEqual(graph.root("result:f:r2"), graph.root("result:g:r2"))
+
+
+class RealNullConstantTests(unittest.TestCase):
+    """Three real RageWars functions (us-rev1 map facts) that return or pass 0 and read other globals."""
+
+    def solve(self) -> dict:
+        path = Path(__file__).resolve().parents[1] / "fixtures" / "null_constant_facts.json"
+        return infer(SimpleNamespace(), json.loads(path.read_text()), [])
+
+    def test_globals_read_as_words_are_not_made_conflicts_by_the_zero_constants_of_other_functions(self) -> None:
+        solved = self.solve()["globals"]
+        for name in ("D_800CB6F8", "D_80107DF4"):
+            with self.subTest(name):
+                self.assertEqual((solved[name]["state"], solved[name]["type"]), ("known", "int"))
