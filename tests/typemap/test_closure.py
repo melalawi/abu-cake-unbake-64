@@ -132,3 +132,32 @@ class RealNullConstantTests(unittest.TestCase):
         for name in ("D_800CB6F8", "D_80107DF4"):
             with self.subTest(name):
                 self.assertEqual((solved[name]["state"], solved[name]["type"]), ("known", "int"))
+
+
+class PolymorphicCalleeTests(unittest.TestCase):
+    def test_a_callee_that_proves_nothing_does_not_join_its_callers(self) -> None:
+        graph = closure.Constraints()
+        for caller, type_ in (("a", "float"), ("b", "char *")):
+            graph.seed(f"global:{caller}", type_, {"kind": "machine"})
+            graph.link(f"global:{caller}", "param:f:r4", {"function": caller})
+        graph.instantiate()
+        self.assertNotEqual(graph.root("global:a"), graph.root("global:b"))
+
+    def test_a_callee_with_one_agreeing_type_joins_its_callers(self) -> None:
+        graph = closure.Constraints()
+        graph.seed("param:f:r4", "short *", {"kind": "machine"})
+        for caller in ("a", "b"):
+            graph.seed(f"global:{caller}", "short *", {"kind": "machine"})
+            graph.link(f"global:{caller}", "param:f:r4", {"function": caller})
+        graph.instantiate()
+        self.assertEqual(graph.root("global:a"), graph.root("global:b"))
+
+    def test_real_lookup_callee_and_callers_keep_their_own_types(self) -> None:
+        """func_8028FDB4_de looks an object up; three real callers use the result as different objects."""
+        path = Path(__file__).resolve().parents[1] / "fixtures" / "polymorphic_callee_facts.json"
+        solved = infer(SimpleNamespace(), json.loads(path.read_text()), [])["functions"]
+        states = [param["state"] for function in solved.values() for param in function["params"]]
+        self.assertNotIn("conflict", states)
+        self.assertEqual(
+            [(p["state"], p["type"]) for p in solved["func_80260550_de"]["params"]][2], ("known", "void *")
+        )

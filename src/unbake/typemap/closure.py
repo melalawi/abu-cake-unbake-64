@@ -40,6 +40,8 @@ class Constraints:
         self.machine_seeds: dict[str, dict[str, set[tuple[Any, ...]]]] = defaultdict(lambda: defaultdict(set))
         self.users: dict[str, set[str]] = defaultdict(set)
         self.facts: list[dict[str, Any]] = []
+        # Call-site edges (caller-side node, callee interface node, evidence), applied by `instantiate`.
+        self.links: list[tuple[str, str, dict[str, Any]]] = []
         # The keys of each (node, type) seed list: thousands of units seed one global, and a list scan per seed
         # was quadratic in them.
         self._seen: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -56,6 +58,34 @@ class Constraints:
             self.sizes[node] = 1
         if user:
             self.users[node].add(user)
+
+    def link(self, site: str, interface: str, evidence: dict[str, Any]) -> None:
+        """A value flow between a call site and the callee's argument or result, decided once all evidence is known."""
+        self.use(site)
+        self.use(interface)
+        self.links.append((site, interface, evidence))
+
+    def instantiate(self) -> None:
+        """Join each callee interface to its call sites unless doing so would merge incompatible evidence.
+
+        An interface whose call sites (with the callee's own side) carry two or more different kept types is
+        polymorphic: it hands different pointees to different callers, or only passes values through. Each call
+        site then keeps its own instance, so the callers' types stay apart and conflicts they would cause vanish.
+        """
+        kinds: dict[str, set[str]] = defaultdict(set)
+        for node, types in self.seeds.items():
+            kinds[self.root(node)].update(types)
+        sites: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+        for site, interface, proof in self.links:
+            sites[interface].append((site, proof))
+        for interface, rows in sites.items():
+            callee = self.root(interface)
+            roots = {callee, *(self.root(site) for site, _ in rows)}
+            if len(roots) > 1 and len(set().union(*(kept_types(kinds.get(root, ())) for root in roots))) > 1:
+                continue
+            for site, evidence in rows:
+                self.connect(site, interface, evidence)
+        self.links.clear()
 
     def connect(self, left: str, right: str, evidence: dict[str, Any]) -> None:
         self.use(left)
@@ -103,6 +133,17 @@ class Constraints:
         for node in sorted(self.parents):
             groups.setdefault(self.root(node), []).append(node)
         return list(groups.values())
+
+
+def kept_types(types: Any) -> set[str]:
+    """The machine types of one component that survive `resolve`: a word or an untyped pointer proves nothing
+    beside a specific type."""
+    kept = set(types)
+    if any(t.endswith(" *") for t in kept):
+        kept -= {"int", "unsigned int"}
+        if len(kept) > 1:
+            kept.discard("void *")
+    return kept
 
 
 def _identity(evidence: dict[str, Any]) -> str:
@@ -208,6 +249,10 @@ class Recorder:
         kept = {key: evidence[key] for key in ("function", "version", "instruction", "rom_offset") if key in evidence}
         self.ops.append(("connect", (left, right, kept)))
 
+    def link(self, site: str, interface: str, evidence: dict[str, Any]) -> None:
+        kept = {key: evidence[key] for key in ("function", "version", "instruction", "rom_offset") if key in evidence}
+        self.ops.append(("link", (site, interface, kept)))
+
     def record(self, fact: dict[str, Any]) -> None:
         self.ops.append(("record", (fact,)))
 
@@ -280,15 +325,15 @@ def _function_body(
                 formal = f"param:{callee}:{reg}"
                 forwarded[formal].add(node if node is not None else "unknown")
                 if node is not None:
-                    graph.connect(node, formal, call)
+                    graph.link(node, formal, call)
                     graph.use(node, function)
                     graph.use(formal, callee)
             index = (call["instruction"] - body["address"]) // 4
             if call.get("tail"):
                 for reg in ("r2", "f0"):
-                    graph.connect(f"result:{function}:{reg}", f"result:{callee}:{reg}", call)
+                    graph.link(f"result:{function}:{reg}", f"result:{callee}:{reg}", call)
             for reg in ("r2", "r3", "f0", "f2"):
-                graph.connect(f"result:{callee}:{reg}", f"return:{function}:{version}:{index}:{reg}", call)
+                graph.link(f"return:{function}:{version}:{index}:{reg}", f"result:{callee}:{reg}", call)
         for returned in body["returns"]:
             for reg, value in returned["values"].items():
                 node = origin_node(value, addresses[version])
@@ -377,6 +422,7 @@ def build(
             shared_fields[root][offset].extend(accesses)
             if root != origin:
                 graph.connect(f"field:{origin}:{offset}", f"field:{root}:{offset}", accesses[0])
+    graph.instantiate()
     groups = graph.groups()
     seeds = {node: dict(types) for node, types in graph.seeds.items()}
     users = dict(graph.users)
