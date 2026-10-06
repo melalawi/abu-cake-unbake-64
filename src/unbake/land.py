@@ -217,10 +217,9 @@ def prove(
             raise Held("land", f"land.dependency: {path}: published source depends on disposable or ROM input")
         if path.resolve() != path:
             raise Held("land", f"land.dependency: {path}: required regular project input, not a symlink")
-        if not path.is_file():
-            # New staged headers are installed by this same publication.
-            if not path.is_relative_to(root) or path.relative_to(root).as_posix() not in headers:
-                raise Held("land", f"land.dependency: {path}: required regular project input")
+        # New staged headers are installed by this same publication.
+        if not path.is_file() and (not path.is_relative_to(root) or path.relative_to(root).as_posix() not in headers):
+            raise Held("land", f"land.dependency: {path}: required regular project input")
         publish_inputs.add(path)
     changed = {
         project.include[-1] / name: text.encode()
