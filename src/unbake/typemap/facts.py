@@ -63,37 +63,40 @@ class Snapshot:
 
     def __init__(self, project: Project) -> None:
         self.project = project
-        self._edges: dict[Path, tuple[Path, ...]] = {}
-        self._closures: dict[tuple[Path, ...], tuple[Path, ...]] = {}
+        self._edges: dict[tuple[Path, tuple[Path, ...], tuple[Path, ...]], tuple[Path, ...]] = {}
+        self._closures: dict[tuple[tuple[Path, ...], tuple[str, ...]], tuple[Path, ...]] = {}
         self._digests: dict[Path, str] = {}
         self._parsed: dict[Path, Parsed] = {}
         self._identifiers: dict[Path, frozenset[str]] = {}
         self._generated: frozenset[Path] | None = None
 
-    def edges(self, path: Path) -> tuple[Path, ...]:
-        found = self._edges.get(path)
+    def edges(self, path: Path, includes: tuple[Path, ...], quotes: tuple[Path, ...]) -> tuple[Path, ...]:
+        identity = (path, includes, quotes)
+        found = self._edges.get(identity)
         if found is None:
             resolved = []
             for quote, name in _includes(path, inputs.signature(path)):
-                places = ([path.parent] if quote == '"' else []) + list(self.project.include)
+                places = (*((path.parent, *quotes) if quote == '"' else ()), *includes)
                 target = next((place / name for place in places if (place / name).is_file()), None)
                 if target is not None:
                     resolved.append(target)
-            found = self._edges[path] = tuple(resolved)
+            found = self._edges[identity] = tuple(resolved)
         return found
 
-    def closure(self, roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    def closure(self, roots: tuple[Path, ...], command: list[str]) -> tuple[Path, ...]:
         """Every file the roots can include, ignoring conditionals (a superset is safe)."""
-        found = self._closures.get(roots)
+        identity = (roots, tuple(command))
+        found = self._closures.get(identity)
         if found is None:
-            seen: dict[Path, None] = {}
+            includes, quotes = _search(self.project, command)
+            seen: dict[Path, None] = dict.fromkeys(roots[1:])
             pending = list(roots)
             while pending:
-                for target in self.edges(pending.pop()):
+                for target in self.edges(pending.pop(), includes, quotes):
                     if target not in seen:
                         seen[target] = None
                         pending.append(target)
-            found = self._closures[roots] = tuple(sorted(seen))
+            found = self._closures[identity] = tuple(sorted(seen))
         return found
 
     def digest(self, path: Path) -> str:
@@ -247,9 +250,36 @@ def _interfaces(
     ]
 
 
+def _search(project: Project, command: list[str]) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Ordered native include search; quote-only directories precede ordinary and system roots."""
+    from unbake.compilers import drivers
+
+    preprocess, _ = drivers._options(command)
+    ordinary, quotes, system = [], [], []
+    options = iter(preprocess)
+    for flag in options:
+        value = next(options) if flag in drivers.PREPROCESSOR_PAIRS else flag[2:]
+        if flag == "-iquote":
+            quotes.append(project.root / value)
+        elif flag == "-isystem":
+            system.append(project.root / value)
+        elif flag.startswith("-I"):
+            ordinary.append(project.root / value)
+    if command[0] == "in-memory":
+        ordinary.extend(project.include)
+    return tuple((*ordinary, *system)), tuple(quotes)
+
+
 def _forced(project: Project, command: list[str]) -> list[Path]:
-    forced = [project.root / value for flag, value in itertools.pairwise(command) if flag == "-include"]
-    return [path for path in forced if path.is_file()]
+    includes, quotes = _search(project, command)
+    result = []
+    for flag, value in itertools.pairwise(command):
+        if flag not in ("-include", "-imacros"):
+            continue
+        path = next((root / value for root in (project.root, *quotes, *includes) if (root / value).is_file()), None)
+        if path is not None:
+            result.append(path)
+    return result
 
 
 def _command(project: Project, policy: Host | None, version: str, source: Path, *, marked: bool = False) -> list[str]:
@@ -257,9 +287,16 @@ def _command(project: Project, policy: Host | None, version: str, source: Path, 
         return ["in-memory", version, *project.version(version).macros]
     from unbake.compilers import drivers
 
-    command = (drivers.preprocess_command(project, str(policy.cpp), version, source.stem, Path("@unit.c"), non_matching=False, line_markers=marked)
-               if source.suffix == ".c" else declarations._cpp_command(project, policy, version, extra=True, line_markers=marked))
-    compiler = project.compiler_for(source.stem) if source.suffix == ".c" else project.compilers[project.default_compiler]
+    command = (
+        drivers.preprocess_command(
+            project, str(policy.cpp), version, source.stem, Path("@unit.c"), non_matching=False, line_markers=marked
+        )
+        if source.suffix == ".c"
+        else declarations._cpp_command(project, policy, version, extra=True, line_markers=marked)
+    )
+    compiler = (
+        project.compiler_for(source.stem) if source.suffix == ".c" else project.compilers[project.default_compiler]
+    )
     pins = ["@compiler=" + inputs.digest(compiler.sha256), "@preprocessor=" + inputs.digest(Path(command[0]))]
     return [part.replace(str(project.root), ".") for part in command] + pins
 
@@ -272,7 +309,7 @@ def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snap
     parts: list[str | bytes] = [FACTS, str(FACTS_SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
-    for path in snapshot.closure(roots):
+    for path in snapshot.closure(roots, command):
         parts.extend((storage.relative(project, path), snapshot.digest(path)))
     return key(*parts)
 
@@ -283,7 +320,7 @@ def unit_key(project: Project, policy: Host | None, source: Path, version: str, 
     roots = (source, *_forced(project, command))
     parts: list[str | bytes] = [SOURCE, str(SOURCE_SCHEMA), "unit", version, json.dumps(command)]
     parts.extend((storage.relative(project, source), source.read_bytes()))
-    closure = snapshot.closure(roots)
+    closure = snapshot.closure(roots, command)
     names = set(_IDENTIFIER.findall(source.read_text(errors="replace")))
     for path, found in _interfaces(snapshot, closure, source, names):
         state = "interface " + found if found is not None else snapshot.digest(path)
@@ -304,7 +341,7 @@ def header_key(project: Project, policy: Host | None, header: Path, version: str
         storage.relative(project, header),
     ]
     parts.extend(("self", snapshot.digest(header)))
-    closure = snapshot.closure(roots)
+    closure = snapshot.closure(roots, command)
     names = set(_IDENTIFIER.findall(header.read_text(errors="replace")))
     for path, found in _interfaces(snapshot, closure, header, names):
         state = "interface " + found if found is not None else snapshot.digest(path)
@@ -519,8 +556,15 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             raise Held("solve", f"facts.source: {task_source} grouped with {source}")
         command = _command(project, policy, version, source)
         # Only identical actual expansion inputs can share preprocessing. Version names alone are not inputs.
-        contract = key(json.dumps(command), source, *(part for path in snapshot.closure((source, *_forced(project, command)))
-                        for part in (storage.relative(project, path), snapshot.digest(path))))
+        contract = key(
+            json.dumps(command),
+            source,
+            *(
+                part
+                for path in snapshot.closure((source, *_forced(project, command)), command)
+                for part in (storage.relative(project, path), snapshot.digest(path))
+            ),
+        )
         digest = expansions.get(contract)
         if digest is None:
             text = declarations.source_unit(project, policy, version, source)
@@ -528,7 +572,10 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             expansions[contract] = digest
             # ABI/ISA and compiler pins remain part of the parse contract even when expansion bytes match.
             compiler = project.compiler_for(source.stem)
-            parse_contract = key(json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]), compiler.sha256)
+            parse_contract = key(
+                json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]),
+                compiler.sha256,
+            )
             identity = digest, parse_contract
             if identity not in units:
                 try:
@@ -536,12 +583,17 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
                 except Held:
                     extract(project, policy, (function, source, version))
                     raise
-                owned = {name: output.encoded([_owned(definition, name)]) for name in dict.fromkeys(task[0] for task in tasks)}
+                owned = {
+                    name: output.encoded([_owned(definition, name)])
+                    for name in dict.fromkeys(task[0] for task in tasks)
+                }
                 units[identity] = output.encoded([consumed]), owned
                 del consumed, definition
             del text
         compiler = project.compiler_for(source.stem)
-        parse_contract = key(json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]), compiler.sha256)
+        parse_contract = key(
+            json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]), compiler.sha256
+        )
         consumed_data, owned = units[digest, parse_contract]
         result.append(_stamp(consumed_data[:-1] + b"," + owned[function][1:], function, version))
     return result
@@ -640,6 +692,7 @@ def _source_tasks(
     _, content_key, (_, source, version) = group[0]
     if host is not None:
         from unbake.compilers import drivers
+
         compiler = project.compiler_for(source.stem)
         default = project.compilers[project.default_compiler]
         unit_options, unit_codegen = drivers._options(list(project.unit_flags.get(source.stem, ())))
@@ -776,26 +829,41 @@ def _unit_work(
         output.shared.clear()
     from unbake import cache, prefixes
 
-    cache.forget(["decl.unit", "decl.clean.published", "decl.clean.layouts", "decl.tree", "decl.layouts", "decl.records"])
+    cache.forget(
+        ["decl.unit", "decl.clean.published", "decl.clean.layouts", "decl.tree", "decl.layouts", "decl.records"]
+    )
     prefixes.release_units()
     return result, counts
 
 
-def _unit_job(shared: Shared, versions: list[list[tuple[int, str, Task]]]) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
+def _unit_job(
+    shared: Shared, versions: list[list[tuple[int, str, Task]]]
+) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
     from dataclasses import asdict
+
     from unbake.pool import TaskIdentity, WorkerMemory, memory_fault
 
     project = shared[0]
     tasks = [task for group in versions for _, _, task in group]
     source = tasks[0][1]
-    identity = TaskIdentity("types", storage.relative(project, source), tuple(dict.fromkeys(task[0] for task in tasks)),
-                            tuple(dict.fromkeys(task[2] for task in tasks)), source.stat().st_size, inputs.digest(source),
-                            tuple(content for group in versions for _, content, _ in group))
+    identity = TaskIdentity(
+        "types",
+        storage.relative(project, source),
+        tuple(dict.fromkeys(task[0] for task in tasks)),
+        tuple(dict.fromkeys(task[2] for task in tasks)),
+        source.stat().st_size,
+        inputs.digest(source),
+        tuple(content for group in versions for _, content, _ in group),
+    )
     try:
         return _unit_work(shared, versions)
     except MemoryError as error:
         fault = dict(error.args[0]) if isinstance(error, WorkerMemory) else memory_fault(error)
-        fault.update(action="types", identity=asdict(identity), configured_cap_bytes=None if shared[1] is None else shared[1].memory_worker_bytes)
+        fault.update(
+            action="types",
+            identity=asdict(identity),
+            configured_cap_bytes=None if shared[1] is None else shared[1].memory_worker_bytes,
+        )
         raise WorkerMemory(fault) from error
     except Held as error:
         fault = {**(error.fault or {}), "action": "types", "identity": asdict(identity)}

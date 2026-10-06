@@ -79,7 +79,8 @@ def environment(project: Project, policy: Host | None) -> str:
     for ident, compiler in sorted(project.compilers.items()):
         tools.extend((ident, compiler.cc, compiler.sha256))
     return key(
-        "semantic-environment-v3", *(path for path in sources),
+        "semantic-environment-v3",
+        *(path for path in sources),
         json.dumps(storage.relocatable(asdict(project), project.root), default=str, sort_keys=True),
         *tools,
     )
@@ -100,7 +101,7 @@ class Session:
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
         self.ownership = layout_map.load(project)
         from unbake.cdecl import declarations as parsed_names
-        from unbake.typemap import declarations
+        from unbake.typemap import declarations, facts
 
         exported: set[str] = set()
         for path in {*self.authored, *layout_index.headers(project)}:
@@ -108,7 +109,9 @@ class Session:
             exported.update(row.typedefs | row.exports | row.tags)
         self.source_words = {path: set(re.findall(r"\b[A-Za-z_]\w*\b", text)) for path, text in self.sources.items()}
         self.projections: dict[Path, Any] = {}
+        snapshot = facts.Snapshot(project)
         for path, text in self.sources.items():
+
             def project_source(path: Path = path, text: str = text) -> Any:
                 owned, tags = header_names._owned((project, policy, path, text))
                 from unbake.cdecl import declaration_source
@@ -117,17 +120,40 @@ class Session:
                 directives = re.findall(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M)
                 # Token spelling retains declarations/directives, but implementation whitespace has no meaning.
                 tokens = [match[0] for match in declarations._C_TOKEN.finditer(outside)]
-                return {"declarations": tokens, "directives": directives, "owned": owned, "tags": tags,
-                        "dependencies": sorted(self.source_words[path] & exported)}
+                return {
+                    "declarations": tokens,
+                    "directives": directives,
+                    "owned": owned,
+                    "tags": tags,
+                    "dependencies": sorted(self.source_words[path] & exported),
+                }
 
-            self.projections[path] = artifact(self.cache, "typemap-source-names", key(
-                str(SOURCE_NAMES_SCHEMA), self.environment, storage.relative(project, path), text,
-                storage.encoded(sorted(exported))), project_source)
+            self.projections[path] = artifact(
+                self.cache,
+                "typemap-source-names",
+                key(
+                    str(SOURCE_NAMES_SCHEMA),
+                    self.environment,
+                    storage.relative(project, path),
+                    text,
+                    storage.encoded(sorted(exported)),
+                    *(
+                        facts.unit_key(project, policy, path, version, snapshot)
+                        for version in project.versions
+                        if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M)
+                    ),
+                ),
+                project_source,
+            )
         self.inputs = key(
-            self.environment, layout_map.encoded(self.ownership),
+            self.environment,
+            layout_map.encoded(self.ownership),
             *(part for path, text in self.authored.items() for part in (storage.relative(project, path), text)),
-            *(part for path, projection in self.projections.items()
-              for part in (storage.relative(project, path), storage.encoded(projection))),
+            *(
+                part
+                for path, projection in self.projections.items()
+                for part in (storage.relative(project, path), storage.encoded(projection))
+            ),
         )
         self.reserved: set[str] = set()
         self.consumer_names: dict[Path, set[str]] = {}
@@ -238,10 +264,13 @@ class Session:
             kind: {name: {k: row[k] for k in keys if k in row} for name, row in value[kind].items()}
             for kind, keys in self._PROJECTED.items()
         }
+        for name, row in value["functions"].items():
+            projection["functions"][name]["caller_arguments"] = (row.get("abi") or {}).get("caller_arguments", [])
         projection.update((field, value.get(field, {})) for field in self._CARRIED)
         names = set().union(*(set(value[kind]) for kind in self._PROJECTED), set(value.get("typedefs", {})))
-        projection["source_dependencies"] = {storage.relative(self.project, path): sorted(words & names)
-                                               for path, words in self.source_words.items()}
+        projection["source_dependencies"] = {
+            storage.relative(self.project, path): sorted(words & names) for path, words in self.source_words.items()
+        }
         return key(str(RENDER_SCHEMA), self.inputs, storage.encoded(projection)), projection
 
     def render(
