@@ -76,6 +76,9 @@ def classify(data: bytes, address: int, shape: Shape, emitted: Shape, owned: Bou
     found = original(words, emitted)
     if found is not None:
         return "original", f"{found.rule}: {found.evidence}"
+    reason = _fragment(words, shape)
+    if reason is not None:
+        return "dead", reason
     return "drafter", "proved single-entry body"
 
 
@@ -247,6 +250,52 @@ def _registers(word: int) -> tuple[set[int], set[int], set[int], set[int]]:
                 return none, none, {fs, rt}, {fd}
             return none, none, {fs}, {fd}
     return none, none, none, none
+
+
+def _fragment(words: list[int], shape: Shape) -> str | None:
+    """Retain compiler capability checks for short, frameless fragments.
+
+    Frame/return ownership belongs exclusively to boundary.closure. These are
+    the existing adapter-controlled register/ISA checks, not another boundary
+    heuristic. Branches and tail calls are never judged by straight-line liveness.
+    """
+    if len(words) * 4 > shape.fragment_bytes or any(_frame_open(word) for word in words):
+        return None
+    if (
+        "isa" in shape.rules
+        and shape.isa_level < 3
+        and any(word >> 26 in _MIPS3_OPS or (word >> 26 == 0 and word & 63 in _MIPS3_SPECIAL) for word in words)
+    ):
+        return f"64-bit opcode outside -mips{shape.isa_level}"
+    if "entry_registers" in shape.rules:
+        gprs, fprs = set(shape.entry_gprs), set(shape.entry_fprs)
+        for word in words:
+            reads, writes, freads, fwrites = _registers(word)
+            if reads - gprs:
+                return f"reads ${min(reads - gprs)} before setting it"
+            if freads - fprs:
+                return f"reads $f{min(freads - fprs)} before setting it"
+            gprs |= writes
+            fprs |= fwrites
+    if "zero_write" in shape.rules and any(word and 0 in _registers(word)[1] for word in words):
+        return "writes $zero"
+    if "dead_write" not in shape.rules or len(words) < 2 or words[-2] != JR_RA:
+        return None
+    if any(_transfers(word) for word in words[:-2]):
+        return None
+    live_gprs, live_fprs = {2, 3, 29, 31}, {0, 2}
+    for word in reversed(words):
+        reads, writes, freads, fwrites = _registers(word)
+        restores = {*range(16, 24), 30} if word >> 26 in range(32, 40) else set()
+        unused = writes - {0, 2, 3, 29, 31} - restores - live_gprs
+        funused = fwrites - {0, 2} - live_fprs
+        if unused:
+            return f"writes ${min(unused)} and never reads it"
+        if funused:
+            return f"writes $f{min(funused)} and never reads it"
+        live_gprs = (live_gprs - writes) | reads
+        live_fprs = (live_fprs - fwrites) | freads
+    return None
 
 
 def _reads_unset(words: list[int], shape: Shape) -> bool:
