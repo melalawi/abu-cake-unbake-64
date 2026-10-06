@@ -982,7 +982,9 @@ def _collect(project: Project, policy: Host | None, store: Any, keys: list[str])
                 if not duplicates:
                     supplemental.append(statement)
         extra.parent.mkdir(parents=True, exist_ok=True)
-        atomic_files.text(extra, "\n".join(supplemental))
+        content = "\n".join(supplemental)
+        if not extra.is_file() or extra.read_text() != content:
+            atomic_files.text(extra, content)
         evidence: dict[str, dict[str, Any]] = {}
         evidence_texts = _version_texts(project, policy, contents, extra, ordered)
 
