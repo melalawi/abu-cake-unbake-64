@@ -16,6 +16,12 @@ if TYPE_CHECKING:
 
 
 class Ido:
+    def dependency_paths(self, output: str) -> tuple[str, ...]:
+        """IDO emits one complete, unescaped filename per target rule."""
+        from unbake.compilers.families import dependency_rules
+
+        return dependency_rules(output)
+
     def analysis_flags(
         self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
     ) -> tuple[str, ...]:

@@ -28,7 +28,10 @@ class PublicationDependencyTests(ProjectCase):
         def preprocess(argv, cwd, phase, **kwargs):
             # Native dependency output, including a macro-selected nested header.
             version = "eu" if "-DVERSION_EU" in argv else "us"
-            return f"alpha.o: {argv[-1]} {headers['authored/root.h']} {headers['authored/' + version + '.h']}\n"
+            return "".join(
+                f"alpha.o:\t{path}\n"
+                for path in (argv[-1], headers["authored/root.h"], headers["authored/" + version + ".h"])
+            )
 
         with (
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
@@ -74,6 +77,7 @@ class PublicationDependencyTests(ProjectCase):
 
     def test_native_git_refusal_keeps_its_invocation_and_both_streams(self):
         import subprocess
+
         with (
             patch.object(
                 process.subprocess,
@@ -140,3 +144,12 @@ class PublicationDependencyTests(ProjectCase):
                     {},
                     self.project.work / "_land" / "alpha",
                 )
+
+    def test_native_ido_rules_retain_every_path_and_literal_spaces(self):
+        file = self.project.src / "alpha.c"
+        file.write_text("int alpha(void) { return 1; }\n")
+        nested = self.project.include[-1] / "nested.h"
+        spaced = self.project.include[-1] / "space name.h"
+        text = "\n".join(f"alpha.o:\t{path}" for path in (file, nested, spaced)) + "\n"
+        with patch.object(process, "run_tool", return_value=text):
+            self.assertEqual(runner.dependencies(self.project, self.host, file, "us", unit="alpha"), {nested, spaced})

@@ -16,6 +16,18 @@ if TYPE_CHECKING:
 
 
 class Gcc:
+    def dependency_paths(self, output: str) -> tuple[str, ...]:
+        """GCC emits make-escaped words, with optional continuation/phony rules."""
+        import re
+
+        from unbake.compilers.families import dependency_rules
+
+        return tuple(
+            re.sub(r"\\(.)", r"\1", word).replace("$$", "$")
+            for rule in dependency_rules(output)
+            for word in re.findall(r"(?:\\.|[^\s])+", rule)
+        )
+
     def analysis_flags(
         self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
     ) -> tuple[str, ...]:

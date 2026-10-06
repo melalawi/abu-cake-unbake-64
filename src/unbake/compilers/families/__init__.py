@@ -24,6 +24,7 @@ class CompilerIdentity(Protocol):
 
 @runtime_checkable
 class Family(Protocol):
+    def dependency_paths(self, output: str) -> tuple[str, ...]: ...
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]: ...
     def analysis_flags(
         self, compiler: Path, cpp: str, root: Path, preprocess: tuple[str, ...], codegen: tuple[str, ...]
@@ -38,6 +39,20 @@ class Family(Protocol):
     def dump_flags(self) -> tuple[str, ...]: ...
     def allocation(self, dumps: Mapping[str, str]) -> Allocation: ...
     def schedule(self, dumps: Mapping[str, str | Path] | None) -> Schedule: ...
+
+
+def dependency_rules(output: str) -> tuple[str, ...]:
+    """Native make dependency right-hand sides, without inventing missing inputs."""
+    result = []
+    for line in output.replace("\\\n", " ").splitlines():
+        if not line.strip():
+            continue
+        target, separator, names = line.partition(":")
+        if not target.strip() or not separator:
+            raise Held("compile", "compile.dependencies: invalid native dependency rule")
+        if names.strip():
+            result.append(names.strip())
+    return tuple(result)
 
 
 def family_for(compiler: str | CompilerIdentity) -> Family:
