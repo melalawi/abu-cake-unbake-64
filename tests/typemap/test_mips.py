@@ -48,6 +48,15 @@ class MipsFactsTests(unittest.TestCase):
         result = analyze([0x24840004, 0x1480FFFE, 0x8C820000, 0x03E00008, 0])
         self.assertTrue(result["memory"][0]["base"]["unknown"])
 
+    def test_a_loaded_pointer_advanced_by_a_counter_stays_the_base(self) -> None:
+        # lw t0,0(a0); addiu a1,a1,1; addu t1,t0,a1; lbu t2,0(t1)
+        result = analyze([0x8C880000, 0x24A50001, 0x01054821, 0x912A0000, 0x03E00008, 0])
+        base = result["memory"][1]["base"]
+        self.assertEqual((base["origins"], base["based"]), ([], ["memory:caller:us:0"]))
+        # Two plain pointers are ambiguous and prove nothing: addu t1,a0,a1; lbu t2,0(t1)
+        ambiguous = analyze([0x00854821, 0x912A0000, 0x03E00008, 0])
+        self.assertEqual(ambiguous["memory"][0]["base"]["based"], [])
+
     def test_width_signedness_and_partial_access_are_separate_from_types(self) -> None:
         result = analyze([0x90820001, 0x84830002, 0x88880003, 0xC4800004, 0xE4800008, 0x03E00008, 0])
         self.assertEqual(

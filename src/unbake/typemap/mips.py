@@ -46,6 +46,8 @@ class Value:
     constant: int | None = None
     defined: bool = True
     dependencies: tuple[str, ...] = ()
+    # Origins of a pointer this value was advanced from by an untracked index (offset unknown).
+    based: tuple[str, ...] = ()
 
     def shift(self, offset: int) -> Value:
         if self.constant is not None:
@@ -54,6 +56,7 @@ class Value:
             tuple((name, delta + offset) for name, delta in self.origins),
             defined=self.defined,
             dependencies=self.dependencies,
+            based=self.based,
         )
 
     def merge(self, other: Value) -> Value:
@@ -61,7 +64,8 @@ class Value:
             return self
         dependencies = tuple(sorted(set(self.dependencies + other.dependencies)))
         if not self.origins or not other.origins:
-            return Value(defined=self.defined and other.defined, dependencies=dependencies)
+            based = tuple(sorted(set(self.based + other.based))) if not self.origins and not other.origins else ()
+            return Value(defined=self.defined and other.defined, dependencies=dependencies, based=based)
         origins = tuple(sorted(set(self.origins + other.origins)))
         return (
             Value(origins, defined=self.defined and other.defined, dependencies=dependencies)
@@ -76,7 +80,21 @@ class Value:
             "unknown": not self.origins and self.constant is None,
             "defined": self.defined,
             "dependencies": list(self.dependencies),
+            "based": list(self.based),
         }
+
+
+def _advanced(left: Value, right: Value) -> Value:
+    """LEFT + RIGHT when one is a plain tracked pointer (a single origin at offset 0) and the other is not:
+    a counter or offset value (several origins, a shifted origin) or one with no origin at all."""
+
+    def plain(value: Value) -> bool:
+        return value.constant is None and len(value.origins) == 1 and value.origins[0][1] == 0
+
+    for pointer, index in ((left, right), (right, left)):
+        if plain(pointer) and not plain(index) and index.constant is None:
+            return Value(defined=pointer.defined, dependencies=pointer.dependencies, based=(pointer.origins[0][0],))
+    return UNKNOWN
 
 
 UNKNOWN = Value(defined=False)
@@ -234,6 +252,8 @@ class Analysis:
                     value = regs[rs].shift(rt_constant)
                 elif fn in (0x20, 0x21, 0x2C, 0x2D) and rs_constant is not None:
                     value = regs[rt].shift(rs_constant)
+                elif fn in (0x20, 0x21):
+                    value = _advanced(regs[rs], regs[rt])
             elif fn in (0, 2, 3, 0x38, 0x3A, 0x3B, 0x3C, 0x3E, 0x3F):
                 read, destination = [rt], rd
                 if word >> 6 & 31 == 0 and fn == 0:

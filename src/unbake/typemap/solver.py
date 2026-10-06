@@ -22,7 +22,7 @@ from unbake.typemap.mapping import refresh_map
 SCHEMA = 6
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 4
-MACHINE_SCHEMA = 3
+MACHINE_SCHEMA = 4
 
 
 _MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")

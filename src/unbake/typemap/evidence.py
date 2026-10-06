@@ -43,6 +43,18 @@ def scalar(access: dict[str, Any]) -> str | None:
     return None
 
 
+SCALAR_POINTERS = frozenset(
+    f"{name} *"
+    for name in ("signed char", "unsigned char", "short", "unsigned short", "int", "unsigned int", "float", "double")
+)
+
+
+def pointer(access: dict[str, Any]) -> str:
+    """The pointer type a base register of ACCESS proves: to the observed scalar, else untyped."""
+    pointee = scalar(access)
+    return f"{pointee} *" if pointee else "void *"
+
+
 def stack_argument(memory: dict[str, Any], function: str) -> str | None:
     """Big-endian narrow stack formals occupy the low end of an O32 word."""
     origins = memory["base"].get("origins", [])

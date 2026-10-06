@@ -19,7 +19,7 @@ from unbake.typemap.mips import Analysis, control
 from unbake.work import inventory as plan
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
+SCHEMA = 4
 
 
 def _analysis(

@@ -108,7 +108,7 @@ def _identity(evidence: dict[str, Any]) -> str:
 
 
 def _machine_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
-    keys = ("kind", "function", "version", "instruction", "rom_offset", "common_base")
+    keys = ("kind", "function", "version", "instruction", "rom_offset", "common_base", "indexed_base")
     return {key: evidence[key] for key in keys if key in evidence}
 
 
@@ -143,6 +143,11 @@ def resolve(
         kept = {
             t: rows for t, rows in kept.items() if t not in ("int", "unsigned int") and not (specific and t == "void *")
         }
+    if len(kept) > 1 and all(
+        t in evidence.SCALAR_POINTERS and all(row.get("indexed_base") for row in rows) for t, rows in kept.items()
+    ):
+        # Accesses of different widths through one pointer prove a pointer, not a pointee.
+        kept = {"void *": [p for rows in kept.values() for p in rows]}
     state = "known" if len(kept) == 1 else "conflict" if kept else "unknown"
     return {
         "state": state,
@@ -423,6 +428,12 @@ def _access(
         cell = f"global:address:{version}:{memory['address']:08X}"
     else:
         origins = memory["base"]["origins"]
+        based = memory["base"].get("based", [])
+        if not origins and len(based) == 1 and not based[0].startswith("stack:"):
+            # A pointer advanced by an index of unknown value: the pointer is proven, its field is not.
+            graph.use(based[0], function)
+            graph.seed(based[0], evidence.pointer(memory), {"kind": "machine", **memory, "indexed_base": True})
+            return
         if len(origins) != 1 or origins[0]["id"].startswith("stack:"):
             return
         origin = origins[0]["id"]
