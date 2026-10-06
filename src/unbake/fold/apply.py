@@ -6,6 +6,8 @@ so fold edits a private copy; tidy leaves those copies in the work dir and land 
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -38,9 +40,26 @@ def view(project: Project, function: str) -> Project:
     work_root = drafted.work_include[0]
     shared = project.include[-1] / owner.header
     private = work_root / owner.header
-    if shared.is_file() and not private.exists():
-        private.parent.mkdir(parents=True, exist_ok=True)
-        atomic_files.copyfile(shared, private)
+    if shared.is_file():
+        book = project.work / function / ".header-bases.json"
+        bases = json.loads(book.read_text()) if book.is_file() else {}
+        if not isinstance(bases, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) for k, v in bases.items()
+        ):
+            raise Held("fold", f"fold.header_bases: {book}: expected header digests")
+        shared_digest = hashlib.sha256(shared.read_bytes()).hexdigest()
+        private_digest = hashlib.sha256(private.read_bytes()).hexdigest() if private.is_file() else None
+        # Untouched copies follow the current shared header after another land.
+        # A staged edit keeps its private bytes. Older untracked copies establish
+        # a baseline only when they already equal the current shared content.
+        if private_digest is None or private_digest == bases.get(owner.header):
+            if private_digest != shared_digest:
+                private.parent.mkdir(parents=True, exist_ok=True)
+                atomic_files.copyfile(shared, private)
+            private_digest = shared_digest
+        if private_digest == shared_digest and bases.get(owner.header) != shared_digest:
+            bases[owner.header] = shared_digest
+            atomic_files.text(book, json.dumps(bases, sort_keys=True) + "\n")
     link_private_includes(project, function)
     return drafted
 
