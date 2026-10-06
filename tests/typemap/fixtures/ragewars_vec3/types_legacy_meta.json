@@ -1,0 +1,8 @@
+{
+  "content_sha256": "\"9667e96e42470c213522ac2da29a90c30f7dc591d568a78c91c9c820feb6122f\"",
+  "project_id": "\"1317b0d7-6ca5-413c-ae10-0649ad5d6994\"",
+  "revision": "12",
+  "rom_sha1": "{\"de\":\"a6daacbd0e7f77c73208cf494aefc24703060b17\",\"eu\":\"46b474fac79a4b21535bb6c78ce3039a2c202359\",\"eu-x\":\"0b54615930a55675955eef8d8a22f1dfc34d2b44\",\"us\":\"9f8cb190831945f6f707aa8c2b20e04fa4276795\",\"us-rev1\":\"037fb397cee2669048ed6b762a64698de4a4d88a\"}",
+  "schema": "1",
+  "solution_sha256": "\"b17d6322320d15a5c62264faadbe604ece94c347ba534fb3f515c29d0d77c80b\""
+}

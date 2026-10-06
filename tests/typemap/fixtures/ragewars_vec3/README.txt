@@ -3,3 +3,5 @@ https://github.com/melalawi/ragewars-decomp
 Regeneration facts deliberately omit Vec3: published source dependencies must retain it independently of inference.
 
 Added unmodified func_80272018_de.c: its struct Vec3 forward declaration must not erase another consumer's typedef.
+
+Bounded legacy types.sqlite metadata was captured read-only from the RageWars payload on 2026-10-06. Values retain their SQLite JSON encoding; user_version was 0, meta schema was 1, and inference keys were absent.

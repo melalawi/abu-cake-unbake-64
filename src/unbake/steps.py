@@ -139,6 +139,8 @@ class Step:
     needs: tuple[str, ...] = ()
     # The files the step writes; a recorded one that goes missing or changes makes the step run again.
     outputs: Callable[[Project], Iterable[Path]] | None = None
+    # Readiness is checked before cache reuse, independently of the recorded input key.
+    ready: Callable[[Project], bool] | None = None
 
 
 def _rom_facts_key(project: Project, host: Host) -> str:
@@ -170,6 +172,12 @@ def _types_key(project: Project, host: Host) -> str:
     from unbake.typemap import solver
 
     return solver.input_key(project, host)
+
+
+def _types_ready(project: Project) -> bool:
+    from unbake.typemap import types_db
+
+    return types_db.compatible(types_db.path(project))
 
 
 def _types(project: Project, host: Host) -> dict[str, Any]:
@@ -312,6 +320,7 @@ STEPS: dict[str, Step] = {
             _types_key,
             _types,
             ("rom-facts",),
+            ready=_types_ready,
         ),
         Step(
             "headers",
@@ -464,7 +473,16 @@ def _ensure(
     steps = order(names)
     # A step whose recorded output went missing or changed runs first: it regenerates from its recorded
     # inputs (headers from the installed solution), and a later step must not read the damaged file.
-    damaged = [name for name in steps if STEPS[name].outputs is not None and altered(project, name)]
+    unready = set()
+    for name in steps:
+        readiness = STEPS[name].ready
+        if readiness is not None and not readiness(project):
+            unready.add(name)
+    damaged = [
+        name
+        for name in steps
+        if STEPS[name].outputs is not None and altered(project, name) and not (set(order([name])) & unready)
+    ]
     steps = damaged + [name for name in steps if name not in damaged]
     results: list[StepResult] = []
     chain = effort.mark()
@@ -479,11 +497,18 @@ def _ensure(
             current = _reading_current(project, partial(step.key, project, host))
             same = recorded(project, name) == current
             changed = altered(project, name) if same and step.outputs is not None else []
-            if not (force and attempt == 0 and name in requested) and same and not changed:
+            ready = step.ready is None or step.ready(project)
+            if not (force and attempt == 0 and name in requested) and same and not changed and ready:
                 if attempt == 0:
                     results.append(StepResult(name, step.trigger, False, 0.0))
                 continue
-            trigger = f"an output is missing or changed: {', '.join(changed)}" if changed else step.trigger
+            trigger = (
+                "the installed output is stale or missing"
+                if not ready
+                else f"an output is missing or changed: {', '.join(changed)}"
+                if changed
+                else step.trigger
+            )
             command.running(name)
             changes: dict[str, Any] = {}
             try:

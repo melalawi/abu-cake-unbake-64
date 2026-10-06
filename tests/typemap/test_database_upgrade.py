@@ -3,6 +3,8 @@
 import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 
 from tests.typemap import test_solve_reuse
@@ -31,6 +33,82 @@ class DatabaseUpgradeTests(test_solve_reuse.SolveReuseFixture):
                 self.assertEqual(types_db.meta(self.database, "revision"), revision + 1)
                 self.assertIsNotNone(types_db.meta(self.database, "inference_key"))
                 self.assertTrue(solver.marker(self.project).is_file())
+
+    def test_step_cache_cannot_reuse_old_meta_even_when_its_key_matches(self):
+        self.solve()
+        fixture = Path(__file__).parent / "fixtures/ragewars_vec3/types_legacy_meta.json"
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("PRAGMA user_version = 0")
+            connection.execute("DELETE FROM meta")
+            connection.executemany("INSERT INTO meta VALUES (?, ?)", json.loads(fixture.read_text()).items())
+        self.assertEqual(types_db.meta(self.database, "schema"), 1)
+        self.assertIsNone(types_db.meta(self.database, "inference_key", default=None))
+        calls = self.published.call_count
+        step = steps.STEPS["types"]
+        with patch.object(solver, "readiness", return_value=solver.Readiness("unchanged", {}, [])):
+            cached_key = step.key(self.project, self.host)
+        with (
+            patch.object(steps, "order", return_value=["types"]),
+            patch.object(
+                steps,
+                "STEPS",
+                {"types": replace(step, key=lambda *args: cached_key, run=lambda *args: self.solve()["changes"])},
+            ),
+        ):
+            steps.record(self.project, "types", cached_key)
+            result = steps.ensure(self.project, self.host, ["types"])
+        self.assertTrue(any(row.ran for row in result))
+        self.assertEqual(self.published.call_count, calls + 1)
+        self.assertEqual(types_db.meta(self.database, "revision"), 13)
+        self.assertTrue(types_db.compatible(self.database))
+
+    def test_stale_types_rebuild_before_damaged_headers_regenerate(self):
+        self.solve()
+        fixture = Path(__file__).parent / "fixtures/ragewars_vec3/types_legacy_meta.json"
+        with closing(sqlite3.connect(self.database)) as connection, connection:
+            connection.execute("PRAGMA user_version = 0")
+            connection.execute("DELETE FROM meta")
+            connection.executemany("INSERT INTO meta VALUES (?, ?)", json.loads(fixture.read_text()).items())
+        header = self.project.include[0] / "alpha.h"
+        header.write_text("damaged")
+        ran = []
+
+        def rebuild(*args):
+            ran.append("types")
+            return self.solve()["changes"]
+
+        def regenerate(*args):
+            self.assertTrue(types_db.compatible(self.database), "headers read the stale database before the types step")
+            ran.append("headers")
+            header.write_text("regenerated")
+
+        table = {
+            "types": replace(steps.STEPS["types"], key=lambda *args: "warm", run=rebuild, needs=()),
+            "headers": replace(
+                steps.STEPS["headers"], key=lambda *args: "warm", run=regenerate, outputs=lambda project: [header]
+            ),
+        }
+        with patch.object(steps, "STEPS", table):
+            steps.record(self.project, "types", "warm")
+            steps.record(self.project, "headers", "warm", {str(header.relative_to(self.project.root)): "old digest"})
+            steps.ensure(self.project, self.host, ["headers"])
+        self.assertEqual(ran, ["types", "headers"])
+
+    def test_missing_database_cannot_reuse_a_matching_step_key(self):
+        self.solve()
+        self.database.unlink()
+        step = steps.STEPS["types"]
+        with (
+            patch.object(steps, "order", return_value=["types"]),
+            patch.object(
+                steps,
+                "STEPS",
+                {"types": replace(step, key=lambda *args: "warm", run=lambda *args: self.solve()["changes"])},
+            ),
+        ):
+            steps.record(self.project, "types", "warm")
+            steps.ensure(self.project, self.host, ["types"])
+        self.assertTrue(types_db.compatible(self.database))
 
     def test_step_key_invalidates_an_old_database_even_with_unchanged_inputs(self):
         self.solve()

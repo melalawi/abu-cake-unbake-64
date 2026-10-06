@@ -264,7 +264,7 @@ class BootstrapTests(TempCase):
         from unittest.mock import call, patch
 
         from unbake.layout import header_step
-        from unbake.typemap import solver
+        from unbake.typemap import solver, types_db
 
         for absent, runs in (([], []), (["common/data.h"], [call("p", "h")])):
             with (
@@ -272,6 +272,8 @@ class BootstrapTests(TempCase):
                 patch.object(header_step, "missing", return_value=absent),
                 patch.object(header_step, "run") as run,
                 patch.object(solver, "solve") as solve,
+                patch.object(types_db, "path", return_value=self.root / "types.sqlite"),
+                patch.object(types_db, "compatible", return_value=True),
             ):
                 steps.STEPS["types"].run("p", "h")
                 self.assertEqual(run.call_args_list, runs)
