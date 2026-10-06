@@ -58,6 +58,11 @@ class _Frame:
     guarded: bool = False
 
 
+def _likely(word: int) -> bool:
+    op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
+    return op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3, 18, 19)) or (op == 17 and rs == 8 and rt & 2 != 0)
+
+
 def closure(
     words: dict[int, int],
     start: int,
@@ -183,7 +188,7 @@ def closure(
             if _transfers(delay) or delay == 0x42000018:
                 failures.add(f"unsafe-delay-transfer:{at(offset + 4)}")
                 continue
-            likely = op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3, 18, 19)) or (op == 17 and rt & 2 != 0)
+            likely = _likely(word)
             unconditional = (op in (4, 20) and rs == rt) or (op == 1 and rs == 0 and rt in (1, 3, 17, 19))
             linking = op == 3 or (indirect and link_register == 31) or (op == 1 and rt in (16, 17, 18, 19))
             taken = replace(frame, ra=False) if linking else frame
@@ -281,7 +286,31 @@ def evidence(
     dead = {offset for offset in range(start, trailing, 4) if offset not in seen and words.get(offset) == 0}
     if dead:
         result.append("proved-dead-zero-island:" + ",".join(f"0x{offset + bias:X}" for offset in sorted(dead)))
-    uncovered = set(range(start, end, 4)) - seen - padding - dead
+    copies = set()
+    if "likely_copy" in compiler_shape.rules:
+        # IDO can move the target's first instruction into a likely delay slot,
+        # retarget the branch past it, and retain the now unreachable original.
+        # It belongs only to that exact in-body branch/target pair, never an
+        # independently nominated entry or an arbitrary unreachable instruction.
+        for offset in seen:
+            word = words[offset]
+            if not _likely(word) or offset + 4 not in seen:
+                continue
+            immediate = word & 65535
+            immediate -= 65536 if immediate & 32768 else 0
+            target = offset + 4 + immediate * 4
+            duplicate = target - 4
+            if (
+                start < duplicate < trailing
+                and target in seen
+                and duplicate not in seen
+                and duplicate not in known
+                and words.get(duplicate) == words[offset + 4]
+            ):
+                copies.add(duplicate)
+        if copies:
+            result.append("proved-dead-likely-copy:" + ",".join(f"0x{offset + bias:X}" for offset in sorted(copies)))
+    uncovered = set(range(start, end, 4)) - seen - padding - dead - copies
     if uncovered:
         reasons.append(
             "unowned-code-or-data-island:" + ",".join(f"0x{offset + bias:X}" for offset in sorted(uncovered))

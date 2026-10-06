@@ -88,11 +88,19 @@ def emitters(shapes: Iterable[Shape]) -> Shape:
     return Shape(max(item.isa_level for item in shapes), first.entry_gprs, first.entry_fprs, 0, 0, rules)
 
 
-def o32_shape(compiler: str, cflags: tuple[str, ...], *, object_alignment: int, fragment_bytes: int) -> Shape:
+def o32_shape(
+    compiler: str, cflags: tuple[str, ...], *, object_alignment: int, fragment_bytes: int, likely_copies: bool
+) -> Shape:
     """An O32 compiler's shape with every rule on; a family passes its own alignment and fragment size."""
-    for prefix, permitted in (("-mgp", {"-mgp32"}), ("-mfp", {"-mfp32", "-mfp64"}), ("-mabi", {"-mabi=32", "-mabi=o32"})):
+    for prefix, permitted in (
+        ("-mgp", {"-mgp32"}),
+        ("-mfp", {"-mfp32", "-mfp64"}),
+        ("-mabi", {"-mabi=32", "-mabi=o32"}),
+    ):
         supplied = [flag for flag in cflags if flag.startswith(prefix)]
         if any(flag not in permitted for flag in supplied):
             raise Held("families", f"compilers.{compiler}.cflags: unsupported {prefix} values {supplied}")
     rules = RULES | OPTIMIZING_RULES if optimizing(cflags) else RULES
+    if likely_copies:
+        rules |= {"likely_copy"}
     return Shape(isa_level(compiler, cflags), O32_ENTRY_GPRS, O32_ENTRY_FPRS, object_alignment, fragment_bytes, rules)

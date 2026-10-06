@@ -19,8 +19,12 @@ class Ido:
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
         """Language/macro input, excluding code generation optimization."""
         for flag in codegen:
-            if not (flag.startswith(("-O", "-G", "-g", "-mips")) or flag in ("-non_shared", "-shared", "-ansi", "-signed", "-unsigned", "-Xc", "-Xansi")):
+            if not (
+                flag.startswith(("-O", "-G", "-g", "-mips"))
+                or flag in ("-non_shared", "-shared", "-ansi", "-signed", "-unsigned", "-Xc", "-Xansi")
+            ):
                 from unbake.config import Held
+
                 raise Held("compile", f"compile.flags: {flag}: unsupported by the ido driver")
         return (*preprocess, *(flag for flag in codegen if not flag.startswith(("-O", "-g"))))
 
@@ -32,7 +36,7 @@ class Ido:
         `kreg` and `isa` hold."""
         from unbake.compilers.families.mips import o32_shape
 
-        return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64)
+        return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64, likely_copies=True)
 
     def rodata_section(self) -> str:
         return ".rodata"

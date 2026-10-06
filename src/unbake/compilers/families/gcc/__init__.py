@@ -18,7 +18,14 @@ if TYPE_CHECKING:
 class Gcc:
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
         """Language/macro input, excluding code generation optimization."""
-        return (*preprocess, *(flag for flag in codegen if flag in ("-funsigned-char", "-fsigned-char", "-ansi") or flag.startswith("-std=")))
+        return (
+            *preprocess,
+            *(
+                flag
+                for flag in codegen
+                if flag in ("-funsigned-char", "-fsigned-char", "-ansi") or flag.startswith("-std=")
+            ),
+        )
 
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
         """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments.
@@ -28,7 +35,7 @@ class Gcc:
         expands with cfc1/ctc1 $31 only at -mips1, beside the conversion. So `cop0`, `fcsr`, `kreg` and `isa` hold."""
         from unbake.compilers.families.mips import o32_shape
 
-        return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64)
+        return o32_shape(compiler, cflags, object_alignment=16, fragment_bytes=64, likely_copies=False)
 
     def rodata_section(self) -> str:
         return ".rdata"
