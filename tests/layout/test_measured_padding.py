@@ -34,3 +34,15 @@ class MeasuredPaddingTests(unittest.TestCase):
         )
         with self.assertRaises(Held):
             planner.normalized_functions(image, rows, {0: {"loaded-entry"}, 0x1544: {"jal-target"}}, SHAPES, [])
+
+    def test_alignment_at_loaded_extent_is_not_hidden_in_unmapped_cartridge_bytes(self):
+        text = (Path(__file__).parent / "fixtures/bundled.text").read_bytes()
+        image = text + bytes(64)
+        region = Function("de", "region", 0, len(text), 0x80211120, "region", "asm", ())
+        bodies = planner.normalized_functions(image, [region], {0: {"loaded-entry"}}, SHAPES, [])
+        providers = planner.complete_providers(image, bodies, [], (region,), SHAPES)
+        padding = [p for p in providers if p["evidence"].get("classification") == "proved compiler alignment"]
+        self.assertEqual([(p["start"], p["end"], p["address"]) for p in padding], [(5444, 5456, 0x80212664)])
+        self.assertEqual(providers[-1]["address"], None)
+        self.assertEqual((providers[-1]["start"], providers[-1]["end"]), (5456, len(image)))
+        self.assertEqual(sum(p["end"] - p["start"] for p in providers), len(image))

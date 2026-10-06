@@ -204,7 +204,7 @@ def normalized_functions(
     """Disassembler entries and compiler shapes nominate; closure alone promotes bodies."""
     from unbake.work.shape import _frame_open
 
-    result = []
+    result: list[split.Function] = []
     known = set(seeds) | {f.start for f in ff}
     for parent in ff:
         previous = result[-1] if result else None
@@ -643,6 +643,25 @@ def complete_providers(
             constants,
         )
 
+    def retained(begin: int, end: int, reason: str) -> list[ProviderRecord]:
+        cuts = sorted({begin, end, *(at for f in ranges for at in (f.start, f.end) if begin < at < end)})
+        result = []
+        for start, stop in pairwise(cuts):
+            containing = next((f for f in ranges if f.start <= start < stop <= f.end), None)
+            address = containing.address + start - containing.start if containing else None
+            result.append(
+                ProviderRecord(
+                    start=start,
+                    end=stop,
+                    address=address,
+                    name=f"retained_{start:X}",
+                    kind="unresolved" if address is not None else "bin",
+                    owners=[],
+                    evidence={"classification": "proved compiler alignment" if aligned_gap(start, stop) else reason},
+                )
+            )
+        return result
+
     ordered = sorted(providers, key=lambda p: p["start"])
     result: list[ProviderRecord] = []
     cursor = 0
@@ -650,37 +669,11 @@ def complete_providers(
         if p["start"] < cursor:
             raise Held("setup", f"layout.pool_span: overlapping provider at ROM 0x{p['start']:X}")
         if p["start"] > cursor:
-            containing = next((f for f in ranges if f.start <= cursor < p["start"] <= f.end), None)
-            address = containing.address + cursor - containing.start if containing else None
-            padding = aligned_gap(cursor, p["start"])
-            result.append(
-                ProviderRecord(
-                    start=cursor,
-                    end=p["start"],
-                    address=address,
-                    name=f"retained_{cursor:X}",
-                    kind="unresolved" if address else "bin",
-                    owners=[],
-                    evidence={"classification": "proved compiler alignment" if padding else "unclaimed bytes retained"},
-                )
-            )
+            result.extend(retained(cursor, p["start"], "unclaimed bytes retained"))
         result.append(p)
         cursor = p["end"]
     if cursor < len(image):
-        containing = next((f for f in ranges if f.start <= cursor < len(image) <= f.end), None)
-        address = containing.address + cursor - containing.start if containing else None
-        padding = aligned_gap(cursor, len(image))
-        result.append(
-            ProviderRecord(
-                start=cursor,
-                end=len(image),
-                address=address,
-                name=f"retained_{cursor:X}",
-                kind="unresolved" if address else "bin",
-                owners=[],
-                evidence={"classification": "proved compiler alignment" if padding else "unmapped bytes retained"},
-            )
-        )
+        result.extend(retained(cursor, len(image), "unmapped bytes retained"))
     merged: list[ProviderRecord] = []
     for row in result:
         if merged:

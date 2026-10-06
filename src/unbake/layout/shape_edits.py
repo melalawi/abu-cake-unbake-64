@@ -4,7 +4,10 @@
   the filler becomes a data row `PATH_padding_START`. The row's symbols move to the entry. A `func_HEX...`
   name is renamed to the entry address (HEX + filler bytes) when every version holding it has the same filler,
   so the name keeps telling where the function starts in every version.
-Renames are carried into layout.toml members and unbake-exclusions.json; a renamed function's
+- Continuation: adjacent compatible asm rows are coalesced only when the first is incomplete,
+  the next requires entry state it does not establish, and the combined body passes the shared boundary
+  and compiler proofs. Independent references and published aliases protect an entry.
+Renames and removed continuation rows are carried into layout.toml and unbake-exclusions.json; a renamed function's
 draft history (build/work/FUNC/) and its attempts.json record move to the new name in the same publish.
 Refused (left as is, reported): a symbol already at the entry, rows in different segments, or a name that a
 published src/*.c uses. The build copies asm and data rows from the ROM, so bytes cannot change.
@@ -21,10 +24,11 @@ from typing import TYPE_CHECKING
 from unbake import atomic as atomic_files
 from unbake.config import Held
 from unbake.decomp.exclusions import MANIFEST
-from unbake.layout import split
+from unbake.layout import boundary, split
 from unbake.work import attempts, shape
 
 if TYPE_CHECKING:
+    from unbake.compilers.families.mips import Shape
     from unbake.config import Host, Project
 
 _FUNC = re.compile(r"func_([0-9A-F]{8})(\w*)")
@@ -33,7 +37,7 @@ _IDENTIFIER = re.compile(r"\b[A-Za-z_]\w*\b")
 
 @dataclass(frozen=True)
 class Finding:
-    """One proved edit in one VERSION: kind `filler` (skip bytes before the entry)."""
+    """One proved filler or continuation edit; OWNER and aliases pin any removed entry."""
 
     version: str
     kind: str
@@ -41,6 +45,8 @@ class Finding:
     start: int
     address: int
     skip: int = 0
+    owner: str = ""
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,7 +58,7 @@ class Scan:
 
 
 def scan(job: tuple[Project, str]) -> Scan:
-    """Pool worker: the filler findings of one VERSION's asm rows, and every row and symbol name."""
+    """Pool worker: proved filler/continuation findings and every row/symbol name."""
     project, version = job
     config = project.version(version)
     rows = split.functions(project, version)
@@ -60,18 +66,113 @@ def scan(job: tuple[Project, str]) -> Scan:
     _, symbols = split.symbols(config.symbols)
     taken = {entry[0] for entry in symbols.values()}
     found, blocked = [], []
-    for row in rows:
-        if row.kind != "asm":
+    segment_of = {r.start: id(segment) for segment in split.layout(config.split)[2] for r in segment.rows}
+    _, emitted = shape.configured(project)
+    consumed: set[int] = set()
+
+    def continuation(index: int, target: Shape) -> list[Finding]:
+        if index == 0 or "tail" not in target.rules:
+            return []
+        previous = rows[index - 1]
+        if previous.kind != "asm" or previous.start in consumed:
+            return []
+        owner = Path(previous.path).name
+        compiler = project.compiler_for(owner)
+        flags = project.unit_flags.get(owner, ())
+        bias = previous.address - previous.start
+        known = {f.address - bias for f in rows}
+        code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(previous.start, previous.end, 4)}
+        if boundary.evidence(code, previous.start, previous.end, bias, {"split-entry"}, known, target).proven:
+            return []
+        group = []
+        end = previous.end
+        for following in rows[index:]:
+            name = Path(following.path).name
+            if (
+                following.kind != "asm"
+                or following.start != end
+                or segment_of[previous.start] != segment_of[following.start]
+                or following.address - following.start != bias
+                or project.compiler_for(name) != compiler
+                or project.unit_flags.get(name, ()) != flags
+                or not shape._reads_unset(shape.words_of(image[following.start : following.end]), target)
+            ):
+                break
+            group.append(following)
+            code.update(
+                {at: int.from_bytes(image[at : at + 4], "big") for at in range(following.start, following.end, 4)}
+            )
+            known.discard(following.start)
+            end = following.end
+            proof = boundary.evidence(code, previous.start, end, bias, {"split-entry"}, known, target)
+            if proof.proven:
+                if (
+                    shape.classify(image[previous.start : end], previous.address, target, emitted, proof)[0]
+                    != "drafter"
+                ):
+                    break
+                return [
+                    Finding(
+                        version,
+                        "continuation",
+                        Path(f.path).name,
+                        f.start,
+                        f.address,
+                        owner=owner,
+                        aliases=tuple(n for n, entry in symbols.items() if entry[0] == f.address),
+                    )
+                    for f in group
+                ]
+        return []
+
+    for index, row in enumerate(rows):
+        if row.kind != "asm" or row.start in consumed:
             continue
         compiler = project.compiler_for(Path(row.path).name)
         target = shape.for_compiler(compiler, (*compiler.cflags, *project.unit_flags.get(Path(row.path).name, ())))
         data = image[row.start : row.end]
         name = Path(row.path).name
+        continued = continuation(index, target)
+        if continued:
+            found.extend(continued)
+            consumed.update(f.start for f in continued)
+            continue
         skip = 4 * shape.filler(shape.words_of(data), row.address, target)
         if skip and row.address + skip in taken:
             blocked.append(name)
         elif skip:
             found.append(Finding(version, "filler", name, row.start, row.address, skip))
+    continuations = {f.address: f for f in found if f.kind == "continuation"}
+    if continuations:
+        from unbake.layout.rodata_references import collect
+
+        protected: set[int] = set()
+        owners = {f.name: f.owner for f in continuations.values()}
+        for function in rows:
+            body = image[function.start : function.end]
+            refs, _ = collect(function.name, body, None, None)
+            protected.update(r.address for r in refs if r.address in continuations)
+            for offset in range(function.start, function.end, 4):
+                word = int.from_bytes(image[offset : offset + 4], "big")
+                pc = function.address + offset - function.start
+                op = word >> 26
+                target_address = None
+                if op in (2, 3):
+                    target_address = ((pc + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2)
+                elif op in (1, 4, 5, 6, 7, 20, 21, 22, 23) or (op == 17 and word >> 21 & 31 == 8):
+                    target_address = pc + 4 + ((word & 0x7FFF) - (word & 0x8000)) * 4
+                finding = continuations.get(target_address) if target_address is not None else None
+                if finding is not None and owners.get(function.name, function.name) != finding.owner:
+                    protected.add(finding.address)
+        # A stored pointer is a reason to retain an independently addressable entry.
+        for segment in split.layout(config.split)[2]:
+            for data_row in segment.rows:
+                if data_row.kind in ("data", "rodata", "rdata"):
+                    for offset in range((data_row.start + 3) // 4 * 4, min(split.end(data_row), len(image)) - 3, 4):
+                        pointer = int.from_bytes(image[offset : offset + 4], "big")
+                        protected.update(a for a in (pointer, pointer | 0x80000000) if a in continuations)
+        protected_owners = {f.owner for f in continuations.values() if f.address in protected}
+        found = [f for f in found if f.kind != "continuation" or f.owner not in protected_owners]
     names = frozenset({Path(row.path).name for row in rows} | set(symbols))
     return Scan(version, tuple(found), names, tuple(blocked))
 
@@ -105,13 +206,23 @@ def renames(scans: Iterable[Scan], used: set[str]) -> dict[str, str]:
 
 
 def split_text(path: Path, text: str, findings: Iterable[Finding], renamed: dict[str, str]) -> str:
-    """The split with each filler row cut at its entry."""
+    """Cut filler at its entry and coalesce proved continuation rows."""
     _, lines, segments = split.parse_layout(path, text)
     rows = {row.start: row for segment in segments for row in segment.rows}
+    findings = tuple(findings)
+    owners = {f.name: f.owner for f in findings if f.kind == "continuation"}
     for finding in findings:
         row = rows.get(finding.start)
         if row is None or row.kind != "asm" or Path(row.path).name != finding.name:
             raise Held("shape-edits", f"{path}: {finding.name}: no asm row at 0x{finding.start:X}")
+        if finding.kind == "continuation":
+            position = row.segment.rows.index(row)
+            previous = row.segment.rows[position - 1] if position else None
+            previous_name = Path(previous.path).name if previous is not None else ""
+            if previous is None or owners.get(previous_name, previous_name) != finding.owner:
+                raise Held("shape-edits", f"{path}: {finding.name}: owner {finding.owner} not before it")
+            lines[row.line] = ""
+            continue
         template = lines[row.line]
         newline = row.match["newline"] or "\n"
         padding = split.replace_row(template, row.match, kind="data", path=f"{row.path}_padding_{finding.start:X}")
@@ -122,12 +233,15 @@ def split_text(path: Path, text: str, findings: Iterable[Finding], renamed: dict
 
 
 def symbols_text(path: Path, text: str, findings: Iterable[Finding], renamed: dict[str, str]) -> str:
-    """The symbol file with each filler row's symbols moved to its entry."""
+    """Move filler symbols and remove only proved, unused continuation symbols."""
     moves = {f.address: f for f in findings if f.kind == "filler"}
+    removed = {f.address for f in findings if f.kind == "continuation"}
     output = []
     for line in text.splitlines(keepends=True):
         match = split.SYMBOL.match(line)
         address = int(match["address"], 0) if match else None
+        if address in removed:
+            continue
         if match and address in moves:
             finding = moves[address]
             name = renamed.get(match["name"], match["name"]) if match["name"] == finding.name else match["name"]
@@ -150,12 +264,17 @@ def run(project: Project, host: Host) -> list[str]:
 
     scans = pool.run(host, scan, [(project, version) for version in project.versions])
     used = published_names(project)
-    kept = {item.version: [f for f in item.findings if f.name not in used] for item in scans}
+    kept = {}
+    for item in scans:
+        protected_owners = {f.owner for f in item.findings if f.owner and {f.name, f.owner, *f.aliases} & used}
+        kept[item.version] = [
+            f for f in item.findings if not {f.name, f.owner, *f.aliases} & used and f.owner not in protected_owners
+        ]
     lines = [
         f"shape edit refused: {f.version} {f.name}: published C uses it"
         for i in scans
         for f in i.findings
-        if f.name in used
+        if {f.name, f.owner, *f.aliases} & used
     ]
     lines += [
         f"shape edit refused: {i.version} {name}: a symbol already names its entry" for i in scans for name in i.blocked
@@ -184,7 +303,7 @@ def run(project: Project, host: Host) -> list[str]:
             config = project.version(version)
             for path, edit in ((config.split, split_text), (config.symbols, symbols_text)):
                 atomic_files.text(path, edit(path, split.read(path), findings, renamed))
-        _relabel(project, renamed)
+        _relabel(project, renamed, {f.name for findings in kept.values() for f in findings if f.kind == "continuation"})
         # The generated build files name symbols and rows too; they land in the same commit.
         generated = buildfiles.write(project_config.load(project.root), host)
         _commit(project, host, sorted({*backup, *generated}), kept, renamed)
@@ -197,22 +316,26 @@ def run(project: Project, host: Host) -> list[str]:
     attempts.install(carries)
     for findings in kept.values():
         for f in findings:
-            target = f"+0x{f.skip:X} as {renamed.get(f.name, f.name)}"
+            target = (
+                f"into {f.owner}" if f.kind == "continuation" else f"+0x{f.skip:X} as {renamed.get(f.name, f.name)}"
+            )
             lines.append(f"shape edit {f.version} {f.kind} {f.name} {target}")
     return lines
 
 
-def _relabel(project: Project, renamed: dict[str, str]) -> None:
+def _relabel(project: Project, renamed: dict[str, str], continuations: set[str]) -> None:
     """Carry renames into the files that list function names: layout.toml members and the exclusions manifest."""
     import json
     import tomllib
 
     from unbake.layout import map as layout_map
 
+    remaining = layout_map.catalog(project)
+    gone = continuations - remaining.keys()
     manifest = project.root / MANIFEST
     if manifest.is_file():
         value = json.loads(manifest.read_text())
-        names = [renamed.get(name, name) for name in value["functions"]]
+        names = [renamed.get(name, name) for name in value["functions"] if name not in gone]
         if names != value["functions"]:
             atomic_files.text(manifest, json.dumps({**value, "functions": names}, indent=2) + "\n")
     path = project.root / "layout.toml"
@@ -220,6 +343,7 @@ def _relabel(project: Project, renamed: dict[str, str]) -> None:
         return
     present = {name for group in tomllib.loads(path.read_text()).get("group", []) for name in group["members"]}
     replacements: dict[str, tuple[str, ...]] = {old: (new,) for old, new in renamed.items() if old in present}
+    replacements.update({name: () if name in gone else (name,) for name in continuations if name in present})
     # Always rewritten: a moved entry can change the address order of members that keep their names.
     layout_map.edit_members(project, replacements)
 
@@ -230,5 +354,8 @@ def _commit(
     from unbake.layout import merge_units
 
     found = [f for findings in kept.values() for f in findings]
-    message = f"Shape edits: {len(found)} rows start past alignment filler ({len(renamed)} renamed)"
+    message = (
+        f"Shape edits: {sum(f.kind == 'filler' for f in found)} filler rows ({len(renamed)} renamed), "
+        f"{sum(f.kind == 'continuation' for f in found)} proved continuations"
+    )
     merge_units._commit(project, host, paths, message)
