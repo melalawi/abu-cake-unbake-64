@@ -8,6 +8,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from tests.project_fixture import ProjectCase
 from unbake.cli import guidance
 from unbake.config import Held
 from unbake.layout import header_step
@@ -191,21 +192,44 @@ class HistoryRenameTests(TempCase):
         self.assertEqual(renamed["functions"], {"func_B": row})
 
 
-class HeaderCompileFailureTests(TempCase):
+class HeaderCompileFailureTests(ProjectCase):
     def test_each_unit_reports_its_own_refusal_and_all_travel_together(self) -> None:
         import pickle
 
-        from unbake import runner
+        from unbake import pool, runner
 
-        refusal = Held("compile", "compile.func_802450CC_de: src/func_802450CC_de.c: `D_800CB420_de' undeclared")
-        for label, effect, expected in [
-            ("compiles", None, None),
-            ("refused", refusal, ("compile.func_802450CC_de", f"VERSION de: {refusal.reason}")),
-        ]:
-            with self.subTest(label), patch.object(runner, "compile_unit", side_effect=effect):
-                job = (SimpleNamespace(), SimpleNamespace(), Path("u.c"), "de", "func_802450CC_de")
-                self.assertEqual(header_step._compile(job), expected)  # type: ignore[arg-type]
-        gathered = Held(
-            "compile", "compile.headers: 2 unit compiles fail", failures=(("compile.a", "x"), ("compile.b", "y"))
-        )
-        self.assertEqual(pickle.loads(pickle.dumps(gathered)).failures, gathered.failures)
+        sources = {self.project.src / f"{unit}.c": b"int missing;\n" for unit in ("alpha", "beta")}
+        for source, data in sources.items():
+            source.write_bytes(data)
+        job = (self.project, self.host, self.project.src / "alpha.c", "us", "alpha")
+        with patch.object(runner, "compile_unit", return_value=None) as compile_unit:
+            self.assertIsNone(header_step._compile(job))
+        compile_unit.assert_called_once_with(*job[:4], unit="alpha")
+
+        expected = []
+        for unit in ("alpha", "beta"):
+            for version in self.versions:
+                reason = f"compile.{unit}: src/{unit}.c: `missing' undeclared"
+                expected.append(
+                    {
+                        "key": f"compile.{unit}",
+                        "reason": f"VERSION {version}: {reason}",
+                        "fault": {"chain": [{"phase": "compile", "key": f"compile.{unit}", "reason": reason}]},
+                    }
+                )
+
+        def refuse(view, host, file, version, *, unit):
+            raise Held("compile", f"compile.{unit}: src/{unit}.c: `missing' undeclared")
+
+        with patch.object(runner, "compile_unit", side_effect=refuse):
+            self.assertEqual(header_step._compile(job), expected[0])
+            with (
+                patch.object(pool, "run", side_effect=lambda host, fn, jobs: [fn(job) for job in jobs]),
+                self.assertRaises(Held) as caught,
+            ):
+                header_step.validate(self.project, self.host, sources)
+        gathered = caught.exception
+        self.assertEqual(gathered.key, "compile.headers")
+        self.assertIn("4 unit compiles fail", gathered.reason)
+        self.assertEqual(gathered.failures, tuple(expected))
+        self.assertEqual(pickle.loads(pickle.dumps(gathered)).failures, tuple(expected))

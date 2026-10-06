@@ -314,23 +314,23 @@ class TypesFixedPointTests(TempCase):
     def test_the_types_key_reads_generated_headers(self) -> None:
         from unittest.mock import patch
 
+        from tests.project_fixture import make
         from unbake.typemap import solver
 
-        include = self.root / "include"
+        project, host = make(self.root)
+        include = project.include[0]
         (include / "common").mkdir(parents=True)
-        (self.root / "config.toml").write_text("")
-        (self.root / "layout.toml").write_text("")
+        (project.build / "map").mkdir()
+        (project.build / "map" / "facts.json").write_text('{"shard_sha256": "s"}\n')
         generated = include / "common" / "types_0123456789ab.h"
         generated.write_text("typedef int A;\n")
-        project = SimpleNamespace(root=self.root, include=(include,), versions=())
 
         def key() -> str:
             with patch.object(solver, "SCHEMA", 1):
-                return solver._types_key(project, None, {"shard_sha256": "s"}, [])  # type: ignore[arg-type]
+                return solver._types_key(project, host, {"shard_sha256": "s"}, [])
 
         base = key()
-        (self.root / "build").mkdir(exist_ok=True)
-        (self.root / "build" / "steps.json").write_text("{}")
+        (project.build / "steps.json").write_text("{}")
         self.assertEqual(key(), base)  # outside the solve's inputs
         generated.write_text("typedef long A;\n")
         self.assertNotEqual(key(), base)
