@@ -276,7 +276,7 @@ def land(project: Project, host: Host, file: Path) -> str:
         config_path = project.root / "config.toml"
         data = toml.loads(config_path.read_text())
         units = dict(data.get("units", {}))
-        if ident != project.default_compiler:
+        if ident != project.default_compiler or units.get(function, {}).get("flags"):
             units[function] = {**units.get(function, {}), "compiler": ident}
         else:
             units.pop(function, None)

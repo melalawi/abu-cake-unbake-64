@@ -89,6 +89,17 @@ class LandTests(ProjectCase):
         self.assertEqual(len(commits), 1)
         self.assertIn("Clean alpha", commits[0])
 
+    def test_landing_with_default_compiler_keeps_proven_unit_flags(self) -> None:
+        path = self.project.root / "config.toml"
+        path.write_text(
+            path.read_text().replace("[units]", '[units]\nalpha = { compiler = "ido-7.1", flags = ["-O1"] }')
+        )
+        self.project = config.load(self.project.root)
+        self.assertEqual(self.run_land(["us", "eu"]), "c0ffee")
+        landed = config.load(self.project.root)
+        self.assertEqual(landed.compiler_reference("alpha"), "ido-7.1")
+        self.assertEqual(landed.unit_flags["alpha"], ("-O1",))
+
 
 class ProveVersionsTests(unittest.TestCase):
     def prove(self, results: list[bool]) -> list:
