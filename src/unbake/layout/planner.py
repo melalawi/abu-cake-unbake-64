@@ -207,6 +207,20 @@ def normalized_functions(
     result = []
     known = set(seeds) | {f.start for f in ff}
     for parent in ff:
+        previous = result[-1] if result else None
+        if (
+            previous is not None
+            and previous.end == parent.start
+            and previous.address - previous.start == parent.address - parent.start
+            and not any(parent.start <= at < parent.end for at in seeds)
+            and parent.end - parent.start < max(target.object_alignment for target in shapes.values())
+            and aligned_after(
+                image, previous, parent.end, shapes, known - {parent.start}, carve(image, [previous], spans)
+            )
+        ):
+            # Disassemblers can nominate nonzero alignment words as a function.
+            # Keep those bytes as a provider only when the preceding body proves them.
+            continue
         code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(parent.start, parent.end, 4)}
         nominations = {parent.start, *(at for at in known if parent.start <= at < parent.end)}
         nominations.update(at for at, word in code.items() if _frame_open(word))
@@ -568,6 +582,33 @@ def table_edges(image: bytes, f: split.Function, providers: list[ProviderRecord]
     return result
 
 
+def aligned_after(
+    image: bytes,
+    previous: split.Function,
+    end: int,
+    shapes: dict[str, Any],
+    known: set[int],
+    constants: list[ProviderRecord],
+) -> bool:
+    """The preceding executable body proves exactly this trailing alignment."""
+    bias = previous.address - previous.start
+    code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(previous.start, end, 4)}
+    for target in shapes.values():
+        proof = boundary.evidence(
+            code,
+            previous.start,
+            end,
+            bias,
+            {"proved-executable-entry"},
+            known,
+            target,
+            table_edges(image, previous, constants),
+        )
+        if proof.proven and f"alignment-padding:{end - previous.end}" in proof.tags:
+            return True
+    return False
+
+
 def complete_providers(
     image: bytes,
     ff: list[split.Function],
@@ -593,20 +634,13 @@ def complete_providers(
         previous = next((f for f in ff if f.end == begin), None)
         if previous is None:
             return False
-        bias = previous.address - previous.start
-        code = {at: int.from_bytes(image[at : at + 4], "big") for at in range(previous.start, end, 4)}
-        return any(
-            boundary.evidence(
-                code,
-                previous.start,
-                end,
-                bias,
-                {"proved-executable-entry"},
-                {f.address - bias for f in ff},
-                target,
-                table_edges(image, previous, constants),
-            ).proven
-            for target in shapes.values()
+        return aligned_after(
+            image,
+            previous,
+            end,
+            shapes,
+            {f.address - (previous.address - previous.start) for f in ff},
+            constants,
         )
 
     ordered = sorted(providers, key=lambda p: p["start"])
