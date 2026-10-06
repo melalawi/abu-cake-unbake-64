@@ -23,7 +23,7 @@ class LandTests(ProjectCase):
         self.git: list[tuple[str, ...]] = []
         self.fail_commit = False
 
-    def run_land(self, proved: object) -> str:
+    def run_land(self, proved: object, headers: dict[str, str] | None = None) -> str:
         def git(project, *args, env=None):
             self.git.append(args)
             if args[-1:] == ("HEAD",):
@@ -35,7 +35,7 @@ class LandTests(ProjectCase):
         prove = {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": proved}
         with (
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
-            patch("unbake.fold.apply.fold", return_value=Folded("alpha", SOURCE, {}, ())),
+            patch("unbake.fold.apply.fold", return_value=Folded("alpha", SOURCE, headers or {}, ())),
             patch("unbake.fold.apply.private_headers", return_value={}),
             patch.object(land, "prove", **prove),
             patch.object(land, "_git", side_effect=git),
@@ -99,6 +99,21 @@ class LandTests(ProjectCase):
         landed = config.load(self.project.root)
         self.assertEqual(landed.compiler_reference("alpha"), "ido-7.1")
         self.assertEqual(landed.unit_flags["alpha"], ("-O1",))
+
+    def test_successful_land_acknowledges_only_its_proven_header_output(self) -> None:
+        from unbake import inputs, steps
+
+        header = self.project.include[-1] / "main/alpha.h"
+        other = self.project.include[-1] / "main/beta.h"
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_text("int alpha(void);\n")
+        other.write_text("int beta(void);\n")
+        steps.record(self.project, "headers", "old-input-key", steps._digests(self.project, (header, other)))
+        original_other = inputs.digest(other)
+        self.assertEqual(self.run_land(["us", "eu"], {"main/alpha.h": "extern int alpha(void);\n"}), "c0ffee")
+        self.assertEqual(steps.altered(self.project, "headers"), [])
+        self.assertEqual(steps.recorded(self.project, "headers"), "old-input-key")
+        self.assertEqual(inputs.digest(other), original_other)
 
 
 class ProveVersionsTests(unittest.TestCase):

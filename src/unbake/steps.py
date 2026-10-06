@@ -58,6 +58,28 @@ def _digests(project: Project, paths: Iterable[Path]) -> dict[str, str]:
     return {str(path.relative_to(project.root)): inputs.digest(path) for path in sorted(paths) if path.is_file()}
 
 
+def acknowledge_outputs(project: Project, step: str, paths: Iterable[Path]) -> None:
+    """Update only recorded outputs a successful proven operation itself wrote.
+
+    Keep the input key: a later solve still refreshes declarations from the new
+    source. Other outputs retain their digests so hand edits remain detectable.
+    """
+    value = _read(project)
+    entry = value.get(step)
+    if entry is None:
+        return
+    outputs = dict(entry.get("outputs", {}))
+    from unbake import inputs
+
+    for path in paths:
+        name = str(path.relative_to(project.root))
+        if name in outputs and path.is_file():
+            outputs[name] = inputs.digest(path)
+    if outputs != entry.get("outputs", {}):
+        entry["outputs"] = outputs
+        atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
+
+
 def altered(project: Project, step: str) -> list[str]:
     """The recorded outputs of STEP that are now missing or hold other bytes."""
     from unbake import inputs

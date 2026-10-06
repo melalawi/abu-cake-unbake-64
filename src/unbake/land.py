@@ -301,6 +301,8 @@ def land(project: Project, host: Host, file: Path) -> str:
                 atomic_files.write(path, previous)
         raise
     shutil.rmtree(project.work / function, ignore_errors=True)
+    if headers:
+        steps.acknowledge_outputs(project, "headers", [project.include[-1] / name for name in headers])
     return _git(project, "rev-parse", "HEAD").strip()
 
 
