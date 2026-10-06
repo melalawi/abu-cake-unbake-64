@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from unbake.config import Held, Project, Version
@@ -167,18 +167,24 @@ class RomReader:
         mapping = self.span(address, size)
         return target(self.version, FunctionSpan(address, mapping.offset + address - mapping.address, size))
 
-    def table_entry(self, address: int) -> int:
-        mapping = self.span(address, 4)
+    def table_span(self, address: int, size: int) -> MemorySpan:
+        """The unique backing and configured pointer identity of a complete table range."""
+        mapping = self.span(address, size)
         # Migration can give a resident copy its own native split segment. The
         # raw bytes then have a direct mapping, but their configured pointer bias
         # still describes the same runtime table identity.
-        overrides = [row for row in self.resident_spans() if row.address <= address and address + 4 <= row.end]
+        overrides = [row for row in self.resident_spans() if row.address < address + size and address < row.end]
         if len(overrides) > 1 or any(
-            row.offset + address - row.address != mapping.offset + address - mapping.address for row in overrides
+            not row.address <= address < address + size <= row.end
+            or row.offset + address - row.address != mapping.offset + address - mapping.address
+            for row in overrides
         ):
             raise Held("try", f"{self.version.name}.table_entry: conflicting resident backing at 0x{address:X}")
-        bias = overrides[0].table_entry_bias if overrides else mapping.table_entry_bias
-        return (int.from_bytes(self(address, 4), "big") + bias) & 0xFFFFFFFF
+        return replace(mapping, table_entry_bias=overrides[0].table_entry_bias) if overrides else mapping
+
+    def table_entry(self, address: int) -> int:
+        mapping = self.table_span(address, 4)
+        return (int.from_bytes(self(address, 4), "big") + mapping.table_entry_bias) & 0xFFFFFFFF
 
 
 def rom_reader(version: Version, resident: Callable[[], list[dict[str, int]]]) -> RomReader:

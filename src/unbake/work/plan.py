@@ -45,13 +45,7 @@ def _placement(project: Project, item: split.Function, data: bytes, target: Shap
     def load() -> tuple[list[split.Function], bytes, list[ProviderRecord]]:
         rows = split.functions(project, item.version)
         image = configured.baserom.read_bytes()
-        pools = []
-        for segment in split.layout(configured.split)[2]:
-            for row in segment.rows:
-                if row.kind in ("data", "rodata", "rdata") and "vram" in segment.fields:
-                    pools.append(
-                        rodata_owners.Span(split.address(row, configured.split), row.start, split.end(row), 0, "copied")
-                    )
+        pools = rodata_owners.mapped_spans(project, item.version, include_data=True)
         return rows, image, planner.carve(image, rows, pools)
 
     rows, image, constants = cache.memo(
@@ -63,6 +57,7 @@ def _placement(project: Project, item: split.Function, data: bytes, target: Shap
             inputs.signature(configured.split),
             configured.symbols,
             inputs.signature(configured.symbols),
+            project.resident_mappings.get(item.version, ()),
         ),
         load,
         keep=len(project.versions),
@@ -79,7 +74,7 @@ def _placement(project: Project, item: split.Function, data: bytes, target: Shap
     )
 
 
-def candidates(project: Project, host: Host) -> list[rank.Candidate]:
+def candidates(project: Project, host: Host, *, selected: frozenset[str] | None = None) -> list[rank.Candidate]:
     """Units not yet exact and clean: unmatched functions m2c can draft (complete bodies, one name in every
     version, not excluded), and published units that break a source rule (drafted from their src/ text).
     The word rules run in the worker pool, in chunks of groups."""
@@ -96,6 +91,8 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
         items = tuple(group)
         canonical = min(items, key=lambda item: project.versions.index(item.version))
         aliases = {name for item in items for name in (item.name, *item.aliases)}
+        if selected is not None and not aliases & selected:
+            continue
         if aliases & excluded or any(item.kind == "c" for item in items):
             continue
         if any(item.name != canonical.name for item in items):
@@ -135,7 +132,11 @@ def candidates(project: Project, host: Host) -> list[rank.Candidate]:
             )
         )
     published = _published_rows(project)
-    sources = [source for source in sorted(project.src.glob("*.c")) if source.stem in published]
+    sources = [
+        source
+        for source in sorted(project.src.glob("*.c"))
+        if source.stem in published and (selected is None or source.stem in selected)
+    ]
     for source in checks.dirty(project, Cache(project.cache), sources, host):
         versions, row = published[source.stem]
         summary = history.get(source.stem)
@@ -197,6 +198,8 @@ def refusal(project: Project, name: str) -> str:
     """The one reason a named function is not a candidate: published and clean, unknown, or not draftable."""
     if name in _published_rows(project):
         return "published and clean"
+    if name in exclusions.load(project):
+        return f"excluded by {exclusions.MANIFEST}"
     _, functions, bodies = inventory.inventory(project)
     if not any(name in (item.name, *item.aliases) for item in functions):
         return "unknown function"
@@ -205,7 +208,11 @@ def refusal(project: Project, name: str) -> str:
     for item in functions:
         if name not in (item.name, *item.aliases):
             continue
-        target = shapes.get(item.name, shapes[project.compiler_for(item.name).id])
+        compiler = project.compiler_for(item.name)
+        if compiler.kind not in M2C_KINDS:
+            reasons.append(f"{item.version} {item.name}: compiler {compiler.id} has no drafter")
+            continue
+        target = shapes.get(item.name, shapes[compiler.id])
         route, cause = shape.classify(
             bodies[item.version, item.name],
             item.address,

@@ -11,7 +11,7 @@ from typing import Any
 from unbake import extract
 from unbake.config import Held, Host, Project
 from unbake.layout import split
-from unbake.work import attempts, compare
+from unbake.work import attempts, compare, plan
 
 
 @dataclass
@@ -125,5 +125,19 @@ def explain(project: Project, host: Host, subject: str, sections: tuple[str, ...
             report.sections[name] = _similar(project, host, function)
         else:
             raise Held("explain", f"explain.section: {name}: unknown section")
-    report.next_words = ("compare", str(file)) if file is not None else ("draft", function)
+    eligible = False
+    if "status" in report.sections:
+        eligible = any(
+            row.function == function for row in plan.candidates(project, host, selected=frozenset({function}))
+        )
+        report.sections["status"]["cycle"] = {
+            "eligible": eligible,
+            "reason": "candidate (size window not applied)" if eligible else plan.refusal(project, function),
+        }
+    if file is not None:
+        report.next_words = ("compare", str(file))
+    elif eligible:
+        report.next_words = ("draft", function)
+    elif "status" not in report.sections:
+        report.next_words = ("explain", function, "--section", "status")
     return report

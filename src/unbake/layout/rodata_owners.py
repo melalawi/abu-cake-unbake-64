@@ -86,26 +86,51 @@ class Census:
         }
 
 
+def mapped_spans(project: Project, version: str, *, include_data: bool) -> list[Span]:
+    """One constant span per runtime byte, preserving configured resident pointer identity."""
+    reader = project_reader(project, version)
+    spans = [
+        Span(m.address, m.offset, m.offset + m.end - m.address, m.table_entry_bias, "resident")
+        for m in reader.resident_spans()
+    ]
+    resident = tuple(spans)
+    for span in resident:
+        reader.table_span(span.address, span.end - span.start)
+    for segment in reader.segments:
+        for row in segment.rows:
+            if row.kind.lstrip(".") not in (("data", "rodata", "rdata") if include_data else ("rodata", "rdata")):
+                continue
+            if "vram" not in segment.fields:
+                continue
+            address = split.address(row, project.version(version).split)
+            stop = address + split.end(row) - row.start
+            cuts = sorted({address, stop, *(at for s in resident for at in (s.address, s.stop) if address < at < stop)})
+            for begin, end in itertools.pairwise(cuts):
+                mapped = reader.table_span(begin, end - begin)
+                if not any(s.address <= begin < end <= s.stop for s in resident):
+                    start = mapped.offset + begin - mapped.address
+                    spans.append(
+                        Span(
+                            begin,
+                            start,
+                            start + end - begin,
+                            mapped.table_entry_bias,
+                            "copied" if include_data else "strict",
+                        )
+                    )
+    spans.sort(key=lambda s: s.address)
+    if any(a.stop > b.address for a, b in itertools.pairwise(spans)):
+        raise Held("rodata", "overlapping constant runtime spans")
+    return spans
+
+
 def scan(project: Project, version: str) -> Census:
     configured = project.version(version)
     image = configured.baserom.read_bytes()
     objects_dir = project.build / version / "src"
     _, configured_symbols = split.symbols(configured.symbols)
     values = {name: entry[0] for name, entry in configured_symbols.items()}
-    _, _, segments = split.layout(configured.split)
-    spans = [
-        Span(m.address, m.start, m.end, m.table_entry_bias, "resident")
-        for m in project.resident_mappings.get(version, ())
-    ]
-    for segment in segments:
-        for row in segment.rows:
-            if row.kind.lstrip(".") in ("rodata", "rdata"):
-                address = split.address(row, configured.split)
-                if not any(s.address <= address < s.stop for s in spans):
-                    spans.append(Span(address, row.start, split.end(row), 0, "strict"))
-    spans.sort(key=lambda s: s.address)
-    if any(a.stop > b.address for a, b in itertools.pairwise(spans)):
-        raise Held("rodata", "overlapping constant runtime spans")
+    spans = mapped_spans(project, version, include_data=False)
     functions = split.functions(project, version)
     refs: list[Reference] = []
     errors: list[str] = []
