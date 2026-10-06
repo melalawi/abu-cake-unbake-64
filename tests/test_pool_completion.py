@@ -10,6 +10,33 @@ from unbake import pool
 
 
 class CompletionTests(unittest.TestCase):
+    def test_memory_recycle_does_not_discard_an_unstarted_sibling(self):
+        queued = Future()
+        calls = []
+
+        class Executor:
+            def submit(self, fn, task):
+                _, item = task
+                calls.append(item)
+                if item == 1:
+                    return queued
+                future = Future()
+                fault = MemoryError() if calls.count(0) == 1 else None
+                future.set_result((item, 0.0, 0, {}, fault))
+                return future
+
+            def shutdown(self, *, cancel_futures=False):
+                if cancel_futures:
+                    queued.cancel()
+                else:
+                    queued.set_result((1, 0.0, 0, {}, None))
+
+        owner = pool.Pool(2, 8_000_000_000, 4_000_000_000, 512_000_000)
+        owner._executor = Executor()
+        with patch.object(pool, "_executor", return_value=Executor()):
+            self.assertEqual(list(owner.map(int, [0, 1])), [0, 1])
+        self.assertEqual(calls, [0, 1, 0])
+
     def test_a_finished_sibling_is_not_repeated_after_another_worker_crashes(self):
         calls = []
 

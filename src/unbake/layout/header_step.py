@@ -112,7 +112,8 @@ def _compile(job: tuple[Project, Host, Path, str, str]) -> dict[str, Any] | None
 
     view, host, file, version, unit = job
     try:
-        runner.compile_unit(view, host, file, version, unit=unit)
+        with runner.compile_unit(view, host, file, version, unit=unit):
+            pass
     except Held as error:
         return {"key": error.key, "reason": f"VERSION {version}: {error.reason}", "fault": process.fault(error)}
     return None

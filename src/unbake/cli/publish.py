@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 from unbake.cli.args import Context
 from unbake.cli.output import Result
@@ -26,6 +27,11 @@ src/FUNC.s, records its rule in unbake-original-asm.json and commits "Original a
 Other exact versions land too; nonmatching versions retain assembly. Every already published
 C version must remain exact. Compare still measures every holding version. The default and
 --original continue to require every holding version.
+
+--events streams a fn.committed JSON receipt immediately after each successful commit,
+before merging or trying another file, followed by the usual final Result. The receipt
+names the proved versions and input hashes for commit readback. Prefer one FILE per
+invocation when dispatching each immutable commit to a separate publisher.
 """
 PROJECT = "ready"
 
@@ -36,6 +42,7 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("files", type=Path, nargs="*", metavar="FILE")
+    parser.add_argument("--events", action="store_true", help="Flush each commit receipt immediately as JSONL.")
     parser.add_argument(
         "--require-version",
         action="append",
@@ -50,19 +57,27 @@ def register(parser: argparse.ArgumentParser) -> None:
 def run(context: Context) -> Result:
     from unbake import land
     from unbake.config import Held
+    from unbake.cycle.events import Emitter
 
     if not context.args.files and not context.args.original:
         raise Held("publish", "publish: name a FILE or --original FUNC")
+    emitter = Emitter(context.stdout) if context.args.events else None
+
+    def committed(record: dict[str, Any]) -> None:
+        if emitter is not None:
+            emitter.emit("fn.committed", **record)
+
     done = land.publish(
         context.project(),
         context.require_host(),
         [path.resolve() for path in context.args.files],
         originals=tuple(context.args.original),
         required_versions=(tuple(context.args.require_version) if context.args.require_version is not None else None),
+        on_commit=committed if emitter is not None else None,
     )
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)
-    if done.failed:
-        key = next(iter(done.failed.values()))["key"]
-        return Result(NAME, "held", key, done.document(), following, tuple(done.lines()))
+    failure = next(iter(done.failed.values())) if done.failed else done.post_commit_failure
+    if failure is not None:
+        return Result(NAME, "held", failure["key"], done.document(), following, tuple(done.lines()))
     return result

@@ -1,5 +1,6 @@
 """A successful landing owns the actual project inputs used by every native proof."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -65,7 +66,7 @@ class PublicationDependencyTests(ProjectCase):
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", source, {}, ())),
             patch.object(pool, "run", side_effect=lambda host, fn, jobs: [fn(job) for job in jobs]),
-            patch.object(runner, "compile_unit", return_value=self.root / "alpha.o"),
+            patch.object(runner, "compile_unit", side_effect=lambda *a, **kw: nullcontext(self.root / "alpha.o")),
             patch.object(runner, "place"),
             patch.object(
                 runner,

@@ -1,6 +1,7 @@
 """Required-version publication cannot weaken identity, source rules or existing C proof."""
 
 import hashlib
+from contextlib import nullcontext
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
@@ -44,7 +45,7 @@ class VersionPublicationTests(ProjectCase):
             compiled.append(version)
             if version == "eu":
                 raise Held("compile", "EU builds assembly; this C is deliberately not supported there")
-            return self.root / "alpha.o"
+            return nullcontext(self.root / "alpha.o")
 
         with (
             patch("unbake.pool.run", side_effect=lambda host, fn, jobs: [fn(job) for job in jobs]),
@@ -113,7 +114,7 @@ class VersionPublicationTests(ProjectCase):
             return split.words(project, row), []
 
         with (
-            patch.object(runner, "compile_unit", return_value=self.root / "alpha.o"),
+            patch.object(runner, "compile_unit", side_effect=lambda *a, **kw: nullcontext(self.root / "alpha.o")),
             patch.object(runner, "link_function", side_effect=link),
             patch.object(choice, "alternatives", return_value=[]),
         ):
@@ -145,7 +146,7 @@ class VersionPublicationTests(ProjectCase):
         with (
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", source, {}, ())),
             patch("unbake.pool.run", side_effect=lambda host, fn, jobs: [fn(job) for job in jobs]),
-            patch.object(runner, "compile_unit", return_value=self.root / "alpha.o"),
+            patch.object(runner, "compile_unit", side_effect=lambda *a, **kw: nullcontext(self.root / "alpha.o")),
             patch.object(runner, "place"),
             patch.object(runner, "link", side_effect=linked),
             patch.object(runner, "dependencies", return_value=set()),

@@ -58,6 +58,7 @@ def host_values(directory: Path) -> dict[str, dict[str, object]]:
     tools.update(path=[str(bin_dir)], permuter_archive=str(archive), permuter_sha256="b" * 64)
     return {
         "resources": {
+            "domain": str(directory / "domain.toml"),
             "cores": 4,
             "workers": 2,
             "memory_total_bytes": 8_000,

@@ -323,7 +323,7 @@ class Pool:
     @classmethod
     def from_host(cls, host: Host) -> Pool:
         return cls(
-            host.workers,
+            min(host.workers, host.cores),
             host.memory_total_bytes,
             host.memory_parent_bytes,
             host.memory_worker_bytes,
@@ -568,10 +568,10 @@ def run(host: Host, fn: Callable[..., R], items: Sequence[T], shared: Any = None
 
 def workers(host: Host) -> int:
     """How many workers the host's pool runs."""
-    return admitted(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)
+    return admitted(
+        min(host.workers, host.cores), host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes
+    )
 
 
 def describe(host: Host) -> dict[str, Any]:
-    return {
-        "workers": admitted(host.workers, host.memory_total_bytes, host.memory_parent_bytes, host.memory_worker_bytes)
-    }
+    return {"workers": workers(host)}

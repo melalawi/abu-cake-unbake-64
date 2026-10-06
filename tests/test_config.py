@@ -73,6 +73,13 @@ class LoadHostTests(TempCase):
         self.assertEqual(config.load_host(user, self.root / "project", "check").cores, 4)
         self.assertEqual(config.load_host(user, None, "check").cores, 4)
 
+    def test_a_project_cannot_split_itself_into_another_machine_resource_domain(self) -> None:
+        user = self.write(self.root / "user.toml", host_values(self.root))
+        project = self.root / "project"
+        self.write(project / ".unbake/unbake.toml", {"resources": {"domain": "/other/domain.toml"}})
+        with self.assertRaisesRegex(Held, r"\[resources\].domain: machine domain belongs to the host file"):
+            config.load_host(user, project, "check")
+
     def test_missing_file(self) -> None:
         missing = self.root / "none.toml"
         with self.assertRaises(Held) as raised:
@@ -104,7 +111,12 @@ class HostRefusalTests(TempCase):
         self.values = host_values(self.root)
 
     def test_missing_value_names_key_and_command(self) -> None:
-        for command, dotted in [("compare", "tools.n64link"), ("check", "tools.make"), ("publish", "publish.branch")]:
+        for command, dotted in [
+            ("compare", "tools.n64link"),
+            ("check", "tools.make"),
+            ("publish", "publish.branch"),
+            ("next", "resources.domain"),
+        ]:
             with self.subTest(command=command, key=dotted):
                 host = Host.from_values(edited(self.values, dotted), command)
                 section, key = dotted.split(".")

@@ -340,8 +340,8 @@ def prove(project_scratch: Project, region: Region, candidates: Sequence[Compile
                     selected = replace(
                         project, default_compiler=candidate.id, units={**project.units, function.name: candidate.id}
                     )
-                    out = runner.compile_unit(selected, policy, source_file, version, unit=function.name)
-                    identical = reproduces(out, function.name, data[function.start : function.end])
+                    with runner.compile_unit(selected, policy, source_file, version, unit=function.name) as out:
+                        identical = reproduces(out, function.name, data[function.start : function.end])
                 except (Held, OSError, ValueError, struct.error) as error:
                     errors[f"{candidate.id}/{function.name}"] = str(error)
                     identical = False

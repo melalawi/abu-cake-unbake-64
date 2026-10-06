@@ -22,6 +22,7 @@ VERBS = {
     "explain": ["alpha"],
     "cycle": ["--stop", "all-landed"],
     "recompute": ["--all"],
+    "resources": ["/absent-resource-domain.toml"],
 }
 DELETED = ["try", "submit", "map", "solve", "layout", "report", "collect", "clone", "split", "decomp", "rodata"]
 # Human rendering (stderr only). JSON string fields may hold help or usage text, never rendered receipts.

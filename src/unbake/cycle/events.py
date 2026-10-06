@@ -33,7 +33,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("fn.exact", "function bytes sha256", ""),
         ("fn.landed", "function bytes versions seconds retried", ""),
         ("fn.land_failed", "function versions diagnostic returned_to_worker", "fault"),
-        ("fn.committed", "function commit message", ""),
+        ("fn.committed", "function commit message", "proof"),
         ("cycle.committed", "commit message functions", ""),
         ("fn.held", "function key reason next", "fault"),
         ("fn.failed", "function key reason next", "fault"),
@@ -189,7 +189,7 @@ def validate(event: str, fields: dict[str, Any]) -> None:
                         reject(name)
                 elif not numeric(row[0]) or type(row[1]) is not int or row[1] < 0:
                     reject(name)
-        elif name in {"changes", "fault"}:
+        elif name in {"changes", "fault", "proof"}:
             if type(value) is not dict:
                 reject(name)
             if name == "changes":

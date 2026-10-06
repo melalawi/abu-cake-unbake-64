@@ -1,6 +1,7 @@
 """The per-unit link: missing address-named symbols resolve at their address; anything else is a refusal."""
 
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -44,7 +45,7 @@ class LinkRefusalTests(unittest.TestCase):
             patch.object(compare, "view_for", return_value=SimpleNamespace()),
             patch.object(compare, "row_of", return_value=row),
             patch.object(compare.split, "words", return_value=b"\0" * 16),
-            patch.object(runner, "compile_unit", return_value=Path("unit.o")),
+            patch.object(runner, "compile_unit", return_value=nullcontext(Path("unit.o"))),
             patch.object(runner, "link_function", side_effect=refusal),
             patch.object(Path, "read_bytes", return_value=b"void f(void) {}\n"),
             self.assertRaises(Held) as caught,

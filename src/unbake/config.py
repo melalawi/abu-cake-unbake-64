@@ -515,6 +515,7 @@ Kind = Literal["int", "path", "exe", "dirs", "fraction", "hex64", "text"]
 
 HOST_KEYS: dict[str, dict[str, Kind]] = {
     "resources": {
+        "domain": "path",
         "cores": "int",
         "workers": "int",
         "memory_total_bytes": "int",
@@ -576,6 +577,7 @@ HOST_KEYS: dict[str, dict[str, Kind]] = {
 }
 
 _RESOURCES = (
+    "resources.domain",
     "resources.cores",
     "resources.workers",
     *(f"resources.memory_{n}_bytes" for n in ("total", "parent", "worker")),
@@ -606,10 +608,10 @@ _SETUP = (
 NEEDS: dict[str, tuple[str, ...]] = {
     "init": (),
     "setup": _SETUP,
-    "next": _CACHE,
+    "next": (*_RESOURCES, *_CACHE),
     "draft": (*_COMPARE, "tools.m2c", "tools.splat", "tools.mips_objdump"),
     "compare": _COMPARE,
-    "tidy": (*_CACHE, "tools.cpp"),
+    "tidy": (*_RESOURCES, *_CACHE, "tools.cpp"),
     "search-variants": (
         *_COMPARE,
         "search.stall_trials",
@@ -620,7 +622,7 @@ NEEDS: dict[str, tuple[str, ...]] = {
     "publish": (*_COMPARE, *_PUBLISH),
     "boundary": (*_RESOURCES, *_CACHE, "tools.splat", "tools.cpp"),
     "check": (*_RESOURCES, *_CACHE, *_BUILDFILES, "tools.make", "tools.path", *_BUDGETS),
-    "explain": (*_CACHE, "tools.cpp", "tools.mips_objdump", "tools.splat"),
+    "explain": (*_RESOURCES, *_CACHE, "tools.cpp", "tools.mips_objdump", "tools.splat"),
     "cycle": (
         *_COMPARE,
         *_PUBLISH,
@@ -673,6 +675,8 @@ def load_host(explicit: Path | None, project_root: Path | None, command: str) ->
         override = Path(project_root) / ".unbake" / "unbake.toml"
         if override.is_file():
             for section, table in _host_table(override, _read(override)).items():
+                if section == "resources" and "domain" in table:
+                    raise Held("config", f"{override} [resources].domain: machine domain belongs to the host file")
                 values.setdefault(section, {}).update(table)
             sources.append(override)
     host = Host(values, command, tuple(sources))

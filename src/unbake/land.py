@@ -35,13 +35,22 @@ class Landed:
     commits: list[str] = field(default_factory=list)
     failed: dict[str, dict[str, Any]] = field(default_factory=dict)
     versions: dict[str, list[str]] = field(default_factory=dict)
+    post_commit_failure: dict[str, Any] | None = None
 
     def document(self) -> dict[str, Any]:
-        return {"landed": self.landed, "commits": self.commits, "failed": self.failed, "versions": self.versions}
+        return {
+            "landed": self.landed,
+            "commits": self.commits,
+            "failed": self.failed,
+            "versions": self.versions,
+            **({"post_commit_failure": self.post_commit_failure} if self.post_commit_failure is not None else {}),
+        }
 
     def lines(self) -> list[str]:
         out = [f"landed {name} ({commit[:12]})" for name, commit in zip(self.landed, self.commits, strict=True)]
         out += [f"not landed {name}: {failure['reason']}" for name, failure in self.failed.items()]
+        if self.post_commit_failure is not None:
+            out.append(f"after commit {self.post_commit_failure['commit']}: {self.post_commit_failure['reason']}")
         return out
 
 
@@ -187,8 +196,10 @@ def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[bo
     """Pool worker: one version's compile, place and link of the staged unit equals its ROM row."""
     project, view, host, function, file, version = spec
     row = compare.row_of(project, function, version)
-    obj = runner.compile_unit(view, host, file, version, unit=function)
-    with tempfile.TemporaryDirectory(prefix="land-") as temporary:
+    with (
+        runner.compile_unit(view, host, file, version, unit=function) as obj,
+        tempfile.TemporaryDirectory(prefix="land-") as temporary,
+    ):
         work = Path(temporary)
         placed = work / "placed.o"
         runner.place(project, host, obj, version, row, placed, score=False)
@@ -303,7 +314,32 @@ def _refuse_edited_headers(project: Project) -> None:
         )
 
 
-def land(project: Project, host: Host, file: Path, *, required_versions: tuple[str, ...] | None = None) -> str:
+def _receipt(
+    project: Project, host: Host, function: str, source: Path, versions: Sequence[str], dependencies: set[Path]
+) -> dict[str, Any]:
+    """Read back the already proved publication inputs; no second native proof or parallel store."""
+    from unbake import inputs
+
+    files = {source, project.root / "config.toml", project.compiler_for(function).sha256, *dependencies}
+    files.update(path for v in versions for path in (project.version(v).split, project.version(v).symbols))
+    return {
+        "versions": list(versions),
+        "files": {path.relative_to(project.root).as_posix(): inputs.digest(path) for path in sorted(files)},
+        "configured_rom_sha1": {v: project.version(v).baserom_sha1 for v in versions},
+        "compiler": project.compiler_reference(function),
+        "host_inputs": {str(path): inputs.digest(path) for path in host.sources},
+        "host_values": host.values,
+    }
+
+
+def land(
+    project: Project,
+    host: Host,
+    file: Path,
+    *,
+    required_versions: tuple[str, ...] | None = None,
+    on_commit: Callable[[dict[str, Any]], None] | None = None,
+) -> str:
     """Land one draft; nothing is written until all required, already published and selected freebie versions prove."""
     from unbake.fold import apply as fold_apply
     from unbake.report import progress
@@ -376,13 +412,28 @@ def land(project: Project, host: Host, file: Path, *, required_versions: tuple[s
             else:
                 atomic_files.write(path, previous)
         raise
+    commit = _git(project, "rev-parse", "HEAD").strip()
+    if on_commit is not None:
+        on_commit(
+            {
+                "function": function,
+                "commit": commit,
+                "message": message,
+                "proof": {
+                    **_receipt(updated, host, function, updated.src / f"{function}.c", versions, dependencies),
+                    "compared_sha256": attempt.sha256,
+                },
+            }
+        )
     shutil.rmtree(project.work / function, ignore_errors=True)
     if headers:
         steps.acknowledge_outputs(project, "headers", [project.include[-1] / name for name in headers])
-    return _git(project, "rev-parse", "HEAD").strip()
+    return commit
 
 
-def land_original(project: Project, host: Host, function: str) -> str:
+def land_original(
+    project: Project, host: Host, function: str, *, on_commit: Callable[[dict[str, Any]], None] | None = None
+) -> str:
     """Land one original-asm function as src/F.s; return the commit id. Every holding VERSION must prove the same
     rule from its ROM bytes and give the same .s text, and that text must assemble and link to each ROM row."""
     from unbake import config
@@ -434,7 +485,27 @@ def land_original(project: Project, host: Host, function: str) -> str:
             else:
                 atomic_files.write(path, previous)
         raise
-    return _git(project, "rev-parse", "HEAD").strip()
+    commit = _git(project, "rev-parse", "HEAD").strip()
+    if on_commit is not None:
+        on_commit(
+            {
+                "function": function,
+                "commit": commit,
+                "message": f"Original asm {function}",
+                "proof": {
+                    **_receipt(
+                        updated,
+                        host,
+                        function,
+                        updated.src / f"{function}.s",
+                        versions,
+                        {updated.root / original_asm.MANIFEST},
+                    ),
+                    "original_rule": found.rule,
+                },
+            }
+        )
+    return commit
 
 
 def publish(
@@ -444,6 +515,7 @@ def publish(
     *,
     originals: tuple[str, ...] = (),
     required_versions: tuple[str, ...] | None = None,
+    on_commit: Callable[[dict[str, Any]], None] | None = None,
 ) -> Landed:
     """`unbake publish FILE... [--original NAME...]`: land each draft file, then each original-asm function, in
     turn; one failure does not stop the others."""
@@ -454,10 +526,10 @@ def publish(
         raise Held("publish", "publish.versions: --original requires proof in every holding version")
 
     def draft(file: Path) -> Callable[[Project], str]:
-        return lambda current: land(current, host, file, required_versions=required_versions)
+        return lambda current: land(current, host, file, required_versions=required_versions, on_commit=on_commit)
 
     def original(name: str) -> Callable[[Project], str]:
-        return lambda current: land_original(current, host, name)
+        return lambda current: land_original(current, host, name, on_commit=on_commit)
 
     work = [(file.stem, draft(file)) for file in files] + [(name, original(name)) for name in originals]
     for name, action in work:
@@ -473,5 +545,18 @@ def publish(
         result.versions[name] = [
             v for v in split.holding_versions(updated, name) if compare.row_of(updated, name, v).kind in ("c", "hasm")
         ]
-        steps.ensure(config.load(project.root), host, ["merge-units"])
+        try:
+            steps.ensure(config.load(project.root), host, ["merge-units"])
+        except Held as error:
+            # The accepted commit and its immediate event are durable even
+            # when subsequent tree maintenance refuses. Do not relabel it as
+            # an unlanded source or discard the successful prefix's receipt.
+            result.post_commit_failure = {
+                "function": name,
+                "commit": commit,
+                "key": error.key,
+                "reason": error.reason,
+                "fault": process.fault(error),
+            }
+            break
     return result

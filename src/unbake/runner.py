@@ -1,7 +1,8 @@
 """Run the generated build's commands for one unit: compile (content-keyed), place, link alone, extract .text.
 
-The argv come from compilers.drivers (the same templates the Makefile renders). Published units write their
-objects to build/<v>/src/UNIT.o (make keys its own under build/cas); drafts write under build/work/FUNC/<v>/.
+The argv come from compilers.drivers (the same templates the Makefile renders).
+Each compile consumer owns a temporary object until its context ends. Concurrent
+sources for the same unit/version cannot overwrite one another's link input.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ import hashlib
 import os
 import re
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from unbake import atomic as atomic_files
@@ -23,13 +26,6 @@ def tools(host: Host) -> drivers.Tools:
     return drivers.Tools(str(host.cpp), str(host.mips_as), str(host.n64link))
 
 
-def object_path(project: Project, version: str, unit: str, file: Path) -> Path:
-    published = project.src / f"{unit}.c"
-    if file.resolve() == published.resolve():
-        return project.build / version / "src" / f"{unit}.o"
-    return project.work / unit / version / f"{unit}.o"
-
-
 def _compiler_pins(project: Project, unit: str) -> str:
     """The compiler tree's file digests; each digest is reused while the file's stat signature holds."""
     compiler = project.compiler_for(unit)
@@ -38,10 +34,11 @@ def _compiler_pins(project: Project, unit: str) -> str:
     return cache.key(*(part for path in files for part in (path.relative_to(root).as_posix(), inputs.digest(path))))
 
 
+@contextmanager
 def compile_unit(
     project: Project, host: Host, file: Path, version: str, *, unit: str, non_matching: bool = False
-) -> Path:
-    """Compile FILE as UNIT for VERSION; the object is cached by its preprocessed text, commands and compiler."""
+) -> Iterator[Path]:
+    """Own one object lifetime; reuse the CAS by preprocessed text, commands and compiler."""
     file = Path(file).resolve()
     if not file.is_file():
         raise Held("compile", f"compile.source: {file}: missing file")
@@ -85,15 +82,16 @@ def compile_unit(
                 )
             atomic_files.copyfile(work / f"{name}.o", destination)
 
-    try:
-        cached = cache.Cache(project.cache).produce("object", content_key, make)
-    except Held as error:
-        raise Held("compile", f"compile.{name}: {source}: {error.reason}") from error
-    output = object_path(project, version, unit, file)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if not output.is_file() or output.read_bytes() != cached.read_bytes():
-        atomic_files.copyfile(cached, output)
-    return output
+    with tempfile.TemporaryDirectory(prefix="object-") as temporary:
+        output = Path(temporary) / f"{name}.o"
+        try:
+            cached = cache.Cache(project.cache).produce("object", content_key, make)
+            atomic_files.copyfile(cached, output)
+        except Held as error:
+            raise Held("compile", f"compile.{name}: {source}: {error.reason}") from error
+        except OSError as error:
+            raise Held("compile", f"compile.object: {source}: object could not be materialized: {error}") from error
+        yield output
 
 
 def windows(project: Project, version: str) -> list[str]:
@@ -234,8 +232,10 @@ def build_unit(project: Project, host: Host, unit: str, version: str) -> bytes:
     if len(rows) != 1:
         raise Held("build", f"build.row: {unit}: expected one c row in VERSION {version}, found {len(rows)}")
     row = rows[0]
-    obj = compile_unit(project, host, project.src / f"{unit}.c", version, unit=unit)
-    with tempfile.TemporaryDirectory(prefix="build-") as temporary:
+    with (
+        compile_unit(project, host, project.src / f"{unit}.c", version, unit=unit) as obj,
+        tempfile.TemporaryDirectory(prefix="build-") as temporary,
+    ):
         work = Path(temporary)
         placed = work / "placed.o"
         place(project, host, obj, version, row, placed, score=False)

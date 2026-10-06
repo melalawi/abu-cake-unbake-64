@@ -233,7 +233,7 @@ def _extract(project: Project, host: Host) -> None:
     from unbake.layout import split
 
     try:
-        with ThreadPoolExecutor(max_workers=host.setup_version_jobs) as executor:
+        with ThreadPoolExecutor(max_workers=min(host.setup_version_jobs, host.cores)) as executor:
             list(executor.map(lambda version: extract.segments(project, host, version), project.versions))
     finally:
         # splat rewrites asm files in place, which no directory signature records.

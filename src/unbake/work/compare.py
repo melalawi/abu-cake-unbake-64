@@ -155,9 +155,9 @@ def measure(
         target = split.words(project, row)
         compiling = True
         try:
-            obj = runner.compile_unit(view, host, file, version, unit=function)
-            compiling = False
-            linked, problems = runner.link_function(project, host, obj, version, row, file)
+            with runner.compile_unit(view, host, file, version, unit=function) as obj:
+                compiling = False
+                linked, problems = runner.link_function(project, host, obj, version, row, file)
         except Held as error:
             if not compiling and not retain_link_faults:
                 raise

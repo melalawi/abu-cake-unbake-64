@@ -9,4 +9,5 @@ def prove(project: Project, policy: Host, function: str, version: str, source: P
     """Compile the draft for one version through the runner; a refusal names the compiler diagnostic."""
     from unbake import runner
 
-    runner.compile_unit(project, policy, source, version, unit=function, non_matching=True)
+    with runner.compile_unit(project, policy, source, version, unit=function, non_matching=True):
+        pass

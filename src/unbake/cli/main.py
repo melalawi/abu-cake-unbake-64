@@ -9,7 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TextIO
 
-from unbake import config, process
+from unbake import admission, config, process
 from unbake.cli import (
     boundary,
     check,
@@ -21,6 +21,7 @@ from unbake.cli import (
     init,
     publish,
     recompute,
+    resources,
     search_variants,
     setup,
     tidy,
@@ -44,6 +45,7 @@ VERBS: tuple[ModuleType, ...] = (
     explain,
     cycle,
     recompute,
+    resources,
 )
 BY_NAME = {verb.NAME: verb for verb in VERBS}
 
@@ -101,7 +103,8 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
         from unbake import lock
 
         guard = lock.project_lock(context.root, verb.NAME) if writer and context.root else nullcontext()
-        with guard:
+        # Admission precedes project mutation locks and project preparation.
+        with admission.command(context.host), guard:
             return verb.run(context)  # type: ignore[no-any-return]
     except Held as error:
         data = {"failures": list(error.failures)} if error.failures else None
@@ -128,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     from unbake import effort, tui
 
     stdout = sys.stdout
+    admission.receipt.clear()
     started = effort.mark()
     tui.start(tui.stderr(), tui.interactive())
     try:
@@ -139,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         tui.stop()
     # Every result says what the command cost: wall, CPU of this process, its tools and its pool work by function.
-    result = replace(result, effort=effort.since(started).document())
+    measured = effort.since(started).document()
+    if admission.receipt:
+        measured["admission"] = dict(admission.receipt)
+    result = replace(result, effort=measured)
     code = emit(result, stdout, tui.stderr())
     return 130 if result.key == "interrupted" else code
 

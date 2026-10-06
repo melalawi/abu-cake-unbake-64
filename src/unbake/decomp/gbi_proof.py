@@ -12,17 +12,19 @@ from unbake.objects.elf import Object
 
 def code(project: Project, policy: Host, version: str, source: Path, mode: int) -> object:
     """Compare allocated sections and relocation identities from cached objects."""
-    output = runner.compile_unit(project, policy, source, version, unit=source.stem, non_matching=bool(mode))
-    obj = Object(output)
-    return tuple(
-        (
-            name,
-            obj.content(index),
-            tuple((offset, kind, symbol["name"], symbol["value"]) for offset, kind, symbol in obj.relocations(index)),
+    with runner.compile_unit(project, policy, source, version, unit=source.stem, non_matching=bool(mode)) as output:
+        obj = Object(output)
+        return tuple(
+            (
+                name,
+                obj.content(index),
+                tuple(
+                    (offset, kind, symbol["name"], symbol["value"]) for offset, kind, symbol in obj.relocations(index)
+                ),
+            )
+            for index, name in enumerate(obj.names)
+            if obj.sections[index][2] & 2
         )
-        for index, name in enumerate(obj.names)
-        if obj.sections[index][2] & 2
-    )
 
 
 def preserve(

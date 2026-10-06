@@ -3,6 +3,8 @@
 # Read from --config FILE, then $UNBAKE_CONFIG, then ~/.config/unbake/unbake.toml.
 
 [resources]
+# domain = "/abs/resource-domain.toml" # the same manifest for all commands sharing one machine allocation
+# These are this command's atomic request, not another copy of machine capacity.
 # cores = 12
 # workers = 8
 # memory_total_bytes = 16000000000

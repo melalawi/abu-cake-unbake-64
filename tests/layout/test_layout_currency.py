@@ -2,6 +2,7 @@
 names an edit rather than a command that reaches it again; a draft waits for the generated headers it includes."""
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -205,7 +206,7 @@ class HeaderCompileFailureTests(ProjectCase):
             path = self.project.version(version).split
             path.write_text(path.read_text().replace("asm, alpha]", "c, alpha]").replace("asm, beta]", "c, beta]"))
         job = (self.project, self.host, self.project.src / "alpha.c", "us", "alpha")
-        with patch.object(runner, "compile_unit", return_value=None) as compile_unit:
+        with patch.object(runner, "compile_unit", return_value=nullcontext()) as compile_unit:
             self.assertIsNone(header_step._compile(job))
         compile_unit.assert_called_once_with(*job[:4], unit="alpha")
 
