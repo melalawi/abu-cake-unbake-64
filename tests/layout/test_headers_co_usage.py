@@ -160,3 +160,22 @@ class OneHomeTests(unittest.TestCase):
         ]:
             with self.subTest(label), self.assertRaisesRegex(Exception, "headers.type_home: " + expected):
                 layout(types, sources)
+
+
+class AuthoredIncludeOrderTests(unittest.TestCase):
+    def test_authored_scalar_provider_precedes_its_view_in_a_group(self) -> None:
+        contents = {
+            ROOT / "types.h": "typedef short s16;",
+            ROOT / "common/view.h": "struct View { s16 value; };",
+        }
+        with patch.object(headers, "guarded", side_effect=lambda path, text: text.encode()):
+            result = Layout(
+                contents,
+                contents,
+                ROOT,
+                ownership=GROUPS,
+                sources={Path("/project/src/a.c"): "s16 a(void) { struct View v; return v.value; }"},
+                authored=set(contents),
+            )
+        group = result.headers[ROOT / G["ga"]].decode()
+        self.assertLess(group.index('#include "../types.h"'), group.index('#include "common/view.h"'))

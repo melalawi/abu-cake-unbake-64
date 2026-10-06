@@ -373,8 +373,18 @@ class Layout:
         # A declaration can force a wider home (e.g. data uses a private type).
         # Refuse a downward edge instead of manufacturing a cyclic include.
         validate_edges(root, edges, authored)
+        # Authored providers can rely on a scalar provider imported beside
+        # them. Alphabetical order would put common views before types.h.
+        home_edges: dict[Path, set[Path]] = {}
+        for path, home in self.homes.items():
+            home_edges.setdefault(home, set()).update(
+                self.homes[dep] for dep in self.dependencies[path] if self.homes[dep] != home
+            )
+        components = strongly_connected(sorted(home_edges), lambda home: sorted(home_edges.get(home, set())))
+        rank = {home: number for number, component in enumerate(components) for home in component}
         for destination, lines in bodies.items():
-            includes = [self.include(dep, destination) for dep in sorted(edges.get(destination, set()))]
+            imports = sorted(edges.get(destination, set()), key=lambda dep: (rank.get(dep, -1), dep))
+            includes = [self.include(dep, destination) for dep in imports]
             self.headers[destination] = self.render(destination, "\n".join(includes + lines))
         self.index: dict[str, Any] = {
             "schema": 1,
