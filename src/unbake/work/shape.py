@@ -215,19 +215,30 @@ def _registers(word: int) -> tuple[set[int], set[int], set[int], set[int]]:
         return {rs}, none, none, none
     if op in (4, 5, 20, 21):
         return {rs, rt}, none, none, none
-    if 8 <= op <= 14 or op in (24, 25, 26, 27, 55) or 32 <= op <= 39:
+    if 8 <= op <= 14 or op in (24, 25, 26, 27, 48, 52, 55) or 32 <= op <= 39:
         return {rs}, {rt}, none, none
+    if op in (56, 60):
+        return {rs, rt}, {rt}, none, none
     if op in (40, 41, 42, 43, 44, 45, 46, 63):
         return {rs, rt}, none, none, none
     if op in (49, 53):
         return {rs}, none, none, {rt}
     if op in (57, 61):
         return {rs}, none, {rt}, none
+    if op == 16:
+        if rs in (0, 1, 2):
+            return none, {rt}, none, none
+        if rs in (4, 5, 6):
+            return {rt}, none, none, none
     if op == 17:
-        if rs == 0:
+        if rs in (0, 1):
             return none, {rt}, {fs}, none
-        if rs == 4:
+        if rs in (4, 5):
             return {rt}, none, none, {fs}
+        if rs == 2:
+            return none, {rt}, none, none
+        if rs == 6:
+            return {rt}, none, none, none
         if rs in (16, 17, 20, 21):
             function = word & 63
             if function >= 48:

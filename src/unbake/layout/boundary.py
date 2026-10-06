@@ -5,9 +5,9 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from unbake.compilers.families.mips import Shape
 from unbake.layout import boundary_signatures
 from unbake.layout.boundary_signatures import Signature
-from unbake.compilers.families.mips import Shape
 from unbake.work.shape import _never_starts_c
 
 
@@ -98,14 +98,18 @@ def closure(
                 failures.add(f"unproved-trap-terminal:{at(offset)}")
             return None
         saved = dict(frame.saved)
-        if op in (40, 41, 42, 43, 44, 45, 46, 63) and rs in (29, 30):
+        if op in (40, 41, 42, 43, 44, 45, 46, 56, 57, 60, 61, 63) and rs in (29, 30):
             base = frame.sp if rs == 29 else frame.fp
             if base is None:
                 failures.add(f"unresolved-frame-store:{at(offset)}")
                 return None
             address = base + immediate
-            width = 8 if op == 63 else 4
-            saved = {slot: value for slot, value in saved.items() if not (address < slot + value[0] and slot < address + width)}
+            width = {40: 1, 41: 2, 44: 8, 45: 8, 60: 8, 61: 8, 63: 8}.get(op, 4)
+            saved = {
+                slot: value
+                for slot, value in saved.items()
+                if not (address < slot + value[0] and slot < address + width)
+            }
             if rt == 31 and op in (43, 63):
                 if not frame.sp <= address < address + width <= 0:
                     failures.add(f"return-address-save-outside-frame:{at(offset)}")
@@ -180,14 +184,16 @@ def closure(
                 failures.add(f"unsafe-delay-transfer:{at(offset + 4)}")
                 continue
             likely = op in (20, 21, 22, 23) or (op == 1 and rt in (2, 3, 18, 19)) or (op == 17 and rt & 2 != 0)
-            unconditional = op in (4, 20) and rs == rt or op == 1 and rs == 0 and rt in (1, 3, 17, 19)
-            linking = op == 3 or indirect and link_register == 31 or op == 1 and rt in (16, 17, 18, 19)
+            unconditional = (op in (4, 20) and rs == rt) or (op == 1 and rs == 0 and rt in (1, 3, 17, 19))
+            linking = op == 3 or (indirect and link_register == 31) or (op == 1 and rt in (16, 17, 18, 19))
             taken = replace(frame, ra=False) if linking else frame
             if branch and not unconditional and likely:
                 taken = replace(taken, guarded=True)
             delayed = execute(offset + 4, taken)
             if linking and delayed is not None:
-                delayed = replace(delayed, saved=tuple((slot, value) for slot, value in delayed.saved if slot >= delayed.sp))
+                delayed = replace(
+                    delayed, saved=tuple((slot, value) for slot, value in delayed.saved if slot >= delayed.sp)
+                )
             if branch:
                 immediate = word & 65535
                 immediate -= 65536 if immediate & 32768 else 0
@@ -245,7 +251,10 @@ def evidence(
     seen, tags, failures = closure(words, start, end, bias, known, jump_tables)
     reasons = list(failures)
     from unbake.work.shape import filler
-    leading = filler([words[offset] for offset in range(start, end, 4) if offset in words], start + bias, compiler_shape)
+
+    leading = filler(
+        [words[offset] for offset in range(start, end, 4) if offset in words], start + bias, compiler_shape
+    )
     if leading:
         reasons.append(f"compiler-alignment-before-entry:0x{start + bias + leading * 4:X}")
     result = [*sorted(sources), *shape(words, start, end), *tags]
@@ -260,7 +269,10 @@ def evidence(
         and alignment & (alignment - 1) == 0
         and (
             (trailing + bias + alignment - 1) // alignment * alignment == end + bias
-            and (all(words.get(offset) == 0 for offset in padding) or _never_starts_c([words[offset] for offset in sorted(padding)], compiler_shape))
+            and (
+                all(words.get(offset) == 0 for offset in padding)
+                or _never_starts_c([words[offset] for offset in sorted(padding)], compiler_shape)
+            )
         )
     ):
         result.append(f"alignment-padding:{end - trailing}")

@@ -7,6 +7,7 @@ import re
 import struct
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from unbake.config import Held, Host, Project

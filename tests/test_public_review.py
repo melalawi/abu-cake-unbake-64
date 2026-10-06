@@ -74,3 +74,23 @@ class PublicReviewTests(ProjectCase):
             report = explain.explain(self.project, self.host, "alpha", ("similar",))
         document = json.loads(json.dumps(report.document()))
         self.assertEqual(document["sections"]["similar"][0]["source"], str(source))
+
+    def test_referenced_data_interval_reaches_the_shared_boundary_proof(self):
+        import subprocess
+
+        from tests.project_fixture import make
+        from unbake import config
+        from unbake.layout import code_interval
+
+        project, host = make(self.root / "interval", [0x0C000406, 0x03E00008, 0])
+        configured = project.version("us")
+        configured.split.write_text(configured.split.read_text().replace("asm, gamma]", "data, gamma]"))
+        project = config.load(project.root)
+        decoded = "80001018: 24020003 li\n8000101c: 03e00008 jr\n80001020: 00000000 nop\n"
+        with patch.object(
+            code_interval.subprocess, "run", return_value=subprocess.CompletedProcess(["objdump"], 0, decoded, "")
+        ):
+            proof = code_interval.prove(project, "us", 0x58, 0x64, host)
+        self.assertEqual(proof["address"], 0x80001018)
+        self.assertEqual(proof["references"][0]["function"], "alpha")
+        self.assertIn("control-flow-closed-return", proof["tags"])
