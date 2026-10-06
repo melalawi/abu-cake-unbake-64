@@ -40,7 +40,7 @@ ASSEMBLED = "facts-assembled"
 FACTS_SCHEMA = 4
 SOURCE_SCHEMA = 5
 HEADER_SCHEMA = 4
-ASSEMBLED_SCHEMA = 2
+ASSEMBLED_SCHEMA = 3
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
@@ -726,18 +726,13 @@ def _source_tasks(
         output.put_json(SOURCE, content_key, stub)
     if stub.get("wide"):
         return None
-    context = contexts.get(version)
-    if context is None:
-        context = contexts[version] = layers.Context(parts[version])
-    depends = layers.dependencies(context, stub["runs"], own, stub["named"])
-    part_key = key(SOURCE, content_key, json.dumps(depends, sort_keys=True))
     # What the join of this source part and its header parts gives is cached whole: a warm solve reads it
     # without assembling anything.
     run_names = {name for name, _ in stub["runs"] if name != own}
     assembled_key = key(
         SOURCE,
         str(ASSEMBLED_SCHEMA),
-        part_key,
+        content_key,
         json.dumps(sorted((name, parts[version].identity(name)) for name in run_names if name in parts[version])),
         json.dumps(sorted(generated & run_names)),
         json.dumps([function for _, _, (function, _, _) in group]),
@@ -745,6 +740,11 @@ def _source_tasks(
     stored = output.json(ASSEMBLED, assembled_key)
     if stored is not None and len(stored) == len(group):
         return [(index, row.encode()) for (index, _, _), row in zip(group, stored, strict=True)]
+    context = contexts.get(version)
+    if context is None:
+        context = contexts[version] = layers.Context(parts[version])
+    depends = layers.dependencies(context, stub["runs"], own, stub["named"])
+    part_key = key(SOURCE, content_key, json.dumps(depends, sort_keys=True))
     if part is None:
         part = output.json(SOURCE, part_key)
         if part is None:
