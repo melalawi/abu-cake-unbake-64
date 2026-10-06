@@ -25,13 +25,16 @@ def code(project: Project, policy: Host, version: str, source: Path, mode: int) 
     )
 
 
-def preserve(project: Project, policy: Host, unit: Path, before: str, after: str) -> None:
-    versions = [
+def preserve(
+    project: Project, policy: Host, unit: Path, before: str, after: str, *, versions: tuple[str, ...] | None = None
+) -> None:
+    holding = [
         version
         for version in project.versions
         if any(unit.stem in row.aliases for row in split.functions(project, version))
     ]
-    if not versions:
+    versions = tuple(holding) if versions is None else versions
+    if not versions or set(versions) - set(holding):
         raise Held("gbi", f"{unit.stem}: no owning VERSION for codegen proof")
     with tempfile.TemporaryDirectory(prefix="gbi-proof-") as temporary:
         root = Path(temporary)

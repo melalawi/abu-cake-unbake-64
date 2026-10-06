@@ -438,6 +438,7 @@ def proven(
     headers: dict[Path, str],
     *,
     authored: str | None = None,
+    versions: tuple[str, ...] | None = None,
 ) -> str:
     """Keep a private rewrite only if every owning VERSION and mode is identical."""
     if not any(f.rule in RULES for f in checks.run(source)):
@@ -459,7 +460,7 @@ def proven(
             destination = root / "include" / path.relative_to(home)
             destination.parent.mkdir(parents=True, exist_ok=True)
             atomic_files.text(destination, text)
-        versions = layout_split.holding_versions(project, unit.stem)
+        versions = layout_split.holding_versions(project, unit.stem) if versions is None else versions
         recovered = [lower(source, catalogue(staged, policy, unit, version, source)) for version in versions]
         if not recovered or any(text != recovered[0] for text in recovered):
             raise Held("gbi", f"{unit.stem}: SDK macro recovery differs between owning VERSIONs")
@@ -480,7 +481,7 @@ def proven(
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 atomic_files.write(destination, evidence.read_bytes())
         try:
-            gbi_proof.preserve(staged, policy, unit, before, after)
+            gbi_proof.preserve(staged, policy, unit, before, after, versions=versions)
         except Held as error:
             first = next(f for f in checks.run(source) if f.rule in RULES)
             raise Held(

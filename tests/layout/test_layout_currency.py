@@ -201,6 +201,9 @@ class HeaderCompileFailureTests(ProjectCase):
         sources = {self.project.src / f"{unit}.c": b"int missing;\n" for unit in ("alpha", "beta")}
         for source, data in sources.items():
             source.write_bytes(data)
+        for version in self.versions:
+            path = self.project.version(version).split
+            path.write_text(path.read_text().replace("asm, alpha]", "c, alpha]").replace("asm, beta]", "c, beta]"))
         job = (self.project, self.host, self.project.src / "alpha.c", "us", "alpha")
         with patch.object(runner, "compile_unit", return_value=None) as compile_unit:
             self.assertIsNone(header_step._compile(job))

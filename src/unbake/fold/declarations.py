@@ -279,6 +279,7 @@ def fold_source(
         final,
         {**headers.texts, **{edit.path: edit.after for edit in edits}},
         authored=authored,
+        versions=versions,
     )
     by_path = {edit.path: edit for edit in edits}
     for edit in self_prototype.unqualify(

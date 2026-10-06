@@ -15,6 +15,17 @@ WINDOW = {"min_bytes": 4, "max_bytes": 4096, "min_history": 1}
 
 
 class PublishedUnitTests(ProjectCase):
+    def test_partial_publication_is_selectable_and_drafts_from_proven_source(self) -> None:
+        self.publish("alpha", CLEAN)
+        path = self.project.version("eu").split
+        path.write_text(path.read_text().replace("c, alpha]", "asm, alpha]"))
+        with patch("unbake.pool.run", lambda host, fn, items: [fn(item) for item in items]), patch(
+            "unbake.pool.Pool.from_host", return_value=type("P", (), {"size": 2})()
+        ):
+            found = {row.function for row in plan.candidates(self.project, self.host)}
+        self.assertIn("alpha", found)
+        self.assertEqual(self.drafted(), CLEAN)
+
     def publish(self, function: str, source: str) -> None:
         """The state land leaves: src/F.c and a C row for F in every version."""
         (self.project.src / f"{function}.c").write_text(source)

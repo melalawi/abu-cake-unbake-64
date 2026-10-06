@@ -28,6 +28,19 @@ class Compared:
     # The preconditions in plain words (the raw messages stay in preconditions for the JSON document).
     rule_lines: list[str] = field(default_factory=list)
     faults: dict[str, dict[str, Any]] = field(default_factory=dict)
+    required_versions: tuple[str, ...] | None = None
+
+    @property
+    def required_exact(self) -> bool:
+        return (
+            self.exact
+            if self.required_versions is None
+            else (
+                bool(self.required_versions)
+                and not self.preconditions
+                and all(v in self.compares and self.compares[v].exact for v in self.required_versions)
+            )
+        )
 
     @property
     def identical_everywhere(self) -> bool:
@@ -43,7 +56,10 @@ class Compared:
 
     @property
     def next_command(self) -> str:
-        return f"unbake publish {self.file}" if self.exact else f"unbake compare {self.file}"
+        import shlex
+
+        scope = "".join(" --require-version " + shlex.quote(v) for v in self.required_versions or ())
+        return f"unbake {'publish' if self.required_exact else 'compare'} {shlex.quote(str(self.file))}{scope}"
 
     def document(self) -> dict[str, Any]:
         return {
@@ -59,6 +75,11 @@ class Compared:
             "preconditions": list(self.preconditions),
             "seconds": round(self.seconds, 3),
             "compiler": self.compiler,
+            **(
+                {"required_versions": list(self.required_versions), "required_exact": self.required_exact}
+                if self.required_versions is not None
+                else {}
+            ),
         }
 
     def lines(self) -> list[str]:
@@ -67,6 +88,11 @@ class Compared:
         output.append(
             f"{self.function}: {'EXACT in every version' if self.exact else f'best {self.best_percent:.2f}%'}"
         )
+        if self.required_versions is not None:
+            output.append(
+                f"required versions {', '.join(self.required_versions)}: "
+                + ("EXACT" if self.required_exact else "not exact")
+            )
         return output
 
 
@@ -100,9 +126,17 @@ def view_for(project: Project, file: Path, function: str) -> Project:
     return draft_view(project, function)
 
 
-def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ...] | None = None) -> Compared:
-    """Compare without recording an attempt (search variants use this); a compile failure scores 0%, a link
-    failure refuses."""
+def measure(
+    project: Project,
+    host: Host,
+    file: Path,
+    *,
+    versions: tuple[str, ...] | None = None,
+    retain_link_faults: bool = False,
+) -> Compared:
+    """Measure without recording an attempt. Compile failures retain native faults and nonexact placeholders.
+    Link failures refuse by default; explicit scoped comparison retains them per version so no optional
+    version's failure prevents measuring the required ones. A fault is never an exact comparison."""
     from unbake import runner
     from unbake.decomp import checks
 
@@ -119,9 +153,14 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
     for version in selected:
         row = row_of(project, function, version)
         target = split.words(project, row)
+        compiling = True
         try:
             obj = runner.compile_unit(view, host, file, version, unit=function)
+            compiling = False
+            linked, problems = runner.link_function(project, host, obj, version, row, file)
         except Held as error:
+            if not compiling and not retain_link_faults:
+                raise
             faults[version] = process.fault(error)
             results[version] = Compare(
                 version,
@@ -132,8 +171,6 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
                 0.0,
             )
             continue
-        # A link failure is a refusal naming the symbol and file, never a 0% compare.
-        linked, problems = runner.link_function(project, host, obj, version, row, file)
         result = compare_words(version, target, linked)
         if problems:
             result.typed["relocation"] += len(problems)
@@ -146,17 +183,37 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
     )
 
 
-def compare(project: Project, host: Host, file: Path) -> Compared:
+def compare(project: Project, host: Host, file: Path, *, required_versions: tuple[str, ...] | None = None) -> Compared:
     """Measure every holding version (trying the other configured compilers when not exact) and record it."""
     from unbake.compilers import candidates
 
+    required = None
+    if required_versions is not None:
+        function = function_of(file)
+        holding = split.holding_versions(project, function)
+        if (
+            not required_versions
+            or len(set(required_versions)) != len(required_versions)
+            or set(required_versions) - set(holding)
+        ):
+            raise Held(
+                "compare", f"compare.versions: {function}: require distinct holding versions from {', '.join(holding)}"
+            )
+        required = tuple(v for v in holding if v in required_versions or row_of(project, function, v).kind == "c")
     try:
-        configured: Compared | Held = measure(project, host, file)
+        configured: Compared | Held = (
+            measure(project, host, file) if required is None else measure(project, host, file, retain_link_faults=True)
+        )
     except Held as error:
         configured = error
-    _choice, chosen = candidates.resolve(project, host, file, configured)
+    _choice, chosen = (
+        candidates.resolve(project, host, file, configured)
+        if required is None
+        else candidates.resolve(project, host, file, configured, required_versions=required)
+    )
     assert isinstance(chosen, Compared)
     measured = chosen
+    measured.required_versions = required
     first = row_of(project, measured.function, next(iter(measured.compares)))
     size = first.end - first.start
     attempts.append(

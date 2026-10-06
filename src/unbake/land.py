@@ -1,10 +1,11 @@
-"""land(F): fold, prove every holding version against the ROM, write, commit "Match F".
+"""land(F): fold, prove the publication versions against the ROM, write, commit "Match F".
 
 An already published unit lands the same way (its row edits are a no-op) and commits "Clean F".
 
 Proof: every ROM piece other than F's row is either a raw ROM slice or an already matched unit, so the ROM of a
 version is byte-identical to the original exactly when F's linked .text (strict `n64link place`, every constant
-proved) equals the ROM bytes of F's row. That is checked in every holding version before anything is written.
+proved) equals the ROM bytes of F's row. The default requires every holding version. An explicit required scope
+also proves every already published version and exact freebie; the other versions retain assembly.
 Header text that fold appends is staged first; every published unit that includes a changed header is compiled
 against the staged copy (layout.header_step.validate) before the write.
 """
@@ -33,9 +34,10 @@ class Landed:
     landed: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
     failed: dict[str, dict[str, Any]] = field(default_factory=dict)
+    versions: dict[str, list[str]] = field(default_factory=dict)
 
     def document(self) -> dict[str, Any]:
-        return {"landed": self.landed, "commits": self.commits, "failed": self.failed}
+        return {"landed": self.landed, "commits": self.commits, "failed": self.failed, "versions": self.versions}
 
     def lines(self) -> list[str]:
         out = [f"landed {name} ({commit[:12]})" for name, commit in zip(self.landed, self.commits, strict=True)]
@@ -123,7 +125,27 @@ def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
     return _git(project, "rev-parse", "HEAD").strip(), functions
 
 
-def exact_attempt(project: Project, function: str, file: Path) -> attempts.Attempt:
+def publication_versions(
+    project: Project, function: str, attempt: attempts.Attempt, required: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Explicit requirements, already published C, and exact freebies; no version is removed from the project."""
+    holding = split.holding_versions(project, function)
+    if not required or len(set(required)) != len(required) or set(required) - set(holding):
+        raise Held("land", f"land.versions: {function}: require distinct holding versions from {', '.join(holding)}")
+    mandatory = set(required) | {v for v in holding if compare.row_of(project, function, v).kind == "c"}
+    exact = {v for v in holding if attempt.versions.get(v, {}).get("exact") is True}
+    if missing := mandatory - exact:
+        raise Held(
+            "land",
+            f"land.not_exact: {function}: required or published versions are not exact: "
+            + ", ".join(v for v in holding if v in missing),
+        )
+    return tuple(v for v in holding if v in exact)
+
+
+def exact_attempt(
+    project: Project, function: str, file: Path, *, required_versions: tuple[str, ...] | None = None
+) -> attempts.Attempt:
     """The newest compare of FILE's current bytes, which must be exact; refuse in words that say what to do."""
     from unbake.decomp import checks
 
@@ -135,6 +157,12 @@ def exact_attempt(project: Project, function: str, file: Path) -> attempts.Attem
             f"land.not_compared: {function} was not compared since its last edit. Run: unbake compare {file}",
         )
     attempt = found[-1]
+    if required_versions is not None:
+        publication_versions(project, function, attempt, required_versions)
+        broken = checks.unmarked(file)
+        if broken:
+            raise Held("land", f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken))
+        return attempt
     if attempt.exact:
         return attempt
     version, row = min(attempt.versions.items(), key=lambda item: item[1]["percent"])
@@ -187,9 +215,16 @@ def _prove_versions(
 
 
 def prove(
-    project: Project, host: Host, function: str, source: str, headers: dict[str, str], stage: Path
+    project: Project,
+    host: Host,
+    function: str,
+    source: str,
+    headers: dict[str, str],
+    stage: Path,
+    *,
+    versions: tuple[str, ...] | None = None,
 ) -> tuple[list[str], set[Path]]:
-    """Compile the folded source against staged headers; its linked bytes must equal the ROM row everywhere."""
+    """Compile the folded source against staged headers; every selected version must equal its ROM row."""
     from unbake.layout import header_step
 
     include = stage / "include"
@@ -205,7 +240,7 @@ def prove(
     file = stage / "src" / f"{function}.c"
     atomic_files.text(file, source)
     view = replace(project, work_include=(include,))
-    versions = split.holding_versions(project, function)
+    versions = split.holding_versions(project, function) if versions is None else versions
     dependencies = _prove_versions(project, host, view, function, file, versions)
     publish_inputs = set()
     native = tuple(project.tools / ident for ident in project.compilers)
@@ -268,22 +303,26 @@ def _refuse_edited_headers(project: Project) -> None:
         )
 
 
-def land(project: Project, host: Host, file: Path) -> str:
-    """Land one exact draft; return the commit id. Nothing is written unless every version proves."""
+def land(project: Project, host: Host, file: Path, *, required_versions: tuple[str, ...] | None = None) -> str:
+    """Land one draft; nothing is written until all required, already published and selected freebie versions prove."""
     from unbake.fold import apply as fold_apply
     from unbake.report import progress
 
     _refuse_edited_headers(project)
     function = compare.function_of(file)
     message = subject(project, function)
-    ident = exact_attempt(project, function, file).compiler or project.compiler_reference(function)
+    attempt = exact_attempt(project, function, file, required_versions=required_versions)
+    selected = (
+        None if required_versions is None else publication_versions(project, function, attempt, required_versions)
+    )
+    ident = attempt.compiler or project.compiler_reference(function)
     project = _with_compiler(project, function, ident)
-    folded = fold_apply.fold(project, host, function, file.read_text())
+    folded = fold_apply.fold(project, host, function, file.read_text(), versions=selected)
     headers = {**fold_apply.private_headers(project, function), **folded.headers}
     stage = project.work / "_land" / function
     shutil.rmtree(stage, ignore_errors=True)
     try:
-        versions, dependencies = prove(project, host, function, folded.source, headers, stage)
+        versions, dependencies = prove(project, host, function, folded.source, headers, stage, versions=selected)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     # A private work directory can retain declarations from an abandoned draft.
@@ -398,15 +437,24 @@ def land_original(project: Project, host: Host, function: str) -> str:
     return _git(project, "rev-parse", "HEAD").strip()
 
 
-def publish(project: Project, host: Host, files: list[Path], *, originals: tuple[str, ...] = ()) -> Landed:
+def publish(
+    project: Project,
+    host: Host,
+    files: list[Path],
+    *,
+    originals: tuple[str, ...] = (),
+    required_versions: tuple[str, ...] | None = None,
+) -> Landed:
     """`unbake publish FILE... [--original NAME...]`: land each draft file, then each original-asm function, in
     turn; one failure does not stop the others."""
     from unbake import config
 
     result = Landed()
+    if originals and required_versions is not None:
+        raise Held("publish", "publish.versions: --original requires proof in every holding version")
 
     def draft(file: Path) -> Callable[[Project], str]:
-        return lambda current: land(current, host, file)
+        return lambda current: land(current, host, file, required_versions=required_versions)
 
     def original(name: str) -> Callable[[Project], str]:
         return lambda current: land_original(current, host, name)
@@ -421,5 +469,9 @@ def publish(project: Project, host: Host, files: list[Path], *, originals: tuple
             continue
         result.landed.append(name)
         result.commits.append(commit)
+        updated = config.load(project.root)
+        result.versions[name] = [
+            v for v in split.holding_versions(updated, name) if compare.row_of(updated, name, v).kind in ("c", "hasm")
+        ]
         steps.ensure(config.load(project.root), host, ["merge-units"])
     return result

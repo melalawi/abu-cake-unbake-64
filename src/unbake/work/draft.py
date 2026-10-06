@@ -32,17 +32,20 @@ def naming_version(project: Project, versions: tuple[str, ...]) -> str:
 
 
 def published_seed(project: Project, function: str) -> str | None:
-    """A published unit's own text when it still breaks a source rule; None when FUNC is unmatched.
+    """A published unit's own text when some version is still assembly or it breaks a source rule.
 
-    That text is the draft of a published unit: landing it again republishes the unit once it is exact and clean.
+    None when FUNC is unmatched. Reuse the proved text for partial publications; landing again must preserve
+    every already published version as well as proving any new ones.
     """
     from unbake.decomp import checks, prelude
     from unbake.work import compare
 
-    if not compare.published(project, function):
+    versions = split.holding_versions(project, function)
+    kinds = [compare.row_of(project, function, version).kind for version in versions]
+    if "c" not in kinds:
         return None
     source = project.src / f"{function}.c"
-    if not checks.unmarked(source):
+    if all(kind == "c" for kind in kinds) and not checks.unmarked(source):
         raise Held("draft", f"draft.published: {function}: {source} is published and breaks no source rule")
     return prelude.fields(prelude.resolve(source.read_text()))
 

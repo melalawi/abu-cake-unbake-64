@@ -21,6 +21,11 @@ update layout.toml and commit "Match FUNC". A file that does not prove is not wr
 
 --original lands an original-asm function (one no configured compiler emits from C) as byte-exact
 src/FUNC.s, records its rule in unbake-original-asm.json and commits "Original asm FUNC".
+
+--require-version VERSION (repeatable) allows C publication when those versions are exact.
+Other exact versions land too; nonmatching versions retain assembly. Every already published
+C version must remain exact. Compare still measures every holding version. The default and
+--original continue to require every holding version.
 """
 PROJECT = "ready"
 
@@ -31,6 +36,12 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("files", type=Path, nargs="*", metavar="FILE")
+    parser.add_argument(
+        "--require-version",
+        action="append",
+        metavar="VERSION",
+        help="Require this version and preserve already published versions; repeatable.",
+    )
     parser.add_argument(
         "--original", action="append", default=[], metavar="FUNC", help="Land an original-asm function as src/FUNC.s."
     )
@@ -47,6 +58,7 @@ def run(context: Context) -> Result:
         context.require_host(),
         [path.resolve() for path in context.args.files],
         originals=tuple(context.args.original),
+        required_versions=(tuple(context.args.require_version) if context.args.require_version is not None else None),
     )
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)

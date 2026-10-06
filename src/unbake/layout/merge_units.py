@@ -29,7 +29,7 @@ from unbake.layout import split
 from unbake.work import compare
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 1
+SCHEMA = 2
 
 _INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[^\n]*\n?", re.M)
 
@@ -37,6 +37,7 @@ _INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[^\n]*\n?", re.M)
 def input_key(project: Project) -> str:
     parts: list[str | bytes | Path] = ["merge-units", str(SCHEMA), project.root / "layout.toml"]
     parts.extend(sorted(project.src.glob("*.c")))
+    parts.extend(project.version(version).split for version in project.versions)
     return cache.key(*parts)
 
 
@@ -90,7 +91,11 @@ def _joins(project: Project, owners: Owners, left: str, right: str) -> bool:
         return False
     if project.compiler_reference(left) != project.compiler_reference(right):
         return False
-    return all(_row(owners, left, v).end == _row(owners, right, v).start for v in versions)
+    return all(
+        _row(owners, left, v).kind == _row(owners, right, v).kind == "c"
+        and _row(owners, left, v).end == _row(owners, right, v).start
+        for v in versions
+    )
 
 
 def merged_source(project: Project, members: tuple[str, ...]) -> str:
@@ -106,13 +111,18 @@ def merged_source(project: Project, members: tuple[str, ...]) -> str:
     return "".join(includes) + "\n" + "\n".join(bodies)
 
 
-def prove(project: Project, host: Host, members: tuple[str, ...], source: str) -> bool:
+def prove(
+    project: Project, host: Host, members: tuple[str, ...], source: str, *, versions: tuple[str, ...] | None = None
+) -> bool:
     first = members[0]
+    versions = split.holding_versions(project, first) if versions is None else versions
+    if not versions:
+        return False
     with tempfile.TemporaryDirectory(prefix="merge-") as temporary:
         work = Path(temporary)
         file = work / f"{first}.c"
         atomic_files.text(file, source)
-        for version in split.holding_versions(project, first):
+        for version in versions:
             head = compare.row_of(project, first, version)
             tail = compare.row_of(project, members[-1], version)
             row = replace(head, end=tail.end)

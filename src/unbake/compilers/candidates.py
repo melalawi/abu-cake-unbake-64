@@ -19,13 +19,28 @@ class Choice:
     eliminated: dict[str, str] = field(default_factory=dict)
 
 
-def resolve(project: Project, host: Host, file: Path, configured: object) -> tuple[Choice, object]:
+def resolve(
+    project: Project, host: Host, file: Path, configured: object, *, required_versions: tuple[str, ...] | None = None
+) -> tuple[Choice, object]:
     """(choice, measured result) where configured is the configured compiler's Compared result or its Held."""
     from unbake.work.compare import Compared, measure
 
     function = file.stem
     own = project.compiler_reference(function)
-    if isinstance(configured, Compared) and configured.identical_everywhere:
+
+    def required(result: Compared) -> bool:
+        return (
+            result.identical_everywhere
+            if required_versions is None
+            else all(version in result.compares and result.compares[version].exact for version in required_versions)
+        )
+
+    def rank(result: Compared) -> tuple[bool, int, int, float]:
+        return measured_candidate_rank(
+            {v: c for v, c in result.compares.items() if required_versions is None or v in required_versions}
+        )
+
+    if isinstance(configured, Compared) and required(configured):
         return Choice(own, "configured compiler is exact", (own,)), configured
     results: dict[str, Compared] = {}
     eliminated: dict[str, str] = {}
@@ -39,7 +54,12 @@ def resolve(project: Project, host: Host, file: Path, configured: object) -> tup
         results[own] = configured
     for ident in choice.alternatives(project, function):
         try:
-            results[ident] = measure(choice.selected(project, function, ident), host, file)
+            view = choice.selected(project, function, ident)
+            results[ident] = (
+                measure(view, host, file)
+                if required_versions is None
+                else measure(view, host, file, retain_link_faults=True)
+            )
         except Held as error:
             eliminated[ident] = error.reason.splitlines()[0]
             faults[ident] = process.fault(error)
@@ -50,12 +70,12 @@ def resolve(project: Project, host: Host, file: Path, configured: object) -> tup
             f"compiler.no_candidate: {file}: every configured compiler failed: {detail}",
             fault={"compilers": faults},
         )
-    exact = tuple(ident for ident, result in results.items() if result.identical_everywhere)
+    exact = tuple(ident for ident, result in results.items() if required(result))
     if exact:
         winner, rule = choice.build_choice(project, function, list(exact))
         return Choice(winner, rule, exact, eliminated), results[winner]
-    best = min(measured_candidate_rank(result.compares) for result in results.values())
-    ranked = [ident for ident, result in results.items() if measured_candidate_rank(result.compares) == best]
+    best = min(rank(result) for result in results.values())
+    ranked = [ident for ident, result in results.items() if rank(result) == best]
     winner = own if own in ranked else ranked[0]
     reason = "configured compiler" if winner == own else "strictly better measured rank"
     return Choice(winner, reason, (), eliminated), results[winner]

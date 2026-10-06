@@ -93,7 +93,7 @@ def candidates(project: Project, host: Host, *, selected: frozenset[str] | None 
         aliases = {name for item in items for name in (item.name, *item.aliases)}
         if selected is not None and not aliases & selected:
             continue
-        if aliases & excluded or any(item.kind == "c" for item in items):
+        if aliases & excluded or all(item.kind == "c" for item in items):
             continue
         if any(item.name != canonical.name for item in items):
             continue

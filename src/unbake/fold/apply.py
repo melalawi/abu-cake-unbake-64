@@ -87,10 +87,10 @@ def relative_header(project: Project, path: Path) -> str | None:
     return None
 
 
-def fold(project: Project, host: Host, function: str, text: str) -> Folded:
+def fold(project: Project, host: Host, function: str, text: str, *, versions: tuple[str, ...] | None = None) -> Folded:
     """Lower GBI, fold shared types and plan the publication edits, without writing project files."""
     drafted = view(project, function)
-    versions = split.holding_versions(project, function)
+    versions = split.holding_versions(project, function) if versions is None else versions
     lowered = gbi.prepare(drafted, text, gbi.microcode(drafted))
     source = lowered.source
     if "gbi" in lowered.headers:

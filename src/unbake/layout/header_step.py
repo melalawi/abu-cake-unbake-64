@@ -2,7 +2,7 @@
 
 - Merge-only: a header change or deletion that would remove a name published C spells is refused by name.
 - Only files whose bytes change are written; the index is installed last (layout.apply.install).
-- Before writing, every affected unit is compiled for each version that holds it, against staged copies of
+- Before writing, every affected unit is compiled for each version that builds its C, against staged copies of
   the changed headers and sources in build/work/_headers/ (a draft view shadowing include/ by relative name).
 - Each symbol has one declaration, in its owning header. A source's local declaration of a header-declared
   symbol is removed; where its type differs, the unit must still match the ROM with the header form.
@@ -23,7 +23,7 @@ from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 _DECLARED = (
@@ -127,9 +127,8 @@ def validate(
     """Compile every unit the change reaches against staged copies, on all cores; return the units compiled.
 
     A source whose local declaration lost to its header's differing form must still match the ROM in every
-    holding version with the header form; otherwise every such symbol is refused by name."""
+    published C version with the header form; otherwise every such symbol is refused by name."""
     from unbake import pool
-    from unbake.layout import merge_units
 
     stage = project.work / "_headers"
     shutil.rmtree(stage, ignore_errors=True)
@@ -156,20 +155,29 @@ def validate(
     owners = {version: split.owners_by_alias(project, version) for version in project.versions}
     view = replace(project, work_include=(staged_headers,))
     compiled = []
+    published: dict[Path, tuple[str, ...]] = {}
     jobs: list[tuple[Project, Host, Path, str, str]] = []
     try:
         for source in sorted(project.src.glob("*.c")):
             own = changed.get(source)
-            if own is None and not (includes(source.resolve(), project, memo) & headers):
+            if (
+                own is None
+                and source not in (disagreements or {})
+                and not (includes(source.resolve(), project, memo) & headers)
+            ):
+                continue
+            published[source] = tuple(
+                version
+                for version in split.holding_versions(project, source.stem, owners)
+                if any(row.kind == "c" for row in owners[version].get(source.stem, ()))
+            )
+            if not published[source]:
                 continue
             file = source
             if own is not None:
                 file = staged_sources / source.name
                 atomic_files.write(file, own)
-            jobs.extend(
-                (view, host, file, version, source.stem)
-                for version in split.holding_versions(project, source.stem, owners)
-            )
+            jobs.extend((view, host, file, version, source.stem) for version in published[source])
             compiled.append(source.stem)
         # Every unit compiles; all that fail are refused together, not one per run.
         failures = tuple(failure for failure in pool.run(host, _compile, jobs) if failure is not None)
@@ -182,11 +190,14 @@ def validate(
                 f"({keys}); first: {reason}",
                 failures=failures,
             )
-        proofs = sorted((disagreements or {}).items())
+        proofs = sorted((source, found) for source, found in (disagreements or {}).items() if published.get(source))
         matched = pool.run(
             host,
-            merge_units.prove_job,
-            [(view, host, (source.stem,), changed.get(source, source.read_bytes()).decode()) for source, _ in proofs],
+            _prove_published,
+            [
+                (view, host, source, changed.get(source, source.read_bytes()).decode(), published[source])
+                for source, _ in proofs
+            ],
         )
         refused = [
             f"{name} in {source.name}: local `{local}` matched the ROM; header `{header}` does not"
@@ -199,6 +210,13 @@ def validate(
     if refused:
         raise Held("headers", "headers.declaration: " + "; ".join(refused))
     return compiled
+
+
+def _prove_published(job: tuple[Project, Host, Path, str, tuple[str, ...]]) -> bool:
+    from unbake.layout import merge_units
+
+    project, host, source, text, versions = job
+    return merge_units.prove(project, host, (source.stem,), text, versions=versions)
 
 
 def run(project: Project, host: Host) -> list[Path]:
