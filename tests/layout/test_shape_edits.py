@@ -48,7 +48,7 @@ class ShapeEditTests(unittest.TestCase):
     def run_edits(self) -> list[str]:
         with (
             patch("unbake.pool.run", lambda host, fn, items: [fn(item) for item in items]),
-            patch("unbake.layout.merge_units._commit") as commit,
+            patch("unbake.land._commit") as commit,
             patch("unbake.config.load", return_value=self.fixture),
             patch("unbake.buildfiles.write", return_value=[]),
         ):

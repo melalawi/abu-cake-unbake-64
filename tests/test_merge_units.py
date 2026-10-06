@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from tests.project_fixture import ProjectCase
-from unbake import config
+from unbake import config, land
 from unbake.layout import map as layout_map
 from unbake.layout import merge_units
 from unbake.layout.map import Group
@@ -61,7 +61,7 @@ class RunTests(ProjectCase):
         project = config.load(self.project.root)
         with (
             mock.patch.object(merge_units, "prove", return_value=True),
-            mock.patch.object(merge_units, "_commit") as commit,
+            mock.patch.object(land, "_commit") as commit,
             mock.patch("unbake.buildfiles.write", return_value=[]),
             mock.patch("unbake.pool.run", side_effect=in_process),
         ):
@@ -91,7 +91,7 @@ class SecondRunTests(ProjectCase):
             mock.patch.object(
                 merge_units, "prove", side_effect=lambda project, host, members, source: len(members) > 1
             ),
-            mock.patch.object(merge_units, "_commit") as commit,
+            mock.patch.object(land, "_commit") as commit,
             mock.patch("unbake.buildfiles.write", return_value=[]),
             mock.patch("unbake.pool.run", side_effect=in_process),
         ):
@@ -125,7 +125,7 @@ class VersionOnlyRunTests(ProjectCase):
         with (
             mock.patch.object(merge_units, "runs", return_value=[(g, ("alpha", "beta")), (g, ("gamma",))]),
             mock.patch.object(merge_units, "prove", return_value=True),
-            mock.patch.object(merge_units, "_commit"),
+            mock.patch.object(land, "_commit"),
             mock.patch("unbake.buildfiles.write", return_value=[]),
             mock.patch("unbake.pool.run", side_effect=in_process),
         ):

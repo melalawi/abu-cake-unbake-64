@@ -35,7 +35,7 @@ class TailPublicationTests(ProjectCase):
             patch("unbake.pool.run", lambda host, fn, items: [fn(item) for item in items]),
             patch("unbake.config.load", return_value=self.project),
             patch("unbake.buildfiles.write", return_value=[]),
-            patch("unbake.layout.merge_units._commit"),
+            patch("unbake.land._commit"),
         ):
             return shape_edits.run(self.project, self.host)
 

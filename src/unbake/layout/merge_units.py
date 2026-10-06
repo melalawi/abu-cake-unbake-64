@@ -142,25 +142,6 @@ def _absorb_rows(project: Project, starts: dict[str, set[int]]) -> list[Path]:
     return changed
 
 
-def _commit(project: Project, host: Host, paths: list[Path], message: str) -> None:
-    from unbake import land
-
-    land._git(project, "add", "-A", "--", *(str(p.relative_to(project.root)) for p in paths))
-    land._git(
-        project,
-        "-c",
-        f"user.name={host.publish_author_name}",
-        "-c",
-        f"user.email={host.publish_author_email}",
-        "commit",
-        "-q",
-        "-m",
-        message,
-        "--author",
-        f"{host.publish_author_name} <{host.publish_author_email}>",
-    )
-
-
 def prove_job(job: tuple[Project, Host, tuple[str, ...], str]) -> bool:
     """Worker body: one run's proof in every holding version."""
     return prove(*job)
@@ -168,7 +149,7 @@ def prove_job(job: tuple[Project, Host, tuple[str, ...], str]) -> bool:
 
 def run(project: Project, host: Host) -> list[str]:
     """Prove every run in the worker pool, then write and commit the results in layout order; one line per run."""
-    from unbake import buildfiles, pool
+    from unbake import buildfiles, land, pool
     from unbake import config as project_config
 
     found = runs(project)
@@ -210,7 +191,7 @@ def run(project: Project, host: Host) -> list[str]:
         layout_map.edit_members(project, absorbed, cuts=cuts, proven=firsts)
         touched += buildfiles.write(project_config.load(project.root), host)
         merged = sum(passed for passed in proven)
-        _commit(
+        land._commit(
             project,
             host,
             sorted(set(touched)),

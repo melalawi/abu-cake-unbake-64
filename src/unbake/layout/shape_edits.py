@@ -369,11 +369,11 @@ def _relabel(project: Project, renamed: dict[str, str], continuations: set[str])
 def _commit(
     project: Project, host: Host, paths: list[Path], kept: dict[str, list[Finding]], renamed: dict[str, str]
 ) -> None:
-    from unbake.layout import merge_units
+    from unbake import land
 
     found = [f for findings in kept.values() for f in findings]
     message = (
         f"Shape edits: {sum(f.kind == 'filler' for f in found)} filler rows ({len(renamed)} renamed), "
         f"{sum(f.kind == 'continuation' for f in found)} proved continuations"
     )
-    merge_units._commit(project, host, paths, message)
+    land._commit(project, host, paths, message)
