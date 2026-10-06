@@ -912,7 +912,13 @@ def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
             "ok": False,
             "key": key,
             "diagnostic": f"{type(error).__name__}: {error}",
-            "seconds": 0.0,
+            "seconds": (
+                (error.fault or {}).get("wall_seconds")
+                if isinstance(error, Held)
+                else error.args[0].get("wall_seconds")
+                if isinstance(error, pool.WorkerMemory)
+                else None
+            ),
             "fault": cause_fault(error),
         }
     return done.result()

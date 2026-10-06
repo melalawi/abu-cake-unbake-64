@@ -26,6 +26,7 @@ import signal
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 from collections import deque
@@ -237,7 +238,7 @@ def _measured(
     from unbake import effort
 
     fn, item = task
-    start, before = _cpu(), effort.counted()
+    start, before, wall = _cpu(), effort.counted(), time.monotonic()
     result, error = None, None
     try:
         result = _named(fn, item)
@@ -249,13 +250,20 @@ def _measured(
         if total != old_total or done != old_done:
             added[name] = (done - old_done, total - old_total)
     seconds, rss = _cpu() - start, effort.resident_peak()
+    measured = {
+        "cpu_seconds": seconds,
+        "peak_rss_bytes": rss,
+        "counts": added,
+        "wall_seconds": time.monotonic() - wall,
+        "wall_scope": "worker-action",
+    }
     if isinstance(error, WorkerMemory):
-        error.args[0].update(cpu_seconds=seconds, peak_rss_bytes=rss, counts=added)
+        error.args[0].update(measured)
     elif isinstance(error, Held):
         from unbake.process import fault
 
         chain = fault(error)
-        error.fault = {**(error.fault or {}), **chain, "cpu_seconds": seconds, "peak_rss_bytes": rss, "counts": added}
+        error.fault = {**(error.fault or {}), **chain, **measured}
     return result, seconds, rss, added, error
 
 
@@ -380,6 +388,7 @@ class Pool:
         charged to fn (effort); cancelling the returned future cancels the task."""
         from unbake import effort
 
+        started = time.monotonic()
         inner = self._submit(_measured, (fn, item))
         outer: Future[R] = _Outer(inner)
 
@@ -391,7 +400,23 @@ class Pool:
                 return
             error = done.exception()
             if error is not None:
-                outer.set_exception(error)
+                failed = Held(
+                    "pool",
+                    f"worker.crash: {effort.name_of(fn)}: {error}",
+                    fault={
+                        "action": effort.name_of(fn),
+                        "category": "worker-exit",
+                        "cause": type(error).__name__,
+                        "configured_cap_bytes": self.memory_worker_bytes,
+                        "wall_seconds": time.monotonic() - started,
+                        "wall_scope": "submission-to-completion",
+                        "cpu_seconds": None,
+                        "peak_rss_bytes": None,
+                        "counts": None,
+                    },
+                )
+                failed.__cause__ = error
+                outer.set_exception(failed)
                 return
             result, seconds, rss, counts, fault = done.result()
             effort.charge(effort.name_of(fn) + (".failed" if fault is not None else ""), seconds, rss, counts)
