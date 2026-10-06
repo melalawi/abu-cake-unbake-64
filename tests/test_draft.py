@@ -59,6 +59,9 @@ class DraftFileTests(ProjectCase):
             "s32 alpha(void *p) { FIELD(p, s32, 4) = AT(s32, p, 8); "
             "return M2C_FIELD(p, s32 *, -4); }\n"
         )
+        for version in self.versions:
+            split = self.project.version(version).split
+            split.write_text(split.read_text().replace("asm, alpha]", "c, alpha]"))
         with patch.object(compare, "published", return_value=True):
             private = self.project.work / "alpha/include"
             private.mkdir(parents=True)

@@ -39,7 +39,7 @@ class MergeTests(ProjectCase):
         logged(self.project, "beta", "2026-10-04T10:00:00+00:00", {"us": 33.333333, "eu": 80.004})
         logged(self.project, "beta", "2026-10-04T10:01:00+00:00", {"us": 75.126, "eu": 12.0})
         read = attempts.summaries(self.project)
-        self.assertEqual(read["beta"], Summary(12, {"us": 75.13, "eu": 80.0}, False, 5.0, 3))
+        self.assertEqual(read["beta"], Summary(12, {"us": 75.126, "eu": 80.004}, False, 5.0, 3))
         self.assertEqual(read["gone"], stale)
         path = attempts.write_summary(self.project, {"alpha", "beta", "gamma"})
         first = path.read_bytes()
@@ -51,7 +51,7 @@ class MergeTests(ProjectCase):
                 "functions": {
                     "beta": {
                         "attempts": 3,
-                        "best": {"eu": 80.0, "us": 75.13},
+                        "best": {"eu": 80.004, "us": 75.126},
                         "bytes": 12,
                         "exact": False,
                         "minutes": 5.0,

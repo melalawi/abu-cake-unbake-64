@@ -42,6 +42,8 @@ def published_seed(project: Project, function: str) -> str | None:
 
     versions = split.holding_versions(project, function)
     kinds = [compare.row_of(project, function, version).kind for version in versions]
+    if attempts.fuzzy(project, function) is not None:
+        return attempts.unguarded((project.src / f"{function}.c").read_text())
     if "c" not in kinds:
         return None
     source = project.src / f"{function}.c"

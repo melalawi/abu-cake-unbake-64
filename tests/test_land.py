@@ -34,7 +34,9 @@ class LandTests(ProjectCase):
                 raise Held("land", "git commit exited 1: hook refused")
             return ""
 
-        prove = {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": (proved, set())}
+        prove = (
+            {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": land.Proof(proved, set())}
+        )
         with (
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", SOURCE, headers or {}, ())),

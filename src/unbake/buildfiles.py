@@ -22,7 +22,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 6
+SCHEMA = 7
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -180,6 +180,9 @@ def units_mk(project: Project) -> str:
     """Pattern-specific values (all versions) for units off the default compiler or with their own flags."""
     lines = [HEADER]
     default = project.compilers[project.default_compiler]
+    from unbake.work import attempts
+
+    fuzzy = attempts.fuzzy_sources(project)
     names = sorted({path.stem for path in project.src.glob("*.c")})
     for name in names:
         targets = f"build/%/src/{name}.i build/%/src/{name}.key build/%/units/{name}.bin"
@@ -192,6 +195,8 @@ def units_mk(project: Project) -> str:
         ]
         prep, _ = drivers.stage_flags(compiler.kind, effective)
         rendered = words(list(prep)).replace("-DUNBAKE_VERSION_PLACEHOLDER", "$(VERSION_DEFINES) $(CONSUMER)")
+        if name in fuzzy:
+            rendered += " -DNON_MATCHING"
         lines.append(f"{targets}: PREPROCESS_FLAGS = {rendered}\n")
         if compiler.id != default.id:
             c_includes, c_codegen, c_defines = drivers.compiler_parts(project, compiler.id)
@@ -497,6 +502,8 @@ def generate(project: Project, host: Host) -> dict[Path, bytes]:
 
 def input_key(project: Project, host: Host) -> str:
     """Everything the build files are made from."""
+    from unbake.work import attempts
+
     parts: list[str | bytes | Path] = [
         "buildfiles",
         str(SCHEMA),
@@ -510,6 +517,8 @@ def input_key(project: Project, host: Host) -> str:
     # Contents, not just names: symbols.ld provides the address-named symbols these files spell.
     parts.extend(sorted(project.src.glob("*.c")))
     parts.extend(sorted(project.src.glob("*.s")))
+    summary = attempts.summary_path(project)
+    parts.append(summary if summary.is_file() else "no attempts")
     from unbake.decomp import original_asm
 
     manifest = project.root / original_asm.MANIFEST

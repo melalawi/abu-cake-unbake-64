@@ -59,6 +59,7 @@ class SingleWriterTests(TempCase):
             memory_worker_bytes=1,
         )
         log: list[str] = []  # writes and task runs, in order
+        published: dict[str, str] = {}
         pending: list[Future] = []  # tasks the pool has queued but not run
         drafts: dict[str, int] = {}
         compares: dict[str, int] = {}
@@ -149,10 +150,20 @@ class SingleWriterTests(TempCase):
                     report(done)
             return ran
 
-        def fake_land(project_, host_, file):
+        def fake_land(project_, host_, file, *, fuzzy=False, on_commit=None):
             if busy():
                 raise AssertionError("a land ran while a task was in flight")
-            log.append(f"land {file.stem}")
+            log.append(f"{'fuzzy' if fuzzy else 'land'} {file.stem}")
+            published[file.stem] = file.read_text()
+            if on_commit is not None:
+                on_commit(
+                    {
+                        "function": file.stem,
+                        "commit": "commit-" + file.stem,
+                        "message": "Fuzzy " + file.stem,
+                        "proof": {"kind": "fuzzy", "score": 50.0},
+                    }
+                )
             return "commit-" + file.stem
 
         def recheck(spec):
@@ -221,7 +232,15 @@ class SingleWriterTests(TempCase):
                 next_words=lambda *words: " ".join(words),
             )
         events = [json.loads(line) for line in stream.getvalue().splitlines()]
-        return Run(events=events, result=outcome, log=log, drafts=drafts, compares=compares, searches=searches)
+        return Run(
+            events=events,
+            result=outcome,
+            log=log,
+            drafts=drafts,
+            compares=compares,
+            searches=searches,
+            published=published,
+        )
 
     def test_drafts_start_only_after_the_draft_steps(self) -> None:
         run = self.cycle(land_steps=["quit"])
@@ -342,3 +361,15 @@ class SingleWriterTests(TempCase):
     def test_a_search_started_before_the_land_runs_after_the_steps(self) -> None:
         run = self.cycle(land_steps=[[]], search=lambda n, text, method: None)
         self.assertLess(run.log.index("land alpha"), run.log.index("search beta registers"))
+
+    def test_best_source_is_published_fuzzy_at_the_drained_boundary(self) -> None:
+        run = self.cycle(land_steps=[[]], search=lambda n, text, method: text + ("better\n" if n == 1 else "worse\n"))
+        self.assertEqual(run.result.data["fuzzy"], ["beta"])
+        self.assertEqual(run.result.data["landed"], ["alpha"])
+        self.assertEqual(run.names("cycle.end")[0]["landed_bytes"], 8)
+        self.assertEqual(run.published["beta"], (self.root / "work/beta/beta.ladder.c").read_text())
+        self.assertIn("better", run.published["beta"])
+        self.assertNotIn("worse", run.published["beta"])
+        self.assertEqual(run.names("fn.fuzzy_landed")[0]["commit"], "commit-beta")
+        self.assertEqual(run.names("fn.committed", "beta")[0]["proof"]["kind"], "fuzzy")
+        self.assertFalse(any(line.startswith("ensure ") for line in run.log[run.log.index("fuzzy beta") + 1 :]))

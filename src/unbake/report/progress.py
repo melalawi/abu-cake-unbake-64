@@ -15,7 +15,7 @@ from unbake.report import files, readme_layout
 from unbake.report import units as report_units
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 # Row kinds that count as done, each its own objdiff progress category: matched C and original asm (.s).
 DONE = {"c": ("c", "Matched C", ".c"), "hasm": ("original_asm", "Original asm", ".s")}
 
@@ -274,7 +274,7 @@ def f32(value: float) -> float:
     return float(single)
 
 
-def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
+def _unit(row: report_units.Function, best: float | None, fuzzy_source: str | None = None) -> dict[str, Any]:
     size = row.end - row.start
     matched = row.kind in DONE
     measures: dict[str, Any] = {
@@ -306,6 +306,8 @@ def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
         category, _, suffix = DONE[row.kind]
         metadata["source_path"] = f"src/{row.path}{suffix}"
         metadata["progress_categories"] = [category]
+    elif fuzzy_source:
+        metadata["source_path"] = f"src/{fuzzy_source}.c"
     return {
         "name": row.name,
         "measures": measures,
@@ -317,15 +319,24 @@ def _unit(row: report_units.Function, best: float | None) -> dict[str, Any]:
 
 def measure(project: Project, policy: Host, version: str) -> dict[str, Any]:
     """Progress of one version from its split rows and the best attempt of each unmatched function."""
+    from unbake.layout import split
     from unbake.work import attempts
 
     rows = report_units.functions(project.version(version))
-    best = {
-        function: summary.best[version]
-        for function, summary in attempts.summaries(project).items()
-        if version in summary.best
-    }
-    units = [_unit(row, best.get(row.name)) for row in rows]
+    summaries = attempts.summaries(project)
+    best = {function: summary.best[version] for function, summary in summaries.items() if version in summary.best}
+    retained = {name: summary for name, summary in summaries.items() if summary.fuzzy is not None}
+    fuzzy_rows = {}
+    if retained:
+        owners = split.owners_by_alias(project, version)
+        for function, summary in retained.items():
+            found = owners.get(function, ())
+            if len(found) == 1:
+                name = Path(found[0].path).name
+                fuzzy_rows[name] = function
+                if version in summary.best:
+                    best[name] = max(best.get(name, 0.0), summary.best[version])
+    units = [_unit(row, best.get(row.name), fuzzy_rows.get(row.name)) for row in rows]
     total = sum(row.end - row.start for row in rows)
     matched_rows = [row for row in rows if row.kind in DONE]
     matched = sum(row.end - row.start for row in matched_rows)
@@ -429,6 +440,7 @@ def readme_descriptions(project: Project) -> dict[str, str]:
 
 def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] | None = None) -> list[Path]:
     """versions/*/report.json, the README progress block and attempts.json, the history they are measured from."""
+    from unbake.layout import split
     from unbake.work import attempts
 
     if not project.versions:
@@ -464,6 +476,10 @@ def write(project: Project, policy: Host, *, reports: dict[str, dict[str, Any]] 
         files.write(readme, rendered.encode("utf-8", errors="surrogateescape"))
         written.append(readme)
         rows = {row.name for version in project.versions for row in report_units.functions(project.version(version))}
+        # Retained names may be aliases of a differently named ROM row.
+        for version in project.versions:
+            owners = split.owners_by_alias(project, version)
+            rows.update(name for name in attempts.fuzzy_sources(project) if name in owners)
         written.append(attempts.write_summary(project, rows))
     except OSError as error:
         raise Held("report", f"report file/tool: {error}") from error

@@ -26,7 +26,7 @@ class PublishEventTests(ProjectCase):
         alpha.write_text("int alpha(void) { return 1; }\n")
         beta.write_text("int beta(void) { return 2; }\n")
         stream = io.StringIO()
-        args = argparse.Namespace(files=[alpha, beta], original=[], require_version=None, events=True)
+        args = argparse.Namespace(files=[alpha, beta], original=[], require_version=None, events=True, fuzzy=False)
         context = Context("publish", args, self.project.root, None, stream, self.host)
         observed = []
 
@@ -51,7 +51,7 @@ class PublishEventTests(ProjectCase):
                 land, "exact_attempt", return_value=type("A", (), {"compiler": "ido-7.1", "sha256": "a" * 64})()
             ),
             patch("unbake.fold.apply.fold", side_effect=fold),
-            patch.object(land, "prove", return_value=(["us", "eu"], {self.project.include[-1] / "types.h"})),
+            patch.object(land, "prove", return_value=land.Proof(["us", "eu"], {self.project.include[-1] / "types.h"})),
             patch.object(land, "_commit"),
             patch.object(land, "_git", return_value="accepted-alpha\n"),
             patch.object(land.steps, "ensure", side_effect=merge),

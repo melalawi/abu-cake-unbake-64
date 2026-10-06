@@ -23,7 +23,7 @@ from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
+SCHEMA = 4
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 _DECLARED = (
@@ -106,14 +106,20 @@ def uses(text: str) -> set[str]:
     return spelled - only_defined
 
 
-def _compile(job: tuple[Project, Host, Path, str, str]) -> dict[str, Any] | None:
+def _compile(job: tuple[Project, Host, Path, str, str, bool, bool]) -> dict[str, Any] | None:
     """Compile one staged unit for one version, retaining its complete refusal."""
     from unbake import process, runner
 
-    view, host, file, version, unit = job
+    view, host, file, version, unit, prove_match, non_matching = job
     try:
-        with runner.compile_unit(view, host, file, version, unit=unit):
-            pass
+        if prove_match and not non_matching:
+            data = runner.build_unit(view, host, unit, version, source=file)
+            rows = [row for row in split.functions(view, version) if Path(row.path).name == unit and row.kind == "c"]
+            if len(rows) != 1 or data != split.words(view, rows[0]):
+                raise Held("headers", f"headers.nonregression: {unit} VERSION {version}: changed default ROM code")
+        else:
+            with runner.compile_unit(view, host, file, version, unit=unit, non_matching=non_matching):
+                pass
     except Held as error:
         return {"key": error.key, "reason": f"VERSION {version}: {error.reason}", "fault": process.fault(error)}
     return None
@@ -124,12 +130,16 @@ def validate(
     host: Host,
     changed: dict[Path, bytes],
     disagreements: dict[Path, dict[str, tuple[str, str]]] | None = None,
+    *,
+    prove_all: bool = False,
+    preproved: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Compile every unit the change reaches against staged copies, on all cores; return the units compiled.
 
     A source whose local declaration lost to its header's differing form must still match the ROM in every
     published C version with the header form; otherwise every such symbol is refused by name."""
     from unbake import pool
+    from unbake.work import attempts
 
     stage = project.work / "_headers"
     shutil.rmtree(stage, ignore_errors=True)
@@ -157,9 +167,12 @@ def validate(
     view = replace(project, work_include=(staged_headers,))
     compiled = []
     published: dict[Path, tuple[str, ...]] = {}
-    jobs: list[tuple[Project, Host, Path, str, str]] = []
+    jobs: list[tuple[Project, Host, Path, str, str, bool, bool]] = []
+    fuzzy = attempts.fuzzy_sources(project)
     try:
         for source in sorted(project.src.glob("*.c")):
+            if source.stem in preproved:
+                continue
             own = changed.get(source)
             if (
                 own is None
@@ -170,7 +183,7 @@ def validate(
             published[source] = tuple(
                 version
                 for version in split.holding_versions(project, source.stem, owners)
-                if any(row.kind == "c" for row in owners[version].get(source.stem, ()))
+                if source.stem in fuzzy or any(row.kind == "c" for row in owners[version].get(source.stem, ()))
             )
             if not published[source]:
                 continue
@@ -178,7 +191,10 @@ def validate(
             if own is not None:
                 file = staged_sources / source.name
                 atomic_files.write(file, own)
-            jobs.extend((view, host, file, version, source.stem) for version in published[source])
+            jobs.extend(
+                (view, host, file, version, source.stem, prove_all, source.stem in fuzzy)
+                for version in published[source]
+            )
             compiled.append(source.stem)
         # Every unit compiles; all that fail are refused together, not one per run.
         failures = tuple(failure for failure in pool.run(host, _compile, jobs) if failure is not None)
@@ -187,11 +203,20 @@ def validate(
             keys = ", ".join(sorted({failure["key"].removeprefix("compile.") for failure in failures}))
             raise Held(
                 "compile",
-                f"compile.headers: {len(failures)} unit compiles fail against the regenerated headers "
+                f"compile.headers: {len(failures)} unit "
+                f"{'default-build proofs' if prove_all else 'compiles'} fail against the regenerated headers "
                 f"({keys}); first: {reason}",
                 failures=failures,
             )
-        proofs = sorted((source, found) for source, found in (disagreements or {}).items() if published.get(source))
+        proofs = (
+            []
+            if prove_all
+            else sorted(
+                (source, found)
+                for source, found in (disagreements or {}).items()
+                if published.get(source) and source.stem not in fuzzy
+            )
+        )
         matched = pool.run(
             host,
             _prove_published,

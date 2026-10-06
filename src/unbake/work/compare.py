@@ -145,6 +145,9 @@ def measure(
     selected = versions or split.holding_versions(project, function)
     view = view_for(project, file, function)
     content = file.read_bytes()
+    non_matching = (
+        file.resolve() == (project.src / f"{function}.c").resolve() and attempts.fuzzy(project, function) is not None
+    )
     broken = [finding for finding in checks.run(content.decode()) if finding.fakematch is None]
     preconditions = [checks.message(finding) for finding in broken]
     rule_lines = [checks.plain(finding) for finding in broken]
@@ -155,7 +158,8 @@ def measure(
         target = split.words(project, row)
         compiling = True
         try:
-            with runner.compile_unit(view, host, file, version, unit=function) as obj:
+            options: dict[str, Any] = {"non_matching": True} if non_matching else {}
+            with runner.compile_unit(view, host, file, version, unit=function, **options) as obj:
                 compiling = False
                 linked, problems = runner.link_function(project, host, obj, version, row, file)
         except Held as error:

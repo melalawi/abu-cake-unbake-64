@@ -9,10 +9,11 @@ local log, so fuzzy progress and the ranker's history survive a fresh tree.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,7 @@ class Attempt:
     sha256: str
     bytes: int
     versions: dict[str, dict[str, Any]]
-    best_percent: float
+    best_percent: float | None
     exact: bool
     seconds: float
     compiler: str
@@ -89,7 +90,7 @@ def read(project: Project, function: str) -> list[Attempt]:
                     value["sha256"],
                     int(value["bytes"]),
                     dict(value["versions"]),
-                    float(value["best_percent"]),
+                    None if value["best_percent"] is None else float(value["best_percent"]),
                     bool(value["exact"]),
                     float(value["seconds"]),
                     str(value["compiler"]),
@@ -126,6 +127,7 @@ class Summary:
     exact: bool
     minutes: float
     attempts: int
+    fuzzy: dict[str, Any] | None = None
 
     def document(self) -> dict[str, Any]:
         return {
@@ -134,6 +136,7 @@ class Summary:
             "bytes": self.bytes,
             "exact": self.exact,
             "minutes": self.minutes,
+            **({"fuzzy": self.fuzzy} if self.fuzzy is not None else {}),
         }
 
     @property
@@ -145,7 +148,8 @@ def summarize(rows: list[Attempt]) -> Summary:
     best: dict[str, float] = {}
     for row in rows:
         for version, result in row.versions.items():
-            best[version] = max(best.get(version, 0.0), round(float(result["percent"]), 2))
+            if result.get("percent") is not None and not result.get("fault"):
+                best[version] = max(best.get(version, 0.0), round(float(result["percent"]), 6))
     return Summary(rows[-1].bytes, best, any(row.exact for row in rows), round(minutes(rows), 2), len(rows))
 
 
@@ -164,11 +168,33 @@ def merge(committed: Summary | None, local: Summary | None) -> Summary:
         committed.exact or local.exact,
         max(committed.minutes, local.minutes),
         max(committed.attempts, local.attempts),
+        local.fuzzy if local.fuzzy is not None else committed.fuzzy,
     )
 
 
 def summary_path(project: Project) -> Path:
     return project.root / SUMMARY
+
+
+def _fuzzy_receipt(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"source_sha256", "compiler", "score", "versions"}:
+        raise ValueError("fuzzy receipt: expected source_sha256, compiler, score and versions")
+    digest = value["source_sha256"]
+    if digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise ValueError("fuzzy receipt: invalid source_sha256")
+    if not isinstance(value["compiler"], str) or not value["compiler"]:
+        raise ValueError("fuzzy receipt: compiler is missing")
+    versions = value["versions"]
+    if not isinstance(versions, dict) or not versions or any(not isinstance(v, str) or not v for v in versions):
+        raise ValueError("fuzzy receipt: holding versions are missing")
+    for number in (value["score"], *versions.values()):
+        if number is not None and (
+            type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= 100
+        ):
+            raise ValueError("fuzzy receipt: expected measured percentage or null")
+    return value
 
 
 def _committed(project: Project) -> dict[str, Summary]:
@@ -186,6 +212,7 @@ def _committed(project: Project) -> dict[str, Summary]:
                 bool(value["exact"]),
                 float(value["minutes"]),
                 int(value["attempts"]),
+                _fuzzy_receipt(value.get("fuzzy")),
             )
             for name, value in document["functions"].items()
         }
@@ -217,6 +244,40 @@ def summaries(project: Project) -> dict[str, Summary]:
 def encode(table: dict[str, Summary]) -> bytes:
     functions = {name: table[name].document() for name in sorted(table)}
     return (json.dumps({"functions": functions, "v": 1}, indent=2, sort_keys=True) + "\n").encode()
+
+
+FUZZY_PREFIX = "#ifdef NON_MATCHING\n"
+FUZZY_SUFFIX = "#endif /* NON_MATCHING */\n"
+
+
+def guarded(text: str) -> str:
+    """The retained draft is opt-in C; default ROM ownership stays with its assembly rows."""
+    return FUZZY_PREFIX + text.rstrip() + "\n" + FUZZY_SUFFIX
+
+
+def unguarded(text: str) -> str:
+    if not text.startswith(FUZZY_PREFIX) or not text.endswith(FUZZY_SUFFIX):
+        raise Held("work", "fuzzy.source: retained fuzzy source lost its NON_MATCHING guard")
+    return text[len(FUZZY_PREFIX) : -len(FUZZY_SUFFIX)]
+
+
+def fuzzy(project: Project, function: str) -> dict[str, Any] | None:
+    """The one committed fuzzy receipt; local score history cannot change its publication state."""
+    summary = _committed(project).get(function)
+    return summary.fuzzy if summary is not None else None
+
+
+def fuzzy_sources(project: Project) -> dict[str, dict[str, Any]]:
+    return {name: summary.fuzzy for name, summary in _committed(project).items() if summary.fuzzy is not None}
+
+
+def fuzzy_edit(project: Project, function: str, receipt: dict[str, Any] | None) -> bytes:
+    """Update publication state in the existing attempts summary, for land's ordinary atomic writer."""
+    table = summaries(project)
+    if function not in table:
+        raise Held("work", f"fuzzy.history: {function}: measured compile attempt is missing")
+    table[function] = replace(table[function], fuzzy=receipt)
+    return encode(table)
 
 
 def write_summary(project: Project, rows: set[str]) -> Path:
@@ -285,4 +346,13 @@ def renamed_summary(project: Project, renamed: dict[str, str]) -> bytes | None:
     table = _committed(project)
     if not table.keys() & renamed.keys():
         return None
-    return encode({renamed.get(name, name): summary for name, summary in table.items()})
+    return encode(
+        {
+            renamed.get(name, name): (
+                replace(summary, fuzzy={**summary.fuzzy, "score": None, "source_sha256": None})
+                if name in renamed and summary.fuzzy is not None
+                else summary
+            )
+            for name, summary in table.items()
+        }
+    )

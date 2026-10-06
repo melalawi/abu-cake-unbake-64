@@ -205,10 +205,10 @@ class HeaderCompileFailureTests(ProjectCase):
         for version in self.versions:
             path = self.project.version(version).split
             path.write_text(path.read_text().replace("asm, alpha]", "c, alpha]").replace("asm, beta]", "c, beta]"))
-        job = (self.project, self.host, self.project.src / "alpha.c", "us", "alpha")
+        job = (self.project, self.host, self.project.src / "alpha.c", "us", "alpha", False, False)
         with patch.object(runner, "compile_unit", return_value=nullcontext()) as compile_unit:
             self.assertIsNone(header_step._compile(job))
-        compile_unit.assert_called_once_with(*job[:4], unit="alpha")
+        compile_unit.assert_called_once_with(*job[:4], unit="alpha", non_matching=False)
 
         expected = []
         for unit in ("alpha", "beta"):
@@ -222,7 +222,7 @@ class HeaderCompileFailureTests(ProjectCase):
                     }
                 )
 
-        def refuse(view, host, file, version, *, unit):
+        def refuse(view, host, file, version, *, unit, non_matching):
             raise Held("compile", f"compile.{unit}: src/{unit}.c: `missing' undeclared")
 
         with patch.object(runner, "compile_unit", side_effect=refuse):

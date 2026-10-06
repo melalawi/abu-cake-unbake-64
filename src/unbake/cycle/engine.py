@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import queue
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -57,6 +58,7 @@ class Row:
     sha256: str = ""
     held: bool = False
     commit: str = ""
+    fuzzy: bool = False
     # The bytes of the last generated draft: a draft still holding them is drafted again after the steps change.
     drafted_sha: str = ""
     # Where the mechanical search ladder stands; a fresh compare of the tree or a human edit starts it over.
@@ -421,12 +423,13 @@ def run(
         stop=stopper.condition,
     )
     landed: list[str] = []
+    fuzzy_landed: list[str] = []
     # The task each row has in the pool; its result is read only while it is still the row's task.
     inflight: dict[str, tuple[Future[dict[str, Any]], Task]] = {}
     # Tasks held back while a land waits for the pool to drain; they start after the land's steps.
     deferred: dict[str, Task] = {}
-    # Exact rows waiting for the pool to drain, in arrival order.
-    exact: list[str] = []
+    # Exact or best retained source waiting for the same drained writer boundary.
+    ready: list[str] = []
     retried: set[tuple[str, str]] = set()
     watcher_stop = threading.Event()
     from unbake.cycle import watcher
@@ -472,7 +475,7 @@ def run(
         def submit(function: str, task: Task) -> None:
             """One task per row at a time: while the row's task runs, or a land waits for the pool to drain, the
             newest task is held back and starts after it."""
-            if exact or function in inflight:
+            if ready or function in inflight:
                 deferred[function] = task
                 return
             deferred.pop(function, None)
@@ -489,6 +492,7 @@ def run(
             if row.held:
                 return
             row.ladder = ladder.Ladder()
+            row.fuzzy = False
             file = project.work / row.function / f"{row.function}.c"
             if redraft:
                 row.stage, row.sha256 = "drafting", ""
@@ -515,10 +519,50 @@ def run(
                 start(row)
 
         def finish_land(row: Row) -> None:
+            from unbake import config
+
+            current_project = config.load(project.root)
+            if row.fuzzy:
+                saved = ladder.snapshot_path(Path(row.file))
+                content = saved.read_text() if saved.is_file() else Path(row.file).read_text()
+                proof: dict[str, Any] = {}
+
+                def committed(record: dict[str, Any]) -> None:
+                    proof.update(record.get("proof", {}))
+                    emitter.emit("fn.committed", **record)
+
+                try:
+                    with tempfile.TemporaryDirectory(prefix=".carry-", dir=project.work) as temporary:
+                        candidate = Path(temporary) / f"{row.function}.c"
+                        atomic_files.text(candidate, content)
+                        row.commit = land.land(current_project, host, candidate, fuzzy=True, on_commit=committed)
+                except Held as error:
+                    row.stage, row.diagnostic = "waiting for edit", error.reason
+                    emitter.emit(
+                        "fn.land_failed",
+                        function=row.function,
+                        versions=list(row.versions),
+                        diagnostic=error.reason,
+                        fault=cause_fault(error),
+                        returned_to_worker=False,
+                    )
+                    return
+                row.stage = "needs creative"
+                if row.function not in fuzzy_landed:
+                    fuzzy_landed.append(row.function)
+                emitter.emit(
+                    "fn.fuzzy_landed",
+                    function=row.function,
+                    commit=row.commit,
+                    versions=list(row.versions),
+                    bytes=row.bytes,
+                    best_percent=proof.get("score"),
+                )
+                return
             message = land.subject(project, row.function)
             started = time.monotonic()
             try:
-                commit = land.land(project, host, Path(row.file))
+                commit = land.land(current_project, host, Path(row.file))
             except Held as error:
                 again = (row.function, row.sha256) not in retried
                 retried.add((row.function, row.sha256))
@@ -572,6 +616,9 @@ def run(
                 methods={**row.ladder.tried, **{name: f"skipped: {why}" for name, why in row.ladder.skipped.items()}},
                 trouble=str(trouble),
             )
+            row.fuzzy, row.stage = True, "landing"
+            ready.append(row.function)
+            drain()
 
         def restore(row: Row) -> None:
             """A method that gained nothing leaves the best text in the file."""
@@ -645,11 +692,15 @@ def run(
         def land_drained(*, resume: bool) -> None:
             """The pool is empty: land every exact row, bring the tree current once, redo what read the old tree,
             then start the held-back tasks (unless the cycle is ending)."""
-            while exact:
-                function = exact[0]
+            changed_exact = False
+            while ready:
+                function = ready[0]
                 finish_land(rows[function])
-                exact.pop(0)
-            ran = bring_current(LAND_STEPS)
+                changed_exact |= rows[function].stage == "landed"
+                ready.pop(0)
+            # Guarded C leaves ROM ownership with assembly and contributes no
+            # trusted C body to type inference. It needs no whole-program pass.
+            ran = bring_current(LAND_STEPS) if changed_exact else []
             if ran:
                 recheck()
                 # The steps' work left memos in the workers; drafts start in clean ones.
@@ -711,12 +762,18 @@ def run(
                     else:
                         outcome = _compared(rows[function], _result(done), emitter, stopper)
                         if outcome == "exact":
+                            rows[function].fuzzy = False
                             rows[function].stage = "landing"
-                            exact.append(function)
+                            ready.append(function)
                             drain()
                         elif outcome == "short" and function not in deferred:
                             climb(rows[function], rows[function].best_percent or 0.0)
-                    if function in deferred and not exact:
+                        elif rows[function].best_percent == 100 and rows[function].stage == "waiting for edit":
+                            row = rows[function]
+                            row.ladder.best = 100.0
+                            atomic_files.text(ladder.snapshot_path(Path(row.file)), Path(row.file).read_text())
+                            creative(row)
+                    if function in deferred and not ready:
                         submit(function, deferred[function])
                 elif kind == "edit":
                     path = Path(payload)
@@ -741,7 +798,7 @@ def run(
                     _key(payload, rows, start, emitter, next_words)
                 elif kind == "quit":
                     break
-                if exact and not inflight:
+                if ready and not inflight:
                     land_drained(resume=True)
         except KeyboardInterrupt:
             exit_code = 130
@@ -752,7 +809,7 @@ def run(
                 drain()
                 wait([future for future, _ in inflight.values()])
                 inflight.clear()
-                if exact:
+                if ready:
                     land_drained(resume=False)
             if board is not None:
                 board.close()
@@ -783,6 +840,7 @@ def run(
         carryovers=carry,
         exit=exit_code,
         next=following,
+        fuzzy=fuzzy_landed,
     )
     atomic_files.text(
         state_path(project),
@@ -790,6 +848,7 @@ def run(
     )
     data = {
         "landed": landed,
+        "fuzzy": fuzzy_landed,
         "held": held,
         "carryovers": carry,
         "regressed": regressed,

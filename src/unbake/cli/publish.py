@@ -1,4 +1,4 @@
-"""publish: land exact functions: ROM proof, write, and commit."""
+"""publish: land exact functions or retain admitted fuzzy C through the same writer."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unbake.cli.args import Context
 from unbake.cli.output import Result
 
 NAME = "publish"
-HELP = "Land exact FILEs: prove the ROMs, write src/ and commit."
+HELP = "Publish exact FILEs or retain fuzzy C with --fuzzy."
 DESCRIPTION = """\
 Land each file whose function is exact in every version. For each one: build the ROM of every
 holding version with the new C, compare it with the original, and only then write src/FUNC.c,
@@ -32,6 +32,12 @@ C version must remain exact. Compare still measures every holding version. The d
 before merging or trying another file, followed by the usual final Result. The receipt
 names the proved versions and input hashes for commit readback. Prefer one FILE per
 invocation when dispatching each immutable commit to a separate publisher.
+
+--fuzzy retains source that passes source/ABI checks and compiles in every holding
+version, without a minimum matching percentage. Its body is guarded by NON_MATCHING;
+the default ROM build keeps the original assembly rows and exact progress does not
+increase. A later fuzzy source must have a strictly higher measured, size-weighted
+score. An unavailable comparison stays explicit and never authorizes replacement.
 """
 PROJECT = "ready"
 
@@ -43,6 +49,9 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("files", type=Path, nargs="*", metavar="FILE")
     parser.add_argument("--events", action="store_true", help="Flush each commit receipt immediately as JSONL.")
+    parser.add_argument(
+        "--fuzzy", action="store_true", help="Retain admitted nonmatching C without changing default ROM bytes."
+    )
     parser.add_argument(
         "--require-version",
         action="append",
@@ -74,6 +83,7 @@ def run(context: Context) -> Result:
         originals=tuple(context.args.original),
         required_versions=(tuple(context.args.require_version) if context.args.require_version is not None else None),
         on_commit=committed if emitter is not None else None,
+        **({"fuzzy": True} if context.args.fuzzy else {}),
     )
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)

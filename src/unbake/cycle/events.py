@@ -32,6 +32,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ("fn.creative", "function best_percent methods trouble", ""),
         ("fn.exact", "function bytes sha256", ""),
         ("fn.landed", "function bytes versions seconds retried", ""),
+        ("fn.fuzzy_landed", "function bytes versions commit best_percent", ""),
         ("fn.land_failed", "function versions diagnostic returned_to_worker", "fault"),
         ("fn.committed", "function commit message", "proof"),
         ("cycle.committed", "commit message functions", ""),
@@ -47,7 +48,7 @@ SCHEMA: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         ),
         ("steps.held", "key reason", "fault"),
         ("fn.recheck", "function exact best_percent", "diagnostic fault"),
-        ("cycle.end", "landed landed_bytes held carryovers exit next", ""),
+        ("cycle.end", "landed landed_bytes held carryovers exit next", "fuzzy"),
     )
 }
 
@@ -111,7 +112,7 @@ def validate(event: str, fields: dict[str, Any]) -> None:
         "external_cores",
     }
     booleans = {"ok", "carryover", "exact", "retried", "returned_to_worker"}
-    lists = {"versions", "functions", "landed", "held", "carryovers", "findings"}
+    lists = {"versions", "functions", "landed", "held", "carryovers", "findings", "fuzzy"}
 
     def reject(name: str) -> None:
         raise SchemaError(f"cycle.event {event}.{name}: invalid type or range")

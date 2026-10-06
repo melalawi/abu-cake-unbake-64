@@ -143,7 +143,7 @@ class PublicationDependencyTests(ProjectCase):
             ),
             patch("unbake.layout.header_step.validate"),
         ):
-            versions, paths = land.prove(
+            proof = land.prove(
                 self.project,
                 self.host,
                 "alpha",
@@ -151,8 +151,8 @@ class PublicationDependencyTests(ProjectCase):
                 {"new.h": "typedef int New;\n"},
                 stage,
             )
-        self.assertEqual(versions, list(self.versions))
-        self.assertEqual(paths, {authored, self.project.include[-1] / "new.h"})
+        self.assertEqual(proof.versions, list(self.versions))
+        self.assertEqual(proof.dependencies, {authored, self.project.include[-1] / "new.h"})
 
     def test_disposable_and_symlink_dependencies_refuse_before_publication(self):
         external = self.root / "external.h"

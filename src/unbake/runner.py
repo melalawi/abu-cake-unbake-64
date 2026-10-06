@@ -11,7 +11,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -36,7 +36,14 @@ def _compiler_pins(project: Project, unit: str) -> str:
 
 @contextmanager
 def compile_unit(
-    project: Project, host: Host, file: Path, version: str, *, unit: str, non_matching: bool = False
+    project: Project,
+    host: Host,
+    file: Path,
+    version: str,
+    *,
+    unit: str,
+    non_matching: bool = False,
+    verify_input: Callable[[str], None] | None = None,
 ) -> Iterator[Path]:
     """Own one object lifetime; reuse the CAS by preprocessed text, commands and compiler."""
     file = Path(file).resolve()
@@ -53,6 +60,8 @@ def compile_unit(
         )
     except Held as error:
         raise Held("compile", f"compile.{Path(unit).name}: {source}: {error.reason}") from error
+    if verify_input is not None:
+        verify_input(preprocessed)
     absolute_cc = str(project.compiler_for(unit).cc)
     compile_argv = [absolute_cc, *commands.compile[1:]]
     content_key = cache.key(
@@ -252,20 +261,21 @@ def link_function(
         return link(project, host, placed, version, row, work, source, score=True), problems
 
 
-def build_unit(project: Project, host: Host, unit: str, version: str) -> bytes:
+def build_unit(project: Project, host: Host, unit: str, version: str, *, source: Path | None = None) -> bytes:
     """Strict mode (land): compile src/UNIT.c, prove every constant, link; refuse on any unproved constant."""
     rows = [row for row in split.functions(project, version) if Path(row.path).name == unit and row.kind == "c"]
     if len(rows) != 1:
         raise Held("build", f"build.row: {unit}: expected one c row in VERSION {version}, found {len(rows)}")
     row = rows[0]
+    file = project.src / f"{unit}.c" if source is None else source
     with (
-        compile_unit(project, host, project.src / f"{unit}.c", version, unit=unit) as obj,
+        compile_unit(project, host, file, version, unit=unit) as obj,
         tempfile.TemporaryDirectory(prefix="build-") as temporary,
     ):
         work = Path(temporary)
         placed = work / "placed.o"
         place(project, host, obj, version, row, placed, score=False)
-        data = link(project, host, placed, version, row, work, project.src / f"{unit}.c")
+        data = link(project, host, placed, version, row, work, file)
     if len(data) != row.end - row.start:
         raise Held("build", f"build.size: {unit} {version}: 0x{len(data):X} bytes for a 0x{row.end - row.start:X} row")
     return data
@@ -288,11 +298,13 @@ def preprocess(project: Project, host: Host, file: Path, version: str, *, unit: 
     )
 
 
-def dependencies(project: Project, host: Host, file: Path, version: str, *, unit: str) -> set[Path]:
+def dependencies(
+    project: Project, host: Host, file: Path, version: str, *, unit: str, non_matching: bool = False
+) -> set[Path]:
     """Native preprocessing prerequisites with the same effective unit/version flags."""
     from unbake.compilers.families import family_for
 
-    argv = drivers.preprocess_command(project, str(host.cpp), version, unit, file, non_matching=False)
+    argv = drivers.preprocess_command(project, str(host.cpp), version, unit, file, non_matching=non_matching)
     argv = [word for word in argv if word not in ("-E", "-P")]
     argv.insert(len(argv) - 1, "-M")
     output = process.run_tool(
