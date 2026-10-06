@@ -23,10 +23,10 @@ from typing import Any, TextIO
 from unbake import atomic as atomic_files
 from unbake import tui
 from unbake.cli.output import Result
-from unbake.process import fault as cause_fault
 from unbake.config import Held, Host, Project
 from unbake.cycle import ladder, rank
 from unbake.cycle.events import Emitter
+from unbake.process import fault as cause_fault
 
 STAGES = (
     "queued",
@@ -75,7 +75,13 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
     try:
         made = draft.draft(config.load(root), host, function, replace=replace)
     except Held as error:
-        return {"ok": False, "key": error.key, "diagnostic": error.reason, "fault": cause_fault(error), "seconds": time.monotonic() - started}
+        return {
+            "ok": False,
+            "key": error.key,
+            "diagnostic": error.reason,
+            "fault": cause_fault(error),
+            "seconds": time.monotonic() - started,
+        }
     return {"ok": True, "file": str(made.file), "seconds": time.monotonic() - started}
 
 
@@ -98,12 +104,23 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     try:
         measured = compare.compare(config.load(root), host, Path(file))
     except Held as error:
-        return {"ok": False, "key": error.key, "diagnostic": error.reason, "fault": cause_fault(error), "seconds": time.monotonic() - started}
+        return {
+            "ok": False,
+            "key": error.key,
+            "diagnostic": error.reason,
+            "fault": cause_fault(error),
+            "seconds": time.monotonic() - started,
+        }
     return {
         "ok": True,
         "sha256": measured.source_sha256,
         "per_version": {
-            v: {"percent": round(c.match_percent, 6), "exact": c.exact, "first": first_difference(c.lines)}
+            v: {
+                "percent": round(c.match_percent, 6),
+                "exact": c.exact,
+                "first": first_difference(c.lines),
+                **({"fault": measured.faults[v]} if v in measured.faults else {}),
+            }
             for v, c in measured.compares.items()
         },
         "best_percent": measured.best_percent,
@@ -123,7 +140,13 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
     try:
         found = search.search(config.load(root), host, Path(file), method, host.cycle_search_seconds)
     except Held as error:
-        return {"ok": False, "key": error.key, "diagnostic": error.reason, "fault": cause_fault(error), "seconds": time.monotonic() - started}
+        return {
+            "ok": False,
+            "key": error.key,
+            "diagnostic": error.reason,
+            "fault": cause_fault(error),
+            "seconds": time.monotonic() - started,
+        }
     return {
         "ok": True,
         "best_file": str(found.best_file),
@@ -161,7 +184,7 @@ def _recheck_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
                     "diagnostic": f"rule broken: {checks.plain(broken[0])}",
                 }
     except Held as error:
-        return {"exact": False, "best_percent": None, "diagnostic": error.reason}
+        return {"exact": False, "best_percent": None, "diagnostic": error.reason, "fault": cause_fault(error)}
     return {"exact": True, "best_percent": 100.0, "diagnostic": ""}
 
 
@@ -425,6 +448,7 @@ def run(
                 exact=bool(result["exact"]),
                 best_percent=result["best_percent"],
                 **({"diagnostic": result["diagnostic"]} if result["diagnostic"] else {}),
+                **({"fault": result["fault"]} if "fault" in result else {}),
             )
             if not result["exact"]:
                 regressed.append({"function": function, "diagnostic": result["diagnostic"]})
@@ -502,6 +526,7 @@ def run(
                     function=row.function,
                     versions=list(row.versions),
                     diagnostic=error.reason,
+                    fault=cause_fault(error),
                     returned_to_worker=again,
                 )
                 row.diagnostic = error.reason
@@ -578,6 +603,7 @@ def run(
                 ok=result["ok"],
                 seconds=round(result["seconds"], 3),
                 **({} if result["ok"] else {"diagnostic": result["diagnostic"]}),
+                **({"fault": result["fault"]} if "fault" in result else {}),
                 **({"diagnostic": SKIPPED} if result["ok"] and not result["mutations"] else {}),
                 **({"mutations": result["mutations"], "words": result["words"]} if result["ok"] else {}),
             )
@@ -590,6 +616,7 @@ def run(
                     function=row.function,
                     key=result["key"],
                     reason=row.diagnostic,
+                    **({"fault": result["fault"]} if "fault" in result else {}),
                     next=next_words("search-variants", row.file, "--method", method),
                 )
                 return
@@ -859,7 +886,7 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
         tries=row.tries,
         seconds=round(result["seconds"], 3),
         diagnostic=result["diagnostic"],
-            **({"fault": result["fault"]} if "fault" in result else {}),
+        **({"fault": result["fault"]} if "fault" in result else {}),
     )
     stopper.note_activity()
     if result["exact"]:
@@ -874,8 +901,20 @@ def _result(done: Future[dict[str, Any]]) -> dict[str, Any]:
         return {"ok": False, "key": "cycle.cancelled", "diagnostic": "superseded", "seconds": 0.0}
     error = done.exception()
     if error is not None:
-        key = "worker.memory" if isinstance(error, MemoryError) else "worker.crash"
-        return {"ok": False, "key": key, "diagnostic": f"{type(error).__name__}: {error}", "seconds": 0.0}
+        key = (
+            error.key
+            if isinstance(error, Held)
+            else "worker.memory"
+            if isinstance(error, MemoryError)
+            else "worker.crash"
+        )
+        return {
+            "ok": False,
+            "key": key,
+            "diagnostic": f"{type(error).__name__}: {error}",
+            "seconds": 0.0,
+            "fault": cause_fault(error),
+        }
     return done.result()
 
 

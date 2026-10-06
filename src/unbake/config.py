@@ -33,7 +33,7 @@ class Held(Exception):
         reason: str,
         *,
         next_action: str | None = None,
-        failures: tuple[tuple[str, str], ...] = (),
+        failures: tuple[dict[str, Any], ...] = (),
         fault: dict[str, Any] | None = None,
     ) -> None:
         self.phase = phase

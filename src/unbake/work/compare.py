@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from unbake import process
 from unbake.config import Held, Host, Project, draft_view
 from unbake.layout import split
 from unbake.work import attempts
@@ -26,6 +27,7 @@ class Compared:
     compiler: str = ""
     # The preconditions in plain words (the raw messages stay in preconditions for the JSON document).
     rule_lines: list[str] = field(default_factory=list)
+    faults: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def identical_everywhere(self) -> bool:
@@ -48,7 +50,10 @@ class Compared:
             "function": self.function,
             "file": str(self.file),
             "sha256": self.source_sha256,
-            "versions": {version: result.document() for version, result in self.compares.items()},
+            "versions": {
+                version: result.document() | ({"fault": self.faults[version]} if version in self.faults else {})
+                for version, result in self.compares.items()
+            },
             "best_percent": round(self.best_percent, 6),
             "exact": self.exact,
             "preconditions": list(self.preconditions),
@@ -110,12 +115,14 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
     preconditions = [checks.message(finding) for finding in broken]
     rule_lines = [checks.plain(finding) for finding in broken]
     results: dict[str, Compare] = {}
+    faults: dict[str, dict[str, Any]] = {}
     for version in selected:
         row = row_of(project, function, version)
         target = split.words(project, row)
         try:
             obj = runner.compile_unit(view, host, file, version, unit=function)
         except Held as error:
+            faults[version] = process.fault(error)
             results[version] = Compare(
                 version,
                 0,
@@ -134,7 +141,9 @@ def measure(project: Project, host: Host, file: Path, *, versions: tuple[str, ..
         results[version] = result
     digest = hashlib.sha256(content).hexdigest()
     compiler = view.compiler_reference(function)
-    return Compared(function, file, digest, results, preconditions, time.monotonic() - started, compiler, rule_lines)
+    return Compared(
+        function, file, digest, results, preconditions, time.monotonic() - started, compiler, rule_lines, faults
+    )
 
 
 def compare(project: Project, host: Host, file: Path) -> Compared:
@@ -157,7 +166,7 @@ def compare(project: Project, host: Host, file: Path) -> Compared:
             measured.function,
             measured.source_sha256,
             size,
-            {version: result.document() for version, result in measured.compares.items()},
+            measured.document()["versions"],
             measured.best_percent,
             measured.exact,
             measured.seconds,

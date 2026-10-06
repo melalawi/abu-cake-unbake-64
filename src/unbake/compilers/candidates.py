@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from unbake import process
 from unbake.compilers import choice
 from unbake.compilers.ranking import measured_candidate_rank
 from unbake.config import Held, Host, Project
@@ -28,10 +29,12 @@ def resolve(project: Project, host: Host, file: Path, configured: object) -> tup
         return Choice(own, "configured compiler is exact", (own,)), configured
     results: dict[str, Compared] = {}
     eliminated: dict[str, str] = {}
+    faults = {}
     if isinstance(configured, Held) and configured.key == "link.undefined":
         raise configured  # a symbol no version provides fails the same under every compiler
     if isinstance(configured, Held):
         eliminated[own] = configured.reason.splitlines()[0]
+        faults[own] = process.fault(configured)
     elif isinstance(configured, Compared):
         results[own] = configured
     for ident in choice.alternatives(project, function):
@@ -39,9 +42,14 @@ def resolve(project: Project, host: Host, file: Path, configured: object) -> tup
             results[ident] = measure(choice.selected(project, function, ident), host, file)
         except Held as error:
             eliminated[ident] = error.reason.splitlines()[0]
+            faults[ident] = process.fault(error)
     if not results:
         detail = "; ".join(f"{ident}: {reason}" for ident, reason in eliminated.items())
-        raise Held("compare", f"compiler.no_candidate: {file}: every configured compiler failed: {detail}")
+        raise Held(
+            "compare",
+            f"compiler.no_candidate: {file}: every configured compiler failed: {detail}",
+            fault={"compilers": faults},
+        )
     exact = tuple(ident for ident, result in results.items() if result.identical_everywhere)
     if exact:
         winner, rule = choice.build_choice(project, function, list(exact))

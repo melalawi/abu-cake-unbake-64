@@ -51,6 +51,6 @@ def run(context: Context) -> Result:
     following = context.cmd("next")
     result = Result.ok(NAME, done.document(), done.lines(), following)
     if done.failed:
-        key = next(iter(done.failed.values())).split(":", 1)[0]
+        key = next(iter(done.failed.values()))["key"]
         return Result(NAME, "held", key, done.document(), following, tuple(done.lines()))
     return result

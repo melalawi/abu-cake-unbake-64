@@ -23,7 +23,7 @@ from typing import Any
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import buildfiles, runner, steps
+from unbake import buildfiles, process, runner, steps
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.work import attempts, compare
@@ -33,14 +33,14 @@ from unbake.work import attempts, compare
 class Landed:
     landed: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
-    failed: dict[str, str] = field(default_factory=dict)
+    failed: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def document(self) -> dict[str, Any]:
         return {"landed": self.landed, "commits": self.commits, "failed": self.failed}
 
     def lines(self) -> list[str]:
         out = [f"landed {name} ({commit[:12]})" for name, commit in zip(self.landed, self.commits, strict=True)]
-        out += [f"not landed {name}: {reason}" for name, reason in self.failed.items()]
+        out += [f"not landed {name}: {failure['reason']}" for name, failure in self.failed.items()]
         return out
 
 
@@ -380,7 +380,7 @@ def publish(project: Project, host: Host, files: list[Path], *, originals: tuple
         try:
             commit = action(current)
         except Held as error:
-            result.failed[name] = error.reason
+            result.failed[name] = {"key": error.key, "reason": error.reason, "fault": process.fault(error)}
             continue
         result.landed.append(name)
         result.commits.append(commit)
