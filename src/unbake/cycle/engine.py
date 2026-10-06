@@ -23,6 +23,7 @@ from typing import Any, TextIO
 from unbake import atomic as atomic_files
 from unbake import tui
 from unbake.cli.output import Result
+from unbake.process import fault as cause_fault
 from unbake.config import Held, Host, Project
 from unbake.cycle import ladder, rank
 from unbake.cycle.events import Emitter
@@ -74,7 +75,7 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
     try:
         made = draft.draft(config.load(root), host, function, replace=replace)
     except Held as error:
-        return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
+        return {"ok": False, "key": error.key, "diagnostic": error.reason, "fault": cause_fault(error), "seconds": time.monotonic() - started}
     return {"ok": True, "file": str(made.file), "seconds": time.monotonic() - started}
 
 
@@ -97,7 +98,7 @@ def _compare_task(spec: tuple[Path, Host, str]) -> dict[str, Any]:
     try:
         measured = compare.compare(config.load(root), host, Path(file))
     except Held as error:
-        return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
+        return {"ok": False, "key": error.key, "diagnostic": error.reason, "fault": cause_fault(error), "seconds": time.monotonic() - started}
     return {
         "ok": True,
         "sha256": measured.source_sha256,
@@ -122,7 +123,7 @@ def _search_task(spec: tuple[Path, Host, str, str]) -> dict[str, Any]:
     try:
         found = search.search(config.load(root), host, Path(file), method, host.cycle_search_seconds)
     except Held as error:
-        return {"ok": False, "key": error.key, "diagnostic": error.reason, "seconds": time.monotonic() - started}
+        return {"ok": False, "key": error.key, "diagnostic": error.reason, "fault": cause_fault(error), "seconds": time.monotonic() - started}
     return {
         "ok": True,
         "best_file": str(found.best_file),
@@ -436,7 +437,7 @@ def run(
             return [done.step for done in steps.ensure(project, host, names, report=report) if done.ran]
         except Held as error:
             steps_error = error.reason
-            emitter.emit("steps.held", key=error.key, reason=error.reason)
+            emitter.emit("steps.held", key=error.key, reason=error.reason, fault=cause_fault(error))
             return []
 
     watching.start()
@@ -803,6 +804,7 @@ def _drafted(
             file=str(written) if written.is_file() else "",
             seconds=round(result["seconds"], 3),
             diagnostic=result["diagnostic"],
+            **({"fault": result["fault"]} if "fault" in result else {}),
         )
         if written.is_file():
             # An unproven draft was written: compare it, then wait for edits like any other.
@@ -816,6 +818,7 @@ def _drafted(
             function=function,
             key=result["key"],
             reason=result["diagnostic"],
+            **({"fault": result["fault"]} if "fault" in result else {}),
             next=next_words("draft", function),
         )
         return
@@ -840,6 +843,7 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
             tries=row.tries,
             seconds=round(result["seconds"], 3),
             diagnostic=result["diagnostic"],
+            **({"fault": result["fault"]} if "fault" in result else {}),
         )
         return ""
     if result["sha256"] != row.sha256:
@@ -855,6 +859,7 @@ def _compared(row: Row, result: dict[str, Any], emitter: Emitter, stopper: Stop)
         tries=row.tries,
         seconds=round(result["seconds"], 3),
         diagnostic=result["diagnostic"],
+            **({"fault": result["fault"]} if "fault" in result else {}),
     )
     stopper.note_activity()
     if result["exact"]:

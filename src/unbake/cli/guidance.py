@@ -9,6 +9,10 @@ from unbake.config import Held
 def after(context: Context, error: Held) -> str:
     """The next action after a refusal that did not name its own."""
     key = error.key
+    if "C identifier" in error.reason:
+        return "stop: choose a valid C function identifier from unbake next"
+    if error.fault and error.fault.get("category") in ("native-os", "native-signal", "native-exit"):
+        return "stop: correct the native tool failure captured with this result before retrying"
     if error.phase == "usage":
         return context.cmd(context.command, "--help")
     if key.startswith("unbake.toml"):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import math
 import resource
 import threading
 import time
@@ -73,6 +74,13 @@ def window() -> None:
 
 def charge(name: str, seconds: float, rss: int = 0, counts: dict[str, tuple[int, int]] | None = None) -> None:
     """One pool task's CPU, peak resident bytes and the counts it added (the worker's, merged into this ledger)."""
+    if type(name) is not str or not name or type(seconds) not in (int, float) or seconds < 0 or not math.isfinite(seconds):
+        raise ValueError("effort.charge: required named finite nonnegative CPU seconds")
+    if type(rss) is not int or rss < 0:
+        raise ValueError("effort.charge: required nonnegative integer measured RSS")
+    for kind, (done, total) in (counts or {}).items():
+        if type(kind) is not str or type(done) is not int or type(total) is not int or not 0 <= done <= total:
+            raise ValueError(f"effort.charge.{kind}: invalid counts")
     with _lock:
         row = _ledger.setdefault(name, [0.0, 0])
         row[0] += seconds
@@ -91,6 +99,8 @@ def counted() -> dict[str, tuple[int, int]]:
 
 
 def count(name: str, done: int, total: int) -> None:
+    if type(name) is not str or not name or type(done) is not int or type(total) is not int or not 0 <= done <= total:
+        raise ValueError(f"effort.count.{name}: required nonnegative integer done <= total")
     with _lock:
         row = _counts.setdefault(name, [0, 0])
         row[0] += done
@@ -98,8 +108,8 @@ def count(name: str, done: int, total: int) -> None:
 
 
 def name_of(fn: object) -> str:
-    module = getattr(fn, "__module__", "") or ""
-    return f"{module.removeprefix('unbake.')}.{getattr(fn, '__qualname__', repr(fn))}"
+    module = getattr(fn, "__module__", type(fn).__module__) or ""
+    return f"{module.removeprefix('unbake.')}.{getattr(fn, '__qualname__', type(fn).__qualname__)}"
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,7 @@ from unbake.cli import next as next_verb
 from unbake.cli.args import Context, HelpRequested, Parser
 from unbake.cli.output import Result, emit
 from unbake.config import Held
+from unbake import process
 
 VERBS: tuple[ModuleType, ...] = (
     init,
@@ -107,7 +108,8 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
         data = {"failures": [{"key": k, "reason": r} for k, r in error.failures]} if error.failures else None
         return Result.held(verb.NAME, error, error.next_action or guidance.after(context, error), data)
     except Exception as error:  # nothing unexpected reaches the terminal raw: it is a refusal with a key and a Next
-        unexpected = Held(verb.NAME, f"{verb.NAME}.unexpected: {_where(error)}")
+        from unbake.process import fault
+        unexpected = Held(verb.NAME, f"{verb.NAME}.unexpected: {_where(error)}", fault=fault(error))
         return Result.held(verb.NAME, unexpected, guidance.after(context, unexpected))
     except KeyboardInterrupt:
         return Result.held(verb.NAME, Held(verb.NAME, "interrupted: stopped by the user"), None)
@@ -131,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = _run(argv, stdout)
     except Exception as error:
-        result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}"), "unbake next")
+        result = Result.held("unbake", Held("unbake", f"unbake.unexpected: {_where(error)}", fault=process.fault(error)), "unbake next")
     finally:
         tui.stop()
     # Every result says what the command cost: wall, CPU of this process, its tools and its pool work by function.
