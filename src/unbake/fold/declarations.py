@@ -220,12 +220,38 @@ def fold_source(
     prove_headers: bool = True,
     source_path: Path | None = None,
     exact_entry: Attempt | None = None,
+    owning_source: str | None = None,
+    owning_evidence: dict[str, object] | None = None,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
     from unbake.fold import callee_contracts
     from unbake.typemap import declaration_evidence, namespace
 
     authored = text
+    from unbake.layout import redeclarations
+
+    if owning_evidence is None:
+        self_prototype.retain_known(headers.texts, text, function, redeclarations.aliases(list(headers.texts.values())))
+    owning_edits: list[Edit] = []
+    if owning_evidence is not None:
+        from unbake.layout import index as layout_index
+        from unbake.layout import redeclarations
+
+        manifest = set(layout_index.load(project)["headers"])
+        generated = frozenset(
+            path
+            for path in headers.texts
+            if any(
+                path.is_relative_to(root)
+                and (path.relative_to(root).as_posix() in manifest or layout_index.marked(path, root))
+                for root in project.include
+            )
+        )
+        aliases = redeclarations.aliases(list(headers.texts.values()))
+        owning_edits = self_prototype.owned(
+            headers.texts, generated, text, function, aliases, versions, exact_entry, owning_source, owning_evidence
+        )
+        headers = Headers({**headers.texts, **{edit.path: edit.after for edit in owning_edits}}, root=headers.root)
     contracts = namespace.project_declarations(project, headers.texts, texts=(text,))
     identity_edits = [
         Edit(path, before, after, versions)
@@ -297,9 +323,9 @@ def fold_source(
         # Blank moved typedefs without changing the aggregate edit offsets.
         for start, end in sorted(moved_spans, reverse=True):
             text = text[:start] + "".join("\n" if char == "\n" else " " for char in text[start:end]) + text[end:]
-    if contract_edits or identity_edits:
+    if contract_edits or identity_edits or owning_edits:
         by_path = {edit.path: edit for edit in edits}
-        for edit in [*contract_edits, *identity_edits]:
+        for edit in [*contract_edits, *identity_edits, *owning_edits]:
             current = by_path.get(edit.path)
             by_path[edit.path] = replace(current, before=edit.before) if current is not None else edit
         edits = list(by_path.values())
@@ -334,7 +360,7 @@ def fold_source(
         if any(
             path.is_relative_to(root)
             and (
-                path.relative_to(root).as_posix() in manifest
+                (path.relative_to(root).as_posix() in manifest or layout_index.marked(path, root))
                 or (
                     len(path.relative_to(root).parts) > 1
                     and re.match(
@@ -410,6 +436,8 @@ def folded_edits(
     *,
     prove_headers: bool = True,
     exact_entry: Attempt | None = None,
+    owning_source: str | None = None,
+    owning_evidence: dict[str, object] | None = None,
 ) -> list[Edit]:
     """The folded source, the header edits and the split rows the fold absorbed (land converts F's own row)."""
     from unbake.fold import provider_reuse
@@ -419,7 +447,16 @@ def folded_edits(
     reused = provider_reuse.plan(project, contents, versions, cache=catalogs)
     context = Headers({**contents, **{edit.path: edit.after for edit in reused}}, root=project.root)
     folded = fold_source(
-        project, policy, context, function, text, versions, prove_headers=False, exact_entry=exact_entry
+        project,
+        policy,
+        context,
+        function,
+        text,
+        versions,
+        prove_headers=False,
+        exact_entry=exact_entry,
+        owning_source=owning_source,
+        owning_evidence=owning_evidence,
     )
     # A later fold edit can extend a reconciled private header. Publication must
     # still compare against its original bytes, and write each provider once.

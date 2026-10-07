@@ -38,14 +38,23 @@ class LandTests(ProjectCase):
         prove = (
             {"side_effect": proved} if isinstance(proved, Exception) else {"return_value": land.Proof(proved, set())}
         )
+        record_step = land.steps.record
+
+        def record_proven_headers(project, step, *args, **kwargs):
+            if step == "headers":
+                return record_step(project, step, *args, **kwargs)
+            return None
+
         with (
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", SOURCE, headers or {}, ())),
             patch("unbake.fold.apply.private_headers", return_value={}),
             patch.object(land, "prove", **prove),
             patch.object(land, "_git", side_effect=git),
+            patch("unbake.layout.header_loss.check"),
+            patch.object(land, "dangling_includes", return_value=[]),
             patch.object(land.buildfiles, "write", return_value=[]),
-            patch.object(land.steps, "record"),
+            patch.object(land.steps, "record", side_effect=record_proven_headers),
             patch("unbake.report.progress.write", return_value=[]),
         ):
             return land.land(self.project, self.host, self.file)
@@ -167,4 +176,4 @@ class GeneratedEditTests(LandTests):
                 )
             altered.assert_called_with(self.project, "headers")
         with patch.object(land.steps, "altered", return_value=[]):
-            self.assertEqual(self.run_land([]), "c0ffee")
+            self.assertEqual(self.run_land(list(self.versions)), "c0ffee")

@@ -1,0 +1,28 @@
+{
+  "holders": [
+    "de",
+    "eu",
+    "eu-x",
+    "us",
+    "us-rev1"
+  ],
+  "BE0C0_old_header": "/* unbake published declaration: published_9a7290e2222f416be16cf4db */\nextern void func_802BE0C0_de(void);\n",
+  "5B920_old_header": "/* unbake published declaration: published_9258421ed1c94a28ea9bff86 */\nextern void func_8025B920_de(void *arg0, int arg1, int arg2);\n",
+  "source_sha256": {
+    "func_802BE0C0_de.c": "7df1a8865a83932b65c3ea5a9051dbdf1f8a6ad063763ea3f6690507a29bc908",
+    "func_802BD974_de.c": "8c9d7b5c9ab9b90c90ca28c72641557ad63c9d676c02d9d011108cff38e4c6ef",
+    "family-caller.c": "f5e4e417070833299a73dc19fd31bb768930ea6dfdffcceb219e4ce1cc291e26",
+    "func_8025B920_de.c": "70d5da9894987d5b8120521e12a12a87fc4409e10304e2593c35ff956e3ff887",
+    "old-owner.c": "13fa11d2769568015104bf21526fde9f23414f76424820f2129a542935334463"
+  },
+  "retained_native_proofs": [
+    "BE0C0/NATIVE-pair.json",
+    "NATIVE-ready8-5B920-consumer-pair.json"
+  ],
+  "native_bytes": {
+    "BE0C0": 8,
+    "formatter": 1132,
+    "5B920": 300
+  },
+  "sdk_context_origin": "Exact _Pft, size_t and va_list declarations from real Family CPP output; family-caller.c preserves complete selected body, including all15 public SDK va_arg expansions. Host syntax checks are not MIPS ABI proof."
+}

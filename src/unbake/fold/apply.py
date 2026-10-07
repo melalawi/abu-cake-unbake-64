@@ -113,6 +113,8 @@ def fold(
     *,
     versions: tuple[str, ...] | None = None,
     exact_entry: Attempt | None = None,
+    owning_source: str | None = None,
+    owning_evidence: dict[str, object] | None = None,
 ) -> Folded:
     """Lower GBI, fold shared types and plan the publication edits, without writing project files."""
     drafted = view(project, function)
@@ -125,7 +127,15 @@ def fold(
         source = gbi.install_audio(drafted) + source
     with notes.collect() as learned:
         edits = declarations.folded_edits(
-            drafted, host, function, source, versions, prove_headers=False, exact_entry=exact_entry
+            drafted,
+            host,
+            function,
+            source,
+            versions,
+            prove_headers=False,
+            exact_entry=exact_entry,
+            owning_source=owning_source,
+            owning_evidence=owning_evidence,
         )
     headers: dict[str, str] = {}
     split_edits = []
@@ -163,6 +173,51 @@ def fold(
 
     effective = {**private_headers(project, function), **headers}
     source_edits = shared_consumers.plan(project, host, function, effective)
+    if owning_evidence is not None:
+        from unbake.layout import redeclarations
+
+        # Include-only reachability cannot find a source-local extern or a
+        # function-pointer use. Bind every current spelled consumer to the
+        # proposed canonical provider, then use the existing all-holder native
+        # consumer proof. Incompatible authored views are deliberately kept;
+        # their compiler conflict must refuse the entire replacement.
+        providers = [name for name, body in sorted(headers.items()) if function in redeclarations.catalog(body)]
+        if not providers:
+            raise Held(
+                cause_named(
+                    "land.own_contract",
+                    f"land.own_contract: {function}: replacement has no self-contained provider",
+                    owner="fold",
+                    stage="land",
+                )
+            )
+        include = f'#include "{providers[0]}"\n'
+        pending = {edit.path: edit for edit in source_edits}
+        for path in sorted(project.src.glob("*.c")):
+            if path.stem == function:
+                continue
+            before = path.read_text()
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", before, flags=re.S)
+            code = re.sub(r"^\s*#\s*include[^\n]*", "", code, flags=re.M)
+            occurrences = list(re.finditer(r"\b" + re.escape(function) + r"\b", code))
+            if not occurrences:
+                continue
+            if any(not re.match(r"\s*\(", code[match.end() :]) for match in occurrences):
+                raise Held(
+                    cause_named(
+                        "land.own_contract",
+                        f"land.own_contract: {function}: indirect consumer {path} requires explicit proof",
+                        owner="fold",
+                        stage="land",
+                    )
+                )
+            current = pending.get(path)
+            after = before if current is None else current.after
+            if include not in after:
+                after = include + after
+            # Even an existing include must retain a source proof obligation.
+            pending[path] = Edit(path, before, after, tuple(split.holding_versions(project, path.stem)))
+        source_edits = tuple(pending.values())
     from unbake.layout.header_context import Headers
 
     installed = Headers.contents(project)

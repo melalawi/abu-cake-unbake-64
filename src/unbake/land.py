@@ -869,6 +869,94 @@ def _receipt(
     }
 
 
+def _own_contract_source(project: Project, function: str) -> str | None:
+    """Pin actual old C ownership; a marked caller contract is not an old definition."""
+    holding = split.holding_versions(project, function)
+    path = project.src / f"{function}.c"
+    if not holding:
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: current native owner is missing",
+                owner="land",
+                stage="land",
+            )
+        )
+    if path.is_file():
+        if any(compare.row_of(project, function, v).kind != "c" for v in holding):
+            raise Held(
+                cause_named(
+                    "land.own_contract",
+                    f"land.own_contract: {function}: an existing C owner must be exact in every holder",
+                    owner="land",
+                    stage="land",
+                )
+            )
+        source = path.read_text()
+        if source != _git(project, "show", f"HEAD:src/{function}.c"):
+            raise Held(
+                cause_named(
+                    "land.own_contract",
+                    f"land.own_contract: {function}: owning source differs from its committed identity",
+                    owner="land",
+                    stage="land",
+                )
+            )
+        return source
+    if any(compare.row_of(project, function, v).kind != "asm" for v in holding):
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: published owning source is missing",
+                owner="land",
+                stage="land",
+            )
+        )
+    return None
+
+
+def _compare_own_contract(project: Project, host: Host, file: Path) -> None:
+    """Measure an explicit proposal in a private header view, never installed authority.
+
+    No exact receipt is fabricated: compare creates the real complete attempt.
+    Land later repeats the strict planner and target/current-consumer proofs in
+    the existing transaction before it can install the proposed contract.
+    """
+    from unbake.fold import self_prototype, source_views
+    from unbake.layout import index, redeclarations
+    from unbake.layout.header_context import Headers
+
+    function = compare.function_of(file)
+    previous = _own_contract_source(project, function)
+    view = compare.view_for(project, file, function)
+    headers = Headers.read(view)
+    manifest = set(index.load(project)["headers"])
+    generated = frozenset(
+        path
+        for path in headers.texts
+        if any(
+            path.is_relative_to(root) and (path.relative_to(root).as_posix() in manifest or index.marked(path, root))
+            for root in view.include
+        )
+    )
+    edits = self_prototype.owned(
+        headers.texts,
+        generated,
+        file.read_text(),
+        function,
+        redeclarations.aliases(list(headers.texts.values())),
+        split.holding_versions(project, function),
+        None,
+        previous,
+        self_prototype.measure_owned(project, function),
+        provisional=True,
+    )
+    proposed = Headers({**headers.texts, **{edit.path: edit.after for edit in edits}}, root=headers.root)
+    with scratch.temporary(host, project, "land", prefix="own-contract-compare-") as temporary:
+        roots = source_views.header_includes(view, proposed, Path(temporary))
+        compare.compare(replace(view, work_include=roots), host, file)
+
+
 @publication_transaction.transactional
 def land(
     project: Project,
@@ -878,6 +966,7 @@ def land(
     required_versions: tuple[str, ...] | None = None,
     on_commit: Callable[[dict[str, Any]], None] | None = None,
     fuzzy: bool = False,
+    replace_own_contract: bool = False,
 ) -> str:
     """Land one draft; nothing is written until all required, already published and selected freebie versions prove."""
     from unbake.decomp import checks
@@ -890,6 +979,7 @@ def land(
     function = compare.function_of(file)
     previous_fuzzy = attempts.ledger(project).fuzzy(function)
     text = file.read_text()
+    proposed_source_sha256 = hashlib.sha256(text.encode()).hexdigest()
     if previous_fuzzy is not None and file.resolve() == (project.src / f"{function}.c").resolve():
         text = attempts.unguarded(text)
     if fuzzy:
@@ -920,6 +1010,23 @@ def land(
         attempt = matching[-1] if matching else None
     else:
         attempt = exact_attempt(project, function, file, required_versions=required_versions)
+    owning_source = None
+    owning_evidence = None
+    owning_path = project.src / f"{function}.c"
+    if replace_own_contract:
+        if fuzzy or required_versions is not None:
+            raise Held(
+                cause_named(
+                    "land.own_contract",
+                    "land.own_contract: replacement requires exact proof in every holding version",
+                    owner="land",
+                    stage="land",
+                )
+            )
+        owning_source = _own_contract_source(project, function)
+        from unbake.fold.self_prototype import measure_owned
+
+        owning_evidence = measure_owned(project, function)
     message = f"Fuzzy {function}" if fuzzy else subject(project, function)
     selected = (
         None
@@ -933,7 +1040,26 @@ def land(
     # The writer admits new measured split rows before fold's strict ownership read.
     # Admission checks above still refuse invalid requests without changing the map.
     layout_map.ensure(project)
-    folded = fold_apply.fold(project, host, function, text, versions=selected, exact_entry=None if fuzzy else attempt)
+    owning_options: dict[str, Any] = (
+        {"owning_source": owning_source, "owning_evidence": owning_evidence} if replace_own_contract else {}
+    )
+    folded = fold_apply.fold(
+        project,
+        host,
+        function,
+        text,
+        versions=selected,
+        exact_entry=None if fuzzy else attempt,
+        **owning_options,
+    )
+    owning_providers = (
+        {
+            name: (project.include[-1] / name).read_bytes() if (project.include[-1] / name).is_file() else None
+            for name in folded.headers
+        }
+        if replace_own_contract
+        else {}
+    )
     result = checks.findings(project, (file,), Cache(project.cache), proposed={file: folded.source})
     broken = [row.finding for row in (result.rows if fuzzy else result.unmarked)]
     if broken:
@@ -1063,6 +1189,36 @@ def land(
         atomic_files.write(path, content)
 
     try:
+        if owning_source is not None and (not owning_path.is_file() or owning_path.read_text() != owning_source):
+            raise Held(
+                cause_named(
+                    "land.own_contract",
+                    f"land.own_contract: {function}: owning source changed since proof",
+                    owner="land",
+                    stage="land",
+                )
+            )
+        if replace_own_contract and owning_source is None and owning_path.exists():
+            raise Held(
+                cause_named(
+                    "land.own_contract",
+                    f"land.own_contract: {function}: a new owning source appeared since proof",
+                    owner="land",
+                    stage="land",
+                )
+            )
+        for name, provider_before in owning_providers.items():
+            path = project.include[-1] / name
+            provider_current = path.read_bytes() if path.is_file() else None
+            if provider_current != provider_before:
+                raise Held(
+                    cause_named(
+                        "land.own_contract",
+                        f"land.own_contract: {function}: provider {name} changed since proof",
+                        owner="land",
+                        stage="land",
+                    )
+                )
         for edit in folded.source_edits:
             if not edit.path.is_file() or edit.path.read_text() != edit.before:
                 raise Held(
@@ -1136,6 +1292,31 @@ def land(
                 "proof": {
                     **_receipt(updated, host, function, updated.src / f"{function}.c", versions, dependencies),
                     **({"compared_sha256": attempt.sha256} if attempt is not None else {}),
+                    **(
+                        {
+                            "own_contract": {
+                                "previous_source_sha256": hashlib.sha256(owning_source.encode()).hexdigest()
+                                if owning_source is not None
+                                else None,
+                                "previous_provider_sha256": {
+                                    name: hashlib.sha256(before).hexdigest() if before is not None else None
+                                    for name, before in owning_providers.items()
+                                },
+                                "proposed_source_sha256": proposed_source_sha256,
+                                "published_source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                                "consumer_sources": [
+                                    {
+                                        "path": edit.path.relative_to(project.root).as_posix(),
+                                        "previous_source_sha256": hashlib.sha256(edit.before.encode()).hexdigest(),
+                                        "published_source_sha256": hashlib.sha256(edit.after.encode()).hexdigest(),
+                                    }
+                                    for edit in folded.source_edits
+                                ],
+                            }
+                        }
+                        if replace_own_contract
+                        else {}
+                    ),
                     **(
                         {
                             "kind": "fuzzy",
@@ -1265,12 +1446,22 @@ def publish(
     on_commit: Callable[[dict[str, Any]], None] | None = None,
     fuzzy: bool = False,
     compare_first: bool = False,
+    replace_own_contract: bool = False,
 ) -> Landed:
     """`unbake publish FILE... [--original NAME...]`: land each draft file, then each original-asm function, in
     turn; one failure does not stop the others."""
     from unbake import config
 
     result = Landed()
+    if replace_own_contract and (fuzzy or originals or required_versions is not None or len(files) != 1):
+        raise Held(
+            cause_named(
+                "publish.own_contract",
+                "publish.own_contract: name exactly one owning C FILE with exact all-holder proof",
+                owner="land",
+                stage="publish",
+            )
+        )
     if fuzzy and (originals or required_versions is not None):
         raise Held(
             cause_named(
@@ -1312,6 +1503,8 @@ def publish(
 
     def draft(file: Path) -> Callable[[Project], str]:
         options = {"fuzzy": True} if fuzzy else {}
+        if replace_own_contract:
+            options["replace_own_contract"] = True
         return lambda current: land(
             current, host, file, required_versions=required_versions, on_commit=callback, **options
         )
@@ -1326,7 +1519,10 @@ def publish(
         try:
             with publication_transaction.transaction(current):
                 if compare_first and position < len(files):
-                    compare.compare(current, host, files[position], required_versions=required_versions)
+                    if replace_own_contract:
+                        _compare_own_contract(current, host, files[position])
+                    else:
+                        compare.compare(current, host, files[position], required_versions=required_versions)
                 commit = action(current)
         except KeyboardInterrupt:
             result.interrupted = True

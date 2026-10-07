@@ -496,6 +496,81 @@ def validate_published(
             )
 
 
+def replace_owned_contract(
+    contents: dict[Path, str],
+    generated: frozenset[Path],
+    function: str,
+    previous: str,
+    proposed: str,
+    aliases: dict[str, str],
+    versions: tuple[str, ...],
+) -> list[Edit]:
+    """Stage an explicitly proved owning replacement, never ordinary retention.
+
+    The caller validates both owning definitions and the complete exact attempt.
+    The publication transaction still proves the target and current consumers
+    before these provisional bytes can become installed authority.
+    """
+    from unbake.layout import redeclarations
+
+    edits = []
+    for path, before in sorted(contents.items()):
+        after = before
+        for start, end in reversed(redeclarations.spans(before)):
+            old = before[start:end]
+            if function not in declarations(old).declared:
+                continue
+            if declarations(old).declared != {function}:
+                raise Held(
+                    cause_named(
+                        "land.own_contract",
+                        f"land.own_contract: {function}: combined provider at {path}",
+                        owner="types",
+                        stage="land",
+                    )
+                )
+            if redeclarations.equivalent(old, proposed, aliases):
+                continue
+            if not redeclarations.equivalent(old, previous, aliases):
+                raise Held(
+                    cause_named(
+                        "land.own_contract",
+                        f"land.own_contract: {function}: conflicting existing provider at {path}",
+                        owner="types",
+                        stage="land",
+                    )
+                )
+            marker = re.search(r"/\* unbake declaration evidence:[^*]*\*/\s*$", before[:start])
+            if path not in generated or marker:
+                raise Held(
+                    cause_named(
+                        "land.own_contract",
+                        f"land.own_contract: {function}: independently authored provider at {path}",
+                        owner="types",
+                        stage="land",
+                    )
+                )
+            published = re.search(r"/\* unbake published declaration:[^*]*\*/\s*$", before[:start])
+            replacement = proposed.strip()
+            if published:
+                label = "published_" + hashlib.sha256((replacement + "\n").encode()).hexdigest()[:24]
+                replacement = f"/* unbake published declaration: {label} */\n" + replacement
+                start = published.start()
+            after = after[:start] + replacement + after[end:]
+        if after != before:
+            edits.append(Edit(path, before, after, versions))
+    if not edits:
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: no installed owning contract to replace",
+                owner="types",
+                stage="land",
+            )
+        )
+    return edits
+
+
 def published_snapshot(
     project: Project, *, sources: dict[Path, str] | None = None, contents: dict[Path, str] | None = None
 ) -> tuple[dict[Path, str], dict[Path, set[Path]]]:

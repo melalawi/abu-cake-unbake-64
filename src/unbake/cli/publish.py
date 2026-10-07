@@ -47,6 +47,16 @@ the default ROM build keeps the original assembly rows and exact progress does n
 increase. A later fuzzy source must have a higher measured, size-weighted score, or
 an equal score while removing committed source-rule violations and adding none.
 An unavailable comparison stays explicit and never authorizes replacement.
+
+--replace-own-contract explicitly publishes one complete owning definition over
+a conflicting marked published contract. Old owning source/provider identities,
+the exact proposed source and all affected current native consumers must prove
+in every holding version. Only O32 word contracts with measured entry/exit
+evidence are supported; pointer types and word footprint remain strict. An empty
+owned void definition may add unused word formals (at most four).
+Conflicting caller-only externs remain refusals. Put the
+explicit definition in the draft; publication installs its self-contained shared
+prototype. This option cannot be combined with fuzzy or partial-version work.
 """
 PROJECT = "ready"
 
@@ -58,6 +68,11 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("files", type=Path, nargs="*", metavar="FILE")
     parser.add_argument("--compare", action="store_true", help="Measure each FILE before publication.")
+    parser.add_argument(
+        "--replace-own-contract",
+        action="store_true",
+        help="Replace one marked contract through explicit owning-source and native consumer proof.",
+    )
     parser.add_argument(
         "--push", metavar="REMOTE", help="Rebase, reconcile affected proofs and push to the configured branch."
     )
@@ -100,6 +115,7 @@ def run(context: Context) -> Result:
         on_commit=committed if emitter is not None else None,
         **({"fuzzy": True} if context.args.fuzzy else {}),
         **({"compare_first": True} if getattr(context.args, "compare", False) else {}),
+        **({"replace_own_contract": True} if getattr(context.args, "replace_own_contract", False) else {}),
     )
     following = context.cmd("next")
     data = done.document()
@@ -113,6 +129,8 @@ def run(context: Context) -> Result:
             words.extend(("--require-version", version))
         if context.args.fuzzy:
             words.append("--fuzzy")
+        if getattr(context.args, "replace_own_contract", False):
+            words.append("--replace-own-contract")
         if getattr(context.args, "compare", False):
             words.append("--compare")
         if getattr(context.args, "push", None):
