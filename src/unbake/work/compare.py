@@ -97,11 +97,12 @@ class Compared:
 
 
 def function_of(file: Path) -> str:
-    if file.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", file.stem):
-        raise Held("compare", f"compare.file: {file}: expected FUNC.c")
+    function = file.stem.removesuffix(".best")
+    if file.suffix != ".c" or not re.fullmatch(r"[A-Za-z_]\w*", function):
+        raise Held("compare", f"compare.file: {file}: expected FUNC.c or FUNC.best.c")
     if not file.is_file():
         raise Held("compare", f"compare.file: {file}: missing file")
-    return file.stem
+    return function
 
 
 def row_of(project: Project, function: str, version: str) -> split.Function:

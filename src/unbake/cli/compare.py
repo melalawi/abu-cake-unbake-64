@@ -28,7 +28,7 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 
 def register(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("file", type=Path, metavar="FILE", help="build/work/FUNC/FUNC.c or src/FUNC.c")
+    parser.add_argument("file", type=Path, metavar="FILE", help="build/work/FUNC/FUNC.c, FUNC.best.c or src/FUNC.c")
     parser.add_argument(
         "--require-version",
         action="append",
