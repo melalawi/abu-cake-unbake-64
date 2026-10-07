@@ -58,19 +58,7 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
     for path in sorted(project.src.rglob("*.c")):
         raw = path.read_bytes()
         text = raw.decode()
-        # Comments cannot create a guard. The retained format has one whole-file guard.
-        import re
-
-        uncommented = re.sub(
-            r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"',
-            lambda token: "\n" * token[0].count("\n") if token[0].startswith(("/*", "//")) else token[0],
-            text,
-            flags=re.S,
-        )
-        guarded = any(
-            "NON_MATCHING" in line and line.lstrip().startswith(("#ifdef", "#if ", "#if("))
-            for line in uncommented.splitlines()
-        )
+        guarded = attempts.guard_present(text)
         if guarded:
             attempts.unguarded(text)
         unit = path.relative_to(project.src).with_suffix("").as_posix()

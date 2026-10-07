@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from unbake import cache as retention
-from unbake import effort, sqlite
+from unbake import effort, sqlite, strict_json
 from unbake.config import Held, Project
 from unbake.process import capture
 from unbake.process import named as cause_named
@@ -125,6 +125,59 @@ def _connection(file: Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def legacy_storage(file: Path) -> int:
+    """Identify the old writer by its complete table contract, not PRAGMA alone.
+
+    The pre-versioned writer stored semantic schema 1 in meta and did not set
+    user_version. This is migration intake only; it never authorizes reuse.
+    """
+    expected = {
+        "meta": (("key", "TEXT", 0, 1), ("value", "TEXT", 1, 0)),
+        "entries": (("kind", "TEXT", 1, 1), ("name", "TEXT", 1, 2), ("value", "TEXT", 1, 0)),
+        "summary": (
+            ("kind", "TEXT", 1, 1),
+            ("name", "TEXT", 1, 2),
+            ("semantic_sha256", "TEXT", 1, 0),
+            ("users", "TEXT", 1, 0),
+        ),
+        "redraft": (("function", "TEXT", 0, 1), ("value", "TEXT", 1, 0)),
+    }
+    with _connection(file) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if version == DB_SCHEMA:
+            expected.pop("redraft")
+        valid = version in (0, 1, DB_SCHEMA) and tables == expected.keys()
+        for table, columns in expected.items():
+            actual = tuple(
+                (row[1], row[2], row[3], row[5]) for row in connection.execute(f"PRAGMA table_info({table})")
+            )
+            valid = valid and actual == columns
+        metadata = {
+            key: strict_json.loads(value, file) for key, value in connection.execute("SELECT key,value FROM meta")
+        }
+        valid = valid and type(metadata.get("schema")) is int and metadata["schema"] == 1
+        valid = valid and type(metadata.get("revision")) is int and metadata["revision"] >= 0
+        import re
+
+        valid = valid and all(
+            isinstance(metadata.get(key), str) and re.fullmatch(r"[0-9a-f]{64}", metadata[key])
+            for key in ("content_sha256", "solution_sha256")
+        )
+        if not valid:
+            raise Held(
+                cause_named(
+                    "migration.storage",
+                    f"{file}: unknown legacy storage shape/metadata (user_version {version})",
+                    owner="typemap.types_db",
+                    stage="migration",
+                )
+            )
+        if version == DB_SCHEMA:
+            compatible(file)
+        return int(version)
+
+
 def compatible(file: Path) -> bool:
     """Older storage contracts are stale; a broken current contract is corruption.
 
@@ -145,7 +198,7 @@ def compatible(file: Path) -> bool:
                     stage="types",
                 )
             )
-        keys = (*REUSE_META, "schema")
+        keys = (*REUSE_META, "schema", "migration_reuse")
         placeholders = ",".join("?" for _ in keys)
         metadata = {
             key: json.loads(value)
@@ -172,6 +225,8 @@ def compatible(file: Path) -> bool:
                         stage="types",
                     )
                 )
+        if metadata.get("migration_reuse") == "unverified":
+            return False
         for key in REUSE_META:
             if key not in metadata:
                 raise Held(

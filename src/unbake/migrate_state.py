@@ -6,6 +6,7 @@ import math
 import shutil
 import sqlite3
 import uuid
+from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
@@ -13,9 +14,10 @@ from typing import Any, Literal
 from unbake import atomic, inputs, strict_json
 from unbake.config import Held, Project
 from unbake.inputs import DependencySet, LogicalPath
-from unbake.journal import Journal
+from unbake.journal import INDEX, Journal
+from unbake.journal import recover as recover_journal
 from unbake.process import named
-from unbake.work.attempts import Event, Ledger, Operation, Outcome, Summary, encoded, now
+from unbake.work.attempts import Event, Ledger, Operation, Outcome, Summary, encoded, guard_body, guard_present, now
 
 
 def refuse(reason: str) -> None:
@@ -23,6 +25,8 @@ def refuse(reason: str) -> None:
 
 
 def plan(project: Project) -> dict[str, Any]:
+    if (project.build / "migration.journal" / INDEX).is_file():
+        refuse("interrupted migration journal requires migrate-state --recover, then a new --plan")
     paths = [
         project.root / "attempts.json",
         project.build / "steps.json",
@@ -31,19 +35,29 @@ def plan(project: Project) -> dict[str, Any]:
     ]
     database = project.build / "types.sqlite"
     if database.is_file():
-        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
-            schema = connection.execute("PRAGMA user_version").fetchone()[0]
-        if schema == 1:
+        from unbake.typemap import types_db
+
+        schema = types_db.legacy_storage(database)
+        if schema in (0, 1):
             paths.append(database)
-        elif schema != 2:
-            refuse(f"{database}: unknown storage schema {schema}; preserve before migration")
     inventory = {}
     for path in paths:
         if path.is_symlink():
             refuse(f"{path}: migration input is a symlink")
         if path.is_file():
             inventory[path.relative_to(project.root).as_posix()] = inputs.digest(path, algorithm="sha256", reuse=False)
+    sources = {}
+    for source in sorted(project.src.rglob("*.c")):
+        text = source.read_text()
+        if guard_present(text):
+            if source.is_symlink():
+                refuse(f"{source}: retained migration source is a symlink")
+            guard_body(text, subject=source.relative_to(project.root).as_posix())
+            sources[source.relative_to(project.root).as_posix()] = inputs.digest(
+                source, algorithm="sha256", reuse=False
+            )
     return {
+        "sources": sources,
         "schema": 2,
         "project_id": project.id,
         "inputs": inventory,
@@ -72,6 +86,43 @@ def _summary(value: Any) -> Summary:
     return Summary(
         value["bytes"], value["best"], value["exact"], value["minutes"], value["attempts"], value.get("fuzzy")
     )
+
+
+def retain(
+    project: Project, migration: dict[str, Any], receipts: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Bind existing opt-in sources to actual ASM membership, with no native proof."""
+    from unbake.layout import split
+
+    missing = {
+        Path(path).relative_to("src").with_suffix("").as_posix(): digest
+        for path, digest in migration["sources"].items()
+        if Path(path).relative_to("src").with_suffix("").as_posix() not in receipts
+    }
+    if not missing:
+        return {}
+    holdings: dict[str, list[str]] = {name: [] for name in missing}
+    for version in project.versions:
+        for row in split.functions(project, version):
+            for member in split.unit_members(row):
+                for alias in member.aliases:
+                    if alias in holdings and version not in holdings[alias]:
+                        holdings[alias].append(version)
+    return {
+        name: {
+            "source_sha256": digest,
+            "compiler": project.compiler_reference(name),
+            "versions": holdings[name],
+            "verification": "unverified",
+        }
+        for name, digest in missing.items()
+    }
+
+
+def recover(project: Project) -> dict[str, Any]:
+    """Public recovery uses the migration's own before-images, never an older writer."""
+    restored = recover_journal(project.build / "migration.journal")
+    return {"recovered_files": len(restored), "native_calls": 0}
 
 
 def imported(project: Project, migration: dict[str, Any]) -> tuple[bytes, dict[str, Summary]]:
@@ -182,12 +233,15 @@ def imported(project: Project, migration: dict[str, Any]) -> tuple[bytes, dict[s
                 },
                 "committed",
             )
+    receipts = {name: summary.fuzzy for name, summary in summaries.items() if summary.fuzzy is not None}
+    for name, row in retain(project, migration, receipts).items():
+        add("source.retained", name, {"retained": row, "provenance": migration["sources"]})
     steps = project.build / "steps.json"
     if steps.is_file():
         add("history.steps", "steps", {"records": strict_json.read(steps), "proof_reusable": False})
     database = project.build / "types.sqlite"
     if database.relative_to(project.root).as_posix() in migration["inputs"]:
-        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
             rows = connection.execute("SELECT function,value FROM redraft").fetchall()
         for function, value in rows:
             add("draft.required", function, {"mark": strict_json.loads(value, database)})
@@ -199,10 +253,26 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         refuse("migration inputs changed; create a new reviewed plan")
     target = project.root / "attempts.jsonl"
     if target.exists():
-        Ledger(project)._refresh()
+        history = Ledger(project)
+        history._refresh()
         if migration["inputs"]:
             refuse("current ledger coexists with retired state; preserve and reconcile explicitly")
-        return {"reused": True, "events": 0}
+        known = dict(history.fuzzy_sources())
+        known.update({name: {} for name in history.publications()})
+        retained = retain(project, migration, known)
+        with Journal(project.build / "migration.journal") as transaction:
+            transaction.save([target])
+            for name, row in retained.items():
+                history.note(
+                    "source.retained",
+                    name,
+                    {"retained": row, "provenance": migration["sources"]},
+                    dependencies=DependencySet((), {"migration": migration, "dependencies_unknown": True}, {}),
+                )
+            from unbake.report import state
+
+            state.inventory(project, receipts=history.fuzzy_sources())
+        return {"reused": True, "events": len(retained)}
     content, expected = imported(project, migration)
     backup = project.root / migration["backup"]
     backup.mkdir(parents=True, exist_ok=True)
@@ -232,9 +302,18 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         if database.relative_to(project.root).as_posix() in migration["inputs"]:
             staged = backup / "types-current.sqlite"
             shutil.copyfile(database, staged)
-            with sqlite3.connect(staged) as connection:
+            with closing(sqlite3.connect(staged)) as connection, connection:
                 connection.execute("DROP TABLE redraft")
                 connection.execute("PRAGMA user_version=2")
+                metadata = {key for (key,) in connection.execute("SELECT key FROM meta")}
+                from unbake.typemap import types_db
+
+                if not set(types_db.REUSE_META) <= metadata:
+                    connection.execute("INSERT INTO meta VALUES (?,?)", ("migration_reuse", '"unverified"'))
+            from unbake.typemap import types_db
+
+            if types_db.legacy_storage(staged) != types_db.DB_SCHEMA:
+                refuse("converted type storage readback failed")
             atomic.copyfile(staged, database)
         for relative in migration["inputs"]:
             if relative != "build/types.sqlite":

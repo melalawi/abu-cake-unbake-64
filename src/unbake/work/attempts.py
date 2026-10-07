@@ -686,12 +686,35 @@ class Ledger:
         record = self.publication(function)
         return dict(record.receipt) if record is not None and record.available and record.kind == "fuzzy" else None
 
+    def retained_sources(self) -> dict[str, dict[str, Any]]:
+        self._refresh()
+        retained = {}
+        for identity in self.order:
+            event = self.events[identity]
+            if event["kind"] == "source.retained":
+                retained[event["subject"]] = dict(event["result"]["value"]["retained"])
+            elif event["kind"].startswith("publication.") and event["result"]["state"] == "committed":
+                retained.pop(event["subject"], None)
+        return retained
+
     def fuzzy_sources(self) -> dict[str, dict[str, Any]]:
-        return {
-            name: dict(record.receipt)
-            for name, record in self.publications().items()
-            if record.available and record.kind == "fuzzy"
+        result = {
+            name: {
+                "source_sha256": row["source_sha256"],
+                "compiler": row["compiler"],
+                "score": None,
+                "versions": {v: None for v in row["versions"]},
+            }
+            for name, row in self.retained_sources().items()
         }
+        result.update(
+            {
+                name: dict(record.receipt)
+                for name, record in self.publications().items()
+                if record.available and record.kind == "fuzzy"
+            }
+        )
+        return result
 
     def record_publication(
         self,
@@ -788,17 +811,75 @@ def guarded(text: str) -> str:
     return FUZZY_PREFIX + text.rstrip() + "\n" + FUZZY_SUFFIX
 
 
-def unguarded(text: str) -> str:
-    if not text.startswith(FUZZY_PREFIX) or not text.endswith(FUZZY_SUFFIX):
-        raise Held(
-            cause_named(
-                "fuzzy.source",
-                "fuzzy.source: retained fuzzy source lost its NON_MATCHING guard",
-                owner="work.attempts",
-                stage="work",
-            )
+def guard_present(text: str) -> bool:
+    """Comments and literals cannot create a NON_MATCHING directive."""
+    masked = re.sub(
+        r"/\*.*?\*/|//[^\n]*|\"(?:\\[\s\S]|[^\"\\])*\"|'(?:\\[\s\S]|[^'\\])*'",
+        lambda match: re.sub(r"[^\n]", " ", match[0]),
+        text,
+        flags=re.S,
+    )
+    return bool(re.search(r"^[ \t]*#[ \t]*(?:ifdef|ifndef|if|elif)\b[^\n]*\bNON_MATCHING\b", masked, re.M))
+
+
+def guard_body(text: str, *, subject: str) -> str:
+    """One balanced whole-file NON_MATCHING opt-in guard; closing comments are not authority."""
+    masked = re.sub(
+        r"/\*.*?\*/|//[^\n]*|\"(?:\\[\s\S]|[^\"\\])*\"|'(?:\\[\s\S]|[^'\\])*'",
+        lambda match: re.sub(r"[^\n]", " ", match[0]),
+        text,
+        flags=re.S,
+    )
+    directives = list(re.finditer(r"^[ \t]*#[ \t]*(ifdef|ifndef|if|elif|else|endif)\b([^\n]*)(?:\n|$)", masked, re.M))
+    valid = False
+    if directives and not masked[: directives[0].start()].strip():
+        first = directives[0]
+        expression = first[2].strip()
+        opened = (first[1] == "ifdef" and expression == "NON_MATCHING") or (
+            first[1] == "if"
+            and re.fullmatch(r"defined[ \t]*(?:\([ \t]*NON_MATCHING[ \t]*\)|[ \t]+NON_MATCHING)", expression)
         )
-    return text[len(FUZZY_PREFIX) : -len(FUZZY_SUFFIX)]
+        branches: list[bool] = []
+        valid = bool(opened)
+        last = None
+        for index, directive in enumerate(directives):
+            kind, argument = directive[1], directive[2].strip()
+            if kind in ("if", "ifdef", "ifndef"):
+                valid = valid and bool(argument)
+                branches.append(False)
+            elif kind == "endif":
+                if not branches or argument:
+                    valid = False
+                    break
+                branches.pop()
+                if not branches:
+                    last = directive
+                    valid = valid and index == len(directives) - 1 and not masked[directive.end() :].strip()
+            else:
+                if len(branches) <= 1 or branches[-1]:
+                    valid = False
+                    break
+                if kind == "else":
+                    valid = valid and not argument
+                    branches[-1] = True
+                else:
+                    valid = valid and bool(argument)
+        valid = valid and not branches and last is not None
+        if valid and last is not None:
+            return text[first.end() : last.start()]
+    raise Held(
+        cause_named(
+            "fuzzy.source.guard",
+            f"{subject}: expected a balanced whole-file NON_MATCHING guard without an outer else branch",
+            owner="work.attempts",
+            stage="source",
+            subject=subject,
+        )
+    )
+
+
+def unguarded(text: str) -> str:
+    return guard_body(text, subject="retained source")
 
 
 # Draft history moves with a rename: text files carry the new name; compiled objects are rebuilt, not carried.
@@ -917,6 +998,23 @@ def validate_event(event: Mapping[str, Any]) -> None:
             refuse("invalid proof identities")
         if event["kind"] in ("publication.exact", "publication.fuzzy", "publication.original", "publication.prepared"):
             validate_publication(result["value"]["publication"])
+        if event["kind"] == "source.retained":
+            row = result["value"]["retained"]
+            if (
+                result["state"] != "ok"
+                or result["proof_ids"]
+                or set(row) != {"source_sha256", "compiler", "versions", "verification"}
+                or row["verification"] != "unverified"
+                or not isinstance(row["source_sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"])
+                or not isinstance(row["compiler"], str)
+                or not row["compiler"]
+                or not isinstance(row["versions"], list)
+                or not row["versions"]
+                or any(not isinstance(v, str) or not v for v in row["versions"])
+                or len(set(row["versions"])) != len(row["versions"])
+            ):
+                refuse("invalid unverified retained source identity")
         if event["kind"] == "history.imported":
             Summary.read(result["value"]["summary"])
         encoded(dependencies.document())

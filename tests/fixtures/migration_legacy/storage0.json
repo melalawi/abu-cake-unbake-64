@@ -1,0 +1,134 @@
+{
+  "user_version": 0,
+  "meta": [
+    [
+      "content_sha256",
+      "\"9667e96e42470c213522ac2da29a90c30f7dc591d568a78c91c9c820feb6122f\""
+    ],
+    [
+      "revision",
+      "12"
+    ],
+    [
+      "schema",
+      "1"
+    ],
+    [
+      "solution_sha256",
+      "\"b17d6322320d15a5c62264faadbe604ece94c347ba534fb3f515c29d0d77c80b\""
+    ]
+  ],
+  "columns": {
+    "meta": [
+      [
+        0,
+        "key",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        1,
+        "value",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
+    "entries": [
+      [
+        0,
+        "kind",
+        "TEXT",
+        1,
+        null,
+        1
+      ],
+      [
+        1,
+        "name",
+        "TEXT",
+        1,
+        null,
+        2
+      ],
+      [
+        2,
+        "value",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
+    "redraft": [
+      [
+        0,
+        "function",
+        "TEXT",
+        0,
+        null,
+        1
+      ],
+      [
+        1,
+        "value",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ],
+    "summary": [
+      [
+        0,
+        "kind",
+        "TEXT",
+        1,
+        null,
+        1
+      ],
+      [
+        1,
+        "name",
+        "TEXT",
+        1,
+        null,
+        2
+      ],
+      [
+        2,
+        "semantic_sha256",
+        "TEXT",
+        1,
+        null,
+        0
+      ],
+      [
+        3,
+        "users",
+        "TEXT",
+        1,
+        null,
+        0
+      ]
+    ]
+  },
+  "entry": [
+    "arrays",
+    "D_0023C934",
+    "{\"declaration_conflict\":false,\"extent\":null,\"provenance\":{\"function\":\"func_8023B9C0_eu\",\"kind\":\"published\",\"sha256\":\"c5ef8bd34981887b6b31b11ab9a487f999675cf79e7404058ef51ccbffe872b9\",\"source\":\"src/func_8023B9C0_eu.c\",\"version\":\"us-rev1\"},\"state\":\"unknown\",\"type\":\"char\"}"
+  ],
+  "summary": [
+    "arrays",
+    "D_0023C934",
+    "798ee0114cb8d969cdbd94ba17cb32d58c4dafa863fa099e3b6e358f52c47c14",
+    "[]"
+  ],
+  "redraft": [
+    "__cmpdi2",
+    "{\"function\":\"__cmpdi2\",\"reasons\":[\"functions:__cmpdi2\",\"functions:func_802484B0_de\",\"functions:func_8028EDA0_de\",\"functions:func_8028F278_de\",\"functions:func_80292308_de\",\"functions:func_80292900_de\"],\"revision\":12,\"type_db_sha256\":\"9667e96e42470c213522ac2da29a90c30f7dc591d568a78c91c9c820feb6122f\"}"
+  ]
+}
