@@ -1,0 +1,27 @@
+{
+  "cppflags": [
+    "-P",
+    "-undef",
+    "-nostdinc",
+    "-D_LANGUAGE_C",
+    "-DF3DEX_GBI_2",
+    "-D__GNUC__=2"
+  ],
+  "versions": {
+    "de": [
+      "VERSION_DE"
+    ],
+    "eu": [
+      "VERSION_EU"
+    ],
+    "eu-x": [
+      "VERSION_EU_X"
+    ],
+    "us": [
+      "VERSION_US"
+    ],
+    "us-rev1": [
+      "VERSION_US_REV1"
+    ]
+  }
+}

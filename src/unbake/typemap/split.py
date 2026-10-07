@@ -22,10 +22,12 @@ def required_providers(
     blocked_tags: set[str] | None = None,
 ) -> set[Path]:
     """Resolve one consumer's names; both generation and imported C use this closure."""
+    from unbake.layout.apply import spelled
+
     selected: set[Path] = set()
     code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', " ", declaration_source(text))
     explicit_tags = set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", code))
-    pending = re.findall(r"\b[A-Za-z_]\w*\b", code)
+    pending = list(spelled(text))
     seen = set()
     while pending:
         name = pending.pop()

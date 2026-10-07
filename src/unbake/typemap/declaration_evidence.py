@@ -429,7 +429,7 @@ def published_snapshot(
     spellings it consumes, including callback arrays and complete queue layouts.
     Follow declaration dependencies to keep primitive aliases and member types.
     """
-    from unbake.layout import index
+    from unbake.layout import apply, index
     from unbake.typemap.declarations import published_sources
 
     contents = {path: path.read_text() for path in sorted(index.headers(project))}
@@ -455,7 +455,9 @@ def published_snapshot(
                 for variant in redeclarations.variants(text[start:end])
             )
         )
-        pending = {(name, False) for name in re.findall(r"\b[A-Za-z_]\w*\b", declaration_source(text))}
+        # Directive blanking would hide native uses inside source macros.
+        # Use the same roots as import rewriting and provider selection.
+        pending = {(name, False) for name in apply.spelled(text)}
         seen = set()
         while pending:
             name, dependency = pending.pop()

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import pool
+from unbake.cdecl import SOURCE_TOKEN
 from unbake.config import Held, Host, Project
 from unbake.layout import index, map, redeclarations
 from unbake.typemap import storage
@@ -18,8 +19,11 @@ _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"][^\n]*(?:\n
 
 
 def spelled(text: str) -> set[str]:
-    """Every name the source spells, including macro bodies; include lines and comments are not uses."""
-    code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
+    """Names spelled by code and macro bodies, excluding includes, comments and literals."""
+    code = SOURCE_TOKEN.sub(
+        lambda match: re.sub(r"[^\n]", " ", match[0]) if match[0].startswith(("/*", "//", '"', "'")) else match[0],
+        text,
+    )
     code = re.sub(r"^[ \t]*#[ \t]*include[^\n]*", " ", code, flags=re.M)
     return set(re.findall(r"\b[A-Za-z_]\w*\b", code))
 
