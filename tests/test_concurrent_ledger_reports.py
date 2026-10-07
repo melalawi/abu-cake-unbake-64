@@ -49,6 +49,7 @@ class ConcurrentLedgerReportsTests(ProjectCase):
         }
         summary = attempts.Summary(12, {v: score for v in self.versions}, False, 1, 1, receipt)
         self.project.root.joinpath(attempts.PATH).write_bytes(history_bytes(self.project, {function: summary}))
+        buildfiles.write_progress(self.project, publish_branch=self.host.publish_branch)
         self.report()
         self.git("add", ".")
         self.git("commit", "-qm", "Fixture branch " + function)
@@ -74,6 +75,28 @@ class ConcurrentLedgerReportsTests(ProjectCase):
         text = self.project.root.joinpath("README.md").read_text()
         self.assertIn("Authored intro.", text)
         self.assertIn("Authored suffix.", text)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=no").stdout, "")
+
+    def test_legacy_generated_ci_and_verifier_conflicts_regenerate_from_the_current_owner(self):
+        payload = verify.bundle()
+        with patch.object(verify, "bundle", return_value=payload + b"first"):
+            first = self.branch("first", "alpha", 35.0)
+        with patch.object(verify, "bundle", return_value=payload + b"second"):
+            second = self.branch("second", "beta", 52.0)
+        self.assertNotEqual(self.git("rebase", "first", check=False).returncode, 0)
+        conflicts = set(self.git("diff", "--name-only", "--diff-filter=U").stdout.splitlines())
+        self.assertTrue(
+            {attempts.PATH, verify.MANIFEST, verify.BUNDLE, ".github/workflows/progress.yml", ".gitlab-ci.yml"}
+            <= conflicts
+        )
+        with patch.object(publication_push.pool, "run", side_effect=AssertionError("no repeated native proof")):
+            self.assertTrue(publication_push.resolve_conflicts(self.project, self.host))
+            self.git("-c", "core.editor=true", "rebase", "--continue")
+        history = attempts.Ledger(self.project)
+        self.assertEqual(set(history.summaries()), {"alpha", "beta"})
+        self.assertEqual(set(history.events), first | second)
+        self.assertEqual(self.project.root.joinpath(verify.BUNDLE).read_bytes(), payload)
+        self.assertEqual(verify.validate(config.load(self.project.root))["schema"], 1)
         self.assertEqual(self.git("status", "--porcelain", "--untracked-files=no").stdout, "")
 
     def test_authored_source_conflict_is_not_silently_resolved(self):

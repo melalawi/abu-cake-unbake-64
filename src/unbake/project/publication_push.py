@@ -216,13 +216,16 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
     Authored/source conflicts retain Git's refusal. README is eligible only if
     both branches agree outside the owning progress section.
     """
+    from unbake import buildfiles
     from unbake.report import progress, readme_layout, verify
 
     conflicts = tuple(p for p in _git(project, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p)
+    generated = {verify.BUNDLE, ".github/workflows/progress.yml", ".gitlab-ci.yml"}
     allowed = {
         attempts.PATH,
         verify.MANIFEST,
         "README.md",
+        *generated,
         *("versions/" + v + "/report.json" for v in project.versions),
     }
     if not conflicts or set(conflicts) - allowed:
@@ -266,9 +269,10 @@ def resolve_conflicts(project: Project, host: Host) -> bool:
             if name.startswith("versions/") and name.endswith("/report.json"):
                 atomic.text(project.root / name, _git(project, "show", ":2:" + name))
         current = config.load(project.root)
-        progress.write(current, host, source_only=True)
+        written = buildfiles.write_progress(current, publish_branch=host.publish_branch)
+        written.extend(progress.write(current, host, source_only=True))
         verify.validate(current)
-        _git(project, "add", "--", *conflicts)
+        _git(project, "add", "--", *sorted({*conflicts, *(p.relative_to(project.root).as_posix() for p in written)}))
     return True
 
 
