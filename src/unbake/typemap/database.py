@@ -9,6 +9,7 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from unbake import atomic as atomic_files
@@ -565,6 +566,59 @@ def symbol_segments(project: Project) -> dict[str, str]:
     return result
 
 
+def _consumer_imports(
+    project: Project, outputs: dict[Path, bytes | Path], sources: dict[Path, str]
+) -> dict[Path, bytes]:
+    """Reconnect retained declarations moved by this publication, before installing headers.
+
+    Old generated files may remain until the headers step, but an old home
+    overwritten by this render no longer supplies its declarations. Project
+    only affected imports; local declarations and function bytes stay intact.
+    Missing declarations remain the loss guard's responsibility.
+    """
+    from unbake.fold import imports
+    from unbake.layout import header_loss
+
+    before = {path: path.read_text() for root in project.include for path in root.rglob("*.h")}
+    after = dict(before)
+    for path, data in outputs.items():
+        if path.suffix == ".h":
+            after[path] = (data.read_bytes() if isinstance(data, Path) else data).decode()
+    if before == after:
+        return {}
+    parts = {text: header_loss._header(text) for text in set(before.values()) | set(after.values())}
+
+    def view(contents: dict[Path, str]) -> header_loss.View:
+        return header_loss.View(
+            project.include,
+            {path: parts[text][0] for path, text in contents.items()},
+            {path: parts[text][2] for path, text in contents.items()},
+        )
+
+    old, new = view(before), view(after)
+    kept = set().union(*(parts[text][0] for text in after.values()))
+    dependencies: dict[str, set[str]] = {}
+    for text in before.values():
+        for name, dependency_words in parts[text][1].items():
+            dependencies.setdefault(name, set()).update(dependency_words)
+    changes = {}
+    headers: Any = SimpleNamespace(texts=after)
+    for source, text in sources.items():
+        provided, words = header_loss._source(text)
+        wanted = set(words)
+        pending = list(wanted)
+        while pending:
+            added = dependencies.get(pending.pop(), set()) - wanted - provided
+            wanted.update(added)
+            pending.extend(added)
+        unreachable = (old.included(source, text) - new.included(source, text)) & wanted & kept
+        if unreachable:
+            rewritten = imports.resolve(project, headers, text, source.stem)
+            if rewritten != text:
+                changes[source] = rewritten.encode()
+    return changes
+
+
 def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *, policy: Host | None = None) -> None:
     if not project.include:
         raise Held("solve", "paths.include: required shared type destination")
@@ -572,9 +626,12 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         session = regeneration.Session(project, policy)
     with tui.task("Writing the shared headers", len(session.sources)):
         outputs = session.render(value, lambda: _render(project, value, policy, session))
-    from unbake.layout import header_loss
+    from unbake.layout import header_loss, header_step
 
-    # Types retains obsolete headers until layout rewrites their source imports.
+    reconnected = _consumer_imports(project, outputs, session.sources)
+    outputs.update(reconnected)
+    # Reconnect changed homes in the same installation as their consumers.
+    # Obsolete, untouched homes remain until the regular headers step.
     with tui.task("Checking retained header declarations"):
         header_loss.check(project, outputs, policy=policy)
     replacements = value["shared_aliases"]
@@ -605,6 +662,13 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             validated=validated,
             session=session,
         )
+    if reconnected and policy is not None:
+        native_outputs = {
+            path: data.read_bytes() if isinstance(data, Path) else data
+            for path, data in outputs.items()
+            if path.suffix in (".h", ".c") and (not path.is_file() or path.read_bytes() != data)
+        }
+        header_step.validate(project, policy, native_outputs)
     with tui.task("Saving the type database"):
         value["rendered_sha256"] = {
             storage.relative(project, path): storage.digest(content)

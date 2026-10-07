@@ -10,6 +10,7 @@ from unittest.mock import patch
 from tests.project_fixture import ProjectCase
 from unbake import effort, pool
 from unbake.config import Held
+from unbake.fold import imports
 from unbake.layout import apply, header_loss, header_step, index, map
 from unbake.typemap import database, declaration_evidence, regeneration
 from unbake.typemap.split import guarded, required_providers
@@ -244,3 +245,109 @@ class RetainedMacroGlobalTests(ProjectCase):
                 set(self.compiles), {(unit, version) for unit in (FUNCTION, "beta") for version in self.versions}
             )
             self.assertEqual(len(self.compiles), 2 * len(self.versions))
+
+    def relocation(self):
+        # Replay the actual held render proposal, including its measured data
+        # home. Macro-retention alone puts the reduced fresh render in the
+        # consumer module and does not reproduce this publication boundary.
+        value = self.value()
+        value.update(revision=1, dependencies={FUNCTION: [], "beta": []}, shared_aliases={})
+        session = regeneration.Session(self.project, None)
+        outputs = {
+            self.include / path.relative_to(FIXTURE / "proposal/include"): guarded(
+                path.relative_to(FIXTURE / "proposal/include"), path.read_text()
+            )
+            for path in (FIXTURE / "proposal/include").rglob("*.h")
+        }
+        contents = {path.relative_to(self.include).as_posix(): path.read_text() for path in self.include.rglob("*.h")}
+        contents.update({path.relative_to(self.include).as_posix(): data.decode() for path, data in outputs.items()})
+        lookup = index.overlay({"schema": 1, "headers": {}, "symbols": {}, "clusters": {}}, contents)
+        outputs[index.path(self.project)] = index.encoded(lookup)
+        value["declaration_headers"] = lookup["symbols"]
+        self.assertEqual(value["declaration_headers"][GLOBAL], "span_C76B0/data.h")
+        return value, session, outputs
+
+    def test_real_segment_relocation_reconnects_only_the_affected_imports_once(self):
+        _value, session, outputs = self.relocation()
+        untouched = self.project.src / "beta.c"
+        session.sources[untouched] = "int beta(void) { return 0; }\n"
+        with patch("unbake.fold.imports.resolve", wraps=imports.resolve) as resolve:
+            changes = database._consumer_imports(self.project, outputs, session.sources)
+        self.assertEqual(resolve.call_count, 1)
+        self.assertEqual(set(changes), {self.source})
+        projected = changes[self.source].decode()
+        self.assertIn('#include "span_C76B0/data.h"', projected)
+        self.assertEqual(apply._INCLUDE.sub("", projected), apply._INCLUDE.sub("", self.source.read_text()))
+        header_loss.check(self.project, {**outputs, **changes})
+        self.assertEqual(database._consumer_imports(self.project, outputs, {self.source: projected}), {})
+        native_source = self.root / self.source.name
+        native_source.write_bytes(changes[self.source])
+        after = self.view(outputs)
+        for version in self.versions:
+            _, compiled = self.native(native_source, version, after)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+        self.assertEqual(self.compiles, [(FUNCTION, version) for version in self.versions])
+
+    def test_publish_atomically_reconnects_the_real_data_segment_before_native_consumers(self):
+        value, session, outputs = self.relocation()
+        before = self.source.read_bytes()
+
+        def compile_job(job):
+            view, _host, source, version, unit, _prove, _fuzzy = job
+            self.assertEqual(self.source.read_bytes(), before)
+            self.assertIn('#include "span_C76B0/data.h"', source.read_text())
+            _, compiled = self.native(source, version, view.include[0])
+            return None if compiled.returncode == 0 else {"key": f"compile.{unit}.{version}", "reason": compiled.stderr}
+
+        def run(_host, function, jobs, shared=None):
+            return [function(job) if shared is None else function(shared, job) for job in jobs]
+
+        with (
+            patch.object(database.regeneration, "Session", return_value=session),
+            patch.object(session, "render", return_value=dict(outputs)) as render,
+            patch.object(database, "validate_headers") as shared_headers,
+            patch.object(pool, "run", side_effect=run),
+            patch.object(header_step, "_compile", side_effect=compile_job) as compile_consumer,
+            patch.object(database.types_db, "install", wraps=database.types_db.install) as install,
+        ):
+            database.publish(self.project, value, {}, policy=self.host)
+        self.assertEqual(render.call_count, 1)
+        self.assertEqual(shared_headers.call_count, 1)
+        self.assertEqual(compile_consumer.call_count, len(self.versions))
+        self.assertEqual(install.call_count, 1)
+        self.assertEqual(self.compiles, [(FUNCTION, version) for version in self.versions])
+        self.assertIn('#include "span_C76B0/data.h"', self.source.read_text())
+        self.assertEqual(apply._INCLUDE.sub("", self.source.read_text()), apply._INCLUDE.sub("", before.decode()))
+        self.assertEqual(database.types_db.read(database.types_db.path(self.project))["revision"], 1)
+
+    def test_failed_native_reconnection_cannot_install_headers_sources_or_database(self):
+        value, session, outputs = self.relocation()
+        before = {path: path.read_bytes() for path in (self.source, self.old)}
+        with (
+            patch.object(database.regeneration, "Session", return_value=session),
+            patch.object(session, "render", return_value=dict(outputs)),
+            patch.object(database, "validate_headers"),
+            patch.object(
+                pool,
+                "run",
+                side_effect=lambda _host, function, jobs, shared=None: [
+                    function(job) if shared is None else function(shared, job) for job in jobs
+                ],
+            ),
+            patch.object(header_step, "validate", side_effect=Held("headers", "native consumer refused")) as native,
+            patch.object(database.types_db, "stage") as stage,
+            self.assertRaisesRegex(Held, "native consumer refused"),
+        ):
+            database.publish(self.project, value, {}, policy=self.host)
+        self.assertEqual(native.call_count, 1)
+        stage.assert_not_called()
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data)
+        self.assertFalse((self.include / "span_C76B0/data.h").exists())
+        self.assertFalse(database.types_db.path(self.project).exists())
+
+    def test_absent_declaration_still_holds_without_synthesizing_a_provider(self):
+        outputs = {self.old: b""}
+        self.assertEqual(database._consumer_imports(self.project, outputs, {self.source: self.source.read_text()}), {})
+        with self.assertRaisesRegex(Held, f"would remove {GLOBAL} used by published C"):
+            header_loss.check(self.project, outputs)
