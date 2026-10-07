@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
-from unbake.cdecl import declarations
+from unbake.cdecl import Declarations, declarations
 from unbake.config import Held, Host, Project
 
 
@@ -49,23 +50,49 @@ def _includes(contents: dict[Path, str]) -> dict[Path, set[Path]]:
     return closure
 
 
-def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None = None) -> list[Path]:
+def ordered_headers(
+    contents: dict[Path, str], *, aliases: dict[str, str] | None = None, roots: Iterable[Path] | None = None
+) -> list[Path]:
     """Put shared types before consumers even when headers omit includes.
 
     A typedef name a header uses needs one declaration before it: a provider the header includes is that
     declaration, else every provider precedes it. A complete use of a tag (directly or through an alias) also
-    needs the tag's definition before it; a pointer to a tag needs nothing."""
+    needs the tag's definition before it; a pointer to a tag needs nothing.
+    When ROOTS are supplied, order those includes by the declarations their
+    include closures provide, parsing each selected header only once."""
+    from unbake.typemap.header_names import alias_types
+
     parsed = {}
-    for path, text in contents.items():
+    mapping = {}
+    included = _includes(contents)
+    paths = list(dict.fromkeys(contents if roots is None else roots))
+    selected = set(contents) if roots is None else {dep for path in paths for dep in {path} | included[path]}
+    for path in contents:
+        if path not in selected:
+            continue
+        text = contents[path]
         try:
             parsed[path] = declarations(text)
+            mapping.update(alias_types(text))
         except Held as error:
             raise Held("m2c", f"{path}: {error.reason}") from error
+    mapping.update(aliases or {})
+    if roots is not None:
+        effective = {}
+        for path in paths:
+            headers = [parsed[dep] for dep in {path} | included[path]]
+            effective[path] = Declarations(
+                typedefs=set().union(*(header.typedefs for header in headers)),
+                uses=set().union(*(header.uses for header in headers)),
+                tags=set().union(*(header.tags for header in headers)),
+                complete_uses=set().union(*(header.complete_uses for header in headers)),
+                complete_alias_uses=set().union(*(header.complete_alias_uses for header in headers)),
+            )
+        parsed = effective
     providers: dict[str, set[Path]] = {}
     for path, header in parsed.items():
         for name in header.typedefs:
             providers.setdefault(name, set()).add(path)
-    included = _includes(contents)
     dependencies: dict[Path, set[Path]] = {}
     for path, header in parsed.items():
         dependencies[path] = set()
@@ -79,9 +106,14 @@ def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None
     for path, header in parsed.items():
         complete = set(header.complete_uses)
         for alias in header.complete_alias_uses:
-            target = (aliases or {}).get(alias, "")
-            if re.fullmatch(r"(?:struct|union) \w+", target):
-                complete.add(target.split()[1])
+            seen = set()
+            target = alias
+            while target in mapping and target not in seen:
+                seen.add(target)
+                target = re.sub(r"\b(?:const|volatile|restrict|__restrict|__restrict__)\b", "", mapping[target]).strip()
+            tag = re.fullmatch(r"(?:struct|union)\s+(\w+)(?:\s*\[[^]]*\])*", target)
+            if tag:
+                complete.add(tag[1])
         for name in complete - header.tags:
             offered = tag_providers.get(name, set()) - {path}
             dependencies[path] |= (offered & included[path]) or offered
@@ -102,7 +134,7 @@ def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None
         visited.add(path)
         ordered.append(path)
 
-    for path in contents:
+    for path in paths:
         visit(path)
     return ordered
 

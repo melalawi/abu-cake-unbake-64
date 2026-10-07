@@ -2,6 +2,7 @@
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from unbake.cdecl import LayoutParser, attribute_source, declaration_source, declarations
 from unbake.config import Held
@@ -186,6 +187,56 @@ class HeaderDeclarationsTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(Held, "cyclic shared type context: a.h -> b.h -> a.h"):
             ordered_headers(contents, aliases={"A": "struct A", "B": "struct B"})
+
+    def test_complete_aliases_are_inferred_and_follow_chains_without_a_caller_map(self) -> None:
+        consumer, aliases, value = Path("consumer.h"), Path("aliases.h"), Path("value.h")
+        contents = {
+            consumer: "struct Holder { Final item; };",
+            aliases: "typedef struct Item Value; typedef const Value Final;",
+            value: "struct Item { int word; };",
+        }
+        self.assertEqual(ordered_headers(contents), [aliases, value, consumer])
+
+    def test_tag_and_ordinary_names_stay_distinct_with_inferred_aliases(self) -> None:
+        consumer, scalar, tag = Path("consumer.h"), Path("scalar.h"), Path("tag.h")
+        contents = {
+            consumer: "struct Holder { Value word; };",
+            scalar: "typedef int Value;",
+            tag: "struct Value { struct Holder holder; };",
+        }
+        self.assertEqual(ordered_headers(contents), [scalar, consumer, tag])
+        self.assertEqual(
+            ordered_headers(
+                {
+                    consumer: "struct Holder { Pointer word; };",
+                    scalar: "typedef struct Value *Pointer;",
+                    tag: contents[tag],
+                }
+            ),
+            [scalar, consumer, tag],
+        )
+
+    def test_inferred_complete_alias_cycles_still_refuse(self) -> None:
+        contents = {
+            Path("aliases.h"): "typedef struct A A; typedef struct B B;",
+            Path("a.h"): "struct A { B value; };",
+            Path("b.h"): "struct B { A value; };",
+        }
+        with self.assertRaisesRegex(Held, "cyclic shared type context: a.h -> b.h -> a.h"):
+            ordered_headers(contents)
+
+    def test_include_roots_supply_their_provider_closures_with_one_parse_per_header(self) -> None:
+        scalar, wrapper, consumer, unused = map(Path, ("types.h", "wrapper.h", "consumer.h", "unused.h"))
+        contents = {
+            consumer: "struct Measured { s32 value; };",
+            wrapper: '#include "types.h"\n',
+            scalar: "typedef int s32;",
+            unused: "not a C declaration",
+        }
+        with patch("unbake.decomp.draft_context.declarations", wraps=declarations) as parse:
+            result = ordered_headers(contents, roots=[consumer, wrapper])
+        self.assertEqual(result, [wrapper, consumer])
+        self.assertEqual(parse.call_count, 3)
 
     def test_aggregates_forward_tags_enums_and_unnamed_bitfields(self) -> None:
         parsed = declarations(

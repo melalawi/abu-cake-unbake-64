@@ -155,12 +155,6 @@ def resolve(project: Project, headers: Headers, text: str, function: str = "", *
         for dep in dependencies - selected - covered:
             selected.add(dep)
             pending.append(dep)
-    ordinary = {path: contents[path] for path in sorted(selected) if path.name != "gbi.h"}
-    ordered = [
-        *ordered_headers(ordinary, aliases=index.macros),
-        *(path for path in sorted(selected) if path.name == "gbi.h"),
-    ]
-    directives = "".join(f'#include "{include(path)}"\n' for path in ordered)
     narrowed = text
     for match in reversed(list(_INCLUDE.finditer(_without_comments(text)))):
         if obsolete(match[1]):
@@ -174,4 +168,31 @@ def resolve(project: Project, headers: Headers, text: str, function: str = "", *
     )
     assert prefix is not None
     offset = prefix.end()
-    return narrowed[:offset] + directives + narrowed[offset:]
+    # A provider already included later in the source is covered, but cannot
+    # supply types to an earlier import. Order the unconditional include block
+    # together with recovered imports. Configuration directives and conditions
+    # delimit the block; every non-include byte retains its original position.
+    clean = _without_comments(narrowed)
+    block = re.match(r"(?:[ \t\r\n]|^[ \t]*#[ \t]*include\b[^\n]*(?:\n|$))*", clean[offset:], re.M)
+    assert block is not None
+    matches = [
+        (match, path)
+        for match in _INCLUDE.finditer(clean, offset, offset + block.end())
+        if (path := find(match[1])) is not None
+    ]
+    paths = dict.fromkeys([*sorted(selected), *(path for _, path in matches)])
+    ordinary = [path for path in paths if path.name != "gbi.h"]
+    ordered = [
+        *ordered_headers(contents, aliases=index.macros, roots=ordinary),
+        *(path for path in paths if path.name == "gbi.h"),
+    ]
+    directives: dict[Path, list[str]] = {path: [] for path in ordered}
+    for path in sorted(selected):
+        directives[path].append(f'#include "{include(path)}"')
+    for match, path in matches:
+        directives[path].append(narrowed[match.start() : match.end()])
+    lines = [line for path in ordered for line in directives[path]]
+    added = len(lines) - len(matches)
+    for (match, _), line in reversed(list(zip(matches, lines[added:], strict=True))):
+        narrowed = narrowed[: match.start()] + line + narrowed[match.end() :]
+    return narrowed[:offset] + "".join(line + "\n" for line in lines[:added]) + narrowed[offset:]
