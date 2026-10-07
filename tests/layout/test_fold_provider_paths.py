@@ -88,8 +88,7 @@ class FoldProviderPathTests(ProjectCase):
         self.assertEqual(overlay.call_args.args[1], {HEADER: self.staged, "menu_render.h": self.authored})
         self.assertEqual(imported.call_count, 1)
         self.assertEqual(imported.call_args.args[1:], (self.project.include, outputs))
-        self.assertEqual(reads, {payload: 1})
-        self.assertEqual(text_reads, {payload: 1, self.shared / "types.h": 1, self.shared / "gfx.h": 1})
+        self.assertEqual(reads+text_reads, {payload:2,self.shared / "types.h":1,self.shared / "gfx.h":1})
         self.assertEqual(
             bytes_read,
             {

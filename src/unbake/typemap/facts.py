@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import itertools
 import json
 import pickle
 import re
@@ -32,6 +31,7 @@ from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
+from unbake.project.headers import Graph, scan, topology
 from unbake.typemap import declarations, facts_decode, layers, storage
 
 FACTS = "facts"
@@ -40,11 +40,10 @@ SOURCE = "facts-source"
 HEADER = "facts-header"
 ASSEMBLED = "facts-assembled"
 # Bump a kind's number when the value it stores changes for the same inputs. Keys never digest the tool's code.
-FACTS_SCHEMA = 5
-SOURCE_SCHEMA = 7
-HEADER_SCHEMA = 6
+FACTS_SCHEMA = 6
+SOURCE_SCHEMA = 8
+HEADER_SCHEMA = 7
 ASSEMBLED_SCHEMA = 4
-_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
 # Shared alias maps and layout templates a process keeps between solves.
@@ -54,88 +53,6 @@ _FUNCTION = "\x00function"
 _VERSION = "\x00version"
 
 Task = tuple[str, Path, str]
-
-
-@retention.memoized("typemap.facts._includes", size=retention.memory_size, copy_out=retention.clone)
-def _includes(text: str) -> tuple[tuple[str, str], ...]:
-    return tuple((match[1], match[2]) for match in _INCLUDE.finditer(text))
-
-
-@retention.memoized("typemap.facts._topology", size=retention.memory_size, copy_out=retention.clone)
-def _topology(source: str) -> tuple[tuple[int, str], ...]:
-    return tuple(
-        (line, text.strip())
-        for line, text in enumerate(source.splitlines(), 1)
-        if re.match(r"[ \t]*#[ \t]*(?:include|ifndef|define|endif)\b", text)
-    )
-
-
-class Snapshot:
-    """Include edges, closures and digests read once per key computation; files do not change during one."""
-
-    def __init__(self, project: Project) -> None:
-        self.project = project
-        self._edges: dict[tuple[Path, tuple[Path, ...], tuple[Path, ...]], tuple[Path, ...]] = {}
-        self._closures: dict[tuple[tuple[Path, ...], tuple[Path, ...], tuple[Path, ...]], tuple[Path, ...]] = {}
-        self._digests: dict[Path, str] = {}
-        self._parsed: dict[Path, Parsed] = {}
-        self._identifiers: dict[Path, frozenset[str]] = {}
-        self._generated: frozenset[Path] | None = None
-
-    def edges(self, path: Path, includes: tuple[Path, ...], quotes: tuple[Path, ...]) -> tuple[Path, ...]:
-        identity = (path, includes, quotes)
-        found = self._edges.get(identity)
-        if found is None:
-            resolved = []
-            for quote, name in _includes(path.read_text(errors="replace")):
-                places = (*((path.parent, *quotes) if quote == '"' else ()), *includes)
-                target = next((place / name for place in places if (place / name).is_file()), None)
-                if target is not None:
-                    resolved.append(target)
-            found = self._edges[identity] = tuple(resolved)
-        return found
-
-    def closure(self, roots: tuple[Path, ...], command: list[str]) -> tuple[Path, ...]:
-        """Every file the roots can include, ignoring conditionals (a superset is safe)."""
-        includes, quotes = _search(self.project, command)
-        identity = (roots, includes, quotes)
-        found = self._closures.get(identity)
-        if found is None:
-            seen: dict[Path, None] = dict.fromkeys(roots[1:])
-            pending = list(roots)
-            while pending:
-                for target in self.edges(pending.pop(), includes, quotes):
-                    if target not in seen:
-                        seen[target] = None
-                        pending.append(target)
-            found = self._closures[identity] = tuple(sorted(seen))
-        return found
-
-    def digest(self, path: Path) -> str:
-        found = self._digests.get(path)
-        if found is None:
-            found = self._digests[path] = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
-        return found
-
-    def generated(self) -> frozenset[Path]:
-        if self._generated is None:
-            from unbake.layout import index
-
-            self._generated = frozenset(index.headers(self.project))
-        return self._generated
-
-    def parsed(self, path: Path) -> Parsed:
-        found = self._parsed.get(path)
-        if found is None:
-            found = self._parsed[path] = parse(path.read_text())
-        return found
-
-    def identifiers(self, path: Path) -> frozenset[str]:
-        """Every identifier an authored file spells."""
-        found = self._identifiers.get(path)
-        if found is None:
-            found = self._identifiers[path] = frozenset(_IDENTIFIER.findall(path.read_text(errors="replace")))
-        return found
 
 
 _IDENTIFIER = re.compile(r"[A-Za-z_]\w*")
@@ -245,7 +162,7 @@ def _directives(parsed: Parsed, names: set[str]) -> tuple[str, ...]:
 
 
 def _interfaces(
-    snapshot: Snapshot, closure: tuple[Path, ...], own: Path, names: set[str]
+    snapshot: Graph, closure: tuple[Path, ...], own: Path, names: set[str]
 ) -> list[tuple[Path, str | None]]:
     """For each file of the closure, its interface digest if generated (else None, the caller digests it).
 
@@ -278,38 +195,6 @@ def _interfaces(
         for path in closure
         if path not in taken or interface("", names, parsed=snapshot.parsed(path))
     ]
-
-
-def _search(project: Project, command: list[str]) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """Ordered native include search; quote-only directories precede ordinary and system roots."""
-    from unbake.compilers import drivers
-
-    preprocess, _ = drivers._options(command)
-    ordinary, quotes, system = [], [], []
-    options = iter(preprocess)
-    for flag in options:
-        value = next(options) if flag in drivers.PREPROCESSOR_PAIRS else flag[2:]
-        if flag == "-iquote":
-            quotes.append(project.root / value)
-        elif flag == "-isystem":
-            system.append(project.root / value)
-        elif flag.startswith("-I"):
-            ordinary.append(project.root / value)
-    if command[0] == "in-memory":
-        ordinary.extend(project.include)
-    return tuple((*ordinary, *system)), tuple(quotes)
-
-
-def _forced(project: Project, command: list[str]) -> list[Path]:
-    includes, quotes = _search(project, command)
-    result = []
-    for flag, value in itertools.pairwise(command):
-        if flag not in ("-include", "-imacros"):
-            continue
-        path = next((root / value for root in (project.root, *quotes, *includes) if (root / value).is_file()), None)
-        if path is not None:
-            result.append(path)
-    return result
 
 
 def _command(project: Project, policy: Host | None, version: str, source: Path, *, marked: bool = False) -> list[str]:
@@ -363,38 +248,41 @@ def _command(project: Project, policy: Host | None, version: str, source: Path, 
     return [part.replace(str(project.root), ".") for part in command] + pins + ["@parser-recipe=" + parser_recipe]
 
 
-def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snapshot) -> str:
+def source_key(project: Project, policy: Host | None, task: Task, snapshot: Graph) -> str:
     """The whole-unit facts of one task: every byte of the include closure counts."""
     function, source, version = task
     command = _command(project, policy, version, source)
-    roots = (source, *_forced(project, command))
+    roots = (source,)
     parts: list[str | bytes] = [FACTS, str(FACTS_SCHEMA), "source", version, json.dumps(command), function]
     parts.append(storage.relative(project, source))
     parts.append(source.read_bytes())
-    for path in snapshot.closure(roots, command):
+    for path in snapshot.closure(roots, command).paths:
         parts.extend((storage.relative(project, path), snapshot.digest(path)))
+    parts.append(snapshot.closure(roots, command).dependency_set.digest)
     return key(*parts)
 
 
-def unit_key(project: Project, policy: Host | None, source: Path, version: str, snapshot: Snapshot) -> str:
+def unit_key(project: Project, policy: Host | None, source: Path, version: str, snapshot: Graph) -> str:
     """A source part: the source's bytes, authored headers' bytes and generated headers' interface only."""
     command = _command(project, policy, version, source, marked=True)
-    roots = (source, *_forced(project, command))
+    roots = (source,)
     parts: list[str | bytes] = [SOURCE, str(SOURCE_SCHEMA), "unit", version, json.dumps(command)]
     parts.extend((storage.relative(project, source), source.read_bytes()))
-    closure = snapshot.closure(roots, command)
+    closure = snapshot.closure(roots, command).paths
     names = set(_IDENTIFIER.findall(source.read_text(errors="replace")))
-    for path, found in _interfaces(snapshot, closure, source, names):
+    interfaces = _interfaces(snapshot, closure, source, names)
+    for path, found in interfaces:
         state = "interface " + found if found is not None else snapshot.digest(path)
         parts.extend((storage.relative(project, path), state))
+    parts.append(snapshot.lookup_key(roots, command, (path for path, _ in interfaces)))
     return key(*parts)
 
 
-def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Snapshot) -> str:
+def header_key(project: Project, policy: Host | None, header: Path, version: str, snapshot: Graph) -> str:
     """A header part: the header's bytes, authored includes' bytes, generated includes' interface only (unit_key's
     scheme, keyed on the header's own identifiers)."""
     command = _command(project, policy, version, header, marked=True)
-    roots = (header, *_forced(project, command))
+    roots = (header,)
     parts: list[str | bytes] = [
         HEADER,
         str(HEADER_SCHEMA),
@@ -403,11 +291,13 @@ def header_key(project: Project, policy: Host | None, header: Path, version: str
         storage.relative(project, header),
     ]
     parts.extend(("self", snapshot.digest(header)))
-    closure = snapshot.closure(roots, command)
+    closure = snapshot.closure(roots, command).paths
     names = set(_IDENTIFIER.findall(header.read_text(errors="replace")))
-    for path, found in _interfaces(snapshot, closure, header, names):
+    interfaces = _interfaces(snapshot, closure, header, names)
+    for path, found in interfaces:
         state = "interface " + found if found is not None else snapshot.digest(path)
         parts.extend((storage.relative(project, path), state))
+    parts.append(snapshot.lookup_key(roots, command, (path for path, _ in interfaces)))
     return key(*parts)
 
 
@@ -574,7 +464,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)
     units: dict[tuple[str, str], tuple[bytes, dict[str, bytes]]] = {}
     expansions: dict[str, str] = {}
-    snapshot = Snapshot(project)
+    snapshot = Graph.capture(project)
     result = []
     for function, task_source, version in tasks:
         if task_source != source:
@@ -586,7 +476,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             storage.relative(project, source),
             *(
                 part
-                for path in snapshot.closure((source, *_forced(project, command)), command)
+                for path in snapshot.closure((source,), command).paths
                 for part in (storage.relative(project, path), snapshot.digest(path))
             ),
         )
@@ -627,7 +517,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
 
 def _include_order(source: Path) -> tuple[tuple[str, ...], str]:
     """Sources whose include lines match sit together, so their header expansions are shared."""
-    return tuple(name for _, name in _includes(source.read_text(errors="replace"))), str(source)
+    return tuple(include.name for include in scan(source.read_text(errors="replace"))), str(source)
 
 
 def _headers(project: Project) -> list[Path]:
@@ -708,7 +598,7 @@ def _source_tasks(
     group: list[tuple[int, str, Task]],
     counts: dict[str, int],
     shared: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None],
-    snapshot: Snapshot,
+    snapshot: Graph,
     generated: frozenset[str],
 ) -> list[tuple[int, bytes]] | None:
     """Encoded facts of every task of one source and version: its source part joined to its header parts; None
@@ -748,13 +638,13 @@ def _source_tasks(
     # The source interface can stand while generated include edges move. Refresh its
     # line-marker runs independently, without parsing its owned declarations again.
     command = _command(project, host, version, source, marked=True)
-    closure = snapshot.closure((source, *_forced(project, command)), command)
-    topology = [
-        (storage.relative(project, path), _topology(path.read_text()))
+    closure = snapshot.closure((source,), command).paths
+    directive_shape = [
+        (storage.relative(project, path), topology(snapshot.read(path).decode()))
         for path in closure
         if path in snapshot.generated()
     ]
-    run_key = key(SOURCE, "runs", content_key, json.dumps(topology))
+    run_key = key(SOURCE, "runs", content_key, json.dumps(directive_shape))
     stub = output.json(SOURCE, run_key)
     if stub is None:
         previous_stub = output.json(SOURCE, content_key)
@@ -820,14 +710,14 @@ def _whole_tasks(
 ) -> list[tuple[int, bytes]]:
     """Whole-unit facts of a source the layers cannot represent, keyed on every byte of its includes. GROUP holds
     the tasks of every version that needs them: source_facts extracts each distinct unit text once."""
-    snapshot = Snapshot(project)
+    snapshot = Graph.capture(project)
     keyed = [(index, source_key(project, host, task, snapshot), task) for index, _, task in group]
     missing = [(content_key, task) for _, content_key, task in keyed if not output.has(content_key)]
     if missing:
         counts["whole"] += 1
         encoded = source_facts(project, host, output, [task for _, task in missing])
         for (content_key, task), data in zip(missing, encoded, strict=True):
-            if source_key(project, host, task, Snapshot(project)) != content_key:
+            if source_key(project, host, task, Graph.capture(project)) != content_key:
                 raise Held("solve", f"facts.inputs: {storage.relative(project, task[1])} changed during the solve")
             output.put_encoded(content_key, data)
     result: list[tuple[int, bytes]] = []
@@ -867,7 +757,7 @@ def _unit_work(
     counts: dict[str, int] = {"sources": 0, "whole": 0}
     result = []
     sharing: dict[tuple[str, tuple[tuple[str, str], ...]], dict[str, Any] | None] = {}
-    snapshot = Snapshot(project)
+    snapshot = Graph.capture(project)
     whole: list[tuple[int, str, Task]] = []
     for group in versions:
         pool.progress(step="version:" + group[0][2][2])
@@ -944,7 +834,7 @@ _unit_job._pool_identity = _unit_identity  # type: ignore[attr-defined]
 
 
 @pool.cpu
-def _unit_key_job(shared: tuple[Project, Host | None, Snapshot], item: tuple[Path, tuple[str, ...]]) -> list[str]:
+def _unit_key_job(shared: tuple[Project, Host | None, Graph], item: tuple[Path, tuple[str, ...]]) -> list[str]:
     """One physical source's version keys, reusing the pool's shared include snapshot."""
     project, host, snapshot = shared
     source, versions = item
@@ -962,7 +852,7 @@ def published_keys(project: Project, policy: Host | None) -> list[str]:
     jobs = [(source, tuple(names)) for source, names in versions.items()]
     if not jobs:
         return []
-    snapshot = Snapshot(project)
+    snapshot = Graph.capture(project)
     for path in sorted(snapshot.generated()):
         if path.is_file():
             snapshot.parsed(path)
@@ -981,9 +871,7 @@ def published_keys(project: Project, policy: Host | None) -> list[str]:
 
 
 @pool.cpu
-def _header_keys_job(
-    shared: tuple[Project, Host, Snapshot], item: tuple[str, list[Path]]
-) -> list[tuple[str, Path, str]]:
+def _header_keys_job(shared: tuple[Project, Host, Graph], item: tuple[str, list[Path]]) -> list[tuple[str, Path, str]]:
     project, host, snapshot = shared
     version, headers = item
     return [(version, path, header_key(project, host, path, version, snapshot)) for path in headers]
@@ -991,7 +879,7 @@ def _header_keys_job(
 
 @pool.cpu
 def _bundle_job(
-    shared: tuple[Project, Host, dict[str, dict[str, str]], Snapshot], versions: list[list[tuple[int, str, Task]]]
+    shared: tuple[Project, Host, dict[str, dict[str, str]], Graph], versions: list[list[tuple[int, str, Task]]]
 ) -> str:
     """One physical source's bundle key, derived in a worker beside the others."""
     project, host, header_keys, snapshot = shared
@@ -1003,7 +891,7 @@ def _bundle_key(
     host: Host,
     versions: list[list[tuple[int, str, Task]]],
     header_keys: dict[str, dict[str, str]],
-    snapshot: Snapshot,
+    snapshot: Graph,
 ) -> str:
     """A physical source's complete facts: inputs of both layers, include edges and ownership."""
     spell = _spell(project, host)
@@ -1011,7 +899,7 @@ def _bundle_key(
     for group in versions:
         _, content, (_, source, version) = group[0]
         command = _command(project, host, version, source, marked=True)
-        paths = snapshot.closure((source, *_forced(project, command)), command)
+        paths = snapshot.closure((source,), command).paths
         parts.extend((content, json.dumps([function for _, _, (function, _, _) in group])))
         for path in paths:
             parts.extend(
@@ -1075,7 +963,7 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
     tasks = declarations.published_sources(project)
     if len(tasks) != len(keys):
         raise Held("solve", "facts.keys: published sources changed during the solve")
-    snapshot = Snapshot(project)
+    snapshot = Graph.capture(project)
     versions = sorted({version for _, _, version in tasks})
     header_keys: dict[str, dict[str, str]] = {version: {} for version in versions}
     missing_headers: dict[str, list[tuple[str, Path]]] = {version: [] for version in versions}
@@ -1122,6 +1010,8 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         bundle_keys = (
             pool.run(policy, _bundle_job, ordered, (project, policy, header_keys, snapshot))
             if policy is not None and cache is not None
+            else [_bundle_job((project, None, header_keys, snapshot), group) for group in ordered]
+            if cache is not None
             else []
         )
         for position, versions_ in enumerate(ordered):

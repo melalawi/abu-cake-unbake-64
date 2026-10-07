@@ -4,9 +4,24 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from unbake.project.headers import Graph
 from unbake.typemap import declarations, facts
 
 HEADER = "typedef struct Pair { int a; int b; } Pair;\nextern Pair shared;\n"
+
+
+def fixture_graph(project):
+    if not isinstance(project, SimpleNamespace):
+        return Graph.capture(project)
+    project.src = project.root / "src"
+    project.src.mkdir(parents=True, exist_ok=True)
+    project.id = "graph-fixture"
+    project.cache = project.root / "cache"
+    if not hasattr(project, "include"):
+        project.include = ()
+    if not hasattr(project, "build"):
+        project.build = project.root / "build"
+    return Graph.capture(project)
 
 
 class SourceFactsTests(TempCase):
@@ -25,6 +40,7 @@ class SourceFactsTests(TempCase):
             compiler_for=lambda unit: compiler,
             version=lambda v: SimpleNamespace(macros=("VERSION_" + v,)),
         )
+        fixture_graph(self.project)
         texts = {
             "us": HEADER + "Pair *alpha(void);\nint beta(void);\n",
             "eu": HEADER + "Pair *alpha(void);\nint beta(void);\n",
@@ -48,12 +64,13 @@ class SourceFactsTests(TempCase):
         project = SimpleNamespace(
             root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
         )
+        fixture_graph(project)
         task = ("alpha", self.source, "us")
-        stale = facts.unit_key(project, None, self.source, "us", facts.Snapshot(project))
+        stale = facts.unit_key(project, None, self.source, "us", fixture_graph(project))
         self.source.write_text(self.source.read_text() + "int gamma;\n")
         with (
             patch.object(declarations, "source_unit", lambda *args, **named: self.units(*args)),
-            patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
+            patch.object(Graph, "generated", lambda snapshot: frozenset()),
             self.assertRaises(facts.Held) as raised,
         ):
             facts._unit_job((project, None, {"us": {}}, frozenset()), [[(0, stale, task)]])
@@ -61,12 +78,13 @@ class SourceFactsTests(TempCase):
 
     def test_source_key_follows_schema_not_tool_code(self) -> None:
         project = SimpleNamespace(root=self.root, include=(), version=lambda v: SimpleNamespace(macros=("V",)))
-        snapshot = facts.Snapshot(project)
+        fixture_graph(project)
+        snapshot = fixture_graph(project)
         task = ("alpha", self.source, "us")
         base = facts.source_key(project, None, task, snapshot)
         with patch.object(facts, "FACTS_SCHEMA", facts.FACTS_SCHEMA + 1):
-            self.assertNotEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
-        self.assertEqual(facts.source_key(project, None, task, facts.Snapshot(project)), base)
+            self.assertNotEqual(facts.source_key(project, None, task, fixture_graph(project)), base)
+        self.assertEqual(facts.source_key(project, None, task, fixture_graph(project)), base)
 
 
 class SharedVersionsTests(TempCase):
@@ -81,9 +99,10 @@ class SharedVersionsTests(TempCase):
         project = SimpleNamespace(
             root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
         )
+        fixture_graph(project)
         texts = dict.fromkeys(("de", "eu", "us"), declarations.BOUNDARY + "\nint alpha;\n")
         texts["jp"] = declarations.BOUNDARY + "\nint alpha;\nint jp_only;\n"  # near miss: another unit text
-        snapshot = facts.Snapshot(project)
+        snapshot = fixture_graph(project)
         groups = [
             [(index, facts.unit_key(project, None, source, version, snapshot), ("alpha", source, version))]
             for index, version in enumerate(sorted(texts))
@@ -98,7 +117,7 @@ class SharedVersionsTests(TempCase):
         with (
             patch.object(declarations, "source_unit", lambda p, h, version, s, **k: texts[version]),
             patch.object(layers, "source_part", source_part),
-            patch.object(facts.Snapshot, "generated", lambda snapshot: frozenset()),
+            patch.object(Graph, "generated", lambda snapshot: frozenset()),
             patch.object(facts, "_whole_tasks", lambda p, h, o, group, c: whole.append(group) or []),
         ):
             _, counts = facts._unit_job((project, None, {v: {} for v in texts}, frozenset()), groups)
@@ -114,6 +133,7 @@ class UnitFaultIdentityTests(TempCase):
         source = self.root / "804069F4_de.c"
         source.write_text("int real_input;\n")
         project = SimpleNamespace(root=self.root)
+        fixture_graph(project)
         tasks = [
             [(0, "source-key", ("func_804069F4_de", source, "de"))],
             [(1, "other-key", ("func_804069F4_de", source, "us"))],

@@ -5,7 +5,22 @@ from typing import ClassVar
 
 from tests.kit import TempCase, host_values
 from unbake.config import Host
+from unbake.project.headers import Graph
 from unbake.typemap import facts
+
+
+def fixture_graph(project):
+    if not isinstance(project, SimpleNamespace):
+        return Graph.capture(project)
+    project.src = project.root / "src"
+    project.src.mkdir(parents=True, exist_ok=True)
+    project.id = "graph-fixture"
+    project.cache = project.root / "cache"
+    if not hasattr(project, "include"):
+        project.include = ()
+    if not hasattr(project, "build"):
+        project.build = project.root / "build"
+    return Graph.capture(project)
 
 
 class SourceKeyTests(TempCase):
@@ -29,6 +44,7 @@ class SourceKeyTests(TempCase):
             compilers={"c": SimpleNamespace(cflags=())},
             version=versions.__getitem__,
         )
+        fixture_graph(self.project)
         self.host = Host.from_values(host_values(self.root), "compare")
         compiler = self.project.compilers["c"]
         compiler.cc = self.host.cpp
@@ -42,7 +58,7 @@ class SourceKeyTests(TempCase):
         self.project.versions = ("us", "eu")
 
     def key(self, version: str = "us") -> str:
-        return facts.source_key(self.project, self.host, ("alpha", self.source, version), facts.Snapshot(self.project))
+        return facts.source_key(self.project, self.host, ("alpha", self.source, version), fixture_graph(self.project))
 
     def test_key_changes_with_its_inputs_only(self) -> None:
         include = self.root / "include"
@@ -88,7 +104,7 @@ class UnitKeyTests(SourceKeyTests):
         self.source.write_text('#include "used.h"\nUsed alpha(void) { return 1; }\n')
 
     def key(self, version: str = "us") -> str:  # type: ignore[override]
-        return facts.unit_key(self.project, self.host, self.source, version, facts.Snapshot(self.project))
+        return facts.unit_key(self.project, self.host, self.source, version, fixture_graph(self.project))
 
     def test_generated_header_changes(self) -> None:
         from unittest.mock import patch
@@ -243,7 +259,7 @@ class HeaderKeyTests(SourceKeyTests):
         self.header.write_text('#include "used.h"\nstruct Holder { Used u; };\n')
 
     def key(self, version: str = "us") -> str:  # type: ignore[override]
-        return facts.header_key(self.project, self.host, self.header, version, facts.Snapshot(self.project))
+        return facts.header_key(self.project, self.host, self.header, version, fixture_graph(self.project))
 
     def test_key_changes_with_its_inputs_only(self) -> None:
         """Overridden: the source's bytes are no input of a header part."""

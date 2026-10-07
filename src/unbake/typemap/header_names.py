@@ -12,8 +12,8 @@ from unbake import cache as retention
 from unbake import inputs
 from unbake.cdecl import NAME_TOKEN, NameParser, attribute_source, declaration_source
 from unbake.config import Held, Host, Project
+from unbake.project.headers import Graph, Include
 
-_INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
 _PLACEHOLDER = re.compile(r"M2C_UNK\d*\Z")
 
 
@@ -284,87 +284,6 @@ def rewrite(source: str, replacements: dict[str, str], blocked: set[str]) -> str
     return source
 
 
-class IncludeClosure:
-    """Resolve project-local includes once, sharing the effective input texts."""
-
-    def __init__(self, project: Project, texts: dict[Path, str] | None = None):
-        self.canonical: dict[str, str] = {}
-        self.texts = {self.resolved(str(path)): text for path, text in (texts or {}).items()}
-        self.supplied = set(self.texts)
-        self.edges: dict[str, set[str]] = {}
-        self.frontiers: dict[str, set[str]] = {}
-        self.roots = tuple(map(str, project.include))
-        from unbake.layout import index
-
-        self.special = {self.resolved(str(path)) for path in index.headers(project)}
-
-    def resolved(self, path: str) -> str:
-        if path not in self.canonical:
-            self.canonical[path] = os.path.realpath(path)
-        return self.canonical[path]
-
-    def generated(self, path: str) -> bool:
-        return path in self.special
-
-    def imports(self, path: str) -> set[str]:
-        path = self.resolved(path)
-        if path not in self.edges:
-            if path not in self.texts:
-                self.texts[path] = Path(path).read_text() if os.path.isfile(path) else ""
-            text = re.sub(r"/\*.*?\*/|//[^\n]*", "", self.texts[path], flags=re.S)
-            self.edges[path] = set()
-            for name in _INCLUDE.findall(text):
-                candidates = [os.path.join(root, name) for root in (os.path.dirname(path), *self.roots)]
-                # Missing generated relative paths cannot shadow real authored
-                # headers later in the compiler's include search order.
-                target = next(
-                    (
-                        self.resolved(item)
-                        for item in candidates
-                        if os.path.isfile(item) or self.resolved(item) in self.supplied
-                    ),
-                    None,
-                )
-                if target is None:
-                    target = next(
-                        (self.resolved(item) for item in candidates if self.generated(self.resolved(item))), None
-                    )
-                if target is not None:
-                    self.edges[path].add(target)
-        return self.edges[path]
-
-    def authored_frontier(self, path: str) -> set[str]:
-        """Follow generated edges to authored inputs without claiming their names."""
-        if path not in self.frontiers:
-            pending, seen, authored = [path], set(), set()
-            while pending:
-                current = pending.pop()
-                if current in seen:
-                    continue
-                seen.add(current)
-                if not self.generated(current):
-                    authored.add(current)
-                elif current in self.frontiers:
-                    authored.update(self.frontiers[current])
-                else:
-                    pending.extend(self.imports(current))
-            self.frontiers[path] = authored
-        return self.frontiers[path]
-
-    def paths(self, path: Path, *, authored_only: bool = False) -> set[Path]:
-        pending, seen = [self.resolved(str(path))], set()
-        while pending:
-            current = pending.pop()
-            if current not in seen:
-                seen.add(current)
-                pending.extend(
-                    self.authored_frontier(current)
-                    if authored_only and self.generated(current)
-                    else self.imports(current)
-                )
-        return {Path(item) for item in seen}
-
-
 def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], list[str]]:
     """The names and tags one source declares, across its per-version views (a pool task)."""
     import json
@@ -439,8 +358,8 @@ def source_names(
     from unbake.layout import index
 
     supplied = texts
-    closure = IncludeClosure(project, texts)
-    header = Path(closure.resolved(str(header)))
+    closure = Graph.capture(project, texts)
+    header = header.resolve()
     generated = index.headers(project)
 
     sources = sorted(
@@ -448,17 +367,10 @@ def source_names(
         if supplied is not None
         else project.src.rglob("*.c")
     )
-    included = {path: closure.paths(path, authored_only=True) for path in sources}
-    tasks = [(project, policy, path, closure.texts[closure.resolved(str(path))]) for path in sources]
-    deps = sorted(
-        {
-            dep
-            for path in sources
-            for dep in included[path] - {Path(closure.resolved(str(path)))}
-            if dep not in generated
-        }
-    )
-    dep_tasks = [(dep, closure.texts[closure.resolved(str(dep))]) for dep in deps]
+    included = {path: set(closure.closure((path,), authored_only=True).paths) | {path} for path in sources}
+    tasks = [(project, policy, path, closure.view.read(path).decode()) for path in sources]
+    deps = sorted({dep for path in sources for dep in included[path] - {path.resolve()} if dep not in generated})
+    dep_tasks = [(dep, closure.view.read(dep).decode()) for dep in deps]
     if policy is None:
         owned_rows = [_owned(task) for task in tasks]
         header_rows = [_header_owned(task) for task in dep_tasks]
@@ -474,7 +386,7 @@ def source_names(
         # aliases from consumers that never import that authored declaration.
         local = set(owned)
         tags = set(own_tags)
-        for dep in sorted(included[path] - {Path(closure.resolved(str(path)))}):
+        for dep in sorted(included[path] - {path.resolve()}):
             if dep in generated:
                 continue
             dep_names, dep_tags = header_owned[dep]
@@ -493,21 +405,15 @@ def imports(project: Project, originals: dict[Path, str], filtered: dict[Path, s
     Inline only headers whose imported context changed, retaining their guards
     and translating relative include paths to the project's include roots.
     """
-    paths = {path.resolve(): path for path in originals}
-    edges: dict[Path, dict[str, Path]] = {}
-    for path, text in originals.items():
-        edges[path] = {}
-        for name in _INCLUDE.findall(re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)):
-            target = next(
-                (
-                    paths[item.resolve()]
-                    for item in (path.parent / name, *(root / name for root in project.include))
-                    if item.resolve() in paths
-                ),
-                None,
-            )
-            if target is not None:
-                edges[path][name] = target
+    graph = Graph.contents(originals, project.include)
+    edges = {
+        path: {
+            include.name: resolution.target
+            for include in graph.projection(path).includes
+            if (resolution := graph.resolve(path, include)).target is not None
+        }
+        for path in originals
+    }
     changed = {path for path in originals if originals[path] != filtered[path]}
     while pending := {path for path, targets in edges.items() if changed.intersection(targets.values())} - changed:
         changed.update(pending)
@@ -521,12 +427,12 @@ def imports(project: Project, originals: dict[Path, str], filtered: dict[Path, s
         if path in active:
             return ""  # The containing guarded header is already being emitted.
 
-        def include(match: re.Match[str]) -> str:
-            target = edges[path].get(match[1])
+        def include(directive: Include, original: str) -> str:
+            target = edges[path].get(directive.name)
             if target is None:
-                return match[0]
+                return original
             return render(target, active | {path})
 
-        return _INCLUDE.sub(include, filtered[path])
+        return graph.rewrite_imports(filtered[path], include)
 
     return {path: render(path, set()) for path in originals}

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from tests.typemap.test_facts import fixture_graph
+from unbake.project.headers import Graph
 from unbake.typemap import declarations, facts, layers
 
 
@@ -30,7 +32,7 @@ class AssembledInputTests(TempCase):
                 + f'\n# 1 "{source}"\n'
                 + source.read_text().split("\n", 1)[1]
             )
-            snapshot = facts.Snapshot(project)
+            snapshot = fixture_graph(project)
             identity = facts.header_key(project, None, header, "us", snapshot)
             output.put_json(facts.HEADER, identity, layers.header_part(text.split(f'# 1 "{source}"')[0], header, spell))
             parts = {"us": facts._Parts(output, {spell(str(header)): identity})}
@@ -50,7 +52,7 @@ class AssembledInputTests(TempCase):
                 )
             return rows
 
-        with patch.object(facts.Snapshot, "generated", return_value=frozenset()):
+        with patch.object(Graph, "generated", return_value=frozenset()):
             first = run("struct Shared { int a; };\n")
             with patch.object(
                 layers, "dependencies", side_effect=AssertionError("cached facts rebuilt header layouts")
@@ -80,7 +82,7 @@ class AssembledInputTests(TempCase):
         generated = frozenset({first, extra})
 
         def run(added):
-            snapshot = facts.Snapshot(project)
+            snapshot = fixture_graph(project)
             parts = {}
             for header in generated:
                 text = declarations.BOUNDARY + f'\n# 1 "{header}"\n' + header.read_text()
@@ -107,7 +109,7 @@ class AssembledInputTests(TempCase):
                 )
             return content, rows
 
-        with patch.object(facts.Snapshot, "generated", return_value=generated):
+        with patch.object(Graph, "generated", return_value=generated):
             before, rows = run(False)
             self.assertNotIn("Added", output.decode(json.loads(rows[0][1])[1])["structs"])
             first.write_text('#include "extra.h"\ntypedef int Used;\n')

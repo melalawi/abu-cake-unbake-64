@@ -9,6 +9,7 @@ from pathlib import Path
 
 from unbake.cdecl import Declarations, declarations
 from unbake.config import Held, Host, Project
+from unbake.project.headers import Graph
 
 
 def _clean(text: str) -> str:
@@ -17,37 +18,6 @@ def _clean(text: str) -> str:
 
 def _typedefs(text: str) -> set[str]:
     return declarations(text).typedefs
-
-
-_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"', re.M)
-
-
-def _includes(contents: dict[Path, str]) -> dict[Path, set[Path]]:
-    """Each header's include closure among CONTENTS: a quoted include names a header relative to the including
-    one, or (without "..") by its trailing path."""
-    paths = {os.path.normpath(path): path for path in contents}
-    direct: dict[Path, set[Path]] = {}
-    for path, text in contents.items():
-        found = set()
-        for name in _INCLUDE.findall(text):
-            beside = paths.get(os.path.normpath(path.parent / name))
-            if beside is not None:
-                found.add(beside)
-            elif ".." not in Path(name).parts:
-                tail = Path(name).parts
-                found.update(other for other in contents if other.parts[-len(tail) :] == tail)
-        direct[path] = found - {path}
-    closure: dict[Path, set[Path]] = {}
-    for path in contents:
-        seen: set[Path] = set()
-        pending = [*direct[path]]
-        while pending:
-            other = pending.pop()
-            if other not in seen:
-                seen.add(other)
-                pending.extend(direct[other])
-        closure[path] = seen - {path}
-    return closure
 
 
 def _complete_tags(header: Declarations, aliases: dict[str, str]) -> set[str]:
@@ -79,7 +49,11 @@ def ordered_headers(
 
     parsed = {}
     mapping = {}
-    included = _includes(contents)
+    graph = Graph.contents(contents, tuple(dict.fromkeys(p.parent for p in contents)))
+    spellings = {Path(os.path.abspath(path)): path for path in contents}
+    included = {
+        path: {spellings[dep] for dep in graph.closure((path,)).paths if dep in spellings} - {path} for path in contents
+    }
     paths = list(dict.fromkeys(contents if roots is None else roots))
     selected = set(contents) if roots is None else {dep for path in paths for dep in {path} | included[path]}
     for path in contents:
@@ -87,7 +61,10 @@ def ordered_headers(
             continue
         text = contents[path]
         try:
-            parsed[path] = declarations(text)
+            projection = graph.projection(path)
+            if projection.parse_error:
+                raise Held("m2c", projection.parse_error)
+            parsed[path] = projection.declarations
             mapping.update(alias_types(text))
         except Held as error:
             raise Held("m2c", f"{path}: {error.reason}") from error

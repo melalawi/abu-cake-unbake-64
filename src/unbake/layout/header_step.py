@@ -21,11 +21,10 @@ from unbake import cache, inputs
 from unbake.config import Held, Host, Project
 from unbake.journal import Journal
 from unbake.layout import apply, index, split
+from unbake.project.headers import Graph, HeaderCheck, scan
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
 SCHEMA = 8
-
-_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 
 
 def input_key(project: Project) -> str:
@@ -47,30 +46,7 @@ def input_key(project: Project) -> str:
     return cache.key("headers", str(SCHEMA), dependencies.digest)
 
 
-def declared(text: str) -> set[str]:
-    from unbake.layout.header_loss import declared as names
-
-    return names(text)
-
-
-def includes(path: Path, project: Project, memo: dict[Path, frozenset[Path]]) -> frozenset[Path]:
-    """Every header PATH includes, transitively, resolved against include/ (unresolved names are skipped)."""
-    if path in memo:
-        return memo[path]
-    memo[path] = frozenset()
-    found: set[Path] = set()
-    for name in _INCLUDE.findall(path.read_text(errors="replace")):
-        for root in (path.parent, *project.include):
-            candidate = (root / name).resolve()
-            if candidate.is_file():
-                found.add(candidate)
-                found |= includes(candidate, project, memo)
-                break
-    memo[path] = frozenset(found)
-    return memo[path]
-
-
-def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
+def plan(project: Project, outputs: dict[Path, bytes], host: Host) -> tuple[dict[Path, bytes], HeaderCheck]:
     """The outputs whose bytes differ from the tree, after the merge-only check.
 
     A previously generated header the outputs no longer contain is deleted by apply.install, so it is
@@ -78,8 +54,8 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     changed = {path: data for path, data in outputs.items() if not path.is_file() or path.read_bytes() != data}
     from unbake.layout import header_loss
 
-    header_loss.check(project, outputs, obsolete=index.owned(project) - outputs.keys())
-    return changed
+    check = header_loss.check(project, outputs, obsolete=index.owned(project) - outputs.keys(), policy=host)
+    return changed, check
 
 
 _DEFINED = re.compile(r"^[A-Za-z_][\w \t*]*?\b([A-Za-z_]\w*)[ \t]*\([^;{]*\)[ \t\n]*\{", re.M)
@@ -151,7 +127,9 @@ def validate(
             if path.is_file() and not mirror.exists():
                 mirror.parent.mkdir(parents=True, exist_ok=True)
                 mirror.symlink_to(path)
-    memo: dict[Path, frozenset[Path]] = {}
+    before = Graph.capture(project)
+    after = Graph(before.view.overlay({**dict.fromkeys(obsolete), **changed}), before.search)
+    affected = set(after.affected(before, headers | set(changed), project.src.rglob("*.c")))
     # Each VERSION's alias index once, not once per affected source.
     owners = {version: split.owners_by_alias(project, version) for version in project.versions}
     view = replace(project, work_include=(staged_headers,))
@@ -164,11 +142,7 @@ def validate(
             if source.stem in preproved:
                 continue
             own = changed.get(source)
-            if (
-                own is None
-                and source not in (disagreements or {})
-                and not (includes(source.resolve(), project, memo) & headers)
-            ):
+            if own is None and source not in (disagreements or {}) and source not in affected:
                 continue
             published[source] = tuple(
                 version
@@ -245,14 +219,14 @@ def run(project: Project, host: Host) -> list[Path]:
         apply.units(project)
         disagreements: dict[Path, dict[str, tuple[str, str]]] = {}
         outputs = apply.render(project, host, disagreements)
-        changed = plan(project, outputs)
+        changed, check = plan(project, outputs, host)
         obsolete = index.owned(project) - outputs.keys()
         if not changed and not obsolete:
             return []
         validate(project, host, changed, disagreements, obsolete=frozenset(obsolete))
         # install needs every output: a generated header missing from them is deleted as obsolete.
         changes.save([*changed, *obsolete])
-        apply.install(project, dict(outputs))
+        apply.install(project, dict(outputs), check=check)
         return sorted(set(changed) | obsolete)
 
 
@@ -266,7 +240,8 @@ def missing(project: Project) -> list[str]:
     generated |= {group.header for group in layout_map.load(project).groups}
     absent = set()
     for source in project.src.glob("*.c"):
-        for name in _INCLUDE.findall(source.read_text(errors="replace")):
+        for directive in scan(source.read_text(errors="replace")):
+            name = directive.name
             if name in generated and not (root / name).is_file():
                 absent.add(name)
     return sorted(absent)

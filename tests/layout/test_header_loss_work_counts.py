@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import pool
+from unbake import cdecl, pool
 from unbake.cache import forget
 from unbake.config import Held
 from unbake.layout import header_loss
@@ -31,7 +31,7 @@ class RetentionWorkCounts(ProjectCase):
 
     def check(self, outputs, counts=None):
         state = {"worker": False, "parent": 0, "headers": Counter(), "sources": 0}
-        original = header_loss.declared
+        original = cdecl.declarations
 
         def declared(text):
             state["parent"] += int(not state["worker"])
@@ -48,7 +48,7 @@ class RetentionWorkCounts(ProjectCase):
                 state["worker"] = False
 
         kwargs = {"policy": self.host} if "policy" in inspect.signature(header_loss.check).parameters else {}
-        with patch.object(pool, "run", run), patch.object(header_loss, "declared", declared):
+        with patch.object(pool, "run", run), patch.object(cdecl, "declarations", declared):
             header_loss.check(self.project, outputs, **kwargs)
         if counts is not None:
             counts.update(state)

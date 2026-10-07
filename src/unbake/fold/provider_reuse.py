@@ -18,7 +18,7 @@ from unbake.cdecl import NAME_TOKEN, declaration_source, declarations
 from unbake.config import Held, Host, Project
 from unbake.layout import redeclarations
 from unbake.layout.split import Edit
-from unbake.project.headers import include_closure
+from unbake.project.headers import Graph
 
 
 @dataclass(frozen=True)
@@ -147,7 +147,7 @@ def plan(
             required.update(tokens)
         if not homes:
             continue
-        imported = include_closure(contents, tuple(project.include), homes)
+        imported = set(Graph.contents(contents, project.include).closure(homes).paths)
         if path in imported:
             _refuse(project, contents, path.name, [path, *sorted(homes)], "canonical import would form a cycle")
         # Follow typedef dependencies to prove that identical field spellings

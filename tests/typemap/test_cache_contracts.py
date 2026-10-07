@@ -4,16 +4,17 @@ from unittest.mock import patch
 
 from tests.preprocessor import output
 from tests.project_fixture import ProjectCase
-from tests.typemap.test_facts import SourceKeyTests
+from tests.typemap.test_facts import SourceKeyTests, fixture_graph
 from tests.typemap.test_render_once import session, solution
 from unbake import pool, process
 from unbake.cache import Cache
+from unbake.project.headers import Graph
 from unbake.typemap import database, facts, regeneration
 
 
 class EffectiveDependencyTests(SourceKeyTests):
     def keys(self):
-        snapshot = facts.Snapshot(self.project)
+        snapshot = fixture_graph(self.project)
         return (
             facts.source_key(self.project, self.host, ("alpha", self.source, "us"), snapshot),
             facts.unit_key(self.project, self.host, self.source, "us", snapshot),
@@ -96,7 +97,7 @@ class PhysicalSourceKeyTests(ProjectCase):
         source.write_text("int alpha(void) { return 1; }\nint alias(void) { return 2; }\n")
         tasks = [(name, source, version) for name in ("alpha", "alias") for version in self.project.versions]
         expected = [
-            facts.unit_key(self.project, self.host, path, version, facts.Snapshot(self.project))
+            facts.unit_key(self.project, self.host, path, version, fixture_graph(self.project))
             for _, path, version in tasks
         ]
         real = facts.unit_key
@@ -121,8 +122,8 @@ class PhysicalSourceKeyTests(ProjectCase):
     def test_version_macros_do_not_rewalk_an_identical_include_search(self):
         source = self.project.src / "alpha.c"
         source.write_text('#include "types.h"\nint alpha(void) { return 0; }\n')
-        snapshot = facts.Snapshot(self.project)
-        with patch.object(snapshot, "edges", wraps=snapshot.edges) as edges:
+        snapshot = fixture_graph(self.project)
+        with patch.object(Graph, "edges", autospec=True, side_effect=Graph.edges) as edges:
             first = facts.unit_key(self.project, self.host, source, "us", snapshot)
             visits = edges.call_count
             second = facts.unit_key(self.project, self.host, source, "eu", snapshot)
@@ -146,7 +147,7 @@ class PhysicalSourceKeyTests(ProjectCase):
 
         with patch("unbake.layout.index.headers", return_value=frozenset({header})):
             expected = [
-                facts.unit_key(self.project, self.host, path, version, facts.Snapshot(self.project))
+                facts.unit_key(self.project, self.host, path, version, fixture_graph(self.project))
                 for _, path, version in tasks
             ]
             with (

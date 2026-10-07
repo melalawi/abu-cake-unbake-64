@@ -17,7 +17,7 @@ from unbake.decomp.draft_context import ordered_headers
 from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_identity import Index
 from unbake.layout.structs_types import Aggregate
-from unbake.project.headers import include_closure, include_headers
+from unbake.project.headers import Graph, include_headers
 
 
 def context(
@@ -292,7 +292,7 @@ class Headers:
             or relative in current
             or not any(index.marked(path, root.resolve()) for root in project.include)
         }
-        selected = include_closure(texts, tuple(project.include), selected)
+        selected = set(Graph.contents(texts, project.include).closure(selected).paths)
         return {path: text for path, text in texts.items() if path in selected}
 
     def seeded(self, text: str) -> LayoutParser:

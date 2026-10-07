@@ -10,15 +10,31 @@ from tests.typemap.test_closure import PROGRAMS, SOURCES
 from tests.typemap.test_solver import facts
 from unbake import pool
 from unbake.config import Held
+from unbake.project.headers import Graph
 from unbake.typemap import database, declarations, layers
 from unbake.typemap import facts as source_facts
 from unbake.typemap.declarations import extract
 from unbake.typemap.solver import _merge_records, infer
 
 
+def fixture_graph(project):
+    if not isinstance(project, SimpleNamespace):
+        return Graph.capture(project)
+    project.src = project.root / "src"
+    project.src.mkdir(parents=True, exist_ok=True)
+    project.id = "graph-fixture"
+    project.cache = project.root / "cache"
+    if not hasattr(project, "include"):
+        project.include = ()
+    if not hasattr(project, "build"):
+        project.build = project.root / "build"
+    return Graph.capture(project)
+
+
 class SpellingTests(TempCase):
     def test_project_machine_and_outside_paths(self) -> None:
         project = SimpleNamespace(root=self.root / "proj")
+        fixture_graph(project)
         machine = self.root / "machine"
         spell = lambda text: layers.spelling(project, machine, text)  # noqa: E731
         self.assertEqual(spell(str(self.root / "proj/include/a.h")), "include/a.h")
@@ -43,9 +59,10 @@ class AssembledCacheTests(TempCase):
         project = SimpleNamespace(
             root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
         )
+        fixture_graph(project)
         text = declarations.BOUNDARY + "\nint alpha;\n"
         output = source_facts.Store(project, None)
-        snapshot = source_facts.Snapshot(project)
+        snapshot = fixture_graph(project)
         content_key = source_facts.unit_key(project, None, source, "us", snapshot)
         group = [(0, content_key, ("alpha", source, "us"))]
         parts = {"us": source_facts._Parts(output, {})}
@@ -54,7 +71,7 @@ class AssembledCacheTests(TempCase):
             counts = {"sources": 0, "whole": 0}
             with (
                 patch.object(declarations, "source_unit", lambda *args, **named: text),
-                patch.object(source_facts.Snapshot, "generated", lambda snapshot: frozenset()),
+                patch.object(Graph, "generated", lambda snapshot: frozenset()),
             ):
                 rows = source_facts._source_tasks(
                     project, None, output, parts, {}, group, counts, {}, snapshot, frozenset()
@@ -111,6 +128,7 @@ class DropsTests(TempCase):
 class PooledSolveTests(TempCase):
     def solve(self, source: str, pooled: bool) -> dict:
         project = SimpleNamespace(root=self.root)
+        fixture_graph(project)
         seeds = [extract(source, {"kind": "declared"})] if source else []
         shards = self.root / "shards"
 

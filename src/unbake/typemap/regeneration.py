@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict
@@ -19,6 +18,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import headers
 from unbake.layout import index as layout_index
 from unbake.layout import map as layout_map
+from unbake.project.headers import Graph
 from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
@@ -155,7 +155,7 @@ class Session:
         exported_names = storage.encoded(sorted(exported))
         self.source_words = {path: set(re.findall(r"\b[A-Za-z_]\w*\b", text)) for path, text in self.sources.items()}
         self.projections: dict[Path, Any] = {}
-        snapshot = facts.Snapshot(project)
+        snapshot = Graph.capture(project)
         rows = []
         pending = []
         with tui.task("Selecting changed header consumers", len(self.sources)):
@@ -174,7 +174,9 @@ class Session:
                     exported_names,
                     bindings,
                     *(
-                        facts.unit_key(project, policy, path, version, snapshot)
+                        snapshot.closure(
+                            (path,), facts._command(project, policy, version, path, marked=True)
+                        ).dependency_set.digest
                         for version in project.versions
                         if re.search(r"^\s*#\s*(?:if|ifdef|ifndef|elif)\b", text, re.M)
                     ),
@@ -458,80 +460,3 @@ class Session:
             len(outputs),
         )
         return outputs
-
-
-def validation_inputs(
-    project: Project, outputs: dict[Path, bytes | Path], abi_context: str, *, authored: dict[Path, str] | None = None
-) -> tuple[dict[Path, bytes], dict[Path, set[Path]], list[tuple[str, set[Path]]]]:
-    """Build one effective tree and select each header/ABI's include closure."""
-
-    from unbake.cdecl import Declarations, declarations
-
-    is_generated = storage.generated_view(project)
-    ownership: dict[Path, bool] = {}
-
-    def generated(path: Path) -> bool:
-        if path not in ownership:
-            ownership[path] = is_generated(path)
-        return ownership[path]
-
-    contents = (
-        {path: text.encode() for path, text in authored.items()}
-        if authored is not None
-        else {path: path.read_bytes() for root in project.include for path in root.rglob("*.h") if not generated(path)}
-    )
-    contents.update({p: content for p, content in outputs.items() if isinstance(content, bytes) and p.suffix == ".h"})
-    categories = {path: generated(path) for path in contents}
-    graph_key = key(
-        "validation-graph-v2",
-        *(part for path, data in contents.items() for part in (str(path), data, str(categories[path]))),
-    )
-
-    def graph() -> tuple[dict[Path, set[Path]], dict[str, set[Path]]]:
-        paths = {str(path): path for path in contents}
-        roots = tuple(map(str, project.include))
-        edges: dict[Path, set[Path]] = {}
-        for path, data in contents.items():
-            edges[path] = set()
-            for name in re.findall(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', data.decode(), re.M):
-                for root in (os.path.dirname(str(path)), *roots):
-                    target = paths.get(os.path.abspath(os.path.join(root, name)))
-                    if target is not None:
-                        edges[path].add(target)
-                        break
-        closures = {}
-        for path in contents:
-            seen: set[Path] = set()
-            pending = [path]
-            while pending:
-                current = pending.pop()
-                if current not in seen:
-                    seen.add(current)
-                    pending.extend(edges[current])
-            closures[path] = seen
-        providers: dict[str, set[Path]] = {}
-        for path in sorted(contents, key=lambda p: not categories[p]):
-            data = contents[path]
-
-            def analyze(data: bytes = data) -> Declarations:
-                return declarations(data.decode())
-
-            try:
-                row = memo(
-                    "typemap.validation-symbols", data, analyze, size=retention.memory_size, copy_out=retention.clone
-                )
-            except Held as error:
-                raise Held("m2c", f"{path}: {error.reason}") from error
-            for name in row.typedefs | row.exports | row.tags:
-                if categories[path] or name not in providers:
-                    providers.setdefault(name, set()).add(path)
-        return closures, providers
-
-    closures, providers = memo(
-        "typemap.validation-graph", graph_key, graph, size=retention.memory_size, copy_out=retention.clone
-    )
-    abi = []
-    for text in dict.fromkeys(line for line in abi_context.splitlines() if line.strip()):
-        selected = {p for name in re.findall(r"\b[A-Za-z_]\w*\b", text) for p in providers.get(name, set())}
-        abi.append((text, {dep for p in selected for dep in closures.get(p, {p})}))
-    return contents, closures, abi

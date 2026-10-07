@@ -16,7 +16,8 @@ from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.fold import imports
 from unbake.layout.headers import Layout
 from unbake.layout.map import Group, Map
-from unbake.typemap import database, regeneration
+from unbake.project.headers import Graph
+from unbake.typemap import database
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/ragewars_declaration_order"
 
@@ -143,7 +144,7 @@ class ProviderOrderTests(ProjectCase):
         )
         outputs = {self.include / "common/vec.h": self.contents[self.include / "common/vec.h"].encode()}
         authored = {path: text for path, text in self.contents.items() if path.name != "measured.h"}
-        contents, closures, _ = regeneration.validation_inputs(project, outputs, "", authored=authored)
+        contents, closures, _ = Graph.validation(project, outputs, "", authored=authored)
         job = database._Validation(
             project, SimpleNamespace(cpp=Path(self.cpp)), "us", contents, closures, [], frozenset()
         )

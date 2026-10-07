@@ -10,6 +10,13 @@ from unbake.layout import header_step
 class HeaderPlanTests(ProjectCase):
     def setUp(self) -> None:
         super().setUp()
+        from unbake.config import Host
+
+        values = {name: dict(row) for name, row in self.host.values.items()}
+        values["resources"].update(
+            memory_total_bytes=4 << 30, memory_parent_bytes=1 << 30, memory_worker_bytes=512 << 20
+        )
+        self.host = Host.from_values(values, "draft")
         self.header = self.project.include[-1] / "main" / "g.h"
         self.header.parent.mkdir()
         self.header.write_text("int foo(void);\nint stale(void);\n")
@@ -17,7 +24,7 @@ class HeaderPlanTests(ProjectCase):
 
     def plan(self, outputs: dict, generated: frozenset = frozenset()) -> dict:
         with patch.object(header_step.index, "headers", return_value=generated):
-            return header_step.plan(self.project, outputs)
+            return header_step.plan(self.project, outputs, self.host)[0]
 
     def test_unchanged_outputs_plan_nothing(self) -> None:
         self.assertEqual(self.plan({self.header: self.header.read_bytes()}), {})
@@ -72,7 +79,14 @@ class HeaderPlanTests(ProjectCase):
             patch.object(header_step.apply, "install") as install,
         ):
             self.assertEqual(header_step.run(self.project, self.host), [other])
-        install.assert_called_once_with(self.project, outputs)
+        self.assertEqual(install.call_count, 1)
+        self.assertEqual(install.call_args.args, (self.project, outputs))
+        self.assertTrue(
+            install.call_args.kwargs["check"].valid(
+                __import__("unbake.project.headers", fromlist=["Graph"]).Graph.capture(self.project).view,
+                __import__("unbake.layout.header_loss", fromlist=["output_key"]).output_key(outputs, ()),
+            )
+        )
 
 
 class HeaderRunTests(ProjectCase):
@@ -87,7 +101,7 @@ class HeaderRunTests(ProjectCase):
         def units(project: object) -> None:
             split.write_text(split.read_text() + "# merged pools\n")
 
-        def install(project: object, outputs: dict) -> None:
+        def install(project: object, outputs: dict, *, check=None) -> None:
             header.write_text("int moved(void);\n")  # one file written, then the process holds
             raise Held("headers", "headers.declaration: refused")
 

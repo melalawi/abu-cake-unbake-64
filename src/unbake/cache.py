@@ -23,6 +23,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Iterable, Sequence
 from concurrent.futures import Future
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ParamSpec, Protocol, TypeVar, cast
 
@@ -79,30 +80,44 @@ def clone(value: T) -> T:
     return copy.deepcopy(value)
 
 
-def memory_size(value: Any) -> int:
-    """Account each reachable retained Python object once, including container overhead."""
+def memory_size(value: Any, *, limit: int | None = None) -> int:
+    """Exact retained weight; a bounded oversized walk returns limit+1 without visiting the rest."""
     seen: set[int] = set()
+    total = 0
 
-    def walk(item: Any) -> int:
+    class Oversized(Exception):
+        pass
+
+    def walk(item: Any) -> None:
+        nonlocal total
         if id(item) in seen:
-            return 0
+            return
+        total += sys.getsizeof(item)
+        if limit is not None and total > limit:
+            raise Oversized
         seen.add(id(item))
-        total = sys.getsizeof(item)
         if isinstance(item, dict):
-            total += sum(walk(k) + walk(v) for k, v in item.items())
+            for key, value in item.items():
+                walk(key)
+                walk(value)
         elif isinstance(item, (tuple, list, set, frozenset)):
-            total += sum(map(walk, item))
+            for value in item:
+                walk(value)
         elif not callable(item):
             if hasattr(item, "__dict__"):
-                total += walk(vars(item))
+                walk(vars(item))
             for base in type(item).__mro__:
                 slots = getattr(base, "__slots__", ())
                 for slot in (slots,) if isinstance(slots, str) else slots:
                     if slot not in ("__dict__", "__weakref__") and hasattr(item, slot):
-                        total += walk(getattr(item, slot))
-        return total
+                        walk(getattr(item, slot))
 
-    return walk(value)
+    try:
+        walk(value)
+    except Oversized:
+        assert limit is not None
+        return limit + 1
+    return total
 
 
 _inflight: dict[tuple[str, str], Future[Path]] = {}
@@ -264,7 +279,15 @@ def trim(root: Path, max_bytes: int, trim_to_bytes: int) -> list[Path]:
 
 _memo: OrderedDict[tuple[str, Hashable], tuple[Any, int]] = OrderedDict()
 _memo_lock = threading.Lock()
-_memo_flights: dict[tuple[str, Hashable], Future[Any]] = {}
+
+
+@dataclass
+class _MemoFlight:
+    future: Future[Any]
+    waiters: int = 0
+
+
+_memo_flights: dict[tuple[str, Hashable], _MemoFlight] = {}
 _budget: int | None = None
 _resident = 0
 
@@ -299,13 +322,17 @@ def remember(
 ) -> T:
     global _resident
     identity = (kind, content)
-    value_bytes = size(value)
-    if type(value_bytes) is not int or value_bytes < 0:
-        raise Held("cache", "cache.size: required nonnegative integer bytes")
-    weight = value_bytes + memory_size(identity)
-    if weight < 0:
-        raise Held("cache", "cache.size: required nonnegative integer bytes")
     with _memo_lock:
+        budget = _budget
+        if budget is None:
+            return value
+        identity_bytes = memory_size(identity, limit=budget)
+        if identity_bytes > budget:
+            return value
+        value_bytes = memory_size(value, limit=budget - identity_bytes) if size is memory_size else size(value)
+        if type(value_bytes) is not int or value_bytes < 0:
+            raise Held("cache", "cache.size: required nonnegative integer bytes")
+        weight = value_bytes + identity_bytes
         old = _memo.pop(identity, None)
         if old is not None:
             _resident -= old[1]
@@ -334,22 +361,31 @@ def memo(
         running = _memo_flights.get(identity)
         owner = running is None
         if owner:
-            running = Future()
+            running = _MemoFlight(Future())
             _memo_flights[identity] = running
+        else:
+            assert running is not None
+            running.waiters += 1
     assert running is not None
     if not owner:
-        return cast(T, copy_out(running.result()))
+        return cast(T, copy_out(running.future.result()))
     try:
         value = compute()
         result = remember(kind, content, value, size=size, copy_out=copy_out)
-        running.set_result(copy_out(value))
+        with _memo_lock:
+            # Close admission before returning the producer-owned value. An awaiting
+            # consumer needs one stable copy; an unobserved future needs none.
+            _memo_flights.pop(identity, None)
+            delivery = copy_out(value) if running.waiters else value
+            running.future.set_result(delivery)
         return result
     except BaseException as error:
-        running.set_exception(error)
+        running.future.set_exception(error)
         raise
     finally:
         with _memo_lock:
-            _memo_flights.pop(identity, None)
+            if _memo_flights.get(identity) is running:
+                _memo_flights.pop(identity, None)
 
 
 P = ParamSpec("P")

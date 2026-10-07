@@ -17,11 +17,26 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
-from unbake import pool
+from unbake import cache, pool
+from unbake.project.headers import Graph
 from unbake.typemap import declarations, facts, facts_decode
 
 SLICE = Path(__file__).parent / "fixtures" / "ragewars_decode_slice.json"
 BUDGET = 2 * 1024 * 1024
+
+
+def fixture_graph(project):
+    if not isinstance(project, SimpleNamespace):
+        return Graph.capture(project)
+    project.src = project.root / "src"
+    project.src.mkdir(parents=True, exist_ok=True)
+    project.id = "graph-fixture"
+    project.cache = project.root / "cache"
+    if not hasattr(project, "include"):
+        project.include = ()
+    if not hasattr(project, "build"):
+        project.build = project.root / "build"
+    return Graph.capture(project)
 
 
 class DecodeMemoryTests(TempCase):
@@ -70,6 +85,7 @@ class PublishedDecodeTests(TempCase):
         self.source = self.root / "unit.c"
         self.source.write_text("int unit(void);\n")
         self.project = SimpleNamespace(root=self.root, build=self.root / "build")
+        fixture_graph(self.project)
         self.tasks = [(f"owner_{index}", self.source, "de") for index in range(513)]
         self.jobs = []
         self.fail = None
@@ -90,11 +106,17 @@ class PublishedDecodeTests(TempCase):
     def collect(self, policy):
         output = facts.Store(self.project, None)
         shared_value = {"s32": "int"}
+        output.cache.value(
+            facts.SHARED, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", cache.JSON, lambda: {}
+        )
         with (
             patch.object(declarations, "published_sources", return_value=self.tasks),
-            patch.object(facts.Snapshot, "generated", return_value=frozenset()),
+            patch.object(Graph, "generated", return_value=frozenset()),
             patch.object(facts, "_headers", return_value=[]),
+            patch.object(facts, "unit_key", return_value="transport-fixture-unit"),
+            patch.object(facts, "_command", return_value=["in-memory"]),
             patch.object(facts, "_unit_job", self.unit),
+            patch.object(facts, "_shared_job", return_value=None),
             patch.object(pool, "run", self.run_inline),
             patch.object(output, "_get_shared", return_value=shared_value) as resolve,
         ):

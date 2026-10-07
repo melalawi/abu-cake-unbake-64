@@ -17,6 +17,7 @@ from unbake import cache as retention
 from unbake import effort, pool, tui
 from unbake import inputs as input_pins
 from unbake.config import Held, Host, Project
+from unbake.project.headers import Graph, recipe
 from unbake.typemap import header_names, namespace, regeneration, storage, types_db
 
 
@@ -145,15 +146,18 @@ def _render(
     retained_components, retained_homes = session.published, session.published_homes
     published = value.setdefault("published_declarations", {})
     published_homes = value.setdefault("published_homes", {})
-    from unbake.layout.header_loss import declared
+    from unbake.project.headers import project as declaration_projection
+    from unbake.project.headers import recipe
 
     # Installed contracts are canonical. Replace a stored copy of the same
     # declaration when the installed spelling changed, while keeping stored
     # providers for declarations absent from a partial installed tree.
     installed_paths = {path.relative_to(root).as_posix() for path in retained_components}
-    installed_names = set().union(*(declared(text) for text in retained_components.values()))
+    installed_names = set().union(
+        *(declaration_projection(text, recipe()).names for text in retained_components.values())
+    )
     for name, text in list(published.items()):
-        if name not in installed_paths and declared(text) & installed_names:
+        if name not in installed_paths and declaration_projection(text, recipe()).names & installed_names:
             published.pop(name)
             published_homes.pop(name, None)
     for path, text in retained_components.items():
@@ -602,16 +606,10 @@ def _consumer_imports(
             after[path] = (data.read_bytes() if isinstance(data, Path) else data).decode()
     if before == after:
         return {}
-    parts = {text: header_loss._header(text) for text in set(before.values()) | set(after.values())}
+    parts = {text: header_loss._header(text, recipe()) for text in set(before.values()) | set(after.values())}
 
-    def view(contents: dict[Path, str]) -> header_loss.View:
-        return header_loss.View(
-            project.include,
-            {path: parts[text][0] for path, text in contents.items()},
-            {path: parts[text][2] for path, text in contents.items()},
-        )
-
-    old, new = view(before), view(after)
+    old = Graph.contents(before, project.include, cache_root=project.cache)
+    new = Graph.contents(after, project.include, cache_root=project.cache)
     kept = set().union(*(parts[text][0] for text in after.values()))
     dependencies: dict[str, set[str]] = {}
     for text in before.values():
@@ -871,7 +869,7 @@ def validate_headers(
         return
     effort.count("validation.bundle_hit", 0, 1)
     try:
-        contents, closures, abi = regeneration.validation_inputs(project, outputs, abi_context, authored=authored)
+        contents, closures, abi = Graph.validation(project, outputs, abi_context, authored=authored)
     except Held as error:
         raise Held("solve", f"types.header_parse: {error.reason}") from error
     digests = {path: remembered_digest(data) for path, data in contents.items()}

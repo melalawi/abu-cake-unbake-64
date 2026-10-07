@@ -15,6 +15,13 @@ from unbake.typemap import database
 class HeaderLossTests(ProjectCase):
     def setUp(self):
         super().setUp()
+        from unbake.config import Host
+
+        values = {name: dict(row) for name, row in self.host.values.items()}
+        values["resources"].update(
+            memory_total_bytes=4 << 30, memory_parent_bytes=1 << 30, memory_worker_bytes=512 << 20
+        )
+        self.host = Host.from_values(values, "draft")
         self.header = self.project.include[0] / "used.h"
         self.header.write_text(
             "typedef int Word;\nstruct Vec3 { Word x; };\ntypedef struct Vec3 Vec3;\nextern Vec3 point;\n"
@@ -87,7 +94,10 @@ class HeaderLossTests(ProjectCase):
         for call in (apply.install, header_step.plan):
             with self.subTest(writer=call.__name__):
                 with self.assertRaisesRegex(Held, r"Vec3.*consumer.c"):
-                    call(self.project, output)
+                    if call is header_step.plan:
+                        call(self.project, output, self.host)
+                    else:
+                        call(self.project, output)
                 self.assertEqual(self.header.read_bytes(), before)
                 self.assertFalse((self.project.src / "new.c").exists())
         with patch.object(apply.index, "headers", return_value={self.header}):

@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from tests.kit import TempCase
 from unbake import cache, inputs
-from unbake.layout import header_loss
 from unbake.typemap import inference_cache
 
 VEC3 = Path(__file__).parent / "typemap/fixtures/ragewars_native_vec3/placed.h"
@@ -48,6 +47,12 @@ def producer_process(root, seed, second, observed, release, start):
         )
 
 
+def provided(text):
+    from unbake.project.headers import project, recipe
+
+    return project(text, recipe()).names
+
+
 class CacheOwnershipWork(TempCase):
     def setUp(self):
         super().setUp()
@@ -55,7 +60,7 @@ class CacheOwnershipWork(TempCase):
             cache.configure(memory_bytes=16 * 1024 * 1024)
         cache.forget()
         self.payload = VEC3.read_text()
-        self.assertTrue(header_loss.declared(self.payload))
+        self.assertTrue(provided(self.payload))
         cache.forget()
 
     def threaded(self, fail=False):
@@ -82,7 +87,7 @@ class CacheOwnershipWork(TempCase):
             release.wait(10)
             if fail:
                 raise ValueError("real projection refused")
-            return {"text": self.payload, "names": header_loss.declared(self.payload)}
+            return {"text": self.payload, "names": provided(self.payload)}
 
         def call():
             try:
@@ -127,7 +132,7 @@ class CacheOwnershipWork(TempCase):
 
         def compute():
             made.append(1)
-            return {"text": self.payload, "names": header_loss.declared(self.payload)}
+            return {"text": self.payload, "names": provided(self.payload)}
 
         first = cache.parsed("mutable-vec3", source, compute)
         first["text"] = "poison"
@@ -234,7 +239,7 @@ class CacheOwnershipWork(TempCase):
         workers = pool.Pool(2, 8 << 30, 1 << 30, 1 << 30, self.root / "transport")
 
         def consume(payload, index):
-            return len(header_loss.declared(payload["header"])) + index
+            return len(provided(payload["header"])) + index
 
         original = pool.pickle.loads
         with (

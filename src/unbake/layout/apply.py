@@ -14,6 +14,7 @@ from unbake import pool
 from unbake.cdecl import SOURCE_TOKEN
 from unbake.config import Held, Host, Project
 from unbake.layout import index, map, redeclarations
+from unbake.project.headers import FileBlob, Graph, HeaderCheck, Search, SearchFiles, TreeView
 from unbake.typemap import storage
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"][^\n]*(?:\n|$)', re.M)
@@ -81,45 +82,17 @@ def imported(text: str, root: Path | tuple[Path, ...], outputs: Mapping[Path, by
     A draft's private headers link foundational typedefs into the shared include tree. Keep the include's
     spelling for parent-relative lookup, while allowing resolved links only inside the effective roots.
     """
-    roots = tuple(path.resolve() for path in ((root,) if isinstance(root, Path) else root))
-
-    def includes(body: str, parent: Path | None = None) -> list[Path]:
-        paths = []
-        for match in _INCLUDE.finditer(body):
-            quoted = '"' in match[0].split(match[1], 1)[0]
-            search = (parent, *roots) if quoted and parent is not None else roots
-            for directory in search:
-                path = Path(os.path.abspath(directory / match[1]))
-                resolved = path.resolve()
-                if not any(resolved.is_relative_to(home) for home in roots):
-                    continue
-                if path in outputs or resolved in outputs or path.is_file():
-                    paths.append(path)
-                    break
-        return paths
-
-    result = []
-    pending = list(reversed(includes(text)))
-    seen = set()
-    while pending:
-        path = pending.pop()
-        resolved = path.resolve()
-        identity = path if path in outputs else resolved
-        if identity in seen:
-            continue
-        seen.add(identity)
-        data = outputs.get(path, outputs.get(resolved))
-        if isinstance(data, Path):
-            body = data.read_text()
-        elif isinstance(data, bytes):
-            body = data.decode()
-        elif path.is_file():
-            body = path.read_text()
-        else:
-            continue
-        result.append(body)
-        pending.extend(reversed(includes(body, path.parent)))
-    return result
+    roots = tuple((root,) if isinstance(root, Path) else root)
+    origin = roots[0] / "_imported.c"
+    files = {
+        Path(os.path.abspath(p)): FileBlob(data, None) if isinstance(data, Path) else data
+        for p, data in outputs.items()
+        if p.suffix == ".h"
+    }
+    files[origin] = text.encode()
+    view = TreeView("imports", SearchFiles(files, roots), roots)
+    graph = Graph(view, Search(include_roots=roots))
+    return [graph.view.read(path).decode() for path in graph.closure((origin,)).order]
 
 
 def _staged_headers(project: Project, outputs: Mapping[Path, bytes | Path]) -> dict[str, str]:
@@ -175,21 +148,34 @@ def source(
             # imports.resolve has already selected live canonical homes. Their
             # installed bytes can be newer than the disposable layout index;
             # catalogue only these imports and their listed dependencies.
-            names = list(_INCLUDE.findall(text))
-            seen = set()
-            while names:
-                name = names.pop()
-                if name in seen or (name not in lookup["headers"] and name not in changes):
+            origin = project.src / "_catalog.c"
+            files = {
+                origin: text.encode(),
+                **{project.include[0] / name: body.encode() for name, body in changes.items()},
+            }
+            graph = Graph(
+                TreeView(
+                    "catalog",
+                    SearchFiles(
+                        files,
+                        tuple(project.include),
+                        frozenset(
+                            root / name
+                            for root in project.include
+                            for name in lookup["headers"].keys() | changes.keys()
+                        ),
+                    ),
+                    tuple(project.include),
+                ),
+                Search(include_roots=tuple(project.include)),
+            )
+            for home in graph.closure((origin,)).order:
+                root = next((root for root in project.include if home.is_relative_to(root)), None)
+                if root is None:
                     continue
-                seen.add(name)
-                if name not in changes:
-                    home = next((root / name for root in project.include if (root / name).is_file()), None)
-                    if home is None:
-                        continue
-                    changes[name] = home.read_text()
-                for dependency in _INCLUDE.findall(changes[name]):
-                    relative = os.path.normpath(str(Path(name).parent / dependency))
-                    names.append(relative if relative in lookup["headers"] else dependency)
+                name = home.relative_to(root).as_posix()
+                if name in lookup["headers"] or name in changes:
+                    changes[name] = graph.view.read(home).decode()
             lookup = index.overlay(lookup, changes)
     ownership = ownership or map.load(project)
     previous = previous_names(project) if previous is None else previous
@@ -300,12 +286,15 @@ def units(project: Project, *, dry_run: bool = False) -> int:
     return changed
 
 
-def install(project: Project, outputs: dict[Path, bytes | Path], *, dry_run: bool = False) -> int:
+def install(
+    project: Project, outputs: dict[Path, bytes | Path], *, dry_run: bool = False, check: HeaderCheck | None = None
+) -> int:
     """Validate all content before writing, then delete obsolete owned headers."""
     from unbake.layout import header_loss
 
     obsolete = index.owned(project) - outputs.keys()
-    header_loss.check(project, outputs, obsolete=obsolete)
+    if check is None or not check.valid(Graph.capture(project).view, header_loss.output_key(outputs, obsolete)):
+        header_loss.check(project, outputs, obsolete=obsolete)
     changed = {
         p: data
         for p, data in outputs.items()

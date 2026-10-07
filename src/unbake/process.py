@@ -48,13 +48,22 @@ def run_native(
     context: dict[str, Any] | None = None,
     env: dict[str, str] | None = None,
     temporary_root: Path | None = None,
+    stdin: str | None = None,
 ) -> NativeResult:
     """The one native result/fault boundary, retaining both streams and exact invocation."""
     environment = dict(temporary_environment(work if temporary_root is None else temporary_root, env), LC_ALL="C")
     key = f"{phase}.{Path(argv[0]).name}"
+    native_input: dict[str, Any] = {"input": stdin} if stdin is not None else {}
     try:
         completed = subprocess.run(
-            argv, cwd=work, env=environment, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape"
+            argv,
+            cwd=work,
+            env=environment,
+            **native_input,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
         )
     except OSError as error:
         result = NativeResult(

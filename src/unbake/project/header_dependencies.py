@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +11,7 @@ from pathlib import Path
 from unbake.cdecl import declaration_source
 from unbake.config import Held, Project
 from unbake.layout import index
-
-_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
+from unbake.project.headers import Graph, Include
 
 
 class _OwnedBytes:
@@ -97,6 +95,10 @@ def complete(project: Project, source: str, headers: dict[str, str]) -> Closed:
     lookup = index.load(project)["headers"]
     effective = dict(headers)
     origin = project.src / "_publication.c"
+    graph = Graph.capture(project, {root / name: body for name, body in effective.items()})
+    expected = Graph(
+        graph.view.overlay({root / name: b"" for name in lookup if root / name not in graph.view.files}), graph.search
+    )
     pending = [(origin, source)]
     seen: set[Path] = set()
     relocations: dict[str, str] = {}
@@ -105,16 +107,15 @@ def complete(project: Project, source: str, headers: dict[str, str]) -> Closed:
     while pending:
         parent, text = pending.pop()
 
-        def replace_import(match: re.Match[str], parent: Path = parent) -> str:
+        def replace_import(include: Include, original: str, parent: Path = parent) -> str:
             nonlocal owned, signatures
-            name = match[1]
-            for home in (parent.parent, *project.include):
-                path = Path(os.path.abspath(home / name))
-                relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else None
-                if (relative is not None and (relative in effective or relative in lookup)) or path.is_file():
-                    break
-            else:
-                return match[0]
+            name = include.name
+            if include.unknown:
+                raise Held("land", f"land.header_dependency: {parent}: native dependency proof required for {name}")
+            path = graph.resolve(parent, include).target or expected.resolve(parent, include).target
+            if path is None:
+                return original
+            relative = path.relative_to(root).as_posix() if path.is_relative_to(root) else None
             replacement = relocations.get(relative) if relative is not None else None
             if replacement is not None:
                 path, relative = root / replacement, replacement
@@ -152,12 +153,10 @@ def complete(project: Project, source: str, headers: dict[str, str]) -> Closed:
                 seen.add(path)
                 pending.append((path, body))
             if replacement is not None:
-                return (
-                    match[0][: match.start(1) - match.start()] + replacement + match[0][match.end(1) - match.start() :]
-                )
-            return match[0]
+                return original.replace(name, replacement, 1)
+            return original
 
-        rewritten = _INCLUDE.sub(replace_import, text)
+        rewritten = graph.rewrite_imports(text, replace_import)
         if rewritten != text:
             if parent == origin:
                 source = rewritten

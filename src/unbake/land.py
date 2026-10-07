@@ -30,6 +30,7 @@ from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.project import publication_transaction
+from unbake.project.headers import scan
 from unbake.work import attempts, compare
 
 
@@ -108,51 +109,25 @@ def commit_generated(project: Project, host: Host, before: dict[str, str | None]
     return _git(project, "rev-parse", "HEAD").strip()
 
 
-_QUOTED_INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*"([^"\n]+)"', re.M)
-_GREP_ROW = re.compile(r"^HEAD:(.+?):\d+:(.*)$")
-
-
 def dangling_includes(project: Project, names: list[str]) -> list[tuple[str, str]]:
-    """(file, header) pairs where a file in the tree a commit of NAMES would leave quotes a project header that tree
-    lacks: one this commit deletes, one only the working tree has, or a generated shared type header."""
-    import posixpath
-
     from unbake.layout import headers
+    from unbake.project.headers import Graph, Search, TreeView
 
-    tracked = {row for row in _git(project, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0") if row}
-    gone = {name for name in names if name in tracked and not (project.root / name).is_file()}
-    result = (tracked - gone) | {name for name in names if (project.root / name).is_file()}
-    roots = [root.relative_to(project.root).as_posix() for root in project.include]
-    rows: list[tuple[str, str]] = []
-    try:
-        listing = _git(project, "grep", "-I", "-n", "-E", r'^[ \t]*#[ \t]*include[ \t]*"', "HEAD", "--", "*.c", "*.h")
-    except Held as error:
-        if (error.fault or {}).get("exit") != 1:
-            raise
-        listing = ""  # git grep exits 1 when nothing matches
-    for line in listing.splitlines():
-        match = _GREP_ROW.match(line)
-        if match and match.group(1) not in names:
-            found = _QUOTED_INCLUDE.search(match.group(2))
-            if found:
-                rows.append((match.group(1), found.group(1)))
-    for name in names:
-        path = project.root / name
-        if path.suffix in (".c", ".h") and path.is_file():
-            rows += [(name, found) for found in _QUOTED_INCLUDE.findall(path.read_text(errors="replace"))]
+    view = TreeView.git(project, names)
+    graph = Graph(view, Search(include_roots=tuple(project.include)))
+    disk = Graph.capture(project)
     dangling = []
-    for file, header in sorted(set(rows)):
-        candidates = [posixpath.normpath(posixpath.join(posixpath.dirname(file), header))]
-        candidates += [posixpath.normpath(posixpath.join(root, header)) for root in roots]
-        if any(candidate in result for candidate in candidates):
-            continue
-        project_header = any(
-            candidate in gone or (project.root / candidate).is_file() or headers.shared_header(header)
-            for candidate in candidates
-        )
-        if project_header:
-            dangling.append((file, header))
-    return dangling
+    for path in sorted(view.files):
+        for include in scan(view.read(path).decode(errors="replace")):
+            if include.unknown:
+                raise Held("land", f"land.include_unknown: {path}: native dependency proof required")
+            resolution = graph.resolve(path, include)
+            if resolution.target is not None:
+                continue
+            project_header = disk.resolve(path, include).target is not None or headers.shared_header(include.name)
+            if project_header:
+                dangling.append((path.relative_to(project.root).as_posix(), include.name))
+    return sorted(set(dangling))
 
 
 def _refuse_dangling_includes(project: Project, names: list[str]) -> None:

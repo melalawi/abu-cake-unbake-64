@@ -6,7 +6,8 @@ from tests.project_fixture import ProjectCase
 from unbake.config import Held
 from unbake.layout.headers import Layout
 from unbake.layout.map import Group, Map
-from unbake.typemap import database, declarations, regeneration
+from unbake.project.headers import Graph
+from unbake.typemap import database, declarations
 
 FIXTURE = Path(__file__).parent / "fixtures/ragewars_header_order"
 PROTOTYPE = (FIXTURE / "prototype.h").read_text()
@@ -79,4 +80,4 @@ class HeaderDependencyOrderTests(ProjectCase):
         path = self.project.include[0] / "aa-prototype.h"
         broken = b"extern signed func_8025F074_us unexpected(void);"
         with self.assertRaisesRegex(Held, "aa-prototype.h: header declaration"):
-            regeneration.validation_inputs(self.project, {path: broken}, "", authored={})
+            Graph.validation(self.project, {path: broken}, "", authored={})

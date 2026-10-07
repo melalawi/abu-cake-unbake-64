@@ -21,6 +21,7 @@ from unbake.fold import imports
 from unbake.layout import split as inventory
 from unbake.layout.header_context import Headers
 from unbake.layout.split import Edit
+from unbake.project.headers import Graph, ProviderSet, scan
 from unbake.typemap import split, storage
 
 _MARKER = re.compile(r"/\* unbake declaration evidence: (evidence_[a-f0-9]+) \*/")
@@ -73,7 +74,10 @@ def _units(path: Path, text: str) -> tuple[Unit, ...]:
     # SDK/system declarations already have live providers. Evidence is an
     # explicit include tree, but only authored declarations are consumed.
     try:
-        statements = split.statements(_body(text))
+        projection = Graph.contents({path: text}, (path.parent,)).projection(path)
+        if projection.parse_error:
+            raise Held("headers", projection.parse_error)
+        statements = projection.statements
     except Held:
         return ()
     for statement in statements:
@@ -144,11 +148,12 @@ def select(project: Project, headers: Headers, text: str, function: str) -> tupl
     live = memo(
         "imports.providers",
         tuple(sorted(headers.texts.items())),
-        lambda: imports.Providers(headers.texts),
+        lambda: ProviderSet(Graph.contents(headers.texts, project.include)),
         size=retention.memory_size,
         copy_out=retention.clone,
     )
-    source = imports._INCLUDE.sub("", imports._without_comments(text))
+    graph = Graph.contents(headers.texts, project.include)
+    source = graph.rewrite_imports(imports._without_comments(text), lambda include, original: "")
     local = declarations(source)
     blocked = local.typedefs | local.declared | {function} | {m[1] for m in _DEFINE.finditer(source)}
     words = set(re.findall(r"\b[A-Za-z_]\w*\b", re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', "", source)))
@@ -156,7 +161,7 @@ def select(project: Project, headers: Headers, text: str, function: str) -> tupl
     for unit in rows:
         for name in unit.names | unit.tags:
             by_name.setdefault(name, []).append(unit)
-    requested = set(imports._INCLUDE.findall(imports._without_comments(text)))
+    requested = {include.name for include in scan(text)}
     preferred = {
         unit.path
         for unit in rows

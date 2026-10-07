@@ -5,6 +5,7 @@ from unittest.mock import patch
 from tests.project_fixture import ProjectCase
 from unbake import pool
 from unbake.cache import Cache
+from unbake.project.headers import Graph
 from unbake.typemap import declarations, facts
 
 
@@ -38,7 +39,7 @@ class UnitBundleTests(ProjectCase):
             patch.object(pool, "run", self.run_inline),
             patch.object(facts, "_unit_job", self.unit),
             patch.object(facts, "_header_job", return_value=0),
-            patch.object(facts.Snapshot, "generated", return_value=frozenset({self.project.include[0] / "types.h"})),
+            patch.object(Graph, "generated", return_value=frozenset({self.project.include[0] / "types.h"})),
         ):
             keys = facts.published_keys(self.project, self.host)
             return facts.published(self.project, self.host, facts.Store(self.project, Cache(self.project.cache)), keys)

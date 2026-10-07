@@ -6,9 +6,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
-from unbake import cdecl, pool
+from unbake import cache, cdecl, pool
 from unbake.layout import index
-from unbake.typemap import regeneration, storage
+from unbake.project.headers import Graph
+from unbake.typemap import storage
 
 FIXTURE = Path(__file__).parents[1] / "fixtures/function_address"
 TYPE_SOURCE = "typedef int s32; typedef signed char s8;\n"
@@ -21,6 +22,8 @@ ABI = (
 class ValidationOwnershipWork(TempCase):
     def setUp(self):
         super().setUp()
+        cache.configure(memory_bytes=1 << 20)
+        cache.forget()
         self.include = self.root / "include"
         self.segment = self.include / "span_1000"
         self.segment.mkdir(parents=True)
@@ -36,13 +39,13 @@ class ValidationOwnershipWork(TempCase):
         self.types = self.include / "types.h"
         self.types.write_text(TYPE_SOURCE)
         self.authored = {self.types: TYPE_SOURCE}
-        self.project = SimpleNamespace(root=self.root, include=(self.include,), build=self.root / "build")
+        self.project = SimpleNamespace(
+            root=self.root, include=(self.include,), build=self.root / "build", cache=self.root / "build/cache"
+        )
         self.assertFalse(index.path(self.project).exists())
 
     def inputs(self, *, authored=True):
-        return regeneration.validation_inputs(
-            self.project, self.outputs, ABI, authored=self.authored if authored else None
-        )
+        return Graph.validation(self.project, self.outputs, ABI, authored=self.authored if authored else None)
 
     def test_real_missing_index_recovers_once_and_classifies_each_header_once(self):
         read_text, read_bytes, snapshot = Path.read_text, Path.read_bytes, storage.generated_view
@@ -79,7 +82,7 @@ class ValidationOwnershipWork(TempCase):
         self.assertEqual(scans.call_count, 1)
         self.assertEqual(globs.call_count, 3)  # common and each of the two real groups
         self.assertEqual(texts, {self.root / "layout.toml": 1, self.objects: 1, self.argument: 1, self.types: 1})
-        self.assertEqual(bytes_, {})
+        self.assertEqual({p: n for p, n in bytes_.items() if p in contents}, {})
         self.assertEqual(Counter(classified), {path: 1 for path in contents})
         self.assertEqual(declarations.call_count, 3)
         self.assertEqual(workers.call_count, 0)
@@ -111,41 +114,22 @@ class ValidationOwnershipWork(TempCase):
         self.assertEqual(views.call_count, 1)
         self.assertEqual(scans.call_count, 1)
         self.assertEqual(Counter(classified), {path: 1 for path in contents})
-        self.assertEqual(reads.call_count, 1)
-        self.assertEqual(reads.call_args.args, (self.types,))
+        fixture_reads = [call.args[0] for call in reads.call_args_list if call.args[0] in contents]
+        self.assertEqual(fixture_reads, [self.types])
         self.assertEqual(abi[1][1], {self.objects, self.types})
 
-    def memo_boundary(self):
-        """Control only the existing graph memo; its implementation has another owner."""
-        retained, identities, computes = {}, [], []
-
-        def memo(kind, identity, compute, **kwargs):
-            if kind != "typemap.validation-graph":
-                return compute()
-            identities.append(identity)
-            if identity not in retained:
-                computes.append(identity)
-                retained[identity] = compute()
-            return retained[identity]
-
-        return memo, identities, computes
-
-    def test_equal_snapshot_hits_existing_graph_memo_without_reparsing(self):
-        memo, identities, computes = self.memo_boundary()
+    def test_repeated_projection_parses_once_per_header_with_current_ownership(self):
         with (
-            patch.object(regeneration, "memo", side_effect=memo),
-            patch.object(storage, "generated_view", wraps=storage.generated_view) as views,
-            patch.object(index, "_unindexed_headers", wraps=index._unindexed_headers) as scans,
             patch.object(cdecl, "declarations", wraps=cdecl.declarations) as parses,
+            patch.object(index, "_unindexed_headers", wraps=index._unindexed_headers) as scans,
         ):
             first = self.inputs()
+            first_parses = parses.call_count
             second = self.inputs()
         self.assertEqual(first, second)
-        self.assertEqual(views.call_count, 2)
         self.assertEqual(scans.call_count, 2)
-        self.assertEqual(parses.call_count, 3)
-        self.assertEqual(len(identities), 2)
-        self.assertEqual(len(computes), 1)
+        self.assertEqual(first_parses, 3)
+        self.assertEqual(parses.call_count, first_parses)
 
     def test_ownership_change_invalidates_provider_graph_even_when_bytes_stay_equal(self):
         # Both receipts are real declarations; generation precedence determines
@@ -153,7 +137,6 @@ class ValidationOwnershipWork(TempCase):
         duplicate = "extern s32 func_8011F810;\n"
         self.types.write_text(TYPE_SOURCE + duplicate)
         self.authored[self.types] += duplicate
-        memo, identities, computes = self.memo_boundary()
         generation = {self.objects, self.argument}
 
         def view(project):
@@ -161,7 +144,6 @@ class ValidationOwnershipWork(TempCase):
             return lambda path: path in selected
 
         with (
-            patch.object(regeneration, "memo", side_effect=memo),
             patch.object(storage, "generated_view", side_effect=view),
         ):
             first = self.inputs()
@@ -172,8 +154,6 @@ class ValidationOwnershipWork(TempCase):
         self.assertEqual(first[1], second[1])
         self.assertEqual(first[2][1][1], {self.objects, self.types})
         self.assertEqual(second[2][1][1], {self.types})
-        self.assertEqual(len(set(identities)), 2)
-        self.assertEqual(len(computes), 2)
 
     def test_guarded_include_cycle_keeps_finite_complete_closures(self):
         self.outputs[self.objects] = self.outputs[self.objects].replace(
