@@ -46,7 +46,7 @@ class MappedEntryScopeTests(ProjectCase):
         try:
             for version in containing:
                 writer.add(NAME, version, BODIES[version])
-            path = writer.finish()
+            path = writer.finish((NAME, version) for version in containing)
         finally:
             writer.close()
         return shards.Functions(path, self.inventory)

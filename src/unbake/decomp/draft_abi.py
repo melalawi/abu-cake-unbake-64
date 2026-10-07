@@ -12,6 +12,117 @@ from unbake.layout import split
 from unbake.layout.structs_types import SCALARS
 
 
+def declared_void_exit(
+    record: dict[str, Any], function: str, version: str, body: dict[str, Any], callee: dict[str, Any]
+) -> bool:
+    """Reuse a declared void entry whose incidental exits come from a proved void call.
+
+    This proves no absence of physical result-register writes and changes no
+    semantic or machine record. The two authorities are the existing C return
+    contract and the last callee's own proved definition, not the candidate.
+    """
+    from unbake import cdecl
+    from unbake.fold.callee_contracts import _signature
+    from unbake.typemap import evidence, o32
+
+    abi = record.get("abi") or {}
+    returned = record.get("return") or {}
+    authority = returned.get("provenance", [])
+    if isinstance(authority, dict):
+        authority = [authority]
+    if (
+        returned.get("state") != "known"
+        or returned.get("type") != "void"
+        or not any(row.get("kind") in ("published", "proven", "declared") for row in authority)
+        or not abi.get("arity_known")
+        or abi.get("missing")
+        or abi.get("conflicts")
+        or abi.get("used_returns")
+        or abi.get("unproven_return_reads")
+        or any(abi.get("caller_return_uses", {}).values())
+        or abi.get("return_width") == 8
+        or not isinstance(body, dict)
+        or not body.get("target_sha256")
+        or body.get("unknown")
+        or body.get("unknown_control")
+        or not body.get("returns")
+        or not body.get("calls")
+        or any(call.get("tail") for call in body["calls"])
+    ):
+        return False
+    inputs = abi.get("inputs", {})
+    versions = set(record.get("versions", inputs))
+    consumed = set(inputs.get(version, []))
+    actual = {reg for reg in body.get("register_inputs", []) if evidence.argument(reg)}
+    if (
+        not versions
+        or set(inputs) != versions
+        or version not in versions
+        or any(set(row) != consumed for row in inputs.values())
+        or set(abi.get("registers", [])) != consumed
+        or actual != consumed
+    ):
+        return False
+    carrier = record.get("abi_declaration", {}).get("prototype")
+    signature = _signature(carrier, {}) if carrier else None
+    if (
+        signature is None
+        or cdecl.declarations(carrier).declared != {function}
+        or signature["return"] != "void"
+        or not signature["arity_known"]
+        or signature["variadic"]
+        or any(
+            p["type"] not in ("int", "unsigned int", "long", "unsigned long") and not p["type"].endswith(" *")
+            for p in signature["params"]
+        )
+        or o32.argument_words(signature, {}) != consumed
+    ):
+        return False
+    last = max(body["calls"], key=lambda call: call["instruction"])
+    name = last.get("callee")
+    provenance = callee.get("provenance", [])
+    if isinstance(provenance, dict):
+        provenance = [provenance]
+    prototype = callee.get("prototype")
+    promised = _signature(prototype, {}) if prototype else None
+    callee_abi = callee.get("abi") or {}
+    if (
+        not name
+        or callee.get("state") != "known"
+        or not any(row.get("kind") == "proven" and row.get("function") == name for row in provenance)
+        or version not in callee.get("versions", [])
+        or not prototype
+        or promised is None
+        or cdecl.declarations(prototype).declared != {name}
+        or promised["return"] != "void"
+        or not promised["arity_known"]
+        or promised["variadic"]
+        or not callee_abi.get("arity_known")
+        or callee_abi.get("missing")
+        or callee_abi.get("conflicts")
+        or callee_abi.get("used_returns")
+        or callee_abi.get("unproven_return_reads")
+        or any(callee_abi.get("caller_return_uses", {}).values())
+        or callee_abi.get("return_width") == 8
+        or any(last.get("return_register_use", {}).values())
+    ):
+        return False
+    index = (last["instruction"] - body["address"]) // 4
+    for exit_ in body["returns"]:
+        if exit_["instruction"] <= last["instruction"]:
+            return False
+        for reg in ("r2", "f0"):
+            origin = f"return:{function}:{version}:{index}:{reg}"
+            value = exit_["values"].get(reg, {})
+            if (
+                value.get("origins") != [{"id": origin, "offset": 0}]
+                or value.get("constant") is not None
+                or set(value.get("dependencies", [])) - {origin}
+            ):
+                return False
+    return True
+
+
 def leaf_entry_record(record: dict[str, Any], function: str, version: str, body: dict[str, Any]) -> dict[str, Any]:
     """Reconcile an old caller-union carrier against byte-pinned leaf reads.
 

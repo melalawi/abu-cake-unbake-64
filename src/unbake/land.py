@@ -326,7 +326,7 @@ def _prove_versions(
 def _fuzzy_signature(project: Project, function: str, version: str, source: str) -> None:
     """A nonmatching body cannot use byte equality to excuse an invented entry ABI."""
     from unbake.compilers.families import family_for
-    from unbake.decomp.draft_abi import leaf_entry_record, mapped_body
+    from unbake.decomp.draft_abi import declared_void_exit, leaf_entry_record, mapped_body
     from unbake.layout import redeclarations
     from unbake.typemap import declarations, header_names, o32, types_db
 
@@ -340,10 +340,24 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     if abi.get("return_width") == 8 and (not abi.get("return_pair_known") or abi.get("conflicts")):
         raise Held("land", f"land.fuzzy_abi: {function}: consumed integer return pair is unproven or contradictory")
     expected = record.get("prototype") if record.get("state") == "known" else None
+    declared_void = False
+    if (
+        expected is None
+        and not abi.get("return_known")
+        and record.get("return", {}).get("state") == "known"
+        and record.get("return", {}).get("type") == "void"
+        and isinstance(body, dict)
+        and body.get("calls")
+    ):
+        last = max(body["calls"], key=lambda call: call["instruction"])
+        name = last.get("callee")
+        if name:
+            callee = types_db.entries(database, "functions", [name]).get(name, {})
+            declared_void = declared_void_exit(record, function, version, body, callee)
     if (
         expected is None
         and abi.get("arity_known")
-        and (abi.get("return_known") or abi.get("discardable_return"))
+        and (abi.get("return_known") or abi.get("discardable_return") or declared_void)
         and not abi.get("conflicts")
         and not abi.get("missing")
     ):

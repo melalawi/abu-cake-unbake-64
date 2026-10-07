@@ -1,0 +1,415 @@
+{
+  "func_80226C60_de": {
+    "abi": {
+      "argument_slots": [
+        "r4",
+        "r5",
+        "stack112",
+        "stack116",
+        "stack120"
+      ],
+      "arity_known": true,
+      "call_sites": 10,
+      "caller_arguments": [
+        "r4",
+        "r5",
+        "stack112",
+        "stack116",
+        "stack120",
+        "stack124",
+        "stack128",
+        "stack136",
+        "stack144",
+        "stack272",
+        "stack276",
+        "stack280",
+        "stack284"
+      ],
+      "caller_registers": [
+        "r4",
+        "r5"
+      ],
+      "caller_return_uses": {
+        "func_8022F5E0_de": [],
+        "func_8024796C_de": []
+      },
+      "conflicts": [],
+      "defined_returns": [
+        "f0"
+      ],
+      "inputs": {
+        "de": [
+          "r4",
+          "r5"
+        ],
+        "eu": [
+          "r4",
+          "r5"
+        ],
+        "eu-x": [
+          "r4",
+          "r5"
+        ],
+        "us": [
+          "r4",
+          "r5"
+        ],
+        "us-rev1": [
+          "r4",
+          "r5"
+        ]
+      },
+      "missing": [],
+      "registers": [
+        "r4",
+        "r5"
+      ],
+      "return_known": false,
+      "return_register": "f0",
+      "unproven_return_reads": [],
+      "used_returns": [],
+      "void": false,
+      "word_return_written": true
+    },
+    "abi_declaration": {
+      "parameters_known": true,
+      "prototype": "void func_80226C60_de(int, void *);",
+      "reasons": [
+        "types.abi.word: r4: semantic type conflict; one O32 word carrier",
+        "types.abi.unused_return: no mapped direct caller consumes a result; semantic return unknown"
+      ]
+    },
+    "arity": 2,
+    "params": [
+      {
+        "alternatives": [
+          "char *",
+          "char * *",
+          "float",
+          "float *",
+          "int",
+          "int *",
+          "long long",
+          "short",
+          "short *",
+          "signed char"
+        ],
+        "component": "address:D_002018A0",
+        "name": "object",
+        "node": "param:func_80226C60_de:r4",
+        "provenance": [
+          {
+            "component": "address:D_002018A0"
+          }
+        ],
+        "register": "r4",
+        "state": "conflict",
+        "type": null,
+        "users": [
+          "func_8022F5E0_de"
+        ]
+      },
+      {
+        "alternatives": [
+          "void *"
+        ],
+        "component": "param:func_80226C60_de:r5",
+        "name": "output",
+        "node": "param:func_80226C60_de:r5",
+        "provenance": [
+          {
+            "component": "param:func_80226C60_de:r5"
+          }
+        ],
+        "register": "r5",
+        "state": "known",
+        "type": "void *",
+        "users": [
+          "func_8022F5E0_de"
+        ]
+      }
+    ],
+    "prototype": null,
+    "provenance": [
+      {
+        "function": "func_8022F5E0_de",
+        "kind": "published",
+        "sha256": "a98be4ebe0b7f594b1792719dc8bb71d9f9e9453e8baca30a3acf0895257f11d",
+        "source": "src/func_8022F5E0_de.c",
+        "version": "us-rev1"
+      }
+    ],
+    "return": {
+      "provenance": [
+        {
+          "function": "func_8022F5E0_de",
+          "kind": "published",
+          "sha256": "a98be4ebe0b7f594b1792719dc8bb71d9f9e9453e8baca30a3acf0895257f11d",
+          "source": "src/func_8022F5E0_de.c",
+          "version": "us-rev1"
+        }
+      ],
+      "state": "known",
+      "type": "void",
+      "users": [
+        "func_80226C60_de"
+      ]
+    },
+    "state": "conflict",
+    "type": null,
+    "versions": [
+      "de",
+      "eu",
+      "eu-x",
+      "us",
+      "us-rev1"
+    ]
+  },
+  "func_80274098_de": {
+    "abi": {
+      "argument_slots": [
+        "r4",
+        "r5",
+        "r6"
+      ],
+      "arity_known": true,
+      "call_sites": 100,
+      "caller_arguments": [
+        "r4",
+        "r5",
+        "r6",
+        "stack108",
+        "stack112",
+        "stack116",
+        "stack120",
+        "stack124",
+        "stack128",
+        "stack136",
+        "stack140",
+        "stack144",
+        "stack148",
+        "stack152",
+        "stack16",
+        "stack160",
+        "stack164",
+        "stack180",
+        "stack184",
+        "stack188",
+        "stack192",
+        "stack196",
+        "stack20",
+        "stack200",
+        "stack204",
+        "stack208",
+        "stack212",
+        "stack216",
+        "stack220",
+        "stack224",
+        "stack228",
+        "stack232",
+        "stack236",
+        "stack24",
+        "stack240",
+        "stack244",
+        "stack248",
+        "stack252",
+        "stack256",
+        "stack260",
+        "stack264",
+        "stack272",
+        "stack276",
+        "stack28",
+        "stack280",
+        "stack296",
+        "stack300",
+        "stack32",
+        "stack36",
+        "stack40",
+        "stack44",
+        "stack48",
+        "stack496",
+        "stack500",
+        "stack504",
+        "stack508",
+        "stack512",
+        "stack516",
+        "stack52",
+        "stack520",
+        "stack528",
+        "stack536",
+        "stack540",
+        "stack544",
+        "stack548",
+        "stack552",
+        "stack556",
+        "stack56",
+        "stack560",
+        "stack568",
+        "stack576",
+        "stack584",
+        "stack60",
+        "stack64",
+        "stack68",
+        "stack72",
+        "stack76",
+        "stack80"
+      ],
+      "caller_registers": [
+        "r4",
+        "r5",
+        "r6"
+      ],
+      "caller_return_uses": {
+        "func_80202E4C_de": [],
+        "func_8021CF28_de": [],
+        "func_80226C60_de": [],
+        "func_80226DD0_de": [],
+        "func_802349C0_de": [],
+        "func_80241950_de": [],
+        "func_8024796C_de": [],
+        "func_80247BB4_de": [],
+        "func_8024B53C_de": [],
+        "func_8024D4AC_de": [],
+        "func_8027E784_de": []
+      },
+      "conflicts": [],
+      "defined_returns": [
+        "f0"
+      ],
+      "inputs": {
+        "de": [
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "eu": [
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "eu-x": [
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "us": [
+          "r4",
+          "r5",
+          "r6"
+        ],
+        "us-rev1": [
+          "r4",
+          "r5",
+          "r6"
+        ]
+      },
+      "missing": [],
+      "registers": [
+        "r4",
+        "r5",
+        "r6"
+      ],
+      "return_known": true,
+      "return_register": "f0",
+      "unproven_return_reads": [],
+      "used_returns": [],
+      "void": false,
+      "word_return_written": false
+    },
+    "arity": 3,
+    "params": [
+      {
+        "alternatives": [
+          "void *"
+        ],
+        "component": "param:func_80226C60_de:r5",
+        "name": "arg0",
+        "node": "param:func_80274098_de:r4",
+        "provenance": [
+          {
+            "component": "param:func_80226C60_de:r5"
+          }
+        ],
+        "register": "r4",
+        "state": "known",
+        "type": "void *",
+        "users": [
+          "func_80274098_de"
+        ]
+      },
+      {
+        "alternatives": [
+          "void *"
+        ],
+        "component": "param:func_80274098_de:r5",
+        "name": "arg1",
+        "node": "param:func_80274098_de:r5",
+        "provenance": [
+          {
+            "component": "param:func_80274098_de:r5"
+          }
+        ],
+        "register": "r5",
+        "state": "known",
+        "type": "void *",
+        "users": [
+          "func_80274098_de"
+        ]
+      },
+      {
+        "alternatives": [
+          "void *"
+        ],
+        "component": "param:func_80274098_de:r6",
+        "name": "arg2",
+        "node": "param:func_80274098_de:r6",
+        "provenance": [
+          {
+            "component": "param:func_80274098_de:r6"
+          }
+        ],
+        "register": "r6",
+        "state": "known",
+        "type": "void *",
+        "users": [
+          "func_80274098_de"
+        ]
+      }
+    ],
+    "prototype": "void func_80274098_de(void *arg0, void *arg1, void *arg2);",
+    "provenance": [
+      {
+        "function": "func_80274098_de",
+        "kind": "proven",
+        "sha256": "74d06e2d5f38a85f6f8ce7dc23949dd7cdc11b8f3abfe72b66745535efbec1db",
+        "source": "src/func_80274098_de.c",
+        "version": "us-rev1"
+      }
+    ],
+    "return": {
+      "provenance": [
+        {
+          "function": "func_80274098_de",
+          "kind": "proven",
+          "sha256": "74d06e2d5f38a85f6f8ce7dc23949dd7cdc11b8f3abfe72b66745535efbec1db",
+          "source": "src/func_80274098_de.c",
+          "version": "us-rev1"
+        }
+      ],
+      "state": "known",
+      "type": "void",
+      "users": [
+        "func_80274098_de"
+      ]
+    },
+    "state": "known",
+    "type": "void func_80274098_de(void *arg0, void *arg1, void *arg2);",
+    "versions": [
+      "de",
+      "eu",
+      "eu-x",
+      "us",
+      "us-rev1"
+    ]
+  }
+}

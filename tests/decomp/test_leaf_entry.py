@@ -51,7 +51,12 @@ class LeafEntryTests(unittest.TestCase):
             patch("unbake.typemap.types_db.meta", return_value={}),
         ):
             for version in PROGRAMS:
-                land._fuzzy_signature(SimpleNamespace(), NAME, version, SOURCE)
+                land._fuzzy_signature(
+                    SimpleNamespace(compiler_for=lambda n: SimpleNamespace(id="gcc-2.7.2-kmc")),
+                    NAME,
+                    version,
+                    SOURCE,
+                )
         self.assertEqual(mapped.call_count, 5)
         self.assertEqual(entries.call_count, 5)
         self.assertEqual(RECORD, before)
