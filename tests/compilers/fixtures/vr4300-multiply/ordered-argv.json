@@ -1,0 +1,112 @@
+[
+  {
+    "compiler": "ido-5.3",
+    "configured_cflags": [
+      "-c",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2"
+    ],
+    "effective_flags_ordered": [
+      "-Ibuild/work/func_80114970_us/include",
+      "-Iinclude",
+      "-c",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2",
+      "-DVERSION_US"
+    ],
+    "preprocess_argv_ordered": [
+      "tools/ido-5.3/cc",
+      "-Ibuild/work/func_80114970_us/include",
+      "-Iinclude",
+      "-DVERSION_US",
+      "-D__UNBAKE_STDARG_IDO=1",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-E",
+      "build/work/func_80114970_us/func_80114970_us.c"
+    ],
+    "compile_argv_ordered_relative_executable": [
+      "tools/ido-5.3/cc",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2",
+      "-c",
+      "func_80114970_us.i",
+      "-o",
+      "func_80114970_us.o"
+    ],
+    "compile_argv_ordered_actual_executable": [
+      "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/bt-sol3-20261006/clean-tree/tools/ido-5.3/cc",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2",
+      "-c",
+      "func_80114970_us.i",
+      "-o",
+      "func_80114970_us.o"
+    ],
+    "assemble_argv": null
+  },
+  {
+    "compiler": "ido-7.1",
+    "configured_cflags": [
+      "-c",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2"
+    ],
+    "effective_flags_ordered": [
+      "-Ibuild/work/func_80114970_us/include",
+      "-Iinclude",
+      "-c",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2",
+      "-DVERSION_US"
+    ],
+    "preprocess_argv_ordered": [
+      "tools/ido-7.1/cc",
+      "-Ibuild/work/func_80114970_us/include",
+      "-Iinclude",
+      "-DVERSION_US",
+      "-D__UNBAKE_STDARG_IDO=1",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-E",
+      "build/work/func_80114970_us/func_80114970_us.c"
+    ],
+    "compile_argv_ordered_relative_executable": [
+      "tools/ido-7.1/cc",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2",
+      "-c",
+      "func_80114970_us.i",
+      "-o",
+      "func_80114970_us.o"
+    ],
+    "compile_argv_ordered_actual_executable": [
+      "/mnt/devstorage/AbuCode/.buildtmp/tmp/claude-1000/-mnt-devstorage-Workspaces/16a2299c-8f51-4270-9c1f-009829f453ab/scratchpad/cycles/bt-sol3-20261006/clean-tree/tools/ido-7.1/cc",
+      "-G0",
+      "-non_shared",
+      "-mips2",
+      "-O2",
+      "-c",
+      "func_80114970_us.i",
+      "-o",
+      "func_80114970_us.o"
+    ],
+    "assemble_argv": null
+  }
+]

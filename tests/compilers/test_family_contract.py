@@ -137,3 +137,25 @@ class FamilyContractTests(ProjectCase):
             if result.available:
                 self.assertGreater(len(result.sched2), 4)
                 self.assertGreater(len(result.dbr), 4)
+
+    def test_ido_probes_share_native_vr4300_policy_and_preserve_ordered_flags(self):
+        for ident in ("ido-5.3", "ido-7.1"):
+            with self.subTest(compiler=ident):
+                spec = replace(registry.specification(ident), cflags=("-O2", "-G0", "-O1", "-O2"))
+                work = self.root / ident
+                source = FIXTURES / "vr4300-multiply" / "current-best.c"
+                commands = family_for(ident).probe_commands(self.root, spec, self.host, self.project, work, source)
+                self.assertEqual(
+                    commands,
+                    (
+                        [
+                            str(self.root / spec.cc),
+                            "-Wab,-r4300_mul",
+                            *spec.cflags,
+                            "-c",
+                            str(source),
+                            "-o",
+                            str(work / "probe.o"),
+                        ],
+                    ),
+                )

@@ -28,6 +28,10 @@ if TYPE_CHECKING:
     from unbake.process import NativeResult
 
 
+# Native IDO output targets the Nintendo 64 VR4300 multiply hazard.
+_NATIVE_MULTIPLY_POLICY = "-Wab,-r4300_mul"
+
+
 class Ido:
     def compare_dump_flags(self) -> tuple[str, ...]:
         return ()
@@ -80,7 +84,17 @@ class Ido:
     def probe_commands(
         self, cache: Path, spec: CompilerSpec, policy: Host, project: PendingProject, work: Path, source: Path
     ) -> tuple[list[str], ...]:
-        return ([str(cache / spec.cc), *spec.cflags, "-c", str(source), "-o", str(work / "probe.o")],)
+        return (
+            [
+                str(cache / spec.cc),
+                _NATIVE_MULTIPLY_POLICY,
+                *spec.cflags,
+                "-c",
+                str(source),
+                "-o",
+                str(work / "probe.o"),
+            ],
+        )
 
     def assembler_release(self) -> str | None:
         return None
@@ -111,7 +125,7 @@ class Ido:
     def native_templates(self) -> dict[str, tuple[str, ...] | None]:
         return {
             "preprocess": ("{cc}", "{preprocess}", "-E", "{source}"),
-            "compile": ("{cc}", "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
+            "compile": ("{cc}", _NATIVE_MULTIPLY_POLICY, "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
             "assemble": None,
         }
 

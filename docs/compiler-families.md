@@ -18,6 +18,12 @@ one execution-path kind must agree on native templates, host preprocessing and
 padding; each compiler retains its own flag semantics. Driver-template changes
 need a distinct execution-path kind, not central caller edits.
 
+IDO native compile commands and setup probes share the VR4300 multiply-hazard
+policy `-Wab,-r4300_mul`. The family inserts it before ordered caller codegen
+flags; preprocessing keeps its existing language and macro inputs. The shared
+template supplies both Make and runner commands, whose argv remains part of the
+object cache identity.
+
 The object readers, instruction analysis and O32 transport remain target facts:
 big-endian MIPS ELF32 relocations, ISA instructions and the selected target ABI.
 Authored C extension syntax and preprocessor option transport are source/provider

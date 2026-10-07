@@ -1,6 +1,8 @@
 """Compiler driver commands per kind and per-unit override (the one source for Makefile rules and the runner)."""
 
+import json
 from dataclasses import replace
+from pathlib import Path
 
 from tests.project_fixture import ProjectCase
 from unbake.compilers import drivers
@@ -89,3 +91,40 @@ class DriverTests(ProjectCase):
             with self.assertRaises(Held) as caught:
                 self.steps("alpha")
             self.assertIn(bad, caught.exception.reason)
+
+    def test_actual_vr4300_ido_commands_apply_multiply_policy_before_ordered_caller_flags(self):
+        fixture = Path(__file__).parent / "fixtures" / "vr4300-multiply"
+        for record in json.loads((fixture / "ordered-argv.json").read_text()):
+            with self.subTest(compiler=record["compiler"]):
+                original = record["compile_argv_ordered_relative_executable"]
+                before = record["preprocess_argv_ordered"]
+                steps = drivers.from_flags(
+                    record["compiler"],
+                    original[0],
+                    tuple(record["effective_flags_ordered"]),
+                    (),
+                    (),
+                    "func_80114970_us",
+                    before[-1],
+                    TOOLS,
+                )
+                self.assertEqual(steps.compile, (original[0], "-Wab,-r4300_mul", *original[1:]))
+                self.assertEqual(steps.preprocess, tuple(before))
+                self.assertIsNone(steps.assemble)
+                duplicate = drivers.from_flags(
+                    record["compiler"],
+                    original[0],
+                    (*record["effective_flags_ordered"], "-O1", "-O2", "-O1"),
+                    (),
+                    (),
+                    "func_80114970_us",
+                    before[-1],
+                    TOOLS,
+                )
+                self.assertEqual(duplicate.compile[1], "-Wab,-r4300_mul")
+                self.assertEqual(duplicate.compile[-7:-4], ("-O1", "-O2", "-O1"))
+                made = drivers.render(
+                    drivers.templates("ido")["compile"] or (),
+                    {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)},
+                )
+                self.assertEqual(made, ("$(CC)", "-Wab,-r4300_mul", "$(CG)", "-c", "$*.i", "-o", "$*.o"))

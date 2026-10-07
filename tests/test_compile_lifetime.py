@@ -4,6 +4,7 @@ import re
 import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -85,3 +86,49 @@ class CompileLifetimeTests(ProjectCase):
                 self.assertEqual(again.read_bytes(), expected)
                 self.assertNotEqual(again, obj)
         self.assertFalse(again.exists())
+
+    def test_actual_ido_multiply_source_keeps_command_order_and_cache_current(self):
+        fixture = Path(__file__).parent / "compilers" / "fixtures" / "vr4300-multiply"
+        source = self.project.src / "func_80114970_us.c"
+        source.write_bytes((fixture / "current-best.c").read_bytes())
+        (self.project.include[0] / "owning-callee.h").write_bytes((fixture / "owning-callee.h").read_bytes())
+        calls = []
+
+        def native(argv, work, phase, **kwargs):
+            if "-E" in argv:
+                path = Path(argv[-1])
+                return (path if path.is_absolute() else self.project.root / path).read_text()
+            calls.append(argv)
+            self.assertEqual(argv[1], "-Wab,-r4300_mul")
+            self.assertEqual((work / "func_80114970_us.i").read_text(), source.read_text())
+            (work / "func_80114970_us.o").write_bytes(b"external native object")
+            return ""
+
+        def preprocess(argv, work, phase, **kwargs):
+            return process.NativeResult(
+                tuple(argv),
+                str(work),
+                0,
+                None,
+                native(argv, work, phase, **kwargs),
+                "",
+                "success",
+                None,
+                "utf-8",
+                "surrogateescape",
+                kwargs.get("context", {}),
+            )
+
+        with (
+            patch.object(process, "run_tool", side_effect=native),
+            patch.object(process, "run_native", side_effect=preprocess),
+        ):
+            for _ in range(2):
+                with runner.compile_unit(self.project, self.host, source, "us", unit=source.stem) as obj:
+                    self.assertEqual(obj.read_bytes(), b"external native object")
+            self.assertEqual(len(calls), 1)
+            self.project = replace(self.project, unit_flags={source.stem: ("-O1", "-O2", "-O1")})
+            with runner.compile_unit(self.project, self.host, source, "us", unit=source.stem):
+                pass
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[-1][-7:-4], ["-O1", "-O2", "-O1"])
