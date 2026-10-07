@@ -52,6 +52,17 @@ def published_seed(project: Project, function: str) -> str | None:
     return prelude.fields(prelude.resolve(source.read_text()))
 
 
+def check_existing(project: Project, function: str, *, replace: bool) -> None:
+    """A cheap refusal; the backend repeats it after prerequisites to protect against intervening writes."""
+    file = project.work / function / f"{function}.c"
+    if file.exists() and not replace:
+        raise Held(
+            "draft",
+            f"draft.exists: {file} already exists; edit it, or redraft with --replace",
+            next_action=f"unbake compare {file}",
+        )
+
+
 def draft(project: Project, host: Host, function: str, *, replace: bool) -> Drafted:
     seed = published_seed(project, function)
     if seed is None and function in exclusions.load(project):
@@ -59,12 +70,7 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
     versions = split.holding_versions(project, function)
     directory = attempts.directory(project, function)
     file = directory / f"{function}.c"
-    if file.exists() and not replace:
-        raise Held(
-            "draft",
-            f"draft.exists: {file} already exists; edit it, or redraft with --replace",
-            next_action=f"unbake compare {file}",
-        )
+    check_existing(project, function, replace=replace)
     if seed is not None:
         if replace:
             shutil.rmtree(directory / "include", ignore_errors=True)
