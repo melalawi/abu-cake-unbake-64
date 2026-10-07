@@ -467,18 +467,25 @@ def validation_inputs(
 
     from unbake.cdecl import Declarations, declarations
 
+    is_generated = storage.generated_view(project)
+    ownership: dict[Path, bool] = {}
+
+    def generated(path: Path) -> bool:
+        if path not in ownership:
+            ownership[path] = is_generated(path)
+        return ownership[path]
+
     contents = (
         {path: text.encode() for path, text in authored.items()}
         if authored is not None
-        else {
-            path: path.read_bytes()
-            for root in project.include
-            for path in root.rglob("*.h")
-            if not storage.generated(project, path)
-        }
+        else {path: path.read_bytes() for root in project.include for path in root.rglob("*.h") if not generated(path)}
     )
     contents.update({p: content for p, content in outputs.items() if isinstance(content, bytes) and p.suffix == ".h"})
-    graph_key = key(*(part for path, data in contents.items() for part in (str(path), data)))
+    categories = {path: generated(path) for path in contents}
+    graph_key = key(
+        "validation-graph-v2",
+        *(part for path, data in contents.items() for part in (str(path), data, str(categories[path]))),
+    )
 
     def graph() -> tuple[dict[Path, set[Path]], dict[str, set[Path]]]:
         paths = {str(path): path for path in contents}
@@ -503,7 +510,7 @@ def validation_inputs(
                     pending.extend(edges[current])
             closures[path] = seen
         providers: dict[str, set[Path]] = {}
-        for path in sorted(contents, key=lambda p: not storage.generated(project, p)):
+        for path in sorted(contents, key=lambda p: not categories[p]):
             data = contents[path]
 
             def analyze(data: bytes = data) -> Declarations:
@@ -516,7 +523,7 @@ def validation_inputs(
             except Held as error:
                 raise Held("m2c", f"{path}: {error.reason}") from error
             for name in row.typedefs | row.exports | row.tags:
-                if storage.generated(project, path) or name not in providers:
+                if categories[path] or name not in providers:
                     providers.setdefault(name, set()).add(path)
         return closures, providers
 
