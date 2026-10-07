@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import multiprocessing
+import multiprocessing.connection
 import os
 import pickle
 import queue
@@ -40,6 +41,7 @@ from typing import Any, TypeVar, cast
 
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host
+from unbake.process import temporary_environment
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -108,12 +110,17 @@ def _orphaned(descriptor: int | None, server: int) -> None:
         os.killpg(0, signal.SIGKILL)
 
 
-def _cap(memory_worker_bytes: int) -> None:
+def _cap(memory_worker_bytes: int, directory: str) -> None:
     """Worker start: lead a new process group, die with the pool's owner, cap the data segment."""
     os.setpgid(0, 0)
     if sys.platform == "linux":
         _die_with_owner()
     resource.setrlimit(resource.RLIMIT_DATA, (memory_worker_bytes, memory_worker_bytes))
+    # Python/native dependencies in a worker must also avoid inherited system temp.
+    os.environ.update(temporary_environment(Path(directory)))
+    tempfile.tempdir = directory
+    if sys.platform == "linux":
+        multiprocessing.connection.arbitrary_address = _socket_address  # type: ignore[attr-defined]
 
 
 def kill_groups(pids: Sequence[int]) -> None:
@@ -130,30 +137,48 @@ def kill_groups(pids: Sequence[int]) -> None:
 _SOCKET_ROOM = 107 - len("/pymp-xxxxxxxx/listener-xxxxxxxx")
 
 
-def _socket_directory() -> None:
-    """Put multiprocessing's private dir under XDG_RUNTIME_DIR when TMPDIR is too long for the socket path."""
+_arbitrary_address = multiprocessing.connection.arbitrary_address  # type: ignore[attr-defined]
+
+
+def _socket_address(family: str) -> Any:
+    """Linux abstract sockets carry no files and do not constrain configured cache paths."""
+    if family == "AF_UNIX":
+        return b"\0unbake-" + uuid.uuid4().hex.encode()
+    return _arbitrary_address(family)
+
+
+def _socket_directory(root: Path) -> str:
+    """Keep multiprocessing transport under explicit storage, even with an inherited tempdir."""
+    root = root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
     config = multiprocessing.process.current_process()._config  # type: ignore[attr-defined]
-    if "tempdir" in config or len(tempfile.gettempdir()) <= _SOCKET_ROOM:
-        return
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    if not runtime or len(runtime) > _SOCKET_ROOM:
+    if sys.platform == "linux":
+        multiprocessing.connection.arbitrary_address = _socket_address  # type: ignore[attr-defined]
+    elif len(os.fsencode(root)) > _SOCKET_ROOM:
         raise Held(
             "pool",
-            f"pool.socket: TMPDIR {tempfile.gettempdir()} is too long for the worker socket; "
-            "set XDG_RUNTIME_DIR or a shorter TMPDIR",
+            f"pool.socket: cache.machine_root {root} is too long for the worker socket; configure a shorter path",
         )
-    directory = tempfile.mkdtemp(prefix="pymp-", dir=runtime)
+    previous = config.get("tempdir")
+    if previous and Path(previous).parent == root and Path(previous).is_dir():
+        return str(previous)
+    directory = tempfile.mkdtemp(prefix="pymp-", dir=root)
     atexit.register(shutil.rmtree, directory, ignore_errors=True)
     config["tempdir"] = directory
+    return directory
 
 
-def _executor(size: int, memory_worker_bytes: int, work_per_job: int) -> ProcessPoolExecutor:
-    _socket_directory()
+def _executor(
+    size: int, memory_worker_bytes: int, work_per_job: int, scratch: Path | None = None
+) -> ProcessPoolExecutor:
+    if scratch is None:
+        raise Held("pool", "pool.scratch: cache.machine_root is required for worker transport")
+    directory = _socket_directory(scratch)
     return ProcessPoolExecutor(
         max_workers=size,
         mp_context=multiprocessing.get_context("forkserver"),
         initializer=_cap,
-        initargs=(memory_worker_bytes,),
+        initargs=(memory_worker_bytes, directory),
         max_tasks_per_child=max(1, RECYCLE_AFTER // work_per_job),
     )
 
@@ -332,10 +357,10 @@ class Pool:
         )
 
     def __enter__(self) -> Pool:
+        self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job, self.scratch)
         if threading.current_thread() is threading.main_thread():
             self._handlers = {number: signal.signal(number, self._signalled) for number in SIGNALS}
         atexit.register(self.kill)
-        self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job)
         return self
 
     def __exit__(self, kind: type[BaseException] | None, *exc: object) -> None:
@@ -373,7 +398,7 @@ class Pool:
         if self._executor is not None:
             # Recycling after an allocation failure must retain queued siblings.
             self._executor.shutdown()
-        self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job)
+        self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job, self.scratch)
         return self._executor
 
     def _submit(self, fn: Callable[[T], R], item: T) -> Future[R]:

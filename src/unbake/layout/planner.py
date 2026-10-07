@@ -20,6 +20,7 @@ from unbake import atomic as atomic_files
 from unbake.config import Held, Host, PendingProject, SymbolPolicy
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
+from unbake.process import temporary_environment
 from unbake.project.census import Census
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
@@ -88,6 +89,7 @@ def measure(image: bytes, yaml: str, executable: Path, work: Path, version: str)
     )
     result = subprocess.run(
         [str(executable), "split", str(work / "input.yaml"), str(work / "outputs.yaml")],
+        env=temporary_environment(work),
         capture_output=True,
         text=True,
     )

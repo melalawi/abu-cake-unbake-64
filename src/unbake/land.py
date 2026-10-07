@@ -61,7 +61,7 @@ class Landed:
 
 
 def _git(project: Project, *args: str, env: dict[str, str] | None = None) -> str:
-    return process.run_native(["git", *args], project.root, "land", env=env).stdout
+    return process.run_native(["git", *args], project.root, "land", temporary_root=project.build, env=env).stdout
 
 
 def dirty(project: Project) -> set[str]:

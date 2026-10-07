@@ -298,7 +298,9 @@ def _preprocess(project: Project, command: list[str], source: str) -> str:
     with tempfile.TemporaryDirectory(prefix=".headers-", dir=project.build) as temporary:
         wrapper = Path(temporary) / "context.c"
         atomic_files.fresh(wrapper, source.encode())
-        return run_tool([*command[:-1], str(wrapper)], project.root, "solve").replace(str(wrapper), "<unbake-context>")
+        return run_tool([*command[:-1], str(wrapper)], project.root, "solve", temporary_root=project.build).replace(
+            str(wrapper), "<unbake-context>"
+        )
 
 
 def source_unit(
@@ -332,7 +334,9 @@ def source_unit(
         command = drivers.preprocess_command(
             project, str(policy.cpp), version, unit, wrapper, non_matching=False, line_markers=line_markers
         )
-        return run_tool(command, project.root, "solve").replace(str(wrapper), "<unbake-unit>")
+        return run_tool(command, project.root, "solve", temporary_root=project.build).replace(
+            str(wrapper), "<unbake-unit>"
+        )
 
 
 class ProvenStructs(Mapping[str, Any]):

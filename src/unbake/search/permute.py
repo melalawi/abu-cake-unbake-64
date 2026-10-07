@@ -22,6 +22,7 @@ from unbake import atomic as atomic_files
 from unbake import pool
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
+from unbake.process import temporary_environment
 from unbake.search.core import Context, Mutation
 from unbake.work.compare import Compared
 
@@ -119,6 +120,7 @@ class _RunResult:
 
 
 def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budget: float, log: Path) -> _RunResult:
+    environment = temporary_environment(cwd, environment)
     try:
         with (
             atomic_files.stream(log, "wb") as output,
@@ -131,7 +133,9 @@ def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budg
             )
             # The group outlives a SIGKILLed owner unless something outside it is watching the owner.
             watcher = subprocess.Popen(
-                [sys.executable, "-c", _WATCH, str(os.getpid()), str(process.pid)], start_new_session=True
+                [sys.executable, "-c", _WATCH, str(os.getpid()), str(process.pid)],
+                env=environment,
+                start_new_session=True,
             )
             try:
                 status = process.wait(timeout=budget)
@@ -222,9 +226,7 @@ class Permuter:
             work = Path(tempfile.mkdtemp(prefix="permute-", dir=out))
             entry = checkout(archive, digest, work)
             atomic_files.text(work / "base.c", source, encoding="utf-8")
-            environment = dict(
-                os.environ, TMPDIR=str(work), TMP=str(work), TEMP=str(work), PYTHONDONTWRITEBYTECODE="1", LC_ALL="C"
-            )
+            environment = dict(temporary_environment(work), PYTHONDONTWRITEBYTECODE="1", LC_ALL="C")
             atomic_files.copyfile(target, work / "target.o")
             atomic_files.text(work / "settings.toml", f'func_name = "{function}"\ncompiler_type = "{family}"\n')
             script = work / "compile.sh"

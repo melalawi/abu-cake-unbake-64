@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import inputs
+from unbake import inputs, sqlite
 from unbake.config import Held
 
 # Names per `WHERE name IN (...)` read (SQLite's variable limit is far above this).
@@ -32,7 +32,7 @@ class Functions(Mapping[str, dict[str, Any]]):
     def _connection(self) -> sqlite3.Connection:
         connection: sqlite3.Connection | None = getattr(self._local, "connection", None)
         if connection is None:
-            connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+            connection = sqlite.connect(f"file:{self.path}?mode=ro", uri=True)
             connection.execute("PRAGMA cache_size=-2048")
             self._local.connection = connection
         return connection
@@ -52,7 +52,7 @@ class Functions(Mapping[str, dict[str, Any]]):
     def __getitem__(self, name: str) -> dict[str, Any]:
         item = self.inventory[name]
         try:
-            with closing(sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
+            with closing(sqlite.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
                 connection.execute("PRAGMA cache_size=-2048")
                 rows = connection.execute("SELECT version, body FROM functions WHERE name=? ORDER BY version", (name,))
                 versions = {version: json.loads(zlib.decompress(body)) for version, body in rows}
@@ -68,7 +68,7 @@ class Functions(Mapping[str, dict[str, Any]]):
         """Complete items of NAMES, in that order, over one connection (equal to item-by-item lookup)."""
         bodies: dict[str, dict[str, Any]] = {name: {} for name in names}
         try:
-            with closing(sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
+            with closing(sqlite.connect(f"file:{self.path}?mode=ro", uri=True)) as connection:
                 connection.execute("PRAGMA cache_size=-2048")
                 for start in range(0, len(names), READ_BATCH):
                     batch = names[start : start + READ_BATCH]
@@ -136,7 +136,7 @@ class Writer:
         descriptor, name = tempfile.mkstemp(prefix=".facts-", suffix=".sqlite", dir=directory)
         os.close(descriptor)
         self.temporary = Path(name)
-        self.connection = sqlite3.connect(name)
+        self.connection = sqlite.connect(name)
         self.connection.execute("PRAGMA cache_size=-2048")
         self.connection.execute(
             "CREATE TABLE functions (name TEXT, version TEXT, body BLOB, PRIMARY KEY(name,version))"

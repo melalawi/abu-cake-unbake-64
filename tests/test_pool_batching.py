@@ -3,6 +3,7 @@
 import unittest
 from collections.abc import Iterator, Sequence
 from concurrent.futures import Future
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -97,9 +98,12 @@ if __name__ == "__main__":
 
 class PhysicalRetirement(unittest.TestCase):
     def test_existing_retirement_budget_counts_items_inside_batches(self):
-        with patch.object(pool, "ProcessPoolExecutor") as executor:
-            pool._executor(2, 512_000_000, pool.ITEMS_PER_JOB)
+        with (
+            patch.object(pool, "ProcessPoolExecutor") as executor,
+            patch.object(pool, "_socket_directory", return_value="/configured-cache/pymp-fixture"),
+        ):
+            pool._executor(2, 512_000_000, pool.ITEMS_PER_JOB, Path("/configured-cache"))
         child_jobs = executor.call_args.kwargs["max_tasks_per_child"]
         self.assertLessEqual(child_jobs * pool.ITEMS_PER_JOB, pool.RECYCLE_AFTER)
         self.assertGreaterEqual(child_jobs, 8)
-        self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000,))
+        self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000, "/configured-cache/pymp-fixture"))

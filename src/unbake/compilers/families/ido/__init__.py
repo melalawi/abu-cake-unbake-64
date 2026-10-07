@@ -52,7 +52,12 @@ class Ido:
             with tempfile.TemporaryDirectory(prefix="ido-analysis-", dir=temporary_root) as temporary:
                 source = Path(temporary) / "empty.c"
                 atomic.fresh(source, b"")
-                result = process.run_native([str(compiler), *native, "-E", "-show", str(source)], root, "compile")
+                result = process.run_native(
+                    [str(compiler), *native, "-E", "-show", str(source)],
+                    root,
+                    "compile",
+                    temporary_root=Path(temporary),
+                )
                 lines = [line for line in result.stderr.splitlines() if line.startswith("/usr/lib/cfe ")]
                 if len(lines) != 1 or str(source) not in lines[0]:
                     raise Held(
@@ -65,7 +70,12 @@ class Ido:
                 defines = tuple(word for word in before_words if word.startswith(("-D", "-U")))
                 final = tuple(word for word in after_words if word.startswith(("-D", "-U")))
                 includes = tuple(word for word in before_words if word.startswith("-I") and len(word) > 2)
-                macros = process.run_tool([cpp, "-undef", "-nostdinc", "-dM", "-x", "c", str(source)], root, "compile")
+                macros = process.run_tool(
+                    [cpp, "-undef", "-nostdinc", "-dM", "-x", "c", str(source)],
+                    root,
+                    "compile",
+                    temporary_root=Path(temporary),
+                )
                 removed = tuple("-U" + name for name in re.findall(r"^#define\s+(\w+)", macros, re.M))
                 return defines, final, includes, removed
 

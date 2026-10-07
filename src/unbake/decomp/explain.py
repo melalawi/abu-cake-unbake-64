@@ -276,7 +276,13 @@ def gcc_input(
     command = drivers.preprocess_command(
         project, str(policy.cpp), version, source.stem, source, non_matching=True, line_markers=preserve_lines
     )
-    expanded = run_tool(command, project.root, "explain", context={"source": str(source), "version": version})
+    expanded = run_tool(
+        command,
+        project.root,
+        "explain",
+        temporary_root=project.build,
+        context={"source": str(source), "version": version},
+    )
     if not preserve_lines:
         expanded = re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)
     return expanded, list(codeflags)

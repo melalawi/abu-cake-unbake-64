@@ -157,5 +157,5 @@ def preprocess_context(source: Path, project: Project, policy: Host, version: st
     from unbake.process import run_tool
 
     command = drivers.preprocess_command(project, str(policy.cpp), version, function, source, non_matching=True)
-    expanded = run_tool(command, project.root, "m2c")
+    expanded = run_tool(command, project.root, "m2c", temporary_root=project.build)
     return re.sub(r"^\s*#\s*(?:line\s+)?\d+[^\n]*", "", expanded, flags=re.M)

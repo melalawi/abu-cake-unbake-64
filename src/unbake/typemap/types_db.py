@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from unbake import sqlite
 from unbake.config import Held, Project
 
 DB_SCHEMA = 1
@@ -91,7 +92,7 @@ def solution(file: Path) -> str | None:
 
 def _connect(file: Path) -> sqlite3.Connection:
     try:
-        return sqlite3.connect(f"file:{file}?mode=ro", uri=True)
+        return sqlite.connect(f"file:{file}?mode=ro", uri=True)
     except sqlite3.Error as error:
         raise Held("types", f"types.sqlite: {file}: {error}") from error
 
@@ -153,7 +154,7 @@ def stage(
     digest = content_digest(encoded)
     try:
         staged.unlink()
-        connection = sqlite3.connect(staged)
+        connection = sqlite.connect(staged)
         with connection:
             connection.execute(f"PRAGMA user_version = {DB_SCHEMA}")
             for statement in SCHEMA:
@@ -258,7 +259,7 @@ def redrafts(file: Path) -> dict[str, Any]:
 
 
 def set_redrafts(file: Path, marks: dict[str, Any]) -> None:
-    connection = sqlite3.connect(file)
+    connection = sqlite.connect(file)
     try:
         with connection:
             connection.execute("DELETE FROM redraft")

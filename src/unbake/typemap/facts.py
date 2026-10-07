@@ -1095,7 +1095,9 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
 
     effort.count("facts", counts["sources"], len(groups))
     seeds: list[dict[str, Any]] = []
-    with TemporaryDirectory(prefix="unbake-facts-") as directory:
+    temporary_root = policy.cache_machine_root if policy is not None else project.build
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="unbake-facts-", dir=temporary_root) as directory:
         jobs_ = facts_decode.jobs(encoded, len(tasks), Path(directory))
         decoded = pool.run(policy, _decode_job, jobs_) if policy is not None else [_decode_job(job) for job in jobs_]
         for decoded_batch in decoded:

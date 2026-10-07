@@ -426,7 +426,7 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
         command = [*command[:-1], "-dM", "-undef", "-nostdinc", str(probe)]
         from unbake.cache import memo
 
-        definitions = run_tool(command, project.root, "gbi")
+        definitions = run_tool(command, project.root, "gbi", temporary_root=project.build)
         return memo("gbi.sdk.patterns", definitions, lambda: patterns(definitions))
 
 

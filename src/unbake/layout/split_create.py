@@ -16,6 +16,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.config import Held, Host
 from unbake.layout import split_analysis
+from unbake.process import temporary_environment
 
 
 def without_comments(text: str) -> str:
@@ -63,14 +64,21 @@ def create(
     data = rom.read_bytes()
     if len(data) < 0x1000 or data[:4] != bytes.fromhex("80371240"):
         raise Held("init", f"{rom.name}: required normalized N64 ROM")
-    with tempfile.TemporaryDirectory(prefix=".create-", dir=rom.parent) as temporary:
+    policy.cache_machine_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".create-", dir=policy.cache_machine_root) as temporary:
         work = Path(temporary)
         # Splat embeds the title as an unquoted YAML scalar before loading it.
         # Give its scratch input a safe title and restore the original facts.
         scratch = bytearray(data)
         scratch[0x20:0x34] = b"UNBAKE".ljust(20, b" ")
         atomic_files.write(work / "input.z64", scratch)
-        result = subprocess.run([executable, "create_config", "input.z64"], cwd=work, capture_output=True, text=True)
+        result = subprocess.run(
+            [executable, "create_config", "input.z64"],
+            cwd=work,
+            env=temporary_environment(work),
+            capture_output=True,
+            text=True,
+        )
         if result.returncode:
             raise Held(
                 "init", f"splat create_config {rom.name}: exit {result.returncode}: {result.stdout}{result.stderr}"

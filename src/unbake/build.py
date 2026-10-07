@@ -52,7 +52,9 @@ def source_findings(project: Project) -> list[str]:
 def environment(host: Host) -> dict[str, str]:
     """The only environment make sees: [tools].path, a HOME, the C locale."""
     directories = [str(directory) for directory in host.tool_path]
-    return {"PATH": os.pathsep.join(directories), "HOME": os.environ["HOME"], "LC_ALL": "C"}
+    return process.temporary_environment(
+        host.cache_machine_root, {"PATH": os.pathsep.join(directories), "HOME": os.environ["HOME"], "LC_ALL": "C"}
+    )
 
 
 def python_visible(host: Host) -> str | None:
@@ -100,6 +102,7 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
             project.root,
             "check",
             env=environment(host),
+            temporary_root=project.build,
             context={"target": "check", "versions": list(project.versions)},
         )
     except Held as error:

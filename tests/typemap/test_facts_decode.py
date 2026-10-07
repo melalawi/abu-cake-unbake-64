@@ -8,6 +8,8 @@ Repeating these unchanged bytes fills the existing 256-entry decode job without 
 
 import gc
 import json
+import os
+import tempfile
 import tracemalloc
 from multiprocessing.reduction import ForkingPickler
 from pathlib import Path
@@ -67,7 +69,7 @@ class PublishedDecodeTests(TempCase):
         self.payload = SLICE.read_bytes()
         self.source = self.root / "unit.c"
         self.source.write_text("int unit(void);\n")
-        self.project = SimpleNamespace(root=self.root)
+        self.project = SimpleNamespace(root=self.root, build=self.root / "build")
         self.tasks = [(f"owner_{index}", self.source, "de") for index in range(513)]
         self.jobs = []
         self.fail = None
@@ -100,6 +102,22 @@ class PublishedDecodeTests(TempCase):
         self.assertEqual(resolve.call_count, len(self.tasks) * 4)
         self.assertTrue(all(seed["aliases"] is shared_value for seed in result))
         return result
+
+    def test_published_transport_ignores_unusable_system_temp(self):
+        forbidden = self.root / "missing-system-temp"
+        policy = SimpleNamespace(cache_machine_root=self.root / "machine-cache")
+        for host in (policy, None):
+            with (
+                self.subTest(host=host),
+                patch.dict(os.environ, {"TMPDIR": str(forbidden)}),
+                patch.object(tempfile, "tempdir", str(forbidden)),
+                patch.object(facts_decode, "jobs", wraps=facts_decode.jobs) as transport,
+            ):
+                seeds = self.collect(host)
+                self.assertEqual(len(seeds), len(self.tasks) * 2)
+                expected = policy.cache_machine_root if host else self.project.build
+                self.assertEqual(transport.call_args.args[2].parent, expected)
+                self.assertFalse(forbidden.exists())
 
     def test_published_keeps_job_count_boundaries_order_and_seed_content(self):
         policy = SimpleNamespace(cache_machine_root=self.root)

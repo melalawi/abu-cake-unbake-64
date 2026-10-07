@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from unbake.config import Held, Host, Project
+from unbake.process import temporary_environment
 
 
 def compiler_directories(project: Project) -> tuple[Path, ...]:
@@ -36,6 +37,7 @@ def base_ignore_text(root: Path) -> str:
     tracked = subprocess.run(
         ["git", "ls-files", "-z", "--", ":(top)baserom.sha1", ":(top,glob)**/baserom.sha1"],
         cwd=root,
+        env=temporary_environment(root / "build"),
         capture_output=True,
         check=False,
     )
@@ -85,7 +87,12 @@ def indexed_contents(root: Path, blobs: list[bytes]) -> dict[bytes, bytes]:
     if not blobs:
         return {}
     result = subprocess.run(
-        ["git", "cat-file", "--batch"], cwd=root, input=b"\n".join(blobs) + b"\n", capture_output=True, check=False
+        ["git", "cat-file", "--batch"],
+        cwd=root,
+        env=temporary_environment(root / "build"),
+        input=b"\n".join(blobs) + b"\n",
+        capture_output=True,
+        check=False,
     )
     if result.returncode:
         raise Held("check", f"git cat-file: {result.stderr.decode(errors='replace').strip()}")
@@ -104,7 +111,13 @@ def tracked_findings(project: Project, policy: Host) -> list[str]:
     """Inspect indexed names and regular working files without following links."""
     if not (project.root / ".git").exists():
         return []
-    result = subprocess.run(["git", "ls-files", "--stage", "-z"], cwd=project.root, capture_output=True, check=False)
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "-z"],
+        cwd=project.root,
+        env=temporary_environment(project.build),
+        capture_output=True,
+        check=False,
+    )
     if result.returncode:
         raise Held("check", f"git ls-files: {result.stderr.decode(errors='replace').strip()}")
     directories = compiler_directories(project)

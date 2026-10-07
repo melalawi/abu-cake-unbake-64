@@ -468,7 +468,12 @@ def n64link_pin(host: Host) -> str:
     """The n64link release the build files expect; the host's n64link must print exactly that release."""
     from unbake import process
 
-    printed = process.run_tool([str(host.n64link), "--version"], Path(host.n64link).parent, "buildfiles")
+    printed = process.run_tool(
+        [str(host.n64link), "--version"],
+        Path(host.n64link).parent,
+        "buildfiles",
+        temporary_root=host.cache_machine_root,
+    )
     if printed != N64LINK_RELEASE:
         required = N64LINK_RELEASE.strip()
         actual = printed.strip()

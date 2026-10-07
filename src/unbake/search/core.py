@@ -18,7 +18,7 @@ from unbake import tui
 from unbake.compilers.ranking import measured_candidate_rank
 from unbake.config import Held, Host, Project
 from unbake.decomp import explain
-from unbake.process import read_text
+from unbake.process import read_text, temporary_environment
 from unbake.work.compare import Compared, measure
 
 
@@ -84,7 +84,14 @@ def preprocess(project: Project, policy: Host, source: Path, version: str, deadl
     if remaining <= 0:
         raise Held("search", "context.deadline: preprocessing budget exhausted")
     try:
-        result = subprocess.run(command, cwd=project.root, capture_output=True, text=True, timeout=remaining)
+        result = subprocess.run(
+            command,
+            cwd=project.root,
+            env=temporary_environment(project.build),
+            capture_output=True,
+            text=True,
+            timeout=remaining,
+        )
     except subprocess.TimeoutExpired as error:
         raise Held("search", "context.deadline: preprocessing budget exhausted") from error
     except OSError as error:

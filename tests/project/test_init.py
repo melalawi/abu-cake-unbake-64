@@ -38,6 +38,7 @@ class InitTests(unittest.TestCase):
                         ".git",
                         ".gitignore",
                         "roms",
+                        "build",
                         "config.toml",
                         "layout.toml",
                         "README.md",

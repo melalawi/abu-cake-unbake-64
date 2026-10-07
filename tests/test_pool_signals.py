@@ -19,8 +19,11 @@ class PoolSignalTests(unittest.TestCase):
             patch.object(pool.os, "setpgid") as setpgid,
             patch.object(pool, "_die_with_owner") as watch,
             patch.object(pool.resource, "setrlimit"),
+            patch.object(pool, "temporary_environment", return_value={}),
+            patch.object(pool.tempfile, "tempdir"),
+            patch.object(pool.multiprocessing.connection, "arbitrary_address"),
         ):
-            pool._cap(1)
+            pool._cap(1, "/configured-cache/pymp-fixture")
         setpgid.assert_called_once_with(0, 0)
         watch.assert_called_once_with()
 

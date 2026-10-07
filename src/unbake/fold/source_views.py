@@ -185,7 +185,9 @@ def _preprocessed_lines(
         )
         command[1:1] = [f"-I{project.src}"]
         command[-1:-1] = [f"-I{absent}"]
-        output = run_tool(command, project.root, "solve", context={"function": unit, "version": version})
+        output = run_tool(
+            command, project.root, "solve", temporary_root=project.build, context={"function": unit, "version": version}
+        )
     active: set[int] = set()
     current, number = "", 1
     for line in output.splitlines():

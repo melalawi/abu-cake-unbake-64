@@ -14,6 +14,8 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import IO, Any
 
+from unbake.process import temporary_environment
+
 
 @contextmanager
 def staging(path: Path, *, durable: bool = True) -> Iterator[Path]:
@@ -146,7 +148,9 @@ def command(outputs: list[Path], argv: list[str]) -> None:
         raise ValueError("each output must appear exactly once in the command")
     with ExitStack() as stack:
         names = {str(path): str(stack.enter_context(staging(path))) for path in outputs}
-        subprocess.run([names.get(word, word) for word in argv], check=True)
+        subprocess.run(
+            [names.get(word, word) for word in argv], env=temporary_environment(outputs[0].parent), check=True
+        )
         if any(not Path(name).is_file() for name in names.values()):
             raise ValueError("command did not produce every declared output")
 

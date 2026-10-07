@@ -17,6 +17,7 @@ import tty
 from typing import TYPE_CHECKING, Any
 
 from unbake.config import Project
+from unbake.process import temporary_environment
 from unbake.tui import output
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ class Board:
             return
         self.live.stop()
         try:
-            subprocess.run([*editor.split(), file], check=False)
+            subprocess.run([*editor.split(), file], env=temporary_environment(self.project.build), check=False)
         finally:
             self.live.start()
 

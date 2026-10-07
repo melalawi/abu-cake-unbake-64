@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from unbake import atomic as atomic_files
 from unbake.config import SCHEMA_VERSION, Held
+from unbake.process import temporary_environment
 from unbake.project import hygiene
 
 
@@ -39,7 +40,13 @@ def run(target: Path, *, layout_cap: int) -> list[str]:
     existed = target.exists()
     target.mkdir(parents=True, exist_ok=True)
     try:
-        result = subprocess.run([git, "init", "-b", "main"], cwd=target, capture_output=True, text=True)
+        result = subprocess.run(
+            [git, "init", "-b", "main"],
+            cwd=target,
+            env=temporary_environment(target / "build"),
+            capture_output=True,
+            text=True,
+        )
         if result.returncode:
             raise Held("init", f"git: {result.stderr.strip()}")
         quote = json.dumps

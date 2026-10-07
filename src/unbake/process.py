@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from unbake.config import Held
+
+
+def temporary_environment(work: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Pin child scratch, including SQLite spill files, to the caller's explicit storage."""
+    directory = work.resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    return dict(
+        os.environ if env is None else env,
+        TMPDIR=str(directory),
+        TMP=str(directory),
+        TEMP=str(directory),
+        SQLITE_TMPDIR=str(directory),
+    )
 
 
 @dataclass(frozen=True)
@@ -27,10 +41,16 @@ class NativeResult:
 
 
 def run_native(
-    argv: list[str], work: Path, phase: str, *, context: dict[str, Any] | None = None, env: dict[str, str] | None = None
+    argv: list[str],
+    work: Path,
+    phase: str,
+    *,
+    context: dict[str, Any] | None = None,
+    env: dict[str, str] | None = None,
+    temporary_root: Path | None = None,
 ) -> NativeResult:
     """The one native result/fault boundary, retaining both streams and exact invocation."""
-    environment = dict(os.environ if env is None else env, TMPDIR=str(work), TMP=str(work), TEMP=str(work), LC_ALL="C")
+    environment = dict(temporary_environment(work if temporary_root is None else temporary_root, env), LC_ALL="C")
     key = f"{phase}.{Path(argv[0]).name}"
     try:
         completed = subprocess.run(
@@ -72,8 +92,15 @@ def run_native(
     return result
 
 
-def run_tool(argv: list[str], work: Path, phase: str, *, context: dict[str, Any] | None = None) -> str:
-    return run_native(argv, work, phase, context=context).stdout
+def run_tool(
+    argv: list[str],
+    work: Path,
+    phase: str,
+    *,
+    context: dict[str, Any] | None = None,
+    temporary_root: Path | None = None,
+) -> str:
+    return run_native(argv, work, phase, context=context, temporary_root=temporary_root).stdout
 
 
 def fault(error: BaseException) -> dict[str, Any]:

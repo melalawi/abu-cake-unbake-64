@@ -14,6 +14,7 @@ from unbake import scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import boundary, split
 from unbake.layout.rodata_references import collect
+from unbake.process import temporary_environment
 
 
 def prove(project: Project, version: str, start: int, end: int, policy: Host) -> dict[str, Any]:
@@ -47,6 +48,7 @@ def prove(project: Project, version: str, start: int, end: int, policy: Host) ->
                 f"--adjust-vma={address}",
                 target.name,
             ],
+            env=temporary_environment(Path(target.name).parent),
             capture_output=True,
             text=True,
             check=False,
