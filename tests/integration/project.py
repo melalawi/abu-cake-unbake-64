@@ -63,6 +63,34 @@ set -- $files
 cp "$1" "$2"
 """
 OBJDIFF = "#!/bin/sh\nexit 0\n"
+SPLAT = (
+    "#!"
+    + sys.executable
+    + "\n"
+    + """import csv, json, struct, sys
+from pathlib import Path
+from tests.project_fixture import assembly
+from unbake import config
+from unbake.layout import split
+options = {}
+for line in Path(sys.argv[-1]).read_text().splitlines()[1:]:
+    name, _, value = line.strip().partition(": ")
+    options[name] = json.loads(value)
+project = config.load(Path.cwd())
+version = next(v for v in project.versions if str(project.version(v).baserom.resolve()) == options["target_path"])
+staging = Path(options["base_path"])
+(staging / ".splat").mkdir()
+with (staging / ".splat/splat_symbols.csv").open("w", newline="") as stream:
+    writer = csv.writer(stream)
+    writer.writerow(["name", "vram_start"])
+    for row in split.functions(project, version):
+        writer.writerow([row.name, hex(row.address)])
+        path = staging / "asm" / (row.path + ".s")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = split.words(project, row)
+        path.write_text(assembly(row.name, list(struct.unpack(">" + "I" * (len(data) // 4), data))))
+"""
+)
 # What the generated Makefile runs besides the fixture tools; a [tools].path dir must not expose Python.
 HOST_COMMANDS = [
     "sh",
@@ -106,18 +134,23 @@ class FixtureCase(unittest.TestCase):
         make_rom.write_roms(self.root)
         self.install_tools()
         self.write_host()
+        ignore = self.root / ".gitignore"
+        ignore.write_text(
+            (ignore.read_text() if ignore.exists() else "")
+            + "\n/roms/\n/build/\n/tools/ido-7.1/\n/tools/.downloads/\n/.attempts.lock\n"
+        )
         self.init_git()
 
     def install_tools(self) -> None:
         bin_dir = self.base / "bin"
         bin_dir.mkdir()
         scripts = {
-            "cpp": CPP,
+            "cpp": '#!/bin/sh\nexec /usr/bin/cpp "$@"\n',
             "mips_as": COPY,
             "n64link": N64LINK,
             "mips_ld": LD,
             "mips_objcopy": OBJCOPY,
-            "splat": OBJDIFF,
+            "splat": SPLAT,
             "m2c": OBJDIFF,
             "mips_objdump": OBJDIFF,
             "mips_readelf": OBJDIFF,

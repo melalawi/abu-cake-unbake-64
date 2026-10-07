@@ -129,16 +129,31 @@ class SharedConsumerTests(ProjectCase):
         self.git = []
 
         def native_git(argv, cwd, phase, **kwargs):
+            def result(stdout):
+                return process.NativeResult(
+                    tuple(argv),
+                    str(cwd),
+                    0,
+                    None,
+                    stdout,
+                    "",
+                    "exit",
+                    None,
+                    "utf-8",
+                    "surrogateescape",
+                    kwargs.get("context", {}),
+                )
+
             args = argv[1:]
             if args[:1] == ["cat-file"]:
                 output = b""
                 for name in kwargs["stdin"].splitlines():
                     data = (self.project.root / name.split(":", 1)[1]).read_bytes()
                     output += f"{'0' * 40} blob {len(data)}\n".encode() + data + b"\n"
-                return SimpleNamespace(stdout=output.decode("utf-8", "surrogateescape"))
+                return result(output.decode("utf-8", "surrogateescape"))
             if args[:1] == ["ls-tree"]:
-                return SimpleNamespace(
-                    stdout="\0".join(
+                return result(
+                    "\0".join(
                         str(p.relative_to(self.project.root))
                         for root in (self.project.src, *self.project.include)
                         for p in root.rglob("*")
@@ -147,10 +162,10 @@ class SharedConsumerTests(ProjectCase):
                     + "\0"
                 )
             if args[:1] == ["log"]:
-                return SimpleNamespace(stdout="")
+                return result("")
             if "index" in args:
-                return SimpleNamespace(stdout=str(self.project.root / ".git/index"))
-            return SimpleNamespace(stdout=self.git_command(self.project, *args))
+                return result(str(self.project.root / ".git/index"))
+            return result(self.git_command(self.project, *args))
 
         self.stack.enter_context(patch("unbake.process.run_native", side_effect=native_git))
         self.stack.enter_context(patch.object(land, "_git", side_effect=self.git_command))

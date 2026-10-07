@@ -1,20 +1,19 @@
-
 """Small real RageWars payload: inference cannot erase a published Vec3 dependency."""
 
 import json
 import shutil
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tests.kit import TESTS
 from tests.project_fixture import ProjectCase
 from unbake.cdecl import declarations
 from unbake.config import Held
 from unbake.layout import apply, header_loss, header_step, index, map
 from unbake.typemap import database, declaration_evidence, regeneration
 
-FIXTURE = Path(__file__).parent / "fixtures/ragewars_vec3"
+FIXTURE = TESTS / "typemap/fixtures/ragewars_vec3"
 FUNCTION = "func_8020CD74_de"
 
 

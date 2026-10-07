@@ -150,6 +150,7 @@ class AdmissionTests(TempCase):
         (self.root / "memory.current").write_text("16")
         member = self.root
         write = Path.write_text
+        read = Path.read_text
 
         def kernel_write(path, data, *args, **kwargs):
             nonlocal member
@@ -160,6 +161,14 @@ class AdmissionTests(TempCase):
 
         with (
             patch.object(admission, "_membership", side_effect=lambda pid: member),
+            patch.object(
+                Path,
+                "read_text",
+                autospec=True,
+                side_effect=lambda path, *a, **k: (
+                    "" if str(path) == f"/proc/{os.getpid()}/task/{os.getpid()}/children" else read(path, *a, **k)
+                ),
+            ),
             patch.object(atomic, "control", kernel_write),
         ):
             self.assertEqual(admission.Groups(self.domain).preflight(), 16)
@@ -406,7 +415,7 @@ class StandaloneAdmissionTests(TempCase):
             domain.request.assert_called_once_with(4, host.memory_total_bytes)
             check.assert_called_once_with(os.getpid())
             connection.connect.assert_called_once_with(b"broker")
-            move.assert_called_once_with(self.root / "jobs/command/cgroup.procs", str(os.getpid()))
+            move.assert_called_once_with(self.root / "jobs/command/cgroup.procs", str(os.getpid()).encode())
             self.assertEqual(
                 json.loads(connection.send.call_args_list[0].args[0]),
                 {

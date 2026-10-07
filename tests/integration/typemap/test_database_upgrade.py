@@ -1,14 +1,13 @@
-
 """Old SQLite generations rebuild at the solver boundary, even with a warm marker."""
 
 import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from pathlib import Path
 from unittest.mock import patch
 
-from tests.typemap import test_solve_reuse
+from tests.integration.typemap import test_solve_reuse
+from tests.kit import TESTS
 from unbake import cache, steps
 from unbake.config import Held
 from unbake.typemap import solver, types_db
@@ -37,7 +36,7 @@ class DatabaseUpgradeTests(test_solve_reuse.SolveReuseFixture):
 
     def test_step_cache_cannot_reuse_old_meta_even_when_its_key_matches(self):
         self.solve()
-        fixture = Path(__file__).parent / "fixtures/ragewars_vec3/types_legacy_meta.json"
+        fixture = TESTS / "typemap/fixtures/ragewars_vec3/types_legacy_meta.json"
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("PRAGMA user_version = 0")
             connection.execute("DELETE FROM meta")
@@ -65,7 +64,7 @@ class DatabaseUpgradeTests(test_solve_reuse.SolveReuseFixture):
 
     def test_stale_types_rebuild_before_damaged_headers_regenerate(self):
         self.solve()
-        fixture = Path(__file__).parent / "fixtures/ragewars_vec3/types_legacy_meta.json"
+        fixture = TESTS / "typemap/fixtures/ragewars_vec3/types_legacy_meta.json"
         with closing(sqlite3.connect(self.database)) as connection, connection:
             connection.execute("PRAGMA user_version = 0")
             connection.execute("DELETE FROM meta")

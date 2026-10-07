@@ -35,6 +35,7 @@ class CommitIncludeTests(TempCase):
             ("src/func_800E69A4_us.c", SOURCE.replace("@@", OLD)),
         ):
             self.write(relative, text)
+        self.write(".gitignore", "/build/\n/.attempts.lock\n")
         self.git("init", "-q")
         self.git("add", ".")
         self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")

@@ -5,7 +5,7 @@ import json
 from dataclasses import replace
 from unittest.mock import patch
 
-from tests.typemap.test_solve_reuse import SolveReuseFixture
+from tests.integration.typemap.test_solve_reuse import SolveReuseFixture
 from tests.typemap.test_types_work_counts import SLICE
 from unbake import inputs, steps
 from unbake.cache import Cache

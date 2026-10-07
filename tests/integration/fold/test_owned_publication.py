@@ -50,7 +50,8 @@ class OwningPublicationTests(ProjectCase):
         self.original_consumer = (FIXTURE / (CALLER + ".c")).read_text()
         self.consumer.write_text(self.original_consumer)
         self.source = (FIXTURE / (BE + ".c")).read_text()
-        self.file = self.root / (BE + ".c")
+        self.file = self.project.work / BE / (BE + ".c")
+        self.file.parent.mkdir(parents=True, exist_ok=True)
         self.file.write_text(self.source)
         (self.project.root / "layout.toml").write_bytes(
             ownership.encoded(

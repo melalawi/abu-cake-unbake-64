@@ -106,5 +106,5 @@ class UnitProcessGuardTests(TempCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("subprocess creation is forbidden", result.stderr)
-                self.assertIn("Ran 1 tests", result.stderr)
+                self.assertIn("Ran 1 test", result.stderr)
                 self.assertFalse(marker.exists())

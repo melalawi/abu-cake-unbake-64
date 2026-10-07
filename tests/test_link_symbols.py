@@ -48,6 +48,9 @@ class LinkRefusalTests(ProjectCase):
             )
         )
         row = SimpleNamespace()
+        source = self.project.work / SOURCE.name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("void func_800C3EF0_us(void) {}\n")
         with (
             patch.object(compare, "function_of", return_value="func_800C3EF0_us"),
             patch.object(compare.split, "holding_versions", return_value=("us",)),
@@ -56,10 +59,9 @@ class LinkRefusalTests(ProjectCase):
             patch.object(compare.split, "words", return_value=b"\0" * 16),
             patch.object(runner, "compile_unit", return_value=nullcontext(Path("unit.o"))),
             patch.object(runner, "link_function", side_effect=refusal),
-            patch.object(Path, "read_bytes", return_value=b"void f(void) {}\n"),
             self.assertRaises(Held) as caught,
         ):
-            compare.measure(self.project, self.host, SOURCE)
+            compare.measure(self.project, self.host, source)
         self.assertIs(caught.exception, refusal)
 
     def test_an_undefined_symbol_is_not_retried_under_other_compilers(self) -> None:

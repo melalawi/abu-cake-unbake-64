@@ -6,11 +6,10 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.kit import TempCase
+from tests.kit import TESTS, TempCase
 from tests.project_fixture import make
 from unbake import cache, config, pool, steps
 from unbake.cli import recompute
@@ -19,7 +18,7 @@ from unbake.typemap import mapping, shards, storage
 
 VERSIONS = ("de", "eu", "eu-x", "us", "us-rev1")
 NAMES = ("func_802651B0_de", "__cmpdi2")
-FIXTURES = Path(__file__).parents[1] / "fixtures/map_integrity"
+FIXTURES = TESTS / "fixtures/map_integrity"
 
 
 class IntegrityTests(TempCase):

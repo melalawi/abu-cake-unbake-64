@@ -27,7 +27,11 @@ class PublicationDependencyTests(ProjectCase):
         with (
             patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")),
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", source, {}, ())),
-            patch.object(land, "_prove_versions", return_value={self.project.work / "_land/alpha/include/needed.h"}),
+            patch.object(
+                land,
+                "_prove_versions",
+                side_effect=lambda project, host, view, function, file, versions: {view.work_include[0] / "needed.h"},
+            ),
             patch("unbake.layout.header_step.validate"),
             patch.object(land, "_commit", side_effect=lambda project, host, paths, message: staged.extend(paths)),
             patch.object(land, "_git", return_value="committed\n"),
@@ -109,7 +113,6 @@ class PublicationDependencyTests(ProjectCase):
         with (
             patch.object(land, "_git", side_effect=git),
             patch.object(land, "_refuse_dangling_includes"),
-            patch("unbake.journal.Journal.prepare_commit", return_value="Unbake-Operation: fixture"),
             self.assertRaisesRegex(Held, "hook refused"),
         ):
             land._commit(self.project, self.host, [owned], "Publish owned input")

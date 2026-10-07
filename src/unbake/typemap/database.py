@@ -972,18 +972,8 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                     lookup["headers"][path.relative_to(project.include[0]).as_posix()] = input_pins.digest(
                         path, algorithm="sha256", reuse=retention.configured()
                     )
+                    outputs[path] = path.read_bytes()
             outputs[index.path(project)] = index.encoded(lookup)
-        outputs = {
-            path: content
-            for path, content in outputs.items()
-            if not path.is_file()
-            or (
-                input_pins.digest(path, algorithm="sha256", reuse=retention.configured())
-                != input_pins.digest(content, algorithm="sha256", reuse=retention.configured())
-                if isinstance(content, Path)
-                else path.read_bytes() != content
-            )
-        }
         from unbake.journal import Journal
 
         try:

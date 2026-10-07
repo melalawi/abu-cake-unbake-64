@@ -42,6 +42,16 @@ class NativeFaultTests(TempCase):
         self.assertEqual(reopened.cause.id, original.cause.id)
         self.assertEqual(process.native_results(reopened), (leaf,))
 
+    def test_same_cause_identity_keeps_distinct_context_and_deduplicates_exact_cause(self):
+        cause = process.named("types.declaration", "unclosed body", owner="parser", stage="solve")
+        original = Held(cause)
+        context = process.named("types.declaration", "src/unit.c: de: unclosed body", owner="parser", stage="solve")
+        self.assertEqual(cause.id, context.id)
+        wrapped = process.capture(original, cause=context)
+        self.assertIs(wrapped.cause, cause)
+        self.assertEqual(wrapped.chain[-1].reason, context.reason)
+        self.assertIs(process.capture(original, cause=cause), original.fault)
+
     def test_permission_is_distinct_from_signal_and_exit(self):
         with (
             patch.object(process.subprocess, "run", side_effect=PermissionError(errno.EACCES, "Permission denied")),

@@ -89,6 +89,61 @@ class LiveRecoveryTests(ProjectCase):
         self.assertEqual(output.read_text(), "before\n")
         self.assertFalse(directory.exists())
 
+    def test_default_public_compare_recovers_before_measurement_and_preserves_live_owner(self):
+        import io
+
+        from tests.kit import with_value
+        from unbake.cli import main
+        from unbake.layout import split
+        from unbake.work import compare
+        from unbake.work.score import measure_words
+
+        directory = self.project.build / "boundary.journal"
+        output = self.project.root / "units.mk"
+        draft = self.project.work / "alpha/alpha.c"
+        draft.parent.mkdir(parents=True)
+        draft.write_text("int alpha(void) { return 1; }\n")
+        host = with_value(self.host, "resources.domain", "standalone")
+        for live in (False, True):
+            with self.subTest(live=live):
+                output.write_text("before\n")
+                changes = journal.Journal(directory, root=self.project.root).__enter__()
+                atomic.text(output, "after\n")
+                if not live:
+                    abandon(changes)
+
+                def measure(project, policy, file, live=live):
+                    self.assertEqual(output.read_text(), "after\n" if live else "before\n")
+                    self.assertEqual(directory.exists(), live)
+                    return compare.Compared(
+                        "alpha",
+                        file,
+                        hashlib.sha256(file.read_bytes()).hexdigest(),
+                        {
+                            version: measure_words(
+                                version,
+                                split.words(project, split.functions(project, version)[0]),
+                                split.words(project, split.functions(project, version)[0]),
+                            )
+                            for version in project.versions
+                        },
+                        compiler="ido-7.1",
+                    )
+
+                try:
+                    with (
+                        patch.object(main.config, "load_host", return_value=host),
+                        patch.object(steps, "_ensure", return_value=[]),
+                        patch.object(compare, "measure", side_effect=measure) as measured,
+                    ):
+                        result = main._run(["--project", str(self.project.root), "compare", str(draft)], io.StringIO())
+                    self.assertEqual(result.status, "ok", result.document())
+                    measured.assert_called_once()
+                finally:
+                    if live:
+                        changes.__exit__(None, None, None)
+                self.assertFalse(directory.exists())
+
     def test_nested_owners_keep_the_live_boundary_and_reject_a_different_root(self):
         directory = self.project.build / "boundary.journal"
         with journal.Journal(directory, root=self.project.root) as changes:

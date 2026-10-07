@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from tests.ledger_fixture import history_bytes
 from tests.project_fixture import ProjectCase
-from unbake import buildfiles, config, land
+from unbake import buildfiles, config, journal, land
 from unbake.cache import Cache
 from unbake.config import Held
 from unbake.decomp import checks
@@ -55,6 +55,12 @@ class FuzzyCleanupTests(ProjectCase):
     def publish_source(self, source=CLEANED, score=20.0, *, fuzzy=True, folded=None):
         self.file.write_text(source)
         scores = {v: {"compiled": True, "percent": score, "exact": not fuzzy} for v in self.versions}
+
+        def accept(project, host, paths, message):
+            transaction = journal.current()
+            transaction.prepare_commit(project, host, project.root / ".git/index", paths, "c0ffee")
+            journal.accepted(git_commit="c0ffee")
+
         with (
             patch(
                 "unbake.fold.apply.fold", return_value=Folded(FUNCTION, source if folded is None else folded, {}, ())
@@ -65,7 +71,7 @@ class FuzzyCleanupTests(ProjectCase):
             patch.object(
                 land, "_git", side_effect=lambda p, *args: self.committed if args[0] == "show" else "c0ffee\n"
             ),
-            patch.object(land, "_commit") as commit,
+            patch.object(land, "_commit", side_effect=accept) as commit,
             patch.object(buildfiles, "write", return_value=[]),
             patch.object(land.steps, "record"),
             patch.object(land.steps, "ensure"),

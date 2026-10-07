@@ -291,11 +291,7 @@ def named(
 def capture(error: BaseException, *, cause: Cause) -> Fault:
     """Preserve the first owning cause and add typed context, never search nested dicts for a cause."""
     if isinstance(error, Held):
-        return (
-            error.fault
-            if error.fault.cause.id == cause.id
-            else error.fault.framed(cause.owner, cause.stage, cause.reason)
-        )
+        return error.fault if error.fault.cause == cause else error.fault.framed(cause.owner, cause.stage, cause.reason)
     frames = tuple(
         {"file": Path(f.filename).name, "line": f.lineno, "function": f.name}
         for f in traceback.extract_tb(error.__traceback__)
