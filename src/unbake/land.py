@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
+import tempfile
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -24,14 +25,13 @@ from typing import Any
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import buildfiles, process, runner, scratch, steps
+from unbake import buildfiles, inputs, journal, process, runner, scratch, steps
 from unbake import cache as retention
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.process import Fault, capture
 from unbake.process import named as cause_named
-from unbake.project import publication_transaction
 from unbake.project.headers import scan
 from unbake.work import attempts, compare
 
@@ -159,9 +159,9 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
     index = Path(_git(project, "rev-parse", "--git-path", "index").strip())
     if not index.is_absolute():
         index = project.root / index
-    before = index.read_bytes() if index.is_file() else None
     author = f"{host.publish_author_name} <{host.publish_author_email}>"
-    try:
+    with journal.transaction(project) as transaction:
+        trailer = transaction.prepare_commit(project, host, index, paths, _git(project, "rev-parse", "HEAD").strip())
         _git(project, "add", "--", *names)
         _git(
             project,
@@ -172,20 +172,14 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
             "commit",
             "-q",
             "-m",
-            message,
+            message + "\n\n" + trailer,
             "--author",
             author,
             "--only",
             "--",
             *names,
         )
-    except BaseException:
-        if before is None:
-            index.unlink(missing_ok=True)
-        else:
-            atomic_files.write(index, before)
-        raise
-    publication_transaction.accepted()
+        journal.accepted(git_commit=_git(project, "rev-parse", "HEAD").strip())
 
 
 def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
@@ -703,6 +697,21 @@ def prove(
                     f"land.fuzzy_compile: {function}: {len(failed)} holding versions refused",
                     owner="land",
                     stage="land",
+                    subject=function,
+                    dependencies=inputs.DependencySet(
+                        (),
+                        {
+                            "proposed_source_sha256": inputs.bytes_digest(source.encode(), algorithm="sha256"),
+                            "proposed_headers": {
+                                name: inputs.bytes_digest(text.encode(), algorithm="sha256")
+                                for name, text in headers.items()
+                            },
+                            "versions": list(versions),
+                            "memory_worker_bytes": host.memory_worker_bytes,
+                            "dependencies_unknown": True,
+                        },
+                        {},
+                    ),
                 ),
                 failures=failed,
             )
@@ -869,7 +878,7 @@ def _receipt(
     }
 
 
-@publication_transaction.transactional
+@journal.transactional
 def land(
     project: Project,
     host: Host,
@@ -975,8 +984,8 @@ def land(
         )
     source = attempts.guarded(folded.source) if fuzzy else folded.source
     headers = {**fold_apply.private_headers(project, function), **folded.headers}
-    stage = project.work / "_land" / function
-    shutil.rmtree(stage, ignore_errors=True)
+    project.work.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".land-" + function + "-", dir=project.work))
     try:
         options: dict[str, Any] = {"fuzzy": True} if fuzzy else {}
         if folded.source_edits:
@@ -1073,100 +1082,87 @@ def land(
             **{edit.path: edit.after.encode() for edit in folded.source_edits},
         },
     )
-    written: dict[Path, bytes | None] = {}
-
-    def put(path: Path, content: bytes) -> None:
-        if path not in written:
-            written[path] = path.read_bytes() if path.is_file() else None
-        atomic_files.write(path, content)
-
-    try:
-        if owning_source is not None and (not owning_path.is_file() or owning_path.read_text() != owning_source):
+    written = {
+        project.src / f"{function}.c",
+        config_path,
+        *(edit.path for edit in folded.source_edits),
+        *(
+            Path(edit.path)
+            for edit in ([] if fuzzy else [*folded.split_edits, *_row_edits(project, function, versions)])
+        ),
+        *(
+            project.include[-1] / name
+            for name, text in headers.items()
+            if not (project.include[-1] / name).is_file() or (project.include[-1] / name).read_text() != text
+        ),
+    }
+    if owning_source is not None and (not owning_path.is_file() or owning_path.read_text() != owning_source):
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: owning source changed since proof",
+                owner="land",
+                stage="land",
+            )
+        )
+    if folded.contract is not None and owning_source is None and owning_path.exists():
+        raise Held(
+            cause_named(
+                "land.own_contract",
+                f"land.own_contract: {function}: a new owning source appeared since proof",
+                owner="land",
+                stage="land",
+            )
+        )
+    for name, provider_before in owning_providers.items():
+        path = project.include[-1] / name
+        provider_current = path.read_bytes() if path.is_file() else None
+        if provider_current != provider_before:
             raise Held(
                 cause_named(
                     "land.own_contract",
-                    f"land.own_contract: {function}: owning source changed since proof",
+                    f"land.own_contract: {function}: provider {name} changed since proof",
                     owner="land",
                     stage="land",
                 )
             )
-        if folded.contract is not None and owning_source is None and owning_path.exists():
+    for edit in folded.source_edits:
+        if not edit.path.is_file() or edit.path.read_text() != edit.before:
             raise Held(
                 cause_named(
-                    "land.own_contract",
-                    f"land.own_contract: {function}: a new owning source appeared since proof",
+                    "land.consumer",
+                    f"land.consumer: {edit.path}: source changed since proof",
                     owner="land",
                     stage="land",
                 )
             )
-        for name, provider_before in owning_providers.items():
-            path = project.include[-1] / name
-            provider_current = path.read_bytes() if path.is_file() else None
-            if provider_current != provider_before:
-                raise Held(
-                    cause_named(
-                        "land.own_contract",
-                        f"land.own_contract: {function}: provider {name} changed since proof",
-                        owner="land",
-                        stage="land",
-                    )
-                )
-        for edit in folded.source_edits:
-            if not edit.path.is_file() or edit.path.read_text() != edit.before:
-                raise Held(
-                    cause_named(
-                        "land.consumer",
-                        f"land.consumer: {edit.path}: source changed since proof",
-                        owner="land",
-                        stage="land",
-                    )
-                )
-        put(project.src / f"{function}.c", source.encode())
-        for edit in folded.source_edits:
-            put(edit.path, edit.after.encode())
-        for name, text in headers.items():
-            target = project.include[-1] / name
-            if not target.is_file() or target.read_text() != text:
-                put(target, text.encode())
-        for edit in [] if fuzzy else [*folded.split_edits, *_row_edits(project, function, versions)]:
-            current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
-            put(Path(edit.path), (edit.after if current == edit.before else current).encode())
-        # Unchanged dirty options still supplied the proof and must travel with the source.
-        put(config_path, config_content)
-        from unbake import config
+    atomic_files.write(project.src / f"{function}.c", source.encode())
+    for edit in folded.source_edits:
+        atomic_files.write(edit.path, edit.after.encode())
+    for name, text in headers.items():
+        target = project.include[-1] / name
+        if not target.is_file() or target.read_text() != text:
+            atomic_files.write(target, text.encode())
+    for edit in [] if fuzzy else [*folded.split_edits, *_row_edits(project, function, versions)]:
+        current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
+        atomic_files.write(Path(edit.path), (edit.after if current == edit.before else current).encode())
+    # Unchanged dirty options still supplied the proof and must travel with the source.
+    atomic_files.write(config_path, config_content)
+    from unbake import config
 
-        if fuzzy or previous_fuzzy is not None:
-            attempts.ledger(project).record_publication(
-                function,
-                fuzzy_receipt,
-                source,
-                versions,
-                ident,
-                compare.operation_dependencies(project, host, file),
-                committed=False,
-            )
-        updated = config.load(project.root)
-        receipts = attempts.ledger(updated).fuzzy_sources()
-        if fuzzy_receipt is not None:
-            receipts[function] = fuzzy_receipt
-        else:
-            receipts.pop(function, None)
-        generated = buildfiles.write(updated, host, receipts=receipts)
-        units_path = project.root / "units.mk"
-        if units_path.is_file():
-            generated.append(units_path)
-        steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
-        generated += progress.write(updated, host, receipts=receipts)
-        steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
-        _commit(project, host, sorted({*written, *generated, *dependencies, project.root / attempts.PATH}), message)
-    except BaseException:
-        for path, previous in written.items():
-            if previous is None:
-                path.unlink(missing_ok=True)
-            else:
-                atomic_files.write(path, previous)
-        raise
-    commit = _git(project, "rev-parse", "HEAD").strip()
+    updated = config.load(project.root)
+    receipts = attempts.ledger(updated).fuzzy_sources()
+    if fuzzy_receipt is not None:
+        receipts[function] = fuzzy_receipt
+    else:
+        receipts.pop(function, None)
+    generated = buildfiles.write(updated, host, receipts=receipts)
+    units_path = project.root / "units.mk"
+    if units_path.is_file():
+        generated.append(units_path)
+    steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
+    generated += progress.write(updated, host, receipts=receipts)
+    steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
     attempts.ledger(updated).record_publication(
         function,
         fuzzy_receipt,
@@ -1174,7 +1170,10 @@ def land(
         versions,
         ident,
         compare.operation_dependencies(updated, host, updated.src / f"{function}.c"),
+        committed=False,
     )
+    _commit(project, host, sorted({*written, *generated, *dependencies, project.root / attempts.PATH}), message)
+    commit = _git(project, "rev-parse", "HEAD").strip()
     if on_commit is not None:
         on_commit(
             {
@@ -1229,7 +1228,7 @@ def land(
     return commit
 
 
-@publication_transaction.transactional
+@journal.transactional
 def land_original(
     project: Project, host: Host, function: str, *, on_commit: Callable[[dict[str, Any]], None] | None = None
 ) -> str:
@@ -1276,35 +1275,41 @@ def land_original(
     text = texts.pop()
     records = original_asm.load(project)
     records[function] = original_asm.Record(found.rule)
-    written: dict[Path, bytes | None] = {}
-
-    def put(path: Path, content: bytes) -> None:
-        if path not in written:
-            written[path] = path.read_bytes() if path.is_file() else None
-        atomic_files.write(path, content)
-
-    try:
-        put(project.src / f"{function}.s", text.encode())
-        put(project.root / original_asm.MANIFEST, original_asm.dumps(records).encode())
-        for edit in [
-            *exclusions.publication_edit(project, {function}),
-            *_row_edits(project, function, versions, "hasm"),
-        ]:
-            current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
-            put(Path(edit.path), (edit.after if current == edit.before else current).encode())
-        updated = config.load(project.root)
-        generated = buildfiles.write(updated, host)
-        steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
-        generated += progress.write(updated, host)
-        steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
-        _commit(project, host, sorted({*written, *generated}), f"Original asm {function}")
-    except BaseException:
-        for path, previous in written.items():
-            if previous is None:
-                path.unlink(missing_ok=True)
-            else:
-                atomic_files.write(path, previous)
-        raise
+    written = {
+        project.src / f"{function}.s",
+        project.root / original_asm.MANIFEST,
+        *(
+            Path(edit.path)
+            for edit in [
+                *exclusions.publication_edit(project, {function}),
+                *_row_edits(project, function, versions, "hasm"),
+            ]
+        ),
+    }
+    atomic_files.write(project.src / f"{function}.s", text.encode())
+    atomic_files.write(project.root / original_asm.MANIFEST, original_asm.dumps(records).encode())
+    for edit in [
+        *exclusions.publication_edit(project, {function}),
+        *_row_edits(project, function, versions, "hasm"),
+    ]:
+        current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
+        atomic_files.write(Path(edit.path), (edit.after if current == edit.before else current).encode())
+    updated = config.load(project.root)
+    generated = buildfiles.write(updated, host)
+    steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
+    generated += progress.write(updated, host)
+    steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))
+    attempts.ledger(updated).record_publication(
+        function,
+        None,
+        text,
+        versions,
+        updated.compiler_reference(function),
+        compare.operation_dependencies(updated, host, updated.src / f"{function}.s"),
+        committed=False,
+        kind="original",
+    )
+    _commit(project, host, sorted({*written, *generated}), f"Original asm {function}")
     commit = _git(project, "rev-parse", "HEAD").strip()
     if on_commit is not None:
         on_commit(
@@ -1371,7 +1376,7 @@ def publish(
     committed_records: dict[str, dict[str, Any]] = {}
 
     def committed(record: dict[str, Any]) -> None:
-        publication_transaction.accepted()
+        journal.accepted()
         committed_records[record["function"]] = {
             "commit": record["commit"],
             "proof": {"versions": record["proof"]["versions"]},
@@ -1397,7 +1402,7 @@ def publish(
         committed_records.clear()
         current = config.load(project.root)
         try:
-            with publication_transaction.transaction(current):
+            with journal.transaction(current):
                 if compare_first and position < len(files):
                     compare.compare(current, host, files[position], required_versions=required_versions)
                 commit = action(current)
@@ -1412,6 +1417,7 @@ def publish(
             break
         except Held as error:
             result.failed[name] = {
+                **error.data,
                 "key": error.key,
                 "reason": error.reason,
                 "fault": capture(
@@ -1433,7 +1439,7 @@ def publish(
         )
         try:
             if not fuzzy:
-                with publication_transaction.transaction(config.load(project.root)):
+                with journal.transaction(config.load(project.root)):
                     steps.ensure(config.load(project.root), host, ["merge-units"])
         except KeyboardInterrupt:
             result.interrupted = True

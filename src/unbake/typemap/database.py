@@ -984,38 +984,19 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
                 else path.read_bytes() != content
             )
         }
-        backups: dict[Path, Path | None] = {}
-        try:
-            for path in set(outputs) | {database}:
-                if path.is_file():
-                    descriptor, name = tempfile.mkstemp(prefix=".typemap-backup-", dir=path.parent)
-                    os.close(descriptor)
-                    backup_path = Path(name)
-                    backups[path] = backup_path
-                    atomic_files.copyfile(path, backup_path)
-                else:
-                    backups[path] = None
-            from unbake.journal import Journal
+        from unbake.journal import Journal
 
-            with Journal(project.build / "types-headers.journal") as transaction:
+        try:
+            with Journal(project.build / "types-headers.journal", root=project.root) as transaction:
+                transaction.save([*outputs, database, project.root / "attempts.jsonl"])
                 # Existing homes remain listed until the headers operation owns their deletion.
                 header_step.publish(project, outputs, transaction, check=header_check)
-            types_db.install(database, staged)
-            from unbake.work.attempts import ledger
+                types_db.install(database, staged)
+                from unbake.work.attempts import ledger
 
-            ledger(project).mark_drafts(marks)
-        except BaseException:
-            for path, backup in backups.items():
-                if backup is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    atomic_files.publish(backup, path)
-            raise
+                ledger(project).mark_drafts(marks)
         finally:
             staged.unlink(missing_ok=True)
-            for backup in backups.values():
-                if backup is not None:
-                    backup.unlink(missing_ok=True)
 
 
 def validate_headers(

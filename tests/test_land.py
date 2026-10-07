@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import config, land
+from unbake import config, land, process
 from unbake.config import Held
 from unbake.fold.apply import Folded
 from unbake.process import named
@@ -51,6 +51,13 @@ class LandTests(ProjectCase):
             patch("unbake.fold.apply.private_headers", return_value={}),
             patch.object(land, "prove", **prove),
             patch.object(land, "_git", side_effect=git),
+            patch.object(
+                process,
+                "run_native",
+                side_effect=lambda argv, *args, **kw: __import__("types").SimpleNamespace(
+                    stdout=str(self.project.root / ".git/index") + "\n" if "--git-path" in argv else ""
+                ),
+            ),
             patch("unbake.layout.header_loss.check"),
             patch.object(land, "dangling_includes", return_value=[]),
             patch.object(land.buildfiles, "write", return_value=[]),
@@ -71,7 +78,7 @@ class LandTests(ProjectCase):
             self.assertIn("c, alpha]", self.project.version(version).split.read_text())
         commits = [args for args in self.git if "commit" in args]
         self.assertEqual(len(commits), 1)
-        self.assertIn("Match alpha", commits[0])
+        self.assertEqual(commits[0][commits[0].index("-m") + 1].splitlines()[0], "Match alpha")
         added = next(args for args in self.git if args[0] == "add")
         self.assertIn("src/alpha.c", added)
         self.assertFalse(self.file.parent.exists())
@@ -110,7 +117,7 @@ class LandTests(ProjectCase):
         self.assertEqual({v: self.project.version(v).split.read_text() for v in self.project.versions}, published)
         commits = [args for args in self.git if "commit" in args]
         self.assertEqual(len(commits), 1)
-        self.assertIn("Clean alpha", commits[0])
+        self.assertEqual(commits[0][commits[0].index("-m") + 1].splitlines()[0], "Clean alpha")
 
     def test_landing_with_default_compiler_keeps_proven_unit_flags(self) -> None:
         path = self.project.root / "config.toml"

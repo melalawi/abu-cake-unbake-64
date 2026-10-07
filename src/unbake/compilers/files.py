@@ -40,19 +40,6 @@ def relative(name: str) -> str:
     return name
 
 
-def atomic_bytes(path: Path, content: bytes, *, mode: int | None = None) -> None:
-    if not path.is_symlink() and path.exists() and path.read_bytes() == content:
-        return
-    atomic_files.write(path, content, mode=mode)
-
-
-def atomic_copy(path: Path, source: Path, *, mode: int) -> None:
-    """Publish a staged file without retaining its contents in memory."""
-    with atomic_files.staging(path) as temporary:
-        atomic_files.copyfile(source, temporary)
-        temporary.chmod(mode)
-
-
 def download(entry: Download, cache: Path) -> Path:
     path = cache / "downloads" / entry.sha256
     if path.exists():

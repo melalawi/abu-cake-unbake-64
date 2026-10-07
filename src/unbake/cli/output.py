@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TextIO
 
 from unbake import tui
@@ -49,6 +49,20 @@ class Result:
     def interrupted(cls, command: str, next_: str | None, data: dict[str, Any] | None = None) -> Result:
         """An unfinished command has no refusal or final cause; its work remains retryable."""
         return cls(command, "interrupted", None, {**(data or {}), "retryable": True}, next_)
+
+    def render_actions(self, context: Any) -> Result:
+        from unbake.process import Action
+
+        def render(value: Any) -> Any:
+            if isinstance(value, Action):
+                return value.render(context)
+            if isinstance(value, dict):
+                return {key: render(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [render(item) for item in value]
+            return value
+
+        return replace(self, data=render(self.data), next=render(self.next))
 
     def document(self) -> dict[str, Any]:
         return {

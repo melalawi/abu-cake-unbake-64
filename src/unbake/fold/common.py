@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import NoReturn
 
-from unbake import atomic as atomic_files
 from unbake.config import Held, Project
 from unbake.process import named as cause_named
 
@@ -33,7 +32,3 @@ def relative(project: Project, path: str | Path) -> Path:
         return Path(path).resolve().relative_to(project.root.resolve())
     except ValueError:
         held(f"{path}: path must be inside project.root {project.root}")
-
-
-def atomic(path: Path, content: bytes) -> None:
-    atomic_files.write(path, content)

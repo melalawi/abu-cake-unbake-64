@@ -584,7 +584,10 @@ def generate(project: Project, host: Host, *, receipts: dict[str, dict[str, Any]
     from unbake.report import verify
 
     payload = verify.bundle()
+    from unbake.project import hygiene
+
     files: dict[Path, str] = {
+        project.root / ".gitignore": hygiene.runtime_ignore_text(project),
         project.root / "Makefile": makefile(project, host),
         project.root / "units.mk": units_mk(project, receipts=receipts),
         project.tools / "n64link.version": n64link_pin(host),
@@ -623,6 +626,9 @@ def input_key(project: Project, host: Host) -> str:
     parts.extend(sorted(project.src.glob("*.c")))
     parts.extend(sorted(project.src.glob("*.s")))
     parts.append(cache.serialized(attempts.ledger(project).fuzzy_sources()))
+    from unbake.project import hygiene
+
+    parts.append(hygiene.runtime_ignore_text(project))
     from unbake.decomp import original_asm
 
     manifest = project.root / original_asm.MANIFEST

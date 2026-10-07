@@ -7,7 +7,7 @@ from typing import ClassVar
 from unittest.mock import patch
 
 from tests.kit import TempCase
-from unbake import pool
+from unbake import process
 from unbake.search import permute
 
 
@@ -48,7 +48,7 @@ class TreeTests(TempCase):
         with (
             patch.object(Fake, "__init__", init),
             patch.object(permute.subprocess, "Popen", Fake),
-            patch.object(pool, "kill_groups", lambda pids: groups.append(list(pids))),
+            patch.object(process, "kill_groups", lambda pids: groups.append(list(pids))),
         ):
             try:
                 result: object = permute._run(["permuter"], self.root, {}, 5.0, self.root / "log")

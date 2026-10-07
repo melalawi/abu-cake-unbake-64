@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import select
+import signal
 import subprocess
+import sys
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, replace
@@ -433,3 +437,61 @@ def read_text(path: Path, phase: str) -> str:
         return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise Held(named(f"{path}", f"{path}: {error}", owner="process", stage=phase)) from error
+
+
+def owner(server: int) -> int:
+    """The process that started the fork server `server`: the one that owns the pool."""
+    stat = Path(f"/proc/{server}/stat").read_text()
+    return int(stat.rsplit(")", 1)[1].split()[1])
+
+
+def orphaned(descriptor: int | None, server: int) -> None:
+    """When the owner exits, kill the fork server and this worker's group. A stopped owner often takes the server
+    down first: its absence must never spare the group (orphan workers kept running and holding memory)."""
+    if descriptor is not None:
+        select.select([descriptor], [], [])
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(server, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(0, signal.SIGKILL)
+
+
+def kill_groups(pids: Sequence[int]) -> None:
+    """SIGKILL each worker's process group (the worker itself when its group does not exist yet)."""
+    for pid in pids:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+
+# Runs outside the permuter's group: when the owner (argv 1) exits, even by SIGKILL, the group (argv 2) dies.
+_WATCH = (
+    "import os, select, signal, sys\n"
+    "select.select([os.pidfd_open(int(sys.argv[1]))], [], [])\n"
+    "try:\n"
+    "    os.killpg(int(sys.argv[2]), signal.SIGKILL)\n"
+    "except ProcessLookupError:\n"
+    "    pass\n"
+)
+
+
+@contextmanager
+def managed_group(
+    argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdout: Any, stderr: Any
+) -> Iterator[subprocess.Popen[Any]]:
+    """One owner-death watcher and teardown for a native process tree."""
+    child = subprocess.Popen(argv, cwd=cwd, env=dict(env), stdout=stdout, stderr=stderr, start_new_session=True)
+    watcher = None
+    try:
+        watcher = subprocess.Popen(
+            [sys.executable, "-c", _WATCH, str(os.getpid()), str(child.pid)], env=dict(env), start_new_session=True
+        )
+        yield child
+    finally:
+        kill_groups([child.pid])
+        child.wait()
+        if watcher is not None:
+            watcher.kill()
+            watcher.wait()

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
+from unbake import atomic as atomic_files
 from unbake import inputs
 from unbake.cache import Cache
 from unbake.config import Held
@@ -47,7 +48,7 @@ class OrphanHeaderTests(ProjectCase):
             "clusters": {},
             "type_headers": {"QueryResult": [name]},
         }
-        storage.write(index.path(self.project), index.encoded(lookup))
+        atomic_files.write(storage.output(index.path(self.project)), index.encoded(lookup))
         return lookup
 
     def cached_session(self):
@@ -134,8 +135,8 @@ class OrphanHeaderTests(ProjectCase):
         original = self.old.read_bytes()
         install = apply.install
 
-        def refuse(project, outputs):
-            install(project, outputs)
+        def refuse(project, outputs, *, check=None):
+            install(project, outputs, check=check)
             raise Held(named("headers.test", "headers.test: after orphan deletion", owner="fixture", stage="headers"))
 
         with (
@@ -182,7 +183,7 @@ class OrphanHeaderTests(ProjectCase):
             return [None for _ in jobs]
 
         with (
-            patch.object(attempts, "fuzzy_sources", return_value={"alpha"}),
+            patch.object(attempts.Ledger, "fuzzy_sources", return_value={"alpha"}),
             patch.object(pool, "run", side_effect=compile_jobs),
         ):
             self.assertEqual(
@@ -226,9 +227,11 @@ class OrphanHeaderTests(ProjectCase):
                 state = json.loads((FIXTURE / "cached-render-state.json").read_bytes())
                 if not legacy:
                     state["schema"] = regeneration.RENDER_SCHEMA
-                storage.write(session.cache.path("typemap-render-state", session.inputs), storage.encoded(state))
-                storage.write(
-                    session.cache.path("typemap-render", state["content_key"]),
+                atomic_files.write(
+                    storage.output(session.cache.path("typemap-render-state", session.inputs)), storage.encoded(state)
+                )
+                atomic_files.write(
+                    storage.output(session.cache.path("typemap-render", state["content_key"])),
                     (FIXTURE / "cached-render.json").read_bytes(),
                 )
                 value = deepcopy(state["projection"])

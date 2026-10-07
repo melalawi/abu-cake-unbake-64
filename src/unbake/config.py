@@ -46,7 +46,15 @@ class Held(Exception):
             raise TypeError("Held requires an explicit Cause or Fault")
         self.fault = Fault(value) if isinstance(value, Cause) else value
         self.failures = failures
-        self.data = data or {}
+        self.data = dict(data or {})
+        if failures:
+            self.data["failures"] = list(failures)
+            self.fault = self.fault.framed(
+                self.fault.cause.owner,
+                self.fault.cause.stage,
+                "per-version native proof failures",
+                {"failures": list(failures)},
+            )
         super().__init__(self.fault.cause.reason)
 
     @property

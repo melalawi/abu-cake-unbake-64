@@ -647,13 +647,13 @@ def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Pat
             target.parent.mkdir(parents=True, exist_ok=True)
             old = inputs.digest(target, algorithm="sha256", reuse=retention.configured()) if target.is_file() else None
             if old != pin or target.is_symlink():
-                compiler_files.atomic_bytes(
+                atomic_files.write(
                     target, (directory / name).read_bytes(), mode=(directory / name).stat().st_mode & 0o777
                 )
                 _replaced(target, old, pin)
             manifest.append(f"{pin}  {(tools_relative / ident / name).as_posix()}\n")
         verify(project_directory, specs[ident])
-    compiler_files.atomic_bytes(manifest_path, "".join(manifest).encode())
+    atomic_files.write(manifest_path, "".join(manifest).encode())
     return manifest_path
 
 

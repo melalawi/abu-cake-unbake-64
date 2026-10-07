@@ -53,8 +53,7 @@ class PublicationRestoreTests(ProjectCase):
                     case.doCleanups()
 
     def test_written_paths_saved_once_with_no_project_scan_and_exact_old_modes_and_deleted_files(self):
-        from unbake.journal import Journal
-        from unbake.project.publication_transaction import transaction
+        from unbake.journal import Journal, transaction
 
         header = self.project.include[-1] / "owner.h"
         header.write_bytes(FIXTURE.read_bytes())
@@ -93,13 +92,13 @@ class PublicationRestoreTests(ProjectCase):
         self.assertEqual(untouched.read_text(), "/* pre-existing user edit */\n")
 
     def test_symlink_directory_entry_and_referent_survive_a_rejected_write(self):
-        from unbake.project.publication_transaction import transaction
+        from unbake.journal import transaction
 
         referent = self.project.include[-1] / "original.h"
         referent.write_bytes(FIXTURE.read_bytes())
         link = self.project.include[-1] / "linked.h"
         link.symlink_to("original.h")
-        with self.assertRaises(KeyboardInterrupt), transaction(self.project):
+        with self.assertRaises(Held), transaction(self.project):
             atomic.text(link, "struct Rejected {int value;};\n")
             raise KeyboardInterrupt
         self.assertTrue(link.is_symlink())
@@ -166,7 +165,7 @@ class PublicationRestoreTests(ProjectCase):
         self.assertEqual(header.read_bytes(), old)
 
     def test_git_commit_checkpoint_survives_a_following_exception(self):
-        from unbake.project.publication_transaction import transaction
+        from unbake.journal import transaction
 
         file = self.project.src / "alpha.c"
         file.write_text("int alpha(void) {return 1;}\n")

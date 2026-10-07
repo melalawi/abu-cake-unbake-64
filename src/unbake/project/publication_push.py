@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from unbake import config, pool, process, runner, scratch
+from unbake import atomic, config, journal, pool, process, runner, scratch, strict_json
 from unbake.cache import Cache
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
@@ -210,6 +210,84 @@ def reconcile(
     return [{"function": unit, "version": version} for unit, version in affected], after
 
 
+def resolve_conflicts(project: Project, host: Host) -> bool:
+    """Union immutable events and rerender owned reports during the existing rebase.
+
+    Authored/source conflicts retain Git's refusal. README is eligible only if
+    both branches agree outside the owning progress section.
+    """
+    from unbake.report import progress, readme_layout, verify
+
+    conflicts = tuple(p for p in _git(project, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p)
+    allowed = {
+        attempts.PATH,
+        verify.MANIFEST,
+        "README.md",
+        *("versions/" + v + "/report.json" for v in project.versions),
+    }
+    if not conflicts or set(conflicts) - allowed:
+        return False
+    with journal.transaction(project):
+        if attempts.PATH in conflicts:
+            sides = [_git(project, "show", ":" + str(stage) + ":" + attempts.PATH).encode() for stage in (1, 2, 3)]
+            merged = attempts.Ledger.merge(*sides)
+            atomic.write(project.root / attempts.PATH, merged)
+            # Strict readback owns both project identity and current-source projection.
+            history = attempts.ledger(project)
+            history._refresh()
+            expected = {strict_json.loads(line, "merged ledger")["event_id"] for line in merged.splitlines()}
+            if set(history.events) != expected:
+                raise Held(
+                    cause_named(
+                        "ledger.merge_readback",
+                        "concurrent event union differs on readback",
+                        owner="work.attempts",
+                        stage="publish",
+                    )
+                )
+        if "README.md" in conflicts:
+            ours, theirs = (_git(project, "show", ":" + str(stage) + ":README.md") for stage in (2, 3))
+            left, _, right = readme_layout.section(ours)
+            other_left, _, other_right = readme_layout.section(theirs)
+            if (left, right) != (other_left, other_right):
+                raise Held(
+                    cause_named(
+                        "publish.readme_conflict",
+                        "authored README sections conflict; preserve both branches",
+                        owner="project.publication_push",
+                        stage="publish",
+                    )
+                )
+            atomic.text(project.root / "README.md", ours)
+        if verify.MANIFEST in conflicts:
+            # The old report manifest is a projection, never history authority.
+            atomic.text(project.root / verify.MANIFEST, _git(project, "show", ":2:" + verify.MANIFEST))
+        for name in conflicts:
+            if name.startswith("versions/") and name.endswith("/report.json"):
+                atomic.text(project.root / name, _git(project, "show", ":2:" + name))
+        current = config.load(project.root)
+        progress.write(current, host, source_only=True)
+        verify.validate(current)
+        _git(project, "add", "--", *conflicts)
+    return True
+
+
+def rebase(project: Project, host: Host) -> None:
+    try:
+        _git(project, "rebase", "FETCH_HEAD")
+        return
+    except Held as error:
+        original = error
+    while resolve_conflicts(project, host):
+        try:
+            _git(project, "-c", "core.editor=true", "rebase", "--continue")
+            return
+        except Held:
+            if not _git(project, "diff", "--name-only", "--diff-filter=U", "-z"):
+                raise
+    raise original
+
+
 def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) -> dict[str, Any]:
     """Fetch, rebase when needed, reprove affected scopes, and push without force.
 
@@ -230,6 +308,7 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
     _git(project, "check-ref-format", "refs/heads/" + branch)
     from unbake.report import state
 
+    attempts.ledger(project).assert_portable()
     state.inventory(project)
     before: dict[ProofKey, str] | None = None
     reconciled = []
@@ -252,7 +331,7 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                 before = snapshot(config.load(project.root), host)
             prior = _git(project, "rev-parse", "HEAD")
             try:
-                _git(project, "rebase", "FETCH_HEAD")
+                rebase(project, host)
             except KeyboardInterrupt:
                 try:
                     _git(project, "rebase", "--abort")
@@ -282,6 +361,7 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                 _git(project, "reset", "--keep", prior)
                 raise
             reconciled.extend(proved)
+        attempts.ledger(config.load(project.root)).assert_portable()
         try:
             _git(project, "push", "--", remote, "HEAD:refs/heads/" + branch)
         except Held as error:

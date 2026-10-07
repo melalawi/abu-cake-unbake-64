@@ -56,12 +56,27 @@ def plan(project: Project) -> dict[str, Any]:
             sources[source.relative_to(project.root).as_posix()] = inputs.digest(
                 source, algorithm="sha256", reuse=False
             )
+    target = project.root / "attempts.jsonl"
+    history = Ledger(project)
+    authority = None
+    noncanonical = 0
+    if target.exists():
+        history._refresh()
+        from unbake.work.attempts import portable_tree
+
+        authority = inputs.digest(target, algorithm="sha256", reuse=False)
+        noncanonical = sum(
+            portable_tree(project, history.events[identity]) != history.events[identity] for identity in history.order
+        )
+    backup_inputs = {**inventory, **({"attempts.jsonl": authority} if authority is not None else {})}
     return {
         "sources": sources,
         "schema": 2,
         "project_id": project.id,
         "inputs": inventory,
-        "backup": ".unbake/migrations/" + inputs.bytes_digest(encoded(inventory), algorithm="sha256"),
+        "ledger": authority,
+        "noncanonical_events": noncanonical,
+        "backup": ".unbake/migrations/" + inputs.bytes_digest(encoded(backup_inputs), algorithm="sha256"),
         "counts": {"files": len(inventory), "local_logs": sum(name.endswith("/attempts.jsonl") for name in inventory)},
     }
 
@@ -121,8 +136,77 @@ def retain(
 
 def recover(project: Project) -> dict[str, Any]:
     """Public recovery uses the migration's own before-images, never an older writer."""
-    restored = recover_journal(project.build / "migration.journal")
-    return {"recovered_files": len(restored), "native_calls": 0}
+    directory = project.build / "migration.journal"
+    index = directory / INDEX
+    if not index.is_file():
+        return {"recovered_files": 0, "native_calls": 0}
+    record = strict_json.read(index)
+    if isinstance(record, dict) and record.get("schema") == 2:
+        restored = recover_journal(directory, root=project.root)
+        return {"recovered_files": len(restored), "native_calls": 0}
+    # 1cb wrote an array of exactly path/backup rows. This offline boundary is
+    # the only retired journal reader; ordinary Journal refuses it.
+    if not isinstance(record, list) or any(
+        not isinstance(row, dict) or set(row) != {"path", "backup"} for row in record
+    ):
+        refuse("unknown old migration journal shape; preserve before-images")
+    rows = []
+    for row in record:
+        path = Path(row["path"])
+        backup = directory / row["backup"] if row["backup"] is not None else None
+        if (
+            not path.is_absolute()
+            or not path.is_relative_to(project.root)
+            or path.is_symlink()
+            or any(p.is_symlink() for p in path.parents)
+        ):
+            refuse("old migration output escapes owned regular path")
+        if backup is not None and (backup.parent != directory or not backup.is_file() or backup.is_symlink()):
+            refuse("old migration before-image unavailable")
+        mode: int | None
+        if backup is not None and not path.exists():
+            # The original migration's separately verified backup preserves modes.
+            digest = inputs.digest(backup, algorithm="sha256", reuse=False)
+            relative = path.relative_to(project.root)
+            candidates = (
+                [p / relative for p in (project.root / ".unbake/migrations").iterdir()]
+                if (project.root / ".unbake/migrations").is_dir()
+                else []
+            )
+            evidence = next(
+                (
+                    p
+                    for p in candidates
+                    if p.is_file()
+                    and not p.is_symlink()
+                    and inputs.digest(p, algorithm="sha256", reuse=False) == digest
+                ),
+                None,
+            )
+            if evidence is None:
+                refuse("old journal lacks original file mode; preserve journal and migration backup for review")
+            assert evidence is not None
+            mode = evidence.stat().st_mode & 0o777
+        else:
+            mode = path.stat().st_mode & 0o777 if path.is_file() else None
+        rows.append((path, backup, mode))
+    for path, backup, mode in reversed(rows):
+        if backup is None:
+            if path.exists():
+                atomic.remove(path)
+        else:
+            content = backup.read_bytes()
+            atomic.write(path, content, mode=mode)
+            if path.read_bytes() != content:
+                refuse("old migration recovery readback differs")
+    archive = directory.with_name(directory.name + ".archive")
+    archive.mkdir(parents=True, exist_ok=True)
+    import os
+
+    os.replace(directory, archive / ("legacy-" + uuid.uuid4().hex))
+    atomic.sync_directory(archive)
+    atomic.sync_directory(directory.parent)
+    return {"recovered_files": len(rows), "native_calls": 0}
 
 
 def imported(project: Project, migration: dict[str, Any]) -> tuple[bytes, dict[str, Summary]]:
@@ -180,11 +264,12 @@ def imported(project: Project, migration: dict[str, Any]) -> tuple[bytes, dict[s
     def add(
         kind: str, subject: str, value: dict[str, Any], state: Literal["ok", "blocked", "committed"] = "ok"
     ) -> None:
-        op = Operation.make(project, kind, subject, {}, dependencies)
+        stable = uuid.uuid5(uuid.NAMESPACE_URL, project.id + kind + subject + encoded(value).decode()).hex
+        op = Operation(stable, project.id, kind, subject, {}, dependencies)
         events.append(
             Event(
                 2,
-                uuid.uuid4().hex,
+                stable,
                 op.id,
                 project.id,
                 kind,
@@ -253,15 +338,54 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         refuse("migration inputs changed; create a new reviewed plan")
     target = project.root / "attempts.jsonl"
     if target.exists():
+        from unbake.work.attempts import portable_tree, validate_event
+
         history = Ledger(project)
         history._refresh()
         if migration["inputs"]:
             refuse("current ledger coexists with retired state; preserve and reconcile explicitly")
-        known = dict(history.fuzzy_sources())
-        known.update({name: {} for name in history.publications()})
-        retained = retain(project, migration, known)
-        with Journal(project.build / "migration.journal") as transaction:
+        summaries, sources = history.summaries(), history.fuzzy_sources()
+        original = target.read_bytes()
+        normalized = []
+        identities: dict[str, str] = {}
+        for identity in history.order:
+            old = history.events[identity]
+            row = portable_tree(project, old)
+            parents = [identities[parent] for parent in old["parents"]]
+            if row != old or parents != old["parents"]:
+                row["event_id"] = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    "current-ledger:" + identity + ":" + inputs.bytes_digest(encoded(old), algorithm="sha256"),
+                ).hex
+                row["parents"] = parents
+                row["request"]["representation_origin"] = {
+                    "event_id": identity,
+                    "payload_sha256": inputs.bytes_digest(encoded(old), algorithm="sha256"),
+                }
+            identities[identity] = row["event_id"]
+            validate_event(row)
+            normalized.append(row)
+        changed = sum(identities[i] != i for i in identities)
+        if changed:
+            backup = project.root / migration["backup"] / "attempts.jsonl"
+            if not backup.exists():
+                atomic.write(backup, original)
+            if inputs.digest(backup, algorithm="sha256", reuse=False) != migration["ledger"]:
+                refuse("current-ledger backup verification failed; preserve original")
+        with Journal(project.build / "migration.journal", root=project.root) as transaction:
             transaction.save([target])
+            if changed:
+                atomic.write(target, b"".join(encoded(row) + b"\n" for row in normalized))
+                history = Ledger(project)
+                if (
+                    history.summaries() != summaries
+                    or history.fuzzy_sources() != sources
+                    or len(history.order) != len(normalized)
+                ):
+                    refuse("current-ledger representation readback differs; verified original backup retained")
+            known = dict(history.fuzzy_sources())
+            known.update({name: {} for name in history.publications()})
+            retained = retain(project, migration, known)
             for name, row in retained.items():
                 history.note(
                     "source.retained",
@@ -272,6 +396,14 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
             from unbake.report import state
 
             state.inventory(project, receipts=history.fuzzy_sources())
+        if changed:
+            return {
+                "reused": False,
+                "events": len(normalized),
+                "changed": changed,
+                "backup": migration["backup"],
+                "native_calls": 0,
+            }
         return {"reused": True, "events": len(retained)}
     content, expected = imported(project, migration)
     backup = project.root / migration["backup"]
@@ -288,7 +420,7 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         for header in root.rglob("*.h"):
             relative = header.relative_to(project.root)
             atomic.write(backup / relative, header.read_bytes(), mode=header.stat().st_mode & 0o777)
-    with Journal(project.build / "migration.journal") as transaction:
+    with Journal(project.build / "migration.journal", root=project.root) as transaction:
         transaction.save([target, *(project.root / name for name in migration["inputs"])])
         atomic.write(target, content)
         history = Ledger(project)

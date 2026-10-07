@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
+from unbake import atomic as atomic_files
 from unbake import inputs, land, process
 from unbake.cache import Cache
 from unbake.cdecl import parse
@@ -36,7 +37,7 @@ class PublicationHeaderDependenciesTests(ProjectCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
         self.lookup = json.loads((FIXTURE / "index.json").read_text())
-        storage.write(index.path(self.project), index.encoded(self.lookup))
+        atomic_files.write(storage.output(index.path(self.project)), index.encoded(self.lookup))
         self.missing = self.include / MISSING
         self.payload = (FIXTURE / "missing-owned.h").read_text()
         self.assertEqual(
@@ -47,8 +48,8 @@ class PublicationHeaderDependenciesTests(ProjectCase):
         self.built = []
 
     def cache_payload(self, text):
-        storage.write(
-            self.artifact,
+        atomic_files.write(
+            storage.output(self.artifact),
             storage.encoded(
                 {"outputs": {f"include/{MISSING}": text, "include/common/unrelated.h": "#error stale header\n"}}
             ),
@@ -160,7 +161,7 @@ class PublicationHeaderDependenciesTests(ProjectCase):
         self.lookup["type_headers"] = {
             name: [home for home in homes if home != MISSING] for name, homes in self.lookup["type_headers"].items()
         }
-        storage.write(index.path(self.project), index.encoded(self.lookup))
+        atomic_files.write(storage.output(index.path(self.project)), index.encoded(self.lookup))
         with self.assertRaisesRegex(Held, "land.fuzzy_compile"):
             self.proof()
         self.assertFalse(self.missing.exists())
@@ -193,9 +194,10 @@ class PublicationHeaderDependenciesTests(ProjectCase):
                 nested: inputs.bytes_digest(nested_body.encode(), algorithm="sha256"),
             }
         )
-        storage.write(index.path(self.project), index.encoded(self.lookup))
-        storage.write(
-            self.artifact, storage.encoded({"outputs": {f"include/{MISSING}": body, f"include/{nested}": nested_body}})
+        atomic_files.write(storage.output(index.path(self.project)), index.encoded(self.lookup))
+        atomic_files.write(
+            storage.output(self.artifact),
+            storage.encoded({"outputs": {f"include/{MISSING}": body, f"include/{nested}": nested_body}}),
         )
         proof, _ = self.proof()
         self.assertEqual(proof.dependency_headers, {MISSING: body, nested: nested_body})
@@ -266,7 +268,7 @@ class PublicationHeaderDependenciesTests(ProjectCase):
         body = (self.include / INSTALLED).read_text()
         (self.include / duplicate).write_text(body)
         self.lookup["headers"][duplicate] = inputs.bytes_digest(body.encode(), algorithm="sha256")
-        storage.write(index.path(self.project), index.encoded(self.lookup))
+        atomic_files.write(storage.output(index.path(self.project)), index.encoded(self.lookup))
         with self.assertRaisesRegex(Held, "land.header_home.*multiple installed homes"):
             self.proof()
         self.assertEqual(self.built, [])

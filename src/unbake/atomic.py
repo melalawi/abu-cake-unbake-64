@@ -36,9 +36,19 @@ def recording(callback: Callable[[Path], None]) -> Iterator[None]:
         _recorder.reset(token)
 
 
+def sync_directory(path: Path) -> None:
+    """Persist replacement/deletion of a directory entry after its file contents."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def remove(path: Path, *, missing_ok: bool = False) -> None:
     before_write(path)
     path.unlink(missing_ok=missing_ok)
+    sync_directory(path.parent)
 
 
 @contextmanager
@@ -64,6 +74,8 @@ def publish(temporary: Path, path: Path, *, durable: bool = True) -> None:
             os.fsync(source.fileno())
     before_write(path)
     os.replace(temporary, path)
+    if durable:
+        sync_directory(path.parent)
 
 
 @contextmanager
@@ -96,8 +108,6 @@ def stream(
             with temporary.open(mode, encoding=encoding, errors=errors, newline=newline) as output:
                 yield output
                 output.flush()
-                if durable:
-                    os.fsync(output.fileno())
             temporary.chmod(permissions)
 
 
@@ -126,9 +136,13 @@ def text(
         return int(output.write(content))
 
 
-def copyfile(source: Path, destination: Path, *, follow_symlinks: bool = True, durable: bool = True) -> Path:
+def copyfile(
+    source: Path, destination: Path, *, follow_symlinks: bool = True, durable: bool = True, mode: int | None = None
+) -> Path:
     with staging(destination, durable=durable) as temporary:
         shutil.copyfile(source, temporary, follow_symlinks=follow_symlinks)
+        if mode is not None:
+            temporary.chmod(mode)
     return destination
 
 
@@ -206,6 +220,7 @@ if __name__ == "__main__":
 
 def append_record(path: Path, content: bytes, *, durable: bool) -> None:
     """Append one complete immutable record; the caller holds its stable ledger lock."""
+    before_write(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     existed = path.exists()
     descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)

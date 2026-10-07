@@ -11,8 +11,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import tui
-from unbake.compilers import files as compiler_files
 from unbake.config import Held, Host, PendingProject
 from unbake.layout import split_analysis
 from unbake.layout.split import Function
@@ -377,10 +377,10 @@ def run(
         for item in cartridges:
             target = project.roms / f"baserom.{names[item.path]}.z64"
             if not target.exists():
-                compiler_files.atomic_bytes(target, item.image())
+                atomic_files.write(target, item.image())
                 created.append(target)
         document["ingestion_complete"] = True
-        compiler_files.atomic_bytes(manifest, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())
+        atomic_files.write(manifest, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())
     except BaseException:
         for target in created:
             target.unlink(missing_ok=True)

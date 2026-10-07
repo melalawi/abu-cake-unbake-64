@@ -369,4 +369,6 @@ def edit_members(
 
     target = project.root / "layout.toml"
     value = tomllib.loads(target.read_text())
-    storage.write(target, encoded(regroup(value, catalog(project), project.versions, replacements, cuts, proven)))
+    atomic_files.write(
+        storage.output(target), encoded(regroup(value, catalog(project), project.versions, replacements, cuts, proven))
+    )

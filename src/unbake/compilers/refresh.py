@@ -13,7 +13,6 @@ import toml  # type: ignore[import-untyped]
 from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import config, inputs, tui
-from unbake.compilers import files as compiler_files
 from unbake.compilers import propose as compiler_proposal
 from unbake.config import Held, Host, PendingProject
 from unbake.process import capture
@@ -49,7 +48,7 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
             for p in project.src.rglob("*.c")
         },
     }
-    compiler_files.atomic_bytes(compiler_proposal.proposal_path(pending), compiler_proposal.encoded(proposal))
+    atomic_files.write(compiler_proposal.proposal_path(pending), compiler_proposal.encoded(proposal))
     for line in compiler_proposal.receipt(proposal):
         tui.line("OK(setup): " + line.replace("setup --confirm", "setup --redo-compilers --confirm"))
     compiler_proposal.confirm_proposal(pending, measured, layout, proposal, policy, confirm=confirm)
@@ -106,7 +105,7 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
         before = {path: path.read_bytes() if path.is_file() else None for path in outputs}
         try:
             for path, content in outputs.items():
-                compiler_files.atomic_bytes(path, content)
+                atomic_files.write(path, content)
                 if path.is_relative_to(project.tools):
                     path.chmod((tree / path.relative_to(project.root)).stat().st_mode & 0o777)
         except BaseException:
@@ -114,6 +113,6 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
                 if old_content is None:
                     path.unlink(missing_ok=True)
                 else:
-                    compiler_files.atomic_bytes(path, old_content)
+                    atomic_files.write(path, old_content)
             raise
     return ["compiler proposal accepted; recipes updated; layout and map retained", "run unbake check"]

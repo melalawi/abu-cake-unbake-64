@@ -310,27 +310,28 @@ def run(project: Project, host: Host) -> list[str]:
         project.root / attempts.PATH,
         *(p for v in project.versions for p in (project.version(v).split, project.version(v).symbols)),
     ]
-    backup = {path: path.read_bytes() for path in paths if path.is_file()}
     # Draft history and attempt records move with a rename in the same publish: staged first, swapped in after
     # the commit, discarded on any failure.
     carries = attempts.stage_renames(project, renamed)
+    from unbake import journal
+
     try:
-        attempts.ledger(project).rename(renamed)
-        for version, findings in kept.items():
-            if not findings:
-                continue
-            config = project.version(version)
-            for path, edit in ((config.split, split_text), (config.symbols, symbols_text)):
-                atomic_files.text(path, edit(path, split.read(path), findings, renamed))
-        _relabel(project, renamed, {f.name for findings in kept.values() for f in findings if f.kind == "continuation"})
-        # The generated build files name symbols and rows too; they land in the same commit.
-        generated = buildfiles.write(project_config.load(project.root), host)
-        _commit(project, host, sorted({*backup, *generated}), kept, renamed)
+        with journal.transaction(project):
+            attempts.ledger(project).rename(renamed)
+            for version, findings in kept.items():
+                if not findings:
+                    continue
+                config = project.version(version)
+                for path, edit in ((config.split, split_text), (config.symbols, symbols_text)):
+                    atomic_files.text(path, edit(path, split.read(path), findings, renamed))
+            _relabel(
+                project, renamed, {f.name for findings in kept.values() for f in findings if f.kind == "continuation"}
+            )
+            # The generated build files name symbols and rows too; they land in the same commit.
+            generated = buildfiles.write(project_config.load(project.root), host)
+            _commit(project, host, sorted({*paths, *generated}), kept, renamed)
     except BaseException:
         attempts.discard(carries)
-        for path, content in backup.items():
-            atomic_files.write(path, content)
-        buildfiles.write(project_config.load(project.root), host)
         raise
     attempts.install(carries)
     for findings in kept.values():

@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from unbake import atomic as atomic_files
 from unbake import cdecl
 from unbake.config import Project
-from unbake.layout import split_apply
 from unbake.layout.structs import Layout, held
 
 
@@ -88,6 +88,6 @@ def consolidate(project: Project) -> None:
                     held(str(path), "include source must not be a symlink")
                 edits[path] = after
     for path, content in edits.items():
-        split_apply.write(path, content)
+        atomic_files.text(Path(path), content, encoding="utf-8")
     for path in moved:
         path.unlink()

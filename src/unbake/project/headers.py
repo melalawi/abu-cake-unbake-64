@@ -244,10 +244,30 @@ class TreeView:
         path = Path(os.path.abspath(path))
         if path.is_relative_to(self.root):
             return inputs.LogicalPath(self.root_id, path.relative_to(self.root).parts)
-        return inputs.LogicalPath("external", path.parts[1:])
+        for index, directory in enumerate(self.roots):
+            if path.is_relative_to(directory):
+                return inputs.LogicalPath("include" + str(index), path.relative_to(directory).parts)
+        raise Held(
+            cause_named(
+                "headers.scope",
+                "external header/source requires a declared search root",
+                owner="project.headers",
+                stage="headers",
+                subject=path.name,
+            )
+        )
 
     def pin(self, path: inputs.LogicalPath) -> inputs.FilePin:
-        physical = self.root.joinpath(*path.parts) if path.root == self.root_id else Path("/").joinpath(*path.parts)
+        if path.root == self.root_id:
+            physical = self.root.joinpath(*path.parts)
+        elif re.fullmatch(r"include[0-9]+", path.root) and int(path.root[7:]) < len(self.roots):
+            physical = self.roots[int(path.root[7:])].joinpath(*path.parts)
+        else:
+            raise Held(
+                cause_named(
+                    "headers.scope", "logical input requires a declared root", owner="project.headers", stage="headers"
+                )
+            )
         blob = self.files.get(physical)
         if blob is None:
             return inputs.FilePin(path, "missing", None)
@@ -455,7 +475,8 @@ class Closure:
 
 class Graph:
     def __init__(self, view: TreeView, search: Search, *, project: Any = None) -> None:
-        self.view, self.search, self.project = view, search, project
+        declared = tuple(dict.fromkeys((*view.roots, *search.quote_roots, *search.include_roots, *search.system_roots)))
+        self.view, self.search, self.project = replace(view, roots=declared), search, project
         self._parsed: dict[Path, Any] = {}
         self._edges: dict[Path, tuple[Resolution, ...]] = {}
         self._projections: dict[Path, DeclProjection] = {}
@@ -570,7 +591,17 @@ class Graph:
             selected -= self.view.generated
         dependency_set = inputs.DependencySet(
             tuple(probes[p] for p in sorted(probes)),
-            {"search": repr(self.search), "roots": [self.view.logical(p).name for p in roots]},
+            {
+                "search": {
+                    "quote_roots": [self.view.logical(p).name for p in self.search.quote_roots],
+                    "include_roots": [self.view.logical(p).name for p in self.search.include_roots],
+                    "system_roots": [self.view.logical(p).name for p in self.search.system_roots],
+                    "forced": list(self.search.forced),
+                    "macros": list(self.search.macros),
+                    "recipe": self.search.recipe,
+                },
+                "roots": [self.view.logical(p).name for p in roots],
+            },
             {"graph": self._recipe},
         )
         result = Closure(tuple(sorted(selected)), dependency_set, unknown, tuple(p for p in ordered if p in selected))

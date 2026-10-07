@@ -21,8 +21,7 @@ def encoded(value: object) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def write(path: Path, content: bytes, *, durable: bool = True) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def output(path: Path) -> Path:
     if path.is_symlink():
         raise Held(
             cause_named(
@@ -32,7 +31,7 @@ def write(path: Path, content: bytes, *, durable: bool = True) -> None:
                 stage="solve",
             )
         )
-    atomic_files.write(path, content, durable=durable)
+    return path
 
 
 def read(path: Path, key: str) -> dict[str, Any]:
@@ -201,10 +200,6 @@ class FactLog:
     def close(self) -> None:
         self.stream.close()
         self.temporary.unlink(missing_ok=True)
-
-
-def install(path: Path, staged: Path) -> None:
-    atomic_files.publish(staged, path)
 
 
 def verify_file(path: Path, expected: str, key: str) -> None:

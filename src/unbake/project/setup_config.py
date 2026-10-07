@@ -8,7 +8,7 @@ from typing import Any
 
 import toml  # type: ignore[import-untyped]
 
-from unbake.compilers import files as compiler_files
+from unbake import atomic as atomic_files
 from unbake.config import Held, PendingProject
 from unbake.process import capture
 from unbake.process import named as cause_named
@@ -96,7 +96,7 @@ def write_facts(project: PendingProject, census: Census, *, name: str | None = N
                 stage="setup",
             )
         )
-    compiler_files.atomic_bytes(
+    atomic_files.write(
         project.root / "config.toml", toml.dumps(facts(project, census, name=name, title=title)).encode()
     )
 

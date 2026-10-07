@@ -477,7 +477,7 @@ class Session:
         effort.count("render.reused", int(not computed), 1)
         state_content = storage.encoded({"schema": RENDER_SCHEMA, "projection": projection, "content_key": content_key})
         if not state.is_file() or state.read_bytes() != state_content:
-            storage.write(state, state_content, durable=False)
+            atomic_files.write(storage.output(state), state_content, durable=False)
         value.update({field: result[field] for field in ("declaration_headers", "shared_aliases", *self._CARRIED)})
         self.reserved = set(result["reserved"])
         rendered_headers = {

@@ -12,9 +12,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs as input_pins
-from unbake.compilers import files as compiler_files
 from unbake.compilers import probe as compiler_probes
 from unbake.compilers import profiles as compiler_profiles
 from unbake.compilers import registry as toolchain
@@ -477,7 +477,7 @@ def propose_compilers(
             "regions": probes,
         },
     )
-    compiler_files.atomic_bytes(proposal_path(project), encoded(document))
+    atomic_files.write(proposal_path(project), encoded(document))
     return cast("CompilerProposal", document)
 
 

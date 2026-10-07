@@ -15,7 +15,6 @@ from tests.project_fixture import ProjectCase
 from unbake import admission, build, buildfiles, config, process, steps
 from unbake.cli import main
 from unbake.decomp import checks
-from unbake.layout import split_apply
 from unbake.project import hygiene
 
 
@@ -42,7 +41,7 @@ class PreflightWorkTests(ProjectCase):
             patch.object(
                 process, "run_native", return_value=subprocess.CompletedProcess(["make"], 0, "", "")
             ) as native,
-            patch.object(split_apply, "write", wraps=split_apply.write) as installed,
+            patch("unbake.atomic.text", wraps=__import__("unbake.atomic", fromlist=["text"]).text) as installed,
             patch.object(checks, "run", wraps=checks.run) as scanned,
         ):
             main.main(["--project", str(self.project.root), *command])
@@ -83,11 +82,12 @@ class PreflightWorkTests(ProjectCase):
         unrelated = self.project.src / "independent.c"
         unrelated.write_text("int independent(void) { return 3; }\n")
         changed, _, counts = self.boundary()
-        self.assertEqual(counts, (1, 0, 0, 0))
+        # An unrelated source does not unlock the recorded macro refusal.
+        self.assertEqual(counts, (0, 0, 0, 0))
         self.assertEqual(changed["key"], "check.source_rules")
         source.write_text("int value(void) { return 0; }\n")
         passed, _, counts = self.boundary()
-        self.assertEqual(counts, (1, 1, 1, 2))
+        self.assertEqual(counts, (2, 1, 1, 2))
         self.assertEqual(passed["status"], "ok")
         self.assertNotEqual(self.project.version("us").split.read_bytes(), original)
 

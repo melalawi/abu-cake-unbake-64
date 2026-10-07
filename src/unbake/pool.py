@@ -23,7 +23,6 @@ import os
 import pickle
 import queue
 import resource
-import select
 import shutil
 import signal
 import statistics
@@ -43,6 +42,7 @@ from types import FrameType
 from typing import Any, TypeVar, cast
 
 from unbake import atomic as atomic_files
+from unbake import process
 from unbake.config import Held, Host
 from unbake.process import Fault, Frame, RetryRule, temporary_environment
 from unbake.process import named as cause_named
@@ -279,31 +279,14 @@ def admitted(workers: int, memory_total_bytes: int, memory_parent_bytes: int, me
     return max(1, min(workers, (memory_total_bytes - memory_parent_bytes) // memory_worker_bytes))
 
 
-def owner(server: int) -> int:
-    """The process that started the fork server `server`: the one that owns the pool."""
-    stat = Path(f"/proc/{server}/stat").read_text()
-    return int(stat.rsplit(")", 1)[1].split()[1])
-
-
 def _die_with_owner() -> None:
     """Wait on the owner's pidfd in a thread; when it exits, kill the fork server and this group."""
     server = os.getppid()
     try:
-        descriptor: int | None = os.pidfd_open(owner(server))
+        descriptor: int | None = os.pidfd_open(process.owner(server))
     except (ProcessLookupError, FileNotFoundError):
         descriptor = None
-    threading.Thread(target=_orphaned, args=(descriptor, server), name="owner", daemon=True).start()
-
-
-def _orphaned(descriptor: int | None, server: int) -> None:
-    """When the owner exits, kill the fork server and this worker's group. A stopped owner often takes the server
-    down first: its absence must never spare the group (orphan workers kept running and holding memory)."""
-    if descriptor is not None:
-        select.select([descriptor], [], [])
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(server, signal.SIGKILL)
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(0, signal.SIGKILL)
+    threading.Thread(target=process.orphaned, args=(descriptor, server), name="owner", daemon=True).start()
 
 
 def _cap(
@@ -330,16 +313,6 @@ def _cap(
     tempfile.tempdir = directory
     if sys.platform == "linux":
         multiprocessing.connection.arbitrary_address = _socket_address  # type: ignore[attr-defined]
-
-
-def kill_groups(pids: Sequence[int]) -> None:
-    """SIGKILL each worker's process group (the worker itself when its group does not exist yet)."""
-    for pid in pids:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
 
 
 # The fork server listens on a socket in multiprocessing's private temp dir; sun_path holds 107 bytes.
@@ -744,7 +717,7 @@ class Pool:
                     )
                     current = self.watchdog.current[token]
                     self._report(token, "stuck", current)
-                    kill_groups([cast(int, current.pid)])
+                    process.kill_groups([cast(int, current.pid)])
 
     def _failure(self, future: Future[Any], error: BaseException | None = None) -> TaskFailed | None:
         with self._lock:
@@ -780,7 +753,7 @@ class Pool:
         if executor is None:
             return
         self.killed = True
-        kill_groups(list(executor._processes or {}))
+        process.kill_groups(list(executor._processes or {}))
         executor.shutdown(wait=False, cancel_futures=True)
 
     def _signalled(self, number: int, _frame: FrameType | None) -> None:

@@ -184,17 +184,15 @@ def _run(project: Project, host: Host) -> list[str]:
     if not found:
         return []
     layout = project.root / "layout.toml"
-    backup = {layout: layout.read_bytes()}
-    backup.update({project.version(v).split: project.version(v).split.read_bytes() for v in project.versions})
-    for _, members in found:
-        backup.update({project.src / f"{m}.c": (project.src / f"{m}.c").read_bytes() for m in members})
     lines = []
     touched: list[Path] = [layout]
     absorbed: dict[str, tuple[str, ...]] = {}
     starts: dict[str, set[int]] = {}
     firsts: list[str] = []
     owners = _owners(project)
-    try:
+    from unbake import journal
+
+    with journal.transaction(project):
         for (group, members), source, passed in zip(found, sources, proven, strict=True):
             if not passed:
                 lines.append(f"merge {group.name} {members[0]}..{members[-1]}: refused; byte mismatch")
@@ -219,10 +217,6 @@ def _run(project: Project, host: Host) -> list[str]:
             sorted(set(touched)),
             f"Merge units: {merged} proven runs, {len(found) - merged} byte mismatches",
         )
-    except BaseException:
-        for path, content in backup.items():
-            atomic_files.write(path, content)
-        raise
     return lines
 
 

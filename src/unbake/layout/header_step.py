@@ -253,7 +253,7 @@ def run(project: Project, host: Host) -> list[Path]:
 
     All or nothing: every path the step writes or deletes is journaled first (journal.py), so a hold, an
     exception or a killed process leaves the tree as it was."""
-    with Journal(journal_path(project)) as changes:
+    with Journal(journal_path(project), root=project.root) as changes:
         changes.save(project.version(version).split for version in project.versions)
         apply.units(project)
         disagreements: dict[Path, dict[str, tuple[str, str]]] = {}

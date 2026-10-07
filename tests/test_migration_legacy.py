@@ -211,11 +211,15 @@ class LegacyMigrationTests(ProjectCase):
         legacy.write_text(json.dumps({"v": 1, "functions": {}}))
         old = legacy.read_bytes()
         target = self.project.root / attempts.PATH
-        journal = Journal(self.project.build / "migration.journal")
+        journal = Journal(self.project.build / "migration.journal", root=self.project.root)
         journal.__enter__()
         journal.save([legacy, target])
         legacy.unlink()
         target.write_bytes(b"incomplete")
+        journal.recording.__exit__(None, None, None)
+        from unbake import journal as journal_owner
+
+        journal_owner._current.reset(journal.token)
         with self.assertRaisesRegex(Held, "--recover"):
             migrate_state.plan(self.project)
         self.assertEqual(migrate_state.recover(self.project), {"recovered_files": 2, "native_calls": 0})

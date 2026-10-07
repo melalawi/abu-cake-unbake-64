@@ -1,0 +1,82 @@
+[
+  {
+    "compiled": false,
+    "exact": false,
+    "fault": {
+      "chain": [
+        {
+          "key": "map.schema",
+          "phase": "map",
+          "reason": "map.schema: expected 6; run unbake recompute rom-facts"
+        }
+      ]
+    },
+    "percent": null,
+    "reason": "map.schema: expected 6; run unbake recompute rom-facts",
+    "version": "de"
+  },
+  {
+    "compiled": false,
+    "exact": false,
+    "fault": {
+      "chain": [
+        {
+          "key": "map.schema",
+          "phase": "map",
+          "reason": "map.schema: expected 6; run unbake recompute rom-facts"
+        }
+      ]
+    },
+    "percent": null,
+    "reason": "map.schema: expected 6; run unbake recompute rom-facts",
+    "version": "eu"
+  },
+  {
+    "compiled": false,
+    "exact": false,
+    "fault": {
+      "chain": [
+        {
+          "key": "map.schema",
+          "phase": "map",
+          "reason": "map.schema: expected 6; run unbake recompute rom-facts"
+        }
+      ]
+    },
+    "percent": null,
+    "reason": "map.schema: expected 6; run unbake recompute rom-facts",
+    "version": "eu-x"
+  },
+  {
+    "compiled": false,
+    "exact": false,
+    "fault": {
+      "chain": [
+        {
+          "key": "map.schema",
+          "phase": "map",
+          "reason": "map.schema: expected 6; run unbake recompute rom-facts"
+        }
+      ]
+    },
+    "percent": null,
+    "reason": "map.schema: expected 6; run unbake recompute rom-facts",
+    "version": "us"
+  },
+  {
+    "compiled": false,
+    "exact": false,
+    "fault": {
+      "chain": [
+        {
+          "key": "map.schema",
+          "phase": "map",
+          "reason": "map.schema: expected 6; run unbake recompute rom-facts"
+        }
+      ]
+    },
+    "percent": null,
+    "reason": "map.schema: expected 6; run unbake recompute rom-facts",
+    "version": "us-rev1"
+  }
+]

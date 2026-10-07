@@ -337,7 +337,9 @@ def stage(
 
 
 def install(destination: Path, staged: Path) -> None:
-    os.replace(staged, destination)
+    from unbake import atomic
+
+    atomic.publish(staged, destination)
 
 
 def meta(file: Path, key: str, *, default: Any = _MISSING) -> Any:

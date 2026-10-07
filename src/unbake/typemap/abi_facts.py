@@ -9,6 +9,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.config import Held, Host, Project
@@ -159,8 +160,8 @@ def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) 
             path = writer.finish((name, version) for name, version, _ in jobs)
         finally:
             writer.close()
-        storage.write(
-            index,
+        atomic_files.write(
+            storage.output(index),
             storage.encoded(
                 {
                     **storage.identity(project),

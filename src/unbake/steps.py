@@ -8,7 +8,6 @@ runs them. Read-only commands use whatever the last run produced.
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -16,7 +15,6 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import effort, tui
 from unbake.cache import key
@@ -575,80 +573,11 @@ def ensure(
     types, which reads the headers it writes) is refused by name.
     report hears each step that ran as soon as it finishes, so a long chain is not silent."""
     from unbake import journal
-    from unbake.layout import header_step
+    from unbake.work.attempts import command_ledger
 
-    # A command killed mid-write is rolled back before any step reads the tree.
-    journal.recover(header_step.journal_path(project))
-    for stale in Command.stale(project):
-        stale.rollback()
-    command = Command(project)
-    try:
-        from unbake.work.attempts import command_ledger
-
-        with command_ledger(project):
-            results = _ensure(project, host, names, force=force, report=report, command=command)
-    except BaseException:
-        command.rollback()
-        raise
-    command.close()
-    return results
-
-
-class Command:
-    """The step one ensure is running, so an interrupted or failed step is run again: its record is forgotten.
-
-    Every completed step stands: it recorded the key of what it wrote, and the steps that publish layout.toml
-    (extract's shape edits, merge-units) commit it together with the split and symbol files. Restoring an
-    earlier layout.toml after such a step would name rows the split no longer has. A step that fails restores
-    its own files (shape edits and merge-units keep a backup; the map step writes layout.toml in one atomic
-    write). Kept per process on disk; a later command rolls back the journal of a process that died."""
-
-    def __init__(self, project: Project, path: Path | None = None) -> None:
-        self.project = project
-        self.path = path or project.build / "steps.journal" / f"{os.getpid()}.json"
-        self.state: dict[str, str | None] = {"running": None}
-        if path is not None:
-            self.state = json.loads(path.read_text())
-
-    @classmethod
-    def stale(cls, project: Project) -> list[Command]:
-        directory = project.build / "steps.journal"
-        found = []
-        for path in sorted(directory.glob("*.json")) if directory.is_dir() else ():
-            if not path.stem.isdigit():
-                raise Held(
-                    cause_named(
-                        "steps.journal",
-                        (
-                            f"steps.journal: {path} is not named for a process id; roll it back by "
-                            f"moving it out of the journal directory, then rerun"
-                        ),
-                        owner="steps",
-                        stage="steps",
-                    )
-                )
-            pid = int(path.stem)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                found.append(cls(project, path))
-            except PermissionError:
-                pass
-        return found
-
-    def running(self, name: str | None) -> None:
-        """NAME starts (None: the step that was running finished and recorded its key)."""
-        self.state["running"] = name
-        atomic_files.write(self.path, json.dumps(self.state).encode())
-
-    def rollback(self) -> None:
-        name = self.state.get("running")
-        if name is not None:
-            forget(self.project, name)
-        self.close()
-
-    def close(self) -> None:
-        self.path.unlink(missing_ok=True)
+    journal.recover_all(project)
+    with command_ledger(project):
+        return _ensure(project, host, names, force=force, report=report)
 
 
 def _ensure(
@@ -658,8 +587,9 @@ def _ensure(
     *,
     force: bool,
     report: Callable[[StepResult], object] | None,
-    command: Command,
 ) -> list[StepResult]:
+    from unbake.journal import Journal
+
     requested = set(names := list(names))
     steps = order(names)
     # A step whose recorded output went missing or changed runs first: it regenerates from its recorded
@@ -705,13 +635,13 @@ def _ensure(
                 if changed
                 else step.trigger
             )
-            command.running(name)
             changes: dict[str, Any] = {}
             from unbake.work.attempts import RetryScope
 
             try:
                 with (
                     RetryScope(project, "step.request", name, {}, operation_dependencies(project, host, name)),
+                    Journal(project.build / "steps.journal", root=project.root),
                     tui.task(step.label) as shown,
                 ):
                     changes = _reading_current(project, partial(step.run, project, host)) or {}
@@ -720,6 +650,17 @@ def _ensure(
                             kind["count"] for kind in changes.values() if isinstance(kind, dict) and "count" in kind
                         )
                         shown.note = f"; changed {count} answers" if count else "; nothing changed"
+                    recorded_key = current
+                    if name in ("extract", "rom-facts", "resident", "headers", "buildfiles"):
+                        recorded_key = step.key(project, host)
+                    elif name == "types":
+                        recorded_key = changes.pop("post_input_key", current)
+                    record(
+                        project,
+                        name,
+                        recorded_key,
+                        None if step.outputs is None else _digests(project, step.outputs(project)),
+                    )
             except Held:
                 raise
             except Exception as error:
@@ -731,18 +672,6 @@ def _ensure(
                         ),
                     )
                 ) from error
-            recorded_key = current
-            if name in ("extract", "rom-facts", "resident", "headers", "buildfiles"):
-                recorded_key = step.key(project, host)
-            elif name == "types":
-                recorded_key = changes.pop("post_input_key", current)
-            record(
-                project,
-                name,
-                recorded_key,
-                None if step.outputs is None else _digests(project, step.outputs(project)),
-            )
-            command.running(None)
             used = effort.since(spent)
             result = StepResult(
                 name,

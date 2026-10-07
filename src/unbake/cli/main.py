@@ -122,7 +122,7 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
 
         history = command_ledger(context.project()) if verb.PROJECT == "ready" else nullcontext()
         with admission.command(context.host), guard, history:
-            return verb.run(context)  # type: ignore[no-any-return]
+            return verb.run(context).render_actions(context)  # type: ignore[no-any-return]
     except Held as error:
         data = {"failures": list(error.failures)} if error.failures else None
         return Result.held(verb.NAME, error, guidance.after(context, error), data)

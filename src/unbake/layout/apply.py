@@ -304,7 +304,7 @@ def units(project: Project, *, dry_run: bool = False) -> int:
         if merged != text:
             changed += 1
             if not dry_run:
-                storage.write(path, merged.encode())
+                atomic_files.write(storage.output(path), merged.encode())
     return changed
 
 
@@ -327,9 +327,9 @@ def install(
         for path in sorted(changed, key=lambda p: (p == index.path(project), str(p))):
             data = changed[path]
             if isinstance(data, Path):
-                storage.install(path, data)
+                atomic_files.publish(data, path)
             else:
-                storage.write(path, data)
+                atomic_files.write(storage.output(path), data)
         for path in obsolete:
             atomic_files.remove(path, missing_ok=True)
     return len(changed) + len(obsolete)

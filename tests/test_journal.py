@@ -15,24 +15,27 @@ class JournalTests(TempCase):
         self.directory = self.root / "build" / "step.journal"
 
     def change(self, changes: journal.Journal) -> None:
-        changes.save([self.kept, self.new])
+        changes.save([self.new, self.kept])
         self.kept.write_text("changed\n")
         self.new.write_text("added\n")
 
     def test_an_exception_restores_every_saved_path(self) -> None:
-        with self.assertRaises(RuntimeError), journal.Journal(self.directory) as changes:
+        with self.assertRaises(RuntimeError), journal.Journal(self.directory, root=self.root) as changes:
             self.change(changes)
             raise RuntimeError("held")
         self.assertEqual((self.kept.read_text(), self.new.exists(), self.directory.exists()), ("old\n", False, False))
 
     def test_a_killed_run_is_restored_by_the_next(self) -> None:
-        changes = journal.Journal(self.directory).__enter__()
-        self.change(changes)  # no __exit__: the process died here
-        self.assertEqual(journal.recover(self.directory), [self.kept, self.new])
+        changes = journal.Journal(self.directory, root=self.root).__enter__()
+        self.change(changes)
+        # Simulate the lost process context; real os._exit transitions are tested separately.
+        changes.recording.__exit__(None, None, None)
+        journal._current.reset(changes.token)
+        self.assertEqual(journal.recover(self.directory, root=self.root), [self.new, self.kept])
         self.assertEqual((self.kept.read_text(), self.new.exists(), self.directory.exists()), ("old\n", False, False))
 
     def test_success_keeps_the_changes_and_drops_the_journal(self) -> None:
-        with journal.Journal(self.directory) as changes:
+        with journal.Journal(self.directory, root=self.root) as changes:
             self.change(changes)
         self.assertEqual(
             (self.kept.read_text(), self.new.read_text(), self.directory.exists()), ("changed\n", "added\n", False)

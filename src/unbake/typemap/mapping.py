@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake import inputs, pool, strict_json, tui
 from unbake.config import Held, Host, Project
@@ -384,7 +385,7 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
                 "map.inputs_stale", "map.inputs_stale: inputs changed during map", owner="typemap.mapping", stage="map"
             )
         )
-    storage.write(project.build / "map/facts.json", storage.encoded(result))
+    atomic_files.write(storage.output(project.build / "map/facts.json"), storage.encoded(result))
     result["functions"] = shards.Functions(shard_path, functions)
     return result
 

@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 
 from unbake import atomic, strict_json
 from unbake.config import Held, Project
@@ -348,7 +348,7 @@ class Ledger:
         self.incremental_updates += 1
 
     def append(self, event: Event) -> str:
-        value = event.document()
+        value = portable_tree(self.project, event.document())
         validate_event(value)
         lock = self.project.root / ".attempts.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
@@ -726,14 +726,15 @@ class Ledger:
         dependencies: DependencySet,
         *,
         committed: bool = True,
+        kind: Literal["exact", "fuzzy", "original"] | None = None,
     ) -> str:
         from unbake.inputs import bytes_digest
 
-        kind = "fuzzy" if receipt is not None else "exact"
+        kind = kind or ("fuzzy" if receipt is not None else "exact")
         digest = bytes_digest(source.encode(), algorithm="sha256")
         publication = {
             "kind": kind,
-            "source": {"root": "project", "parts": ["src", function + ".c"]},
+            "source": {"root": "project", "parts": ["src", function + (".s" if kind == "original" else ".c")]},
             "source_sha256": digest,
             "stored_source_sha256": digest,
             "compiler": compiler,
@@ -745,13 +746,45 @@ class Ledger:
             "available": True,
             "unavailable_reason": None,
         }
-        return self.note(
-            "publication." + kind if committed else "publication.prepared",
-            function,
-            {"publication": publication},
-            dependencies=dependencies,
-            state="committed" if committed else "ok",
-        )
+        if committed:
+            identity = self.note(
+                "publication." + kind,
+                function,
+                {"publication": publication},
+                dependencies=dependencies,
+                state="committed",
+            )
+        else:
+            operation = Operation.make(self.project, "publication.prepared", function, {}, dependencies)
+            prior = self.publications().get(function)
+            previous = self.latest("publication.prepared", function)
+            parents = tuple(
+                dict.fromkeys((*((prior.event_id,) if prior else ()), *((previous["event_id"],) if previous else ())))
+            )
+            identity = self.record(
+                operation, Outcome(operation.id, "ok", {"publication": publication}, None, {}), parents=parents
+            )
+        if not committed:
+            from unbake import journal
+
+            journal.prepared(identity)
+        return identity
+
+    def assert_portable(self) -> None:
+        self._refresh()
+        for identity in self.order:
+            row = self.events[identity]
+            if portable_tree(self.project, row) != row:
+                raise Held(
+                    cause_named(
+                        "ledger.portability",
+                        "public history contains host paths; review preserved portable-history migration",
+                        owner="work.attempts",
+                        stage="publish",
+                        subject=identity,
+                        action=Action("command", argv=("migrate-state", "--plan")),
+                    )
+                )
 
     def batch(self, batch_id: str) -> tuple[dict[str, Any], ...]:
         self._refresh()
@@ -770,6 +803,45 @@ class Ledger:
                 if identity in events and encoded(events[identity]) != encoded(row):
                     raise ValueError("ledger.event_conflict: conflicting immutable id")
                 events[identity] = row
+        aliases: dict[str, str] = {}
+        for identity, row in events.items():
+            origin = row["request"].get("representation_origin")
+            if origin is not None:
+                old = origin["event_id"]
+                prior = aliases.get(old)
+                if prior is not None and prior != identity:
+                    raise ValueError("ledger.representation_conflict")
+                if old in events and hashlib.sha256(encoded(events[old])).hexdigest() != origin["payload_sha256"]:
+                    raise ValueError("ledger.representation_origin")
+                aliases[old] = identity
+        for old in aliases:
+            events.pop(old, None)
+        # Representation transitions remap descendants through the same immutable event rule.
+        while True:
+            changed = False
+            for identity, row in list(events.items()):
+                parents = [aliases.get(parent, parent) for parent in row["parents"]]
+                if parents == row["parents"]:
+                    continue
+                original = encoded(row)
+                new = uuid.uuid5(
+                    uuid.NAMESPACE_URL, "current-ledger:" + identity + ":" + hashlib.sha256(original).hexdigest()
+                ).hex
+                rewritten = strict_json.loads(original, "ledger representation merge")
+                rewritten["event_id"], rewritten["parents"] = new, parents
+                rewritten["request"]["representation_origin"] = {
+                    "event_id": identity,
+                    "payload_sha256": hashlib.sha256(original).hexdigest(),
+                }
+                validate_event(rewritten)
+                if new in events and encoded(events[new]) != encoded(rewritten):
+                    raise ValueError("ledger.representation_conflict")
+                events.pop(identity)
+                events[new] = rewritten
+                aliases[identity] = new
+                changed = True
+            if not changed:
+                break
         remaining = set(events)
         written: set[str] = set()
         order = []
@@ -1141,49 +1213,15 @@ class RetryScope:
 
 
 def portable_fault(project: Project, fault: Fault) -> Fault:
-    from unbake.config import relative_text
-    from unbake.process import Frame, NativeResult
-
     raw = encoded(fault.document())
     artifact = hashlib.sha256(raw).hexdigest()
     destination = project.work / "faults" / (artifact + ".json")
     if not destination.is_file():
         atomic.write(destination, raw)
 
-    def text(value: str) -> str:
-        return relative_text(project.root, value)
-
-    def logical(value: str) -> str:
-        root = str(project.root) + "/"
-        return "project:" + value[len(root) :] if value.startswith(root) else text(value)
-
-    cause = replace(
-        fault.cause,
-        subject=text(fault.cause.subject),
-        reason=text(fault.cause.reason),
-        action=replace(
-            fault.cause.action,
-            argv=tuple(logical(word) for word in fault.cause.action.argv),
-            paths=tuple(logical(word) for word in fault.cause.action.paths),
-            reason=text(fault.cause.action.reason),
-        ),
-        evidence={
-            **{k: v for k, v in fault.cause.evidence.items() if v is None or type(v) in (bool, int, float)},
-            "signature": fault.cause.evidence.get("signature"),
-            "native_artifact": artifact,
-        },
-    )
-    frames = tuple(
-        Frame(
-            "context",
-            cause.owner,
-            cause.stage,
-            "raw diagnostic artifact",
-            {"artifact": artifact, "native": isinstance(item, NativeResult)},
-        )
-        for item in fault.chain
-    )
-    return Fault(cause, frames)
+    document = portable_tree(project, fault.document())
+    document["cause"]["evidence"]["native_artifact"] = artifact
+    return Fault.read(document)
 
 
 def retry_pending(project: Project, kind: str, subject: str, current: DependencySet) -> bool:
@@ -1278,6 +1316,166 @@ def producing(operation: Operation) -> Any:
 
 def producer_operation() -> Operation | None:
     return _producer.get()
+
+
+def canonical_search(project: Project, value: Any) -> Any:
+    """One offline decoder for the exact former Search dataclass representation.
+
+    Parse syntax with an explicit node allowlist; never evaluate Python or
+    infer missing search fields. New Graph producers already supply this object.
+    """
+    if not isinstance(value, str):
+        return portable_tree(project, value)
+    import ast
+
+    def refuse() -> NoReturn:
+        raise Held(
+            cause_named(
+                "migration.search",
+                "unknown legacy Search representation; preserve history for review",
+                owner="work.attempts",
+                stage="migration",
+            )
+        )
+
+    try:
+        tree = ast.parse(value, mode="eval").body
+    except SyntaxError:
+        refuse()
+        return None
+    fields = {"quote_roots", "include_roots", "system_roots", "forced", "macros", "recipe"}
+    if not isinstance(tree, ast.Call) or not isinstance(tree.func, ast.Name) or tree.func.id != "Search" or tree.args:
+        refuse()
+    if {arg.arg for arg in tree.keywords} != fields or len(tree.keywords) != len(fields):
+        refuse()
+    result: dict[str, Any] = {}
+    for arg in tree.keywords:
+        name, node = arg.arg, arg.value
+        assert name is not None
+        if name == "recipe":
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                refuse()
+            result[name] = node.value
+            continue
+        if not isinstance(node, ast.Tuple):
+            refuse()
+        values = []
+        for item in node.elts:
+            if name in {"quote_roots", "include_roots", "system_roots"}:
+                if (
+                    not isinstance(item, ast.Call)
+                    or not isinstance(item.func, ast.Name)
+                    or item.func.id != "PosixPath"
+                    or item.keywords
+                    or len(item.args) != 1
+                ):
+                    refuse()
+                item = item.args[0]
+                if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                    refuse()
+                path = Path(item.value)
+                if not path.is_absolute():
+                    refuse()
+                values.append(
+                    project.id + ":" + path.relative_to(project.root).as_posix()
+                    if path.is_relative_to(project.root)
+                    else "external:" + path.as_posix().lstrip("/")
+                )
+            else:
+                if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                    refuse()
+                values.append(item.value)
+        result[name] = values
+    return result
+
+
+def canonical_dependency_document(project: Project, value: Mapping[str, Any]) -> dict[str, Any]:
+    raw_search = value["values"].get("search")
+    search = canonical_search(project, raw_search) if raw_search is not None else None
+    roots = []
+    if isinstance(raw_search, str):
+        import ast
+
+        expression = ast.parse(raw_search, mode="eval").body
+        assert isinstance(expression, ast.Call)
+        for group in ("include_roots", "quote_roots", "system_roots"):
+            node = next(arg.value for arg in expression.keywords if arg.arg == group)
+            assert isinstance(node, ast.Tuple)
+            for item in node.elts:
+                assert isinstance(item, ast.Call) and isinstance(item.args[0], ast.Constant)
+                assert isinstance(item.args[0].value, str)
+                path = Path(item.args[0].value)
+                if path not in roots:
+                    roots.append(path)
+    renamed = {}
+    files = []
+    for pin in value["files"]:
+        row = portable_tree(project, pin)
+        for label in ("path", "link_target"):
+            logical = pin.get(label)
+            if logical is None or logical["root"] != "external":
+                continue
+            physical = Path("/").joinpath(*logical["parts"])
+            matched = next(((i, root) for i, root in enumerate(roots) if physical.is_relative_to(root)), None)
+            if matched is None:
+                raise Held(
+                    cause_named(
+                        "migration.scope",
+                        "external legacy input has no evidenced ordered search root",
+                        owner="work.attempts",
+                        stage="migration",
+                    )
+                )
+            i, root = matched
+            replacement: dict[str, Any] = {"root": "include" + str(i), "parts": list(physical.relative_to(root).parts)}
+            row[label] = replacement
+            renamed[logical["root"] + ":" + "/".join(logical["parts"])] = (
+                replacement["root"] + ":" + "/".join(replacement["parts"])
+            )
+        files.append(row)
+    values = portable_tree(project, value["values"])
+    if search is not None:
+        # Project roots keep the project namespace; external roots use ordered include aliases.
+        for field in ("include_roots", "quote_roots", "system_roots"):
+            search[field] = [
+                "include" + str(roots.index(Path("/") / name.removeprefix("external:"))) + ":"
+                if name.startswith("external:")
+                else name
+                for name in search[field]
+            ]
+        values["search"] = search
+    return {
+        "files": files,
+        "values": values,
+        "recipes": portable_tree(project, value["recipes"]),
+        "_watch_remap": renamed,
+    }
+
+
+def portable_tree(project: Project, value: Any) -> Any:
+    from unbake.config import relative_text
+
+    if isinstance(value, Mapping):
+        if set(value) == {"files", "values", "recipes"}:
+            result = canonical_dependency_document(project, value)
+            result.pop("_watch_remap")
+            return result
+        result = {str(k): portable_tree(project, v) for k, v in value.items()}
+        if "dependency_set" in value and "retry" in value:
+            canonical = canonical_dependency_document(project, value["dependency_set"])
+            remap = canonical.pop("_watch_remap")
+            result["dependency_set"] = canonical
+            result["retry"]["watch"] = [remap.get(watch, watch) for watch in value["retry"]["watch"]]
+        return result
+    if isinstance(value, (list, tuple)):
+        return [portable_tree(project, v) for v in value]
+    if isinstance(value, Path):
+        value = str(value)
+    if isinstance(value, str):
+        value = value.replace(str(project.root) + "/", "project:")
+        value = re.sub(r"(?<=-I)/[^\s\"']+|(?<=-L)/[^\s\"']+", lambda m: relative_text(project.root, m[0]), value)
+        return relative_text(project.root, value)
+    return value
 
 
 def portable_value(project: Project, value: Any) -> Any:

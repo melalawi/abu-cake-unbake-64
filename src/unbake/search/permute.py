@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import math
-import os
 import re
 import shlex
 import subprocess
@@ -19,7 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from unbake import atomic as atomic_files
-from unbake import pool
+from unbake import process as native_process
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, Project
 from unbake.process import capture, temporary_environment
@@ -151,17 +150,6 @@ def compile_script(project: Project, policy: Host, source_path: Path, version: s
     return "\n".join(lines) + "\n"
 
 
-# Runs outside the permuter's group: when the owner (argv 1) exits, even by SIGKILL, the group (argv 2) dies.
-_WATCH = (
-    "import os, select, signal, sys\n"
-    "select.select([os.pidfd_open(int(sys.argv[1]))], [], [])\n"
-    "try:\n"
-    "    os.killpg(int(sys.argv[2]), signal.SIGKILL)\n"
-    "except ProcessLookupError:\n"
-    "    pass\n"
-)
-
-
 @dataclass(frozen=True)
 class _RunResult:
     ran: bool
@@ -178,25 +166,11 @@ def _run(command: Sequence[str], cwd: Path, environment: Mapping[str, str], budg
         ):
             if budget <= 0:
                 return _RunResult(False, None)
-            process = subprocess.Popen(
-                command, cwd=cwd, env=environment, stdout=output, stderr=errors, start_new_session=True
-            )
-            # The group outlives a SIGKILLed owner unless something outside it is watching the owner.
-            watcher = subprocess.Popen(
-                [sys.executable, "-c", _WATCH, str(os.getpid()), str(process.pid)],
-                env=environment,
-                start_new_session=True,
-            )
-            try:
-                status = process.wait(timeout=budget)
-            except subprocess.TimeoutExpired:
-                status = None
-            finally:
-                # Every exit, normal or not, ends the whole tree: the permuter's own workers and compilers.
-                pool.kill_groups([process.pid])
-                process.wait()
-                watcher.kill()
-                watcher.wait()
+            with native_process.managed_group(command, cwd=cwd, env=environment, stdout=output, stderr=errors) as child:
+                try:
+                    status = child.wait(timeout=budget)
+                except subprocess.TimeoutExpired:
+                    status = None
             if status is None:
                 return _RunResult(True, None)
         return _RunResult(True, status)

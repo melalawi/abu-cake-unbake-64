@@ -53,10 +53,6 @@ def diff(edits: Iterable[split.Edit]) -> str:
     )
 
 
-def write(path: Path, text: str) -> None:
-    atomic_files.text(Path(path), text, encoding="utf-8")
-
-
 def _validated(project: Project, edits: Iterable[split.Edit]) -> tuple[list[split.Edit], list[str]]:
     edits = coalesce(edits)
     if not edits:
@@ -108,28 +104,22 @@ def _validated(project: Project, edits: Iterable[split.Edit]) -> tuple[list[spli
 
 
 def _write_staging(project: Project, edits: Iterable[split.Edit]) -> None:
-    """Write validated edits in a private tree before its full publication proof."""
+    """Write validated edits in their private proved tree through the one Journal."""
+    from unbake.journal import Journal
+
     edits, _ = _validated(project, edits)
-    written: list[tuple[split.Edit, bool]] = []
-    try:
+    with Journal(project.build / "boundary.journal", root=project.root) as transaction:
+        transaction.save(Path(edit.path) for edit in edits)
         for edit in edits:
-            existed = Path(edit.path).exists()
-            write(edit.path, edit.after)
-            written.append((edit, existed))
-    except BaseException:
-        for edit, existed in reversed(written):
-            if existed:
-                write(edit.path, edit.before)
-            else:
-                Path(edit.path).unlink(missing_ok=True)
-        raise
+            atomic_files.text(Path(edit.path), edit.after, encoding="utf-8")
 
 
 def apply(project: Project, policy: Host, edits: Iterable[split.Edit]) -> Outcome | None:
-    """Write the edits, regenerate the build files and prove every version with make check; revert on failure."""
+    """Prepare/prove edits; Journal restores the declared outputs on refusal or death."""
     from unbake import build, buildfiles, steps
+    from unbake.journal import Journal
 
-    edits, _versions = _validated(project, edits)
+    edits, _ = _validated(project, edits)
     if not edits:
         return None
     prepared = steps.prepare(
@@ -142,31 +132,13 @@ def apply(project: Project, policy: Host, edits: Iterable[split.Edit]) -> Outcom
             project_scope=True,
         ),
     )
-    prepared.assert_current(project)
-    written: list[tuple[split.Edit, bool]] = []
-    before = {path: path.read_bytes() for path in buildfiles.generate(project, policy) if path.is_file()}
-
-    def revert() -> None:
-        for edit, existed in reversed(written):
-            if existed:
-                write(edit.path, edit.before)
-            else:
-                Path(edit.path).unlink(missing_ok=True)
-        for path, content in before.items():
-            atomic_files.write(path, content)
-
-    try:
+    with Journal(project.build / "boundary.journal", root=project.root) as transaction:
         prepared.assert_current(project)
-        _validated(project, edits)
+        transaction.save([*(Path(edit.path) for edit in edits), *buildfiles.generate(project, policy)])
         for edit in edits:
-            existed = Path(edit.path).exists()
-            write(edit.path, edit.after)
-            written.append((edit, existed))
+            atomic_files.text(Path(edit.path), edit.after, encoding="utf-8")
         buildfiles.write(project, policy)
         outcome = build.check(project, policy)
-    except BaseException:
-        revert()
-        raise
-    if not outcome.ok:
-        revert()
+        if not outcome.ok:
+            transaction.rollback()
     return outcome

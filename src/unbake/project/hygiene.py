@@ -25,6 +25,7 @@ def base_ignore_text(root: Path) -> str:
         "/asm/",
         "/.splat/",
         "/.unbake/",
+        "/.attempts.lock",
         "__pycache__/",
         "*.py[cod]",
         "*.lock",
@@ -45,6 +46,15 @@ def base_ignore_text(root: Path) -> str:
     if tracked.returncode == 0 and tracked.stdout:
         entries.insert(2, "!baserom.sha1")
     return "\n".join(entries) + "\n"
+
+
+def runtime_ignore_text(project: Project) -> str:
+    """Preserve authored ignore rules and append only the sole Ledger runtime lock."""
+    path = project.root / ".gitignore"
+    text = path.read_text() if path.is_file() else ""
+    if text.splitlines() and text.splitlines()[-1] == "/.attempts.lock":
+        return text
+    return text.rstrip("\n") + ("\n" if text else "") + "/.attempts.lock\n"
 
 
 def ignore_text(project: Project) -> str:

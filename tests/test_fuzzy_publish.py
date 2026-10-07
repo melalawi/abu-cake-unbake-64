@@ -34,6 +34,14 @@ class FuzzyPublishTests(ProjectCase):
         stream = io.StringIO()
         records = []
         prove = land.Proof(list(self.versions), set(), scores if fuzzy else None)
+
+        def accepted(project, host, paths, message):
+            from unbake import journal
+
+            current = journal.current()
+            current.prepare_commit(project, host, project.root / ".git/index", paths, "fixture-base")
+            journal.accepted(git_commit="c0ffee")
+
         with (
             patch("unbake.fold.apply.fold", return_value=Folded("alpha", self.file.read_text(), {}, ())),
             patch("unbake.fold.apply.private_headers", return_value={}),
@@ -44,7 +52,7 @@ class FuzzyPublishTests(ProjectCase):
                 "_commit",
                 side_effect=Held(named("fixture.refusal", "hook refused", owner="fixture", stage="land"))
                 if fail_commit
-                else None,
+                else accepted,
             ) as commit,
             patch.object(
                 land,

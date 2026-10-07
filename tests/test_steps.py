@@ -4,7 +4,7 @@ import re
 from types import SimpleNamespace
 
 from tests.kit import BUDGET_HOST, TempCase
-from unbake import steps
+from unbake import atomic, journal, steps
 from unbake.config import Held
 from unbake.process import named
 
@@ -234,7 +234,7 @@ class CommandJournalTests(TempCase):
         )
 
         def write_layout(project: object, host: object) -> None:
-            (self.root / "layout.toml").write_text("inferred\n")
+            atomic.text(self.root / "layout.toml", "inferred\n")
 
         table = {
             "a": steps.Step("a", "a", "a", lambda project, host: "1", write_layout),
@@ -254,13 +254,12 @@ class CommandJournalTests(TempCase):
             versions=(),
             work=self.root / "work",
         )
-        steps.record(project, "b", "old")
 
         for label, error in (("error", FileNotFoundError), ("interrupt", KeyboardInterrupt)):
             with self.subTest(label):
 
                 def failing(project: object, host: object, error: type[BaseException] = error) -> None:
-                    (self.root / "layout.toml").write_text("half-written by b\n")
+                    atomic.text(self.root / "layout.toml", "half-written by b\n")
                     raise error("include/common/data.h")
 
                 with self.assertRaises((Held, KeyboardInterrupt)) as caught:
@@ -269,49 +268,27 @@ class CommandJournalTests(TempCase):
                     self.assertIn("FileNotFoundError", str(caught.exception))
                 # a published its layout with its key; b reruns next time; nothing restores an older layout.
                 self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), ("1", None))
-                self.assertEqual((self.root / "layout.toml").read_text(), "half-written by b\n")
+                self.assertEqual((self.root / "layout.toml").read_text(), "inferred\n")
                 self.assertEqual(list((self.root / "build" / "steps.journal").glob("*.json")), [])
 
-    def test_a_dead_commands_running_step_is_forgotten_by_the_next(self) -> None:
-        from unittest.mock import patch
+    def test_interrupted_step_outputs_are_restored_by_the_single_journal(self) -> None:
+        directory = self.root / "build" / "steps.journal"
+        output = self.root / "layout.toml"
+        output.write_text("completed step a\n")
+        changes = journal.Journal(directory, root=self.root).__enter__()
+        atomic.text(output, "partial step b\n")
+        changes.recording.__exit__(None, None, None)
+        journal._current.reset(changes.token)
+        self.assertEqual(journal.recover(directory, root=self.root), [output])
+        self.assertEqual(output.read_text(), "completed step a\n")
 
-        project = SimpleNamespace(
-            build=self.root / "build",
-            root=self.root,
-            id="fixture",
-            include=(),
-            src=self.root,
-            versions=(),
-            work=self.root / "work",
-        )
-        steps.record(project, "a", "1")
-        steps.record(project, "b", "2")
-        dead = steps.Command(project)
-        dead.path = self.root / "build" / "steps.journal" / "999999.json"
-        dead.running("b")
-        with patch.object(steps.os, "kill", side_effect=ProcessLookupError):
-            for stale in steps.Command.stale(project):
-                stale.rollback()
-        self.assertEqual((steps.recorded(project, "a"), steps.recorded(project, "b")), ("1", None))
-        self.assertFalse(dead.path.exists())
-
-    def test_a_journal_not_named_for_a_process_is_refused_by_name(self) -> None:
-        project = SimpleNamespace(
-            build=self.root / "build",
-            root=self.root,
-            id="fixture",
-            include=(),
-            src=self.root,
-            versions=(),
-            work=self.root / "work",
-        )
-        journal = self.root / "build" / "steps.journal"
-        journal.mkdir(parents=True)
-        (journal / "notes.json").write_text("{}")
+    def test_unknown_journal_contract_refuses_without_output_writes(self) -> None:
+        directory = self.root / "build" / "steps.journal"
+        directory.mkdir(parents=True)
+        (directory / journal.INDEX).write_text("{}")
         with self.assertRaises(Held) as raised:
-            steps.Command.stale(project)
-        self.assertIn("notes.json", raised.exception.reason)
-        self.assertIn("roll it back", raised.exception.reason)
+            journal.recover(directory, root=self.root)
+        self.assertEqual(raised.exception.key, "journal.contract")
 
 
 class BootstrapTests(TempCase):

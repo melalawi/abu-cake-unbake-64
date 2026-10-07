@@ -84,7 +84,7 @@ def restore_roms(project: Project, source: Path) -> None:
                     f"{target}", f"{target}: baserom symlink target is missing", owner="project.setup", stage="setup"
                 )
             )
-        compiler_files.atomic_copy(target, contents[version.baserom_sha1], mode=0o600)
+        atomic_files.copyfile(contents[version.baserom_sha1], target, mode=0o600)
 
 
 def run(project: Project, policy: Host, *, supply: Path | None = None) -> list[str]:
@@ -369,7 +369,6 @@ def _publish(
                 writes[project.build / "setup" / path.name] = path
     obsolete = [project.root / relative for relative in removed_inputs]
     obsolete += [project.root / relative for relative in fingerprint if _retired_evidence(relative)]
-    before: dict[Path, bytes | None] = {}
     if _inputs(project) != fingerprint:
         raise Held(
             cause_named(
@@ -379,7 +378,10 @@ def _publish(
                 stage="setup",
             )
         )
-    try:
+    from unbake.journal import Journal
+
+    with Journal(project.build / "setup-publication.journal", root=project.root) as transaction:
+        transaction.save([*writes, *obsolete])
         for target in [*writes, *obsolete]:
             if target.is_symlink() or any(parent.is_symlink() for parent in target.parents):
                 raise Held(
@@ -390,21 +392,13 @@ def _publish(
                         stage="setup",
                     )
                 )
-            before[target] = target.read_bytes() if target.is_file() else None
         for target, source in writes.items():
             if target != config_path:
-                compiler_files.atomic_copy(target, source, mode=source.stat().st_mode & 0o777)
+                atomic_files.copyfile(source, target, mode=source.stat().st_mode & 0o777)
         for target in obsolete:
-            target.unlink(missing_ok=True)
+            atomic_files.remove(target, missing_ok=True)
         if config_path in writes:
-            compiler_files.atomic_bytes(config_path, writes[config_path].read_bytes())
-    except BaseException:
-        for target, previous in before.items():
-            if previous is None:
-                target.unlink(missing_ok=True)
-            else:
-                compiler_files.atomic_bytes(target, previous)
-        raise
+            atomic_files.write(config_path, writes[config_path].read_bytes())
 
 
 def _prove_publish(

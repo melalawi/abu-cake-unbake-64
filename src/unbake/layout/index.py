@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import cache as retention
 from unbake.config import Held, Project
 from unbake.process import capture
@@ -267,4 +268,4 @@ def update(project: Project, changes: dict[Path, str]) -> None:
     from unbake.typemap import storage
 
     value = overlay(load(project), {p.relative_to(project.include[0]).as_posix(): t for p, t in changes.items()})
-    storage.write(path(project), encoded(value))
+    atomic_files.write(storage.output(path(project)), encoded(value))
