@@ -1,0 +1,156 @@
+{
+  "publication_tool": "d39d79a92131d9d48eba26b98b3df6e4f85054c5",
+  "publication_commit": "b83a340862a1caef8cf56f69ca251b6d57d0deea",
+  "breaking_refresh": "dc416aa1",
+  "failing_tree": "adccc7c2bd69ab80e5782bb86faa73d2d47d8baf",
+  "repair_commit": "83ce46c89dce2ddd859e2c7d17b21d6834a76d65",
+  "files": {
+    "after/include/types.h": {
+      "origin": "adccc7c2:include/types.h",
+      "sha256": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e"
+    },
+    "after/include/abi.h": {
+      "origin": "adccc7c2:include/abi.h",
+      "sha256": "cff5a56cde9e9c6f6229882328d71b038544f4c8102196347b92ac2df6a84951"
+    },
+    "after/include/acmd.h": {
+      "origin": "adccc7c2:include/acmd.h",
+      "sha256": "522f0c6ad06a44f89de7e93dd9caa51ef62e811027a48ce12dd04a3b79db60ac"
+    },
+    "after/include/audio_callbacks.h": {
+      "origin": "adccc7c2:include/audio_callbacks.h",
+      "sha256": "15d5c8bdec38dc2bf6412c28a89f3f8a8db2f6060710eb89a171bf46c40b10fe"
+    },
+    "after/include/span_1000/code_802B4730.h": {
+      "origin": "adccc7c2:include/span_1000/code_802B4730.h",
+      "sha256": "39b67a9b7961c0666e0093d7fd49e1afd768e745d447571644f45b5e594a8b5c"
+    },
+    "after/include/span_1000/code_802B369C.h": {
+      "origin": "adccc7c2:include/span_1000/code_802B369C.h",
+      "sha256": "c99f9114fec3c4ec025095864ae0f4821c8d851366993f2c4b0c7b4a7a5ff237",
+      "line_ranges": [
+        [
+          1,
+          6
+        ],
+        [
+          128,
+          135
+        ],
+        [
+          199,
+          201
+        ],
+        [
+          254,
+          254
+        ]
+      ],
+      "origin_sha256": "26f4ad267f23d684c33f62915a7192c097b28210166a1c3620a0ee58973a8d0f"
+    },
+    "after/include/common/types_1dc8418c21db.h": {
+      "origin": "adccc7c2:include/common/types_1dc8418c21db.h",
+      "sha256": "a4df00894aba28f1497dae5e5827737e491086a6022fff5f1324d01c4890b5d1",
+      "line_ranges": [
+        [
+          1,
+          4
+        ],
+        [
+          696,
+          710
+        ],
+        [
+          5329,
+          5329
+        ]
+      ],
+      "origin_sha256": "ac6b29011de9a231ff4c967e6e9502227ea516c2af8eb12b830a28574b01095a"
+    },
+    "after/include/common/unused.h": {
+      "origin": "adccc7c2:include/common/unused.h",
+      "sha256": "cbf982a199129f6d81f9f74f9267bc4d6da191ecacb92ee8d06ba71caed60361",
+      "line_ranges": [
+        [
+          1,
+          2
+        ],
+        [
+          3,
+          3
+        ],
+        [
+          6,
+          6
+        ],
+        [
+          22705,
+          22705
+        ]
+      ],
+      "origin_sha256": "c6e67f02d835d59ca30de0ed0299e88c8e7b816d0c67c7e7dcf736692a18ebd1"
+    },
+    "before/common/unused.h": {
+      "origin": "b83a3408:include/common/unused.h",
+      "sha256": "c2d104d0e8fea59a50957c86d7cdc388488431a65221a33d0845854cde83c540",
+      "line_ranges": [
+        [
+          1,
+          4
+        ],
+        [
+          7,
+          7
+        ],
+        [
+          3915,
+          3916
+        ],
+        [
+          5533,
+          5539
+        ],
+        [
+          22947,
+          22947
+        ]
+      ],
+      "origin_sha256": "17dd148ce9951f470085b4641c8f03cb6c9c2dfe5c9b34ae7a06382e1a9e8d22"
+    },
+    "published.c": {
+      "origin": "b83a3408:src/func_802B56E0_eu_x.c",
+      "sha256": "69efe2d8ef2796ec338a5a405c8490e13cd2f043559a456b95ac41c6bcca306c"
+    },
+    "repaired.c": {
+      "origin": "83ce46c8:src/func_802B56E0_eu_x.c",
+      "sha256": "c0152dfbf8376b950bd488d1cb5ba3c6cdeb96b8bdd1d696eab36f7ffd312355"
+    },
+    "candidate.c": {
+      "origin": "publication b83a3408 candidate sha256 43e935b664883a06182285864f2b03bf69269ee31e4ea5c4514924e5e7b6c6b0",
+      "sha256": "43e935b664883a06182285864f2b03bf69269ee31e4ea5c4514924e5e7b6c6b0"
+    },
+    "config.toml": {
+      "origin": "adccc7c2:config.toml",
+      "sha256": "b4502ce006992619279dca4837e84d079dd6a7ca30d3553e2de8bdab7671ca99",
+      "line_ranges": [
+        [
+          13,
+          17
+        ],
+        [
+          1329,
+          1338
+        ],
+        [
+          1349,
+          1358
+        ],
+        [
+          1362,
+          1364
+        ]
+      ],
+      "origin_sha256": "28e3ffa9d2a817e6fec3dfd4c99b4427cd0fccd5a3b5e191375b9c1eae927e07"
+    }
+  }
+}
