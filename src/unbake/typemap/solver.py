@@ -20,9 +20,9 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 15
+SCHEMA = 16
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
-ABI_SCHEMA = 9
+ABI_SCHEMA = 10
 MACHINE_SCHEMA = 7
 
 

@@ -160,9 +160,12 @@ class Analysis:
         words: list[int],
         targets: dict[int, str],
         symbols: dict[int, list[str]],
+        *,
+        jump_targets: dict[int, tuple[int, ...]] | None = None,
     ) -> None:
         self.function, self.version, self.address, self.rom_offset = function, version, address, rom_offset
         self.words, self.targets, self.symbols = words, targets, symbols
+        self.jump_targets = jump_targets or {}
         self.memory: dict[int, dict[str, Any]] = {}
         self.calls: dict[int, dict[str, Any]] = {}
         self.returns: dict[int, dict[str, Any]] = {}
@@ -428,6 +431,11 @@ class Analysis:
                     state.registers[r] = Value(((origin, 0),), dependencies=(origin,))
                 return [(next_index, state)] if next_index < len(self.words) else []
             successors = []
+            local_targets = self.jump_targets.get(pc, ()) if kind == "jump" and target is None else ()
+            if local_targets and all(
+                self.address <= at < self.address + len(self.words) * 4 and at % 4 == 0 for at in local_targets
+            ):
+                return [((at - self.address) // 4, state.copy()) for at in dict.fromkeys(local_targets)]
             if target is not None and self.address <= target < self.address + len(self.words) * 4:
                 successors.append(((target - self.address) // 4, state))
             elif record:
@@ -439,6 +447,12 @@ class Analysis:
 
     def run(self) -> dict[str, Any]:
         self.leaders = {0}
+        self.leaders.update(
+            (target - self.address) // 4
+            for targets in self.jump_targets.values()
+            for target in targets
+            if self.address <= target < self.address + len(self.words) * 4 and target % 4 == 0
+        )
         for index, word in enumerate(self.words):
             branch = control(word, self.address + index * 4)
             if branch is not None:

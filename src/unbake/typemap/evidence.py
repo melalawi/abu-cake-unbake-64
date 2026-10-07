@@ -127,6 +127,7 @@ def _summaries(
                 )
             versions[version] = {
                 "address": body["address"],
+                "unknown_control": bool(body.get("unknown")),
                 "register_inputs": sorted(inputs[version]),
                 "register_outputs": [reg for reg in body["register_outputs"] if reg in ("r2", "f0")],
                 "calls": calls_,
@@ -295,6 +296,8 @@ def abi(
         observed = [inputs[name, version] for version in item["versions"]]
         regs = set.union(*observed) if observed else set()
         conflicts = []
+        if any(body.get("unknown_control") for body in item["versions"].values()):
+            conflicts.append("callee control flow is incomplete; entry and exit register sets are partial")
         # A callee's arity is its own entry-register reads. A register a caller happens to hold at the call
         # (a leftover from earlier work) is not an argument: it is recorded as caller evidence only.
         caller_regs = {
@@ -387,7 +390,10 @@ def abi(
             and (not paired[name] or pair_known)
             and (not used_returns or bool(consumed))
             and any(body["returns"] for body in item["versions"].values()),
-            "arity_known": not any("input registers differ" in reason for reason in conflicts) and not missing,
+            "arity_known": not any(
+                "input registers differ" in reason or "control flow is incomplete" in reason for reason in conflicts
+            )
+            and not missing,
             "conflicts": conflicts,
             "missing": missing,
             "call_sites": len(calls.get(name, [])),

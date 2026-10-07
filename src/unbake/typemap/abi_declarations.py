@@ -49,6 +49,11 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
     abi = record.get("abi")
     if not abi:
         return {"prototype": None, "reasons": ["types.abi.absent: machine ABI evidence is absent"]}
+    if any("control flow is incomplete" in reason for reason in abi.get("conflicts", [])):
+        return {
+            "prototype": None,
+            "reasons": ["types.abi.control_flow: unresolved control flow cannot establish a complete entry contract"],
+        }
     reasons = []
     params = {p["register"]: p for p in record["params"]}
     types = {reg: param.get("type") for reg, param in params.items()}
