@@ -155,15 +155,19 @@ def measure(
     results: dict[str, Compare] = {}
     faults: dict[str, dict[str, Any]] = {}
     from unbake.fold import provider_reuse
+    from unbake.typemap import namespace
 
-    with provider_reuse.view(view, host, tuple(selected)) as view:
+    with (
+        provider_reuse.view(view, host, tuple(selected)) as view,
+        namespace.comparison_view(view, host, file, content.decode()) as (view, candidate),
+    ):
         for version in selected:
             row = row_of(project, function, version)
             target = split.words(project, row)
             compiling = True
             try:
                 options: dict[str, Any] = {"non_matching": True} if non_matching else {}
-                with runner.compile_unit(view, host, file, version, unit=function, **options) as obj:
+                with runner.compile_unit(view, host, candidate, version, unit=function, **options) as obj:
                     compiling = False
                     linked, problems = runner.link_function(project, host, obj, version, row, file)
             except Held as error:

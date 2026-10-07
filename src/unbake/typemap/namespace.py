@@ -2,14 +2,241 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import copy
+import re
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from pycparser import c_ast  # type: ignore[import-untyped]
+from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import cdecl
-from unbake.config import Held
+from unbake.config import Held, Host, Project
+
+
+class FunctionDeclarations:
+    """Repair address-only object receipts using code identity, never name prefixes.
+
+    Existing function contracts win. Without a contract, retain the scalar
+    spelling as an unspecified-parameter function declaration; it supplies
+    linkage for an address reference without inventing a parameter list.
+    """
+
+    def __init__(self, value: dict[str, Any], contents: Mapping[Path, str]) -> None:
+        from unbake.layout import redeclarations
+
+        self.names = set(value.get("function_symbols", ())) | value.get("functions", {}).keys()
+        self.records = value.get("functions", {})
+        self.typedefs: dict[str, str] = {}
+        self.parsed: dict[str, Any] = {}
+        self.spans: dict[str, list[tuple[int, int]]] = {}
+        self.rewritten: dict[str, str] = {}
+        self.prototypes: dict[str, str] = {}
+        self.aliases = set(value.get("typedefs", {}))
+        if not self.names:
+            return
+        # Typedef-based function declarations need their actual declarator,
+        # rather than the parser's temporary scalar typedef scaffolding.
+        for text in dict.fromkeys(contents.values()):
+            self.spans[text] = redeclarations.spans(text)
+            for start, end in self.spans[text]:
+                statement = text[start:end]
+                if statement.startswith("typedef"):
+                    for name in cdecl.declarations(statement).typedefs:
+                        self.typedefs[name] = statement
+        generator = c_generator.CGenerator()
+        for text in dict.fromkeys(contents.values()):
+            if self.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", text)):
+                continue
+            for start, end in self.spans[text]:
+                statement = text[start:end]
+                if self.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", statement)):
+                    continue
+                for node in self.tree(statement).ext:
+                    if isinstance(node, c_ast.Decl) and node.name in self.names and self.function(node.type):
+                        self.prototypes.setdefault(node.name, generator.visit(node) + ";")
+
+    def tree(self, text: str) -> Any:
+        if text not in self.parsed:
+            row = cdecl.declarations(text)
+            self.parsed[text] = cdecl.parse(cdecl.declaration_source(text), typedefs=row.uses | self.aliases)
+        return self.parsed[text]
+
+    def function(self, type_: Any, seen: frozenset[str] = frozenset()) -> bool:
+        if isinstance(type_, c_ast.FuncDecl):
+            return True
+        if isinstance(type_, c_ast.TypeDecl) and isinstance(type_.type, c_ast.IdentifierType):
+            identifiers = type_.type.names
+            if len(identifiers) == 1 and identifiers[0] in self.typedefs and identifiers[0] not in seen:
+                name = identifiers[0]
+                for node in self.tree(self.typedefs[name]).ext:
+                    if isinstance(node, c_ast.Typedef) and node.name == name:
+                        return self.function(node.type, seen | {name})
+        return False
+
+    def rewrite(self, text: str) -> str:
+        from unbake.layout import redeclarations
+
+        if text in self.rewritten:
+            return self.rewritten[text]
+        after = text
+        if not self.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", text)):
+            generator = c_generator.CGenerator()
+            if text not in self.spans:
+                self.spans[text] = redeclarations.spans(text)
+            for start, end in reversed(self.spans[text]):
+                statement = text[start:end]
+                if self.names.isdisjoint(re.findall(r"\b[A-Za-z_]\w*\b", statement)):
+                    continue
+                nodes = self.tree(statement).ext
+                rows = []
+                changed = False
+                for node in nodes:
+                    if isinstance(node, c_ast.Decl) and node.name in self.names and not self.function(node.type):
+                        if node.init is not None or "extern" not in node.storage:
+                            raise Held(
+                                "headers", f"headers.namespace: {node.name}: function identity has object storage"
+                            )
+                        record = self.records.get(node.name, {})
+                        prototype = self.prototypes.get(node.name) or record.get("prototype")
+                        if not prototype:
+                            if not isinstance(node.type, c_ast.TypeDecl):
+                                raise Held(
+                                    "headers",
+                                    f"headers.namespace: {node.name}: "
+                                    "non-scalar object conflicts with function identity",
+                                )
+                            declaration = copy.deepcopy(node)
+                            declaration.type = c_ast.FuncDecl(None, declaration.type)
+                            prototype = generator.visit(declaration) + ";"
+                        rows.append(prototype)
+                        changed = True
+                    else:
+                        rows.append(generator.visit(node) + ";")
+                if changed:
+                    after = after[:start] + "\n".join(rows) + after[end:]
+        self.rewritten[text] = after
+        return after
+
+
+def project_declarations(
+    project: Project, contents: Mapping[Path, str], *, texts: tuple[str, ...] = ()
+) -> FunctionDeclarations:
+    """Read code placement once per VERSION and only requested solved contracts."""
+    from unbake.layout import split
+    from unbake.typemap import types_db
+
+    names: set[str] = set()
+    for version in project.versions:
+        for row in split.functions(project, version):
+            names.update(row.aliases)
+            names.update(name for name, _offset in row.entries)
+        for name, (_address, _line, match) in split.symbols(project.version(version).symbols)[1].items():
+            if re.search(r"\btype\s*:\s*func\b", match.string):
+                names.add(name)
+    words = set(re.findall(r"\b[A-Za-z_]\w*\b", "\n".join((*contents.values(), *texts))))
+    names &= words
+    database = types_db.path(project)
+    records = types_db.entries(database, "functions", names) if names and database.is_file() else {}
+    return FunctionDeclarations({"function_symbols": names, "functions": records}, contents)
+
+
+def publication_outputs(
+    contracts: FunctionDeclarations,
+    headers: Mapping[Path, str],
+    sources: Mapping[Path, str],
+    outputs: Mapping[Path, bytes | Path],
+) -> dict[Path, bytes]:
+    """Stage repaired installed consumers and homes with the normal publication.
+
+    Prefer an already rendered output over its installed predecessor. Even a
+    home retained until the headers step must stop declaring code as storage.
+    """
+    changes = {}
+    for path, before in {**headers, **sources}.items():
+        if contracts.rewrite(before) == before:
+            continue
+        content = outputs.get(path)
+        current = (
+            before if content is None else (content.read_bytes() if isinstance(content, Path) else content).decode()
+        )
+        changes[path] = contracts.rewrite(current).encode()
+    return changes
+
+
+def consumer_edits(
+    project: Project, contracts: FunctionDeclarations, function: str, edits: tuple[Any, ...]
+) -> tuple[Any, ...]:
+    """Canonicalize installed consumers once, preserving any pending layout edit."""
+    from unbake.layout import split
+    from unbake.layout.split import Edit
+
+    planned = {edit.path: edit for edit in edits}
+    owners = None
+    for source in sorted(project.src.glob("*.c")):
+        if source.stem == function:
+            continue
+        existing = planned.get(source)
+        before = existing.before if existing is not None else source.read_text()
+        text = existing.after if existing is not None else before
+        after = contracts.rewrite(text)
+        if after == text:
+            continue
+        if owners is None:
+            owners = {version: split.owners_by_alias(project, version) for version in project.versions}
+        versions = tuple(
+            version
+            for version in split.holding_versions(project, source.stem, owners)
+            if any(row.kind == "c" for row in owners[version].get(source.stem, ()))
+        )
+        if versions:
+            planned[source] = Edit(source, before, after, versions)
+    return tuple(planned.values())
+
+
+@contextmanager
+def comparison_view(
+    project: Project,
+    host: Host,
+    source: Path,
+    text: str,
+    *,
+    contents: Mapping[Path, str] | None = None,
+    contracts: FunctionDeclarations | None = None,
+) -> Iterator[tuple[Project, Path]]:
+    """Compare the same canonical declarations that folding will publish."""
+    from unbake import atomic, scratch
+    from unbake.layout.header_context import Headers
+    from unbake.project.headers import include_headers
+
+    if contents is None:
+        contents = Headers.contents(project)
+    if contracts is None:
+        contracts = project_declarations(project, contents, texts=(text,))
+    after = contracts.rewrite(text)
+    changed = {
+        path: rewritten for path, before in contents.items() if (rewritten := contracts.rewrite(before)) != before
+    }
+    if after == text and not changed:
+        yield project, source
+        return
+    with scratch.temporary(host, project, "fold", prefix="function-declarations-") as temporary:
+        root = Path(temporary)
+        for path, rewritten in changed.items():
+            relative = next(path.relative_to(home) for home in project.include if path.is_relative_to(home))
+            atomic.text(root / "include" / relative, rewritten)
+        for path, name in include_headers(project):
+            mirror = root / "include" / name
+            if not mirror.exists():
+                mirror.parent.mkdir(parents=True, exist_ok=True)
+                mirror.symlink_to(path)
+        candidate = source
+        if after != text:
+            candidate = root / "src" / source.name
+            atomic.text(candidate, after)
+        yield replace(project, work_include=(root / "include", *project.work_include)), candidate
 
 
 def code_names(inventory: Mapping[str, Any], symbols: dict[str, Any]) -> tuple[set[str], dict[str, set[int]]]:

@@ -23,7 +23,7 @@ from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
 SOURCE_NAMES_SCHEMA = 7
-RENDER_SCHEMA = 8
+RENDER_SCHEMA = 9
 
 
 def environment(project: Project, policy: Host | None) -> str:
@@ -36,6 +36,7 @@ def environment(project: Project, policy: Host | None) -> str:
         "typemap/header_names.py",
         "typemap/declarations.py",
         "typemap/declaration_evidence.py",
+        "typemap/namespace.py",
         "typemap/facts.py",
         "typemap/facts_decode.py",
         "typemap/layers.py",
@@ -138,14 +139,18 @@ class Session:
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
         from unbake.typemap.declaration_evidence import published_snapshot
 
-        self.published, self.published_homes = published_snapshot(project, sources=self.sources)
+        self.installed = {path: path.read_text() for path in sorted(layout_index.headers(project))}
+        self.published, self.published_homes = published_snapshot(
+            project, sources=self.sources, contents=self.installed
+        )
         self.ownership = layout_map.load(project)
         from unbake.cdecl import declarations as parsed_names
         from unbake.typemap import facts
 
         exported: set[str] = set()
         for path in {*self.authored, *layout_index.headers(project)}:
-            row = parsed_names(self.authored.get(path) or path.read_text())
+            text = self.authored.get(path, self.installed.get(path))
+            row = parsed_names(path.read_text() if text is None else text)
             exported.update(row.typedefs | row.exports | row.tags)
         exported_names = storage.encoded(sorted(exported))
         self.source_words = {path: set(re.findall(r"\b[A-Za-z_]\w*\b", text)) for path, text in self.sources.items()}
@@ -210,6 +215,9 @@ class Session:
         self.reserved: set[str] = set()
         self.consumer_names: dict[Path, set[str]] = {}
         self._rewrite_contexts: dict[tuple[int, int], tuple[dict[str, str], frozenset[str], str, frozenset[str]]] = {}
+        from unbake.typemap.namespace import FunctionDeclarations
+
+        self.function_declarations: FunctionDeclarations | None = None
         self.consumer_tags: dict[Path, set[str]] = {}
 
     def source_names(self, consumers: dict[Path, set[str]]) -> set[str]:

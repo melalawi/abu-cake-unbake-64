@@ -438,7 +438,7 @@ def validate_published(
 
 
 def published_snapshot(
-    project: Project, *, sources: dict[Path, str] | None = None
+    project: Project, *, sources: dict[Path, str] | None = None, contents: dict[Path, str] | None = None
 ) -> tuple[dict[Path, str], dict[Path, set[Path]]]:
     """Keep installed declaration dependencies used by published C bodies.
 
@@ -449,7 +449,8 @@ def published_snapshot(
     from unbake.layout import apply, index
     from unbake.typemap.declarations import published_sources
 
-    contents = {path: path.read_text() for path in sorted(index.headers(project))}
+    if contents is None:
+        contents = {path: path.read_text() for path in sorted(index.headers(project))}
     rows = units(contents)
     by_name: dict[str, list[Unit]] = {}
     for unit in rows:

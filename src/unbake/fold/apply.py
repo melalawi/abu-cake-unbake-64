@@ -121,11 +121,21 @@ def fold(project: Project, host: Host, function: str, text: str, *, versions: tu
             f"fold.source_rules: {function} breaks the source rules: " + "; ".join(checks.plain(f) for f in blockers),
         )
     from unbake.fold import shared_consumers
-    from unbake.layout import header_loss
+    from unbake.layout import header_loss, header_step
     from unbake.layout.structs_fold import _prove_includers
+    from unbake.typemap import namespace
 
     effective = {**private_headers(project, function), **headers}
     source_edits = shared_consumers.plan(project, host, function, effective)
+    from unbake.layout.header_context import Headers
+
+    installed = Headers.contents(project)
+    contracts = namespace.project_declarations(project, installed, texts=(folded,))
+    canonical_edits = namespace.consumer_edits(project, contracts, function, source_edits)
+    identity_changed = canonical_edits != source_edits or any(
+        contracts.rewrite(text) != text for text in installed.values()
+    )
+    source_edits = canonical_edits
     header_edits = [
         Edit(
             project.include[-1] / name,
@@ -138,6 +148,14 @@ def fold(project: Project, host: Host, function: str, text: str, *, versions: tu
     ]
     if header_edits:
         _prove_includers(project, [*header_edits, *source_edits], host, project.src / f"{function}.c")
+    if identity_changed:
+        header_step.validate(
+            project,
+            host,
+            {edit.path: edit.after.encode() for edit in [*header_edits, *source_edits]},
+            prove_all=True,
+            preproved=frozenset({function}),
+        )
     header_loss.check(
         project,
         {

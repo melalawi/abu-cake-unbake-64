@@ -151,7 +151,7 @@ class PublicationNamespaceTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "headers.namespace.*dispatch.*typedef"):
             namespace.check({"functions": {"dispatch": {}}}, {Path("contract.h"): "typedef int dispatch;"})
 
-    def test_renderer_holds_retained_scalar_before_planning_headers(self):
+    def test_renderer_repairs_retained_scalar_before_namespace_validation(self):
         from unbake.typemap import database
 
         path = Path("include/retained.h")
@@ -162,8 +162,17 @@ class PublicationNamespaceTests(unittest.TestCase):
             published_homes={path: {path}},
         )
         value = {"functions": {"dispatch": {"state": "unknown"}}, "globals": {}, "structs": {}, "arrays": {}}
-        with self.assertRaisesRegex(Held, "headers.namespace.*dispatch.*object"):
+
+        def checked(value, components):
+            self.assertIn("extern int dispatch();", components[path])
+            raise ValueError("canonical namespace checked")
+
+        with (
+            patch.object(database.namespace, "check", side_effect=checked) as check,
+            self.assertRaisesRegex(ValueError, "canonical namespace checked"),
+        ):
             database._render(SimpleNamespace(include=(Path("include"),)), value, None, session)
+        self.assertEqual(check.call_count, 1)
 
     def test_existing_function_cannot_be_overwritten_by_known_global_record(self):
         from unbake.typemap import namespace

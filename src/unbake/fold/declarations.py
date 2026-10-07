@@ -220,14 +220,27 @@ def fold_source(
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
     from unbake.fold import callee_contracts
-    from unbake.typemap import declaration_evidence
+    from unbake.typemap import declaration_evidence, namespace
 
     authored = text
+    contracts = namespace.project_declarations(project, headers.texts, texts=(text,))
+    identity_edits = [
+        Edit(path, before, after, versions)
+        for path, before in headers.texts.items()
+        if (after := contracts.rewrite(before)) != before
+    ]
+    if identity_edits:
+        headers = Headers({**headers.texts, **{edit.path: edit.after for edit in identity_edits}}, root=headers.root)
+    text = contracts.rewrite(text)
     headers, contract_edits = callee_contracts.reconcile(project, headers, text, function, versions)
     text = gbi_recover.import_aliases(
         project, text, headers.texts, sdk_aliases=False, rules=frozenset({"volatile-storage"})
     )
     text, evidence_end = declaration_evidence.inject(project, headers, text, function, versions)
+    if evidence_end:
+        prefix = contracts.rewrite(text[:evidence_end])
+        text = prefix + text[evidence_end:]
+        evidence_end = len(prefix)
     if evidence_end:
         text = text[:evidence_end] + "/* unbake declaration evidence boundary */\n" + text[evidence_end:]
     text = imports.resolve(project, headers, text, function)
@@ -274,9 +287,9 @@ def fold_source(
         # Blank moved typedefs without changing the aggregate edit offsets.
         for start, end in sorted(moved_spans, reverse=True):
             text = text[:start] + "".join("\n" if char == "\n" else " " for char in text[start:end]) + text[end:]
-    if contract_edits:
+    if contract_edits or identity_edits:
         by_path = {edit.path: edit for edit in edits}
-        for edit in contract_edits:
+        for edit in [*contract_edits, *identity_edits]:
             current = by_path.get(edit.path)
             by_path[edit.path] = replace(current, before=edit.before) if current is not None else edit
         edits = list(by_path.values())

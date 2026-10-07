@@ -251,14 +251,13 @@ def _draft(
     # Reject unsupported instructions/register reads before changing headers.
     output = lower(output, context.read_text(), allow_fields=True)
     output, shared = share(project, function, output, context.read_text(), types_path=types_path)
-    selected = required_headers(
-        {path: read_text(path, "m2c") for path, name in headers},
-        output,
-    )
+    contents = {path: read_text(path, "m2c") for path, name in headers}
+    selected = required_headers(contents, output)
     atomic_files.text(context, _context(headers, selected), encoding="utf-8")
     atomic_files.text(context, preprocess_context(context, project, policy, v, function), encoding="utf-8")
     if shared is not None and shared.resolve() not in {path for path, _ in headers}:
         headers.append((shared.resolve(), shared.relative_to(project.include[0]).as_posix()))
+        contents[shared.resolve()] = read_text(shared, "m2c")
     if shared is not None:
         selected.add(shared.resolve())
     # The draft and trial compile the same includes as a normal source unit.
@@ -289,11 +288,19 @@ def _draft(
         f"/* NON_MATCHING: draft of {function}; verify behavior and bytes before match. */\n"
         f"{includes.rstrip()}\n\n{signatures}\n\n{output.rstrip()}\n"
     )
+    from unbake.typemap import namespace
+
+    contracts = namespace.project_declarations(project, contents, texts=(content,))
+    content = contracts.rewrite(content)
     candidate = work / "compile-proof" / (function + ".c")
     candidate.parent.mkdir(parents=True, exist_ok=True)
     atomic_files.text(candidate, content, encoding="utf-8")
     try:
-        prove(project, policy, function, v, candidate)
+        with namespace.comparison_view(project, policy, candidate, content, contents=contents, contracts=contracts) as (
+            view,
+            compiled,
+        ):
+            prove(view, policy, function, v, compiled)
     except Held as error:
         raise Held(
             error.phase,

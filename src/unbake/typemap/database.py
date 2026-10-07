@@ -162,8 +162,22 @@ def _render(
         published_homes[relative] = sorted(home.relative_to(root).as_posix() for home in retained_homes[path])
     from unbake.typemap.declaration_evidence import validate_published
 
-    validate_published(project, value, published, context=tuple(session.authored.values()), policy=policy)
-    components = dict(session.authored)
+    contracts = getattr(session, "function_declarations", None)
+    if contracts is None:
+        contracts = namespace.FunctionDeclarations(
+            value, {**session.authored, **{root / path: text for path, text in published.items()}}
+        )
+    for field in ("published_declarations", "declaration_evidence"):
+        for path, text in value.get(field, {}).items():
+            value[field][path] = contracts.rewrite(text)
+    validate_published(
+        project,
+        value,
+        published,
+        context=tuple(contracts.rewrite(text) for text in session.authored.values()),
+        policy=policy,
+    )
+    components = {path: contracts.rewrite(text) for path, text in session.authored.items()}
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     components.update({root / path: text for path, text in value.get("published_declarations", {}).items()})
     namespace.check(value, components)
@@ -626,11 +640,28 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         raise Held("solve", "paths.include: required shared type destination")
     with tui.task("Preparing header ownership"):
         session = regeneration.Session(project, policy)
+    installed = {**session.authored, **session.installed}
+    contracts = namespace.FunctionDeclarations(value, installed)
+    session.function_declarations = contracts
     with tui.task("Writing the shared headers", len(session.sources)):
         outputs = session.render(value, lambda: _render(project, value, policy, session))
     from unbake.layout import header_loss, header_step
 
-    reconnected = _consumer_imports(project, outputs, session.sources)
+    canonical = namespace.publication_outputs(contracts, installed, session.sources, outputs)
+    outputs.update(canonical)
+    if canonical:
+        from unbake.layout import index as layout_index
+
+        listing = outputs[layout_index.path(project)]
+        lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
+        for path, data in canonical.items():
+            if path in session.installed:
+                lookup["headers"][path.relative_to(project.include[0]).as_posix()] = input_pins.bytes_digest(
+                    data, algorithm="sha256"
+                )
+        outputs[layout_index.path(project)] = layout_index.encoded(lookup)
+    sources = {path: canonical.get(path, text.encode()).decode() for path, text in session.sources.items()}
+    reconnected = _consumer_imports(project, outputs, sources)
     outputs.update(reconnected)
     # Reconnect changed homes in the same installation as their consumers.
     # Obsolete, untouched homes remain until the regular headers step.
@@ -664,13 +695,15 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             validated=validated,
             session=session,
         )
-    if reconnected and policy is not None:
+    if canonical and policy is None:
+        raise Held("headers", "headers.namespace: canonical function declarations require native publication proof")
+    if (reconnected or canonical) and policy is not None:
         native_outputs = {
             path: data.read_bytes() if isinstance(data, Path) else data
             for path, data in outputs.items()
             if path.suffix in (".h", ".c") and (not path.is_file() or path.read_bytes() != data)
         }
-        header_step.validate(project, policy, native_outputs)
+        header_step.validate(project, policy, native_outputs, prove_all=bool(canonical))
     with tui.task("Saving the type database"):
         value["rendered_sha256"] = {
             storage.relative(project, path): input_pins.bytes_digest(content, algorithm="sha256")
