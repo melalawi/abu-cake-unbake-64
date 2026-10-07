@@ -52,6 +52,7 @@ class SearchResult:
     fuzzy: float
     trials: int
     steps: Path
+    skips: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -133,7 +134,32 @@ def run(
     evaluated = 0
     deadline = time.monotonic() + budget_seconds
     mutation_seconds = 0.0
-    prepared: dict[tuple[str, str], tuple[str, explain.Allocation, tuple[int, ...]]] = {}
+    prepared: dict[tuple[str, str], tuple[str, explain.Allocation, tuple[int, ...]] | None] = {}
+    skips: list[dict[str, str]] = []
+
+    def prepare(parent: _Candidate, generator: Generator, version: str, limit: float) -> None:
+        key = parent.trial.source_sha256, version
+        if key in prepared:
+            return
+        expanded = preprocess(project, policy, parent.path, version, limit)
+        try:
+            allocation = explain.allocation(project, policy, parent.path, version)
+        except Held as failure:
+            if not failure.key.startswith("dumps."):
+                raise
+            skip = {
+                "key": failure.key,
+                "reason": failure.reason,
+                "version": version,
+                "source_sha256": key[0],
+                "generator": getattr(generator, "name", type(generator).__name__),
+            }
+            skips.append(skip)
+            with atomic_files.stream(steps, "a", encoding="utf-8") as stream:
+                stream.write(json.dumps({**skip, "kind": "allocation.skip", "refusal": failure.reason}) + "\n")
+            prepared[key] = None
+        else:
+            prepared[key] = expanded, allocation, _focus_lines(allocation, parent.source, expanded)
 
     def evaluate(
         content: str, method: str, mutation: Mutation, version: str | None = None, incumbent: _Candidate | None = None
@@ -214,10 +240,7 @@ def run(
     representative = min(best.trial.compares, key=lambda v: (best.trial.compares[v].identical, v))
     for generator in generators:
         version = generator.version if isinstance(generator, Permuter) else representative
-        key = best.trial.source_sha256, version
-        expanded = preprocess(project, policy, best.path, version, time.monotonic() + budget_seconds)
-        allocation = explain.allocation(project, policy, best.path, version)
-        prepared[key] = expanded, allocation, _focus_lines(allocation, best.source, expanded)
+        prepare(best, generator, version, time.monotonic() + budget_seconds)
     deadline = time.monotonic() + budget_seconds
     beam = [best]
     stalls = 0
@@ -236,11 +259,11 @@ def run(
                     break
                 version = generator.version if isinstance(generator, Permuter) else representative
                 key = parent_digest, version
-                if key not in prepared:
-                    expanded = preprocess(project, policy, parent.path, version, generator_deadline)
-                    allocation = explain.allocation(project, policy, parent.path, version)
-                    prepared[key] = expanded, allocation, _focus_lines(allocation, parent.source, expanded)
-                expanded, allocation, focus_lines = prepared[key]
+                prepare(parent, generator, version, generator_deadline)
+                preparation = prepared[key]
+                if preparation is None:
+                    continue
+                expanded, allocation, focus_lines = preparation
                 context = Context(project, policy, out, parent.path, allocation, focus_lines, generator_deadline)
                 method = getattr(generator, "name", type(generator).__name__)
                 proposals = iter(generator.propose(expanded, parent.trial, context))
@@ -279,11 +302,15 @@ def run(
     mutations = evaluated - 1
     if mutations == 0 and time.monotonic() < deadline - mutation_seconds:
         # The methods proposed nothing for this source with budget to spare: the start is the best they have.
-        tui.line("no mutation proposed; the starting source is the best")
+        tui.line(
+            "allocator context skipped; see search skips and steps"
+            if skips
+            else "no mutation proposed; the starting source is the best"
+        )
     elif mutations == 0:
         if not any(isinstance(generator, Permuter) and generator.ran for generator in generators):
             raise Held("search", f"zero mutations evaluated; increase budget or select another method; see {steps}")
         tui.line("external permuter ran; no improving candidates emitted")
     if best.trial.identical_everywhere:
         tui.verdict("cracked", f"IDENTICAL {best.trial.function}: {best.path}")
-    return SearchResult(best.path, best.trial, best.score, best.fuzzy, evaluated, steps)
+    return SearchResult(best.path, best.trial, best.score, best.fuzzy, evaluated, steps, tuple(skips))

@@ -28,6 +28,7 @@ class Searched:
     # Words that still differ in the best text, and the wall time the search ran.
     words: int
     seconds: float
+    skips: tuple[dict[str, str], ...] = ()
 
     def document(self) -> dict[str, Any]:
         return {
@@ -38,6 +39,7 @@ class Searched:
             "steps": str(self.steps),
             "mutations": self.mutations,
             "words": self.words,
+            "skips": list(self.skips),
         }
 
     def lines(self) -> list[str]:
@@ -47,6 +49,7 @@ class Searched:
             f"{self.function}: tried {self.mutations} variants in {self.seconds:g}s; "
             f"best leaves {self.words} words different",
             f"steps: {self.steps}",
+            *(f"skipped {skip['key']}: {skip['reason']}" for skip in self.skips),
         ]
 
 
@@ -133,4 +136,5 @@ def search(project: Project, host: Host, file: Path, method: str, seconds: int) 
         result.trials - 1,
         result.score,
         time.monotonic() - started,
+        result.skips,
     )

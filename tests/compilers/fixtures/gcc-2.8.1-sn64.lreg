@@ -1,0 +1,292 @@
+Register 80 used 272 times across 1858 insns; dies in 17 places; crosses 106 calls; 8 bytes; GR_REGS or none.
+Register 81 used 224 times across 335 insns; dies in 75 places; crosses 37 calls; 8 bytes; GR_REGS or none.
+Register 82 used 3 times across 6 insns; GR_REGS or none; pointer.
+Register 83 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 84 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 85 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 86 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 87 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 88 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 89 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 90 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 91 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 93 used 3 times across 13 insns; FP_REGS or none.
+Register 94 used 4 times across 9 insns; dies in 2 places; FP_REGS or none.
+Register 95 used 4 times across 9 insns; dies in 2 places; FP_REGS or none.
+Register 96 used 4 times across 9 insns; dies in 2 places; FP_REGS or none.
+Register 98 used 6 times across 7 insns; FP_REGS or none.
+Register 99 used 6 times across 7 insns; FP_REGS or none.
+Register 100 used 6 times across 7 insns; FP_REGS or none.
+Register 101 used 6 times across 7 insns; FP_REGS or none.
+Register 102 used 6 times across 7 insns; FP_REGS or none.
+Register 103 used 6 times across 7 insns; FP_REGS or none.
+Register 104 used 6 times across 7 insns; FP_REGS or none.
+Register 105 used 6 times across 7 insns; FP_REGS or none.
+Register 106 used 6 times across 7 insns; FP_REGS or none.
+Register 107 used 6 times across 7 insns; FP_REGS or none.
+Register 108 used 6 times across 7 insns; FP_REGS or none.
+Register 109 used 6 times across 7 insns; FP_REGS or none.
+Register 110 used 6 times across 7 insns; FP_REGS or none.
+Register 111 used 6 times across 7 insns; FP_REGS or none.
+Register 112 used 6 times across 7 insns; FP_REGS or none.
+Register 113 used 6 times across 7 insns; FP_REGS or none.
+Register 114 used 6 times across 7 insns; FP_REGS or none.
+Register 115 used 6 times across 6 insns; FP_REGS or none.
+Register 116 used 6 times across 6 insns; FP_REGS or none.
+Register 117 used 6 times across 7 insns; FP_REGS or none.
+Register 118 used 6 times across 6 insns; FP_REGS or none.
+Register 119 used 6 times across 7 insns; FP_REGS or none.
+Register 120 used 6 times across 7 insns; FP_REGS or none.
+Register 121 used 6 times across 7 insns; FP_REGS or none.
+Register 122 used 6 times across 7 insns; FP_REGS or none.
+Register 123 used 6 times across 6 insns; FP_REGS or none.
+Register 124 used 6 times across 7 insns; FP_REGS or none.
+Register 125 used 6 times across 7 insns; FP_REGS or none.
+Register 126 used 6 times across 7 insns; FP_REGS or none.
+Register 127 used 6 times across 7 insns; FP_REGS or none.
+Register 128 used 6 times across 7 insns; FP_REGS or none.
+Register 129 used 6 times across 7 insns; FP_REGS or none.
+Register 130 used 6 times across 7 insns; FP_REGS or none.
+Register 131 used 6 times across 7 insns; FP_REGS or none.
+Register 132 used 6 times across 6 insns; FP_REGS or none.
+Register 133 used 6 times across 7 insns; FP_REGS or none.
+Register 134 used 6 times across 7 insns; FP_REGS or none.
+Register 135 used 4 times across 5 insns; GR_REGS or none.
+Register 136 used 4 times across 5 insns; GR_REGS or none.
+Register 137 used 4 times across 5 insns; GR_REGS or none.
+Register 138 used 4 times across 5 insns; GR_REGS or none.
+Register 139 used 4 times across 5 insns; GR_REGS or none.
+Register 140 used 4 times across 5 insns; GR_REGS or none.
+Register 141 used 4 times across 5 insns; GR_REGS or none.
+Register 142 used 4 times across 5 insns; GR_REGS or none.
+Register 143 used 4 times across 5 insns; GR_REGS or none.
+Register 144 used 4 times across 5 insns; GR_REGS or none.
+Register 157 used 7 times across 12 insns; GR_REGS or none.
+Register 158 used 5 times across 9 insns; GR_REGS or none.
+Register 159 used 5 times across 9 insns; GR_REGS or none.
+Register 160 used 5 times across 12 insns; GR_REGS or none.
+Register 161 used 5 times across 13 insns; GR_REGS or none.
+Register 162 used 5 times across 10 insns; GR_REGS or none.
+Register 163 used 5 times across 9 insns; GR_REGS or none.
+Register 164 used 8 times across 16 insns; GR_REGS or none.
+Register 165 used 8 times across 16 insns; GR_REGS or none.
+Register 166 used 5 times across 9 insns; GR_REGS or none.
+Register 167 used 5 times across 9 insns; GR_REGS or none.
+Register 168 used 4 times across 4 insns; GR_REGS or none.
+Register 169 used 4 times across 4 insns; GR_REGS or none.
+Register 170 used 4 times across 4 insns; GR_REGS or none.
+Register 171 used 4 times across 4 insns; GR_REGS or none.
+Register 172 used 4 times across 4 insns; GR_REGS or none.
+Register 173 used 4 times across 4 insns; GR_REGS or none.
+Register 174 used 4 times across 4 insns; GR_REGS or none.
+Register 175 used 5 times across 8 insns; GR_REGS or none.
+Register 178 used 4 times across 226 insns; dies in 2 places; crosses 4 calls; GR_REGS or none.
+Register 246 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 247 used 3 times across 4 insns; GR_REGS or none.
+Register 269 used 5 times across 7 insns; GR_REGS or none.
+Register 270 used 3 times across 8 insns; FP_REGS or none.
+Register 273 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 274 used 3 times across 4 insns; GR_REGS or none.
+Register 294 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 295 used 3 times across 4 insns; GR_REGS or none.
+Register 411 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 412 used 3 times across 4 insns; GR_REGS or none.
+Register 434 used 5 times across 7 insns; GR_REGS or none.
+Register 435 used 3 times across 8 insns; FP_REGS or none.
+Register 438 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 439 used 3 times across 4 insns; GR_REGS or none.
+Register 459 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 460 used 3 times across 4 insns; GR_REGS or none.
+Register 590 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 591 used 3 times across 4 insns; GR_REGS or none.
+Register 611 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 612 used 3 times across 4 insns; GR_REGS or none.
+Register 621 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 622 used 3 times across 4 insns; GR_REGS or none.
+Register 642 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 643 used 3 times across 4 insns; GR_REGS or none.
+Register 834 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 835 used 3 times across 4 insns; GR_REGS or none.
+Register 844 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 845 used 3 times across 4 insns; GR_REGS or none.
+Register 853 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 854 used 3 times across 4 insns; GR_REGS or none.
+Register 863 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 864 used 3 times across 4 insns; GR_REGS or none.
+Register 873 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 874 used 3 times across 4 insns; GR_REGS or none.
+Register 1057 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1058 used 3 times across 4 insns; GR_REGS or none.
+Register 1225 used 3 times across 4 insns; GR_REGS or none.
+Register 1226 used 5 times across 20 insns; crosses 2 calls; GR_REGS or none.
+Register 1229 used 3 times across 3 insns; GR_REGS or none.
+Register 1235 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1236 used 3 times across 4 insns; GR_REGS or none.
+Register 1255 used 5 times across 7 insns; GR_REGS or none.
+Register 1256 used 3 times across 8 insns; FP_REGS or none.
+Register 1259 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1260 used 3 times across 4 insns; GR_REGS or none.
+Register 1281 used 3 times across 4 insns; GR_REGS or none.
+Register 1282 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1285 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1286 used 3 times across 4 insns; GR_REGS or none.
+Register 1311 used 3 times across 4 insns; GR_REGS or none.
+Register 1312 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1315 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1316 used 3 times across 4 insns; GR_REGS or none.
+Register 1340 used 3 times across 4 insns; GR_REGS or none.
+Register 1341 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1344 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1345 used 3 times across 4 insns; GR_REGS or none.
+Register 1447 used 3 times across 4 insns; GR_REGS or none.
+Register 1448 used 5 times across 20 insns; crosses 2 calls; GR_REGS or none.
+Register 1451 used 3 times across 3 insns; GR_REGS or none.
+Register 1455 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1456 used 3 times across 4 insns; GR_REGS or none.
+Register 1477 used 3 times across 4 insns; GR_REGS or none.
+Register 1478 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1481 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1482 used 3 times across 4 insns; GR_REGS or none.
+Register 1507 used 3 times across 4 insns; GR_REGS or none.
+Register 1508 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1511 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1512 used 3 times across 4 insns; GR_REGS or none.
+Register 1521 used 3 times across 4 insns; GR_REGS or none.
+Register 1522 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1542 used 3 times across 4 insns; GR_REGS or none.
+Register 1543 used 3 times across 10 insns; crosses 1 call; GR_REGS or none.
+Register 1546 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1547 used 3 times across 4 insns; GR_REGS or none.
+Register 1566 used 5 times across 7 insns; GR_REGS or none.
+Register 1567 used 3 times across 8 insns; FP_REGS or none.
+Register 1570 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1571 used 3 times across 4 insns; GR_REGS or none.
+Register 1758 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1759 used 3 times across 4 insns; GR_REGS or none.
+Register 1790 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1791 used 3 times across 4 insns; GR_REGS or none.
+Register 1800 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1801 used 3 times across 4 insns; GR_REGS or none.
+Register 1819 used 5 times across 15 insns; GR_REGS or none.
+Register 1820 used 3 times across 8 insns; FP_REGS or none.
+Register 1834 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1835 used 3 times across 4 insns; GR_REGS or none.
+Register 1843 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1844 used 3 times across 4 insns; GR_REGS or none.
+Register 1853 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1854 used 3 times across 4 insns; GR_REGS or none.
+Register 1866 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 1867 used 3 times across 4 insns; GR_REGS or none.
+Register 2088 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2089 used 3 times across 4 insns; GR_REGS or none.
+Register 2108 used 5 times across 7 insns; GR_REGS or none.
+Register 2109 used 3 times across 8 insns; FP_REGS or none.
+Register 2112 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2113 used 3 times across 4 insns; GR_REGS or none.
+Register 2121 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2122 used 3 times across 4 insns; GR_REGS or none.
+Register 2134 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2135 used 3 times across 4 insns; GR_REGS or none.
+Register 2159 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2160 used 3 times across 4 insns; GR_REGS or none.
+Register 2169 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2170 used 3 times across 4 insns; GR_REGS or none.
+Register 2190 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2191 used 3 times across 4 insns; GR_REGS or none.
+Register 2211 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2212 used 3 times across 4 insns; GR_REGS or none.
+Register 2220 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2221 used 3 times across 4 insns; GR_REGS or none.
+Register 2233 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2234 used 3 times across 4 insns; GR_REGS or none.
+Register 2596 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2597 used 3 times across 4 insns; GR_REGS or none.
+Register 2606 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2607 used 3 times across 4 insns; GR_REGS or none.
+Register 2627 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2628 used 3 times across 4 insns; GR_REGS or none.
+Register 2647 used 5 times across 7 insns; GR_REGS or none.
+Register 2648 used 3 times across 8 insns; FP_REGS or none.
+Register 2656 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2657 used 3 times across 4 insns; GR_REGS or none.
+Register 2664 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2665 used 3 times across 4 insns; GR_REGS or none.
+Register 2684 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 2686 used 5 times across 7 insns; GR_REGS or none.
+Register 2687 used 3 times across 8 insns; FP_REGS or none.
+Register 2693 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 2695 used 5 times across 7 insns; GR_REGS or none.
+Register 2696 used 3 times across 8 insns; FP_REGS or none.
+Register 2699 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2700 used 3 times across 4 insns; GR_REGS or none.
+Register 2707 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2708 used 3 times across 4 insns; GR_REGS or none.
+Register 2727 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 2729 used 5 times across 7 insns; GR_REGS or none.
+Register 2730 used 3 times across 8 insns; FP_REGS or none.
+Register 2736 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 2738 used 5 times across 7 insns; GR_REGS or none.
+Register 2739 used 3 times across 8 insns; FP_REGS or none.
+Register 2742 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2743 used 3 times across 4 insns; GR_REGS or none.
+Register 2750 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2751 used 3 times across 4 insns; GR_REGS or none.
+Register 2770 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 2772 used 5 times across 7 insns; GR_REGS or none.
+Register 2773 used 3 times across 8 insns; FP_REGS or none.
+Register 2779 used 4 times across 6 insns; dies in 2 places; FP_REGS or none.
+Register 2781 used 5 times across 7 insns; GR_REGS or none.
+Register 2782 used 3 times across 8 insns; FP_REGS or none.
+Register 2785 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2786 used 3 times across 4 insns; GR_REGS or none.
+Register 2901 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2902 used 3 times across 4 insns; GR_REGS or none.
+Register 2924 used 5 times across 7 insns; GR_REGS or none.
+Register 2925 used 3 times across 8 insns; FP_REGS or none.
+Register 2928 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2929 used 3 times across 4 insns; GR_REGS or none.
+Register 2949 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 2950 used 3 times across 4 insns; GR_REGS or none.
+Register 3143 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3144 used 3 times across 4 insns; GR_REGS or none.
+Register 3164 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3165 used 3 times across 4 insns; GR_REGS or none.
+Register 3174 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3175 used 3 times across 4 insns; GR_REGS or none.
+Register 3205 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3206 used 3 times across 4 insns; GR_REGS or none.
+Register 3214 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3215 used 3 times across 4 insns; GR_REGS or none.
+Register 3227 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3228 used 3 times across 4 insns; GR_REGS or none.
+Register 3237 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3238 used 3 times across 4 insns; GR_REGS or none.
+Register 3246 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3247 used 3 times across 4 insns; GR_REGS or none.
+Register 3256 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3257 used 3 times across 4 insns; GR_REGS or none.
+Register 3308 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3309 used 3 times across 4 insns; GR_REGS or none.
+Register 3474 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3475 used 3 times across 4 insns; GR_REGS or none.
+Register 3484 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3485 used 3 times across 4 insns; GR_REGS or none.
+Register 3494 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3495 used 3 times across 4 insns; GR_REGS or none.
+Register 3504 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3505 used 3 times across 4 insns; GR_REGS or none.
+Register 3512 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3513 used 3 times across 4 insns; GR_REGS or none.
+Register 3534 used 5 times across 7 insns; GR_REGS or none.
+Register 3535 used 3 times across 8 insns; FP_REGS or none.
+Register 3694 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3695 used 3 times across 4 insns; GR_REGS or none.
+Register 3715 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3716 used 3 times across 4 insns; GR_REGS or none.
+Register 3725 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3726 used 3 times across 4 insns; GR_REGS or none.
+Register 3746 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3747 used 3 times across 4 insns; GR_REGS or none.
+Register 3755 used 3 times across 12 insns; GR_REGS or none; pointer.
+Register 3756 used 3 times across 4 insns; GR_REGS or none.
+Register 3766 used 23 times across 50 insns; dies in 5 places; GR_REGS or none.

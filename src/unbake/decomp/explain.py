@@ -21,13 +21,14 @@ class Pseudo:
     references: int | None
     live_length: int | None
     live_range: tuple[int, int] | None
-    priority: float | None
+    priority: int | float | None
     rank: int | None
     conflicts: tuple[int, ...]
     allocator: str
     source_lines: tuple[int, ...]
     name: str | None
     rejections: tuple[tuple[int, str], ...]
+    words: int = 1
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,11 @@ def _flips(difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list
     rows = []
     for candidate in (by_number[n] for n in difference.candidates):
         for holder in (by_number[n] for n in difference.holders):
+            if any(
+                p.words != 1 or sum(other.rank == p.rank for other in by_number.values()) > 1
+                for p in (candidate, holder)
+            ):
+                continue
             facts = [(p.number, p.rank, p.references, p.live_length) for p in (candidate, holder)]
             ranked = [(n, r, refs, live) for n, r, refs, live in facts if None not in (r, refs, live)]
             if len(ranked) != 2:

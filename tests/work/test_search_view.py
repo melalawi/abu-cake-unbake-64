@@ -26,7 +26,13 @@ class SearchViewTests(TempCase):
             best.write_text("int f(void) { return 0; }\n")
             (out / "steps").write_text("{}\n")
             return SimpleNamespace(
-                source=best, fuzzy=75.0, trial=SimpleNamespace(exact=False), steps=out / "steps", trials=1, score=3
+                source=best,
+                fuzzy=75.0,
+                trial=SimpleNamespace(exact=False),
+                steps=out / "steps",
+                trials=1,
+                score=3,
+                skips=({"key": "dumps.greg.unknown_line", "reason": "unsupported row"},),
             )
 
         with (
@@ -36,8 +42,10 @@ class SearchViewTests(TempCase):
             patch("unbake.search.core.run", run),
             patch("unbake.search.methods", lambda names: ["generator"]),
         ):
-            search.search(project, SimpleNamespace(cache_machine_root=self.root / "cache"), file, "order", 5)  # type: ignore[arg-type]
+            result = search.search(project, SimpleNamespace(cache_machine_root=self.root / "cache"), file, "order", 5)  # type: ignore[arg-type]
         self.assertEqual(seen, [view])
+        self.assertEqual(result.document()["skips"], [{"key": "dumps.greg.unknown_line", "reason": "unsupported row"}])
+        self.assertIn("skipped dumps.greg.unknown_line: unsupported row", result.lines())
         # The permuter refuses a work directory inside the project: the search works under the cache.
         self.assertTrue(outs[0].is_relative_to(self.root / "cache"))
         self.assertTrue(outs[0].name.startswith("search-f-"))
