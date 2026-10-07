@@ -448,6 +448,7 @@ def prove(
     *,
     versions: tuple[str, ...] | None = None,
     fuzzy: bool = False,
+    source_edits: tuple[split.Edit, ...] = (),
 ) -> Proof:
     """Prove folded source against staged headers: exact ROM bytes, or admitted C in every holding version."""
     from unbake.layout import header_step
@@ -499,9 +500,13 @@ def prove(
         for name, text in headers.items()
         if not (project.include[-1] / name).is_file() or (project.include[-1] / name).read_text() != text
     }
+    for edit in source_edits:
+        if not edit.path.is_file() or edit.path.read_text() != edit.before:
+            raise Held("land", f"land.consumer: {edit.path}: source changed since fold")
+        changed[edit.path] = edit.after.encode()
     if changed:
         # A published unit's own source is validated as its new text, the one this land writes.
-        if fuzzy:
+        if fuzzy or source_edits:
             header_step.validate(project, host, changed, prove_all=True, preproved=frozenset({function}))
         else:
             header_step.validate(project, host, {**changed, project.src / f"{function}.c": source.encode()})
@@ -629,7 +634,9 @@ def land(
     stage = project.work / "_land" / function
     shutil.rmtree(stage, ignore_errors=True)
     try:
-        options = {"fuzzy": True} if fuzzy else {}
+        options: dict[str, Any] = {"fuzzy": True} if fuzzy else {}
+        if folded.source_edits:
+            options["source_edits"] = folded.source_edits
         proof = prove(project, host, function, source, headers, stage, versions=selected, **options)
         versions, dependencies = proof.versions, proof.dependencies
         fuzzy_receipt: dict[str, Any] | None = None
@@ -703,6 +710,7 @@ def land(
         {
             project.src / f"{function}.c": source.encode(),
             **{project.include[-1] / n: t.encode() for n, t in headers.items()},
+            **{edit.path: edit.after.encode() for edit in folded.source_edits},
         },
     )
     written: dict[Path, bytes | None] = {}
@@ -713,7 +721,12 @@ def land(
         atomic_files.write(path, content)
 
     try:
+        for edit in folded.source_edits:
+            if not edit.path.is_file() or edit.path.read_text() != edit.before:
+                raise Held("land", f"land.consumer: {edit.path}: source changed since proof")
         put(project.src / f"{function}.c", source.encode())
+        for edit in folded.source_edits:
+            put(edit.path, edit.after.encode())
         for name, text in headers.items():
             target = project.include[-1] / name
             if not target.is_file() or target.read_text() != text:

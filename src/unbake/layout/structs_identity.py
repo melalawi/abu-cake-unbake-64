@@ -69,7 +69,9 @@ class Index:
         for item in records:
             self.available.setdefault(identity(item, self.names), []).append(item)
 
-    def resolve(self, records: list[Layout], owner: str) -> dict[str, tuple[str, Layout]]:
+    def resolve(
+        self, records: list[Layout], owner: str, *, reserved: set[str] | None = None
+    ) -> dict[str, tuple[str, Layout]]:
         """Reuse an equal shared layout; a conflicting name takes its owning function and size."""
         names = ChainMap({name: item for item in records for name in (item.name, *item.aliases)}, self.names)
         preferred: dict[str, set[str]] = {}
@@ -90,12 +92,14 @@ class Index:
             if candidates:
                 parent = min(candidates, key=lambda candidate: (candidate.name != item.name, candidate.name))
                 pointees(item.fields, parent.fields)
-        occupied = set(self.names)
+        occupied = set(self.names) | (reserved or set())
         result: dict[str, tuple[str, Layout]] = {}
         requested: dict[str, tuple[str, Layout]] = {}
         for item in records:
             key = identity(item, names)
-            candidates = self.available.get(key, [])
+            candidates = [
+                candidate for candidate in self.available.get(key, []) if candidate.name not in (reserved or set())
+            ]
             if candidates:
                 choices = preferred.get(item.name, set())
                 evidence = min(

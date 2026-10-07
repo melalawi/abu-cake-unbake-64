@@ -34,10 +34,19 @@ def preflight(project: Project, policy: Host, pending: list[needs.Need]) -> list
 
 
 def final_source(
-    project: Project, text: str, parsers: list[LayoutParser], edits: list[Edit], headers: Headers, destination: Path
+    project: Project,
+    text: str,
+    parsers: list[LayoutParser],
+    edits: list[Edit],
+    headers: Headers,
+    destination: Path,
+    *,
+    selected: set[str] | None = None,
 ) -> str:
     """Move local aggregate definitions to their shared homes and remove draft markers."""
-    records = [record for parser in parsers for record in _records(parser)]
+    records = [
+        record for parser in parsers for record in _records(parser) if selected is None or record.name in selected
+    ]
     names = {name for record in records for name in (record.name, *record.aliases)}
     includes: set[str] = set()
     replacements: list[tuple[int, int, str]] = []
@@ -398,7 +407,12 @@ def _layout_names(
             # Validate canonical scalar names before rewriting any aggregate alias.
             scalar_edits(project, parser, headers)
             records = _records(parser)
-            resolution = headers.index.resolve([record for record in records if record.name not in sdk], function)
+            from unbake.fold import shared_consumers
+
+            reserved = shared_consumers.reserved(project, policy, headers, function, records)
+            resolution = headers.index.resolve(
+                [record for record in records if record.name not in sdk], function, reserved=reserved
+            )
             resolved_tags.update(target for target, _ in resolution.values() if target in tag_only)
             if not resolution and not callbacks:
                 continue

@@ -29,6 +29,7 @@ class Folded:
     headers: dict[str, str]
     split_edits: tuple[Edit, ...]
     notes: tuple[str, ...] = field(default=())
+    source_edits: tuple[Edit, ...] = field(default=())
 
 
 def view(project: Project, function: str) -> Project:
@@ -98,7 +99,7 @@ def fold(project: Project, host: Host, function: str, text: str, *, versions: tu
     if "abi" in lowered.headers:
         source = gbi.install_audio(drafted) + source
     with notes.collect() as learned:
-        edits = declarations.folded_edits(drafted, host, function, source, versions)
+        edits = declarations.folded_edits(drafted, host, function, source, versions, prove_headers=False)
     headers: dict[str, str] = {}
     split_edits = []
     folded = None
@@ -119,16 +120,33 @@ def fold(project: Project, host: Host, function: str, text: str, *, versions: tu
             "fold",
             f"fold.source_rules: {function} breaks the source rules: " + "; ".join(checks.plain(f) for f in blockers),
         )
+    from unbake.fold import shared_consumers
     from unbake.layout import header_loss
+    from unbake.layout.structs_fold import _prove_includers
 
+    effective = {**private_headers(project, function), **headers}
+    source_edits = shared_consumers.plan(project, host, function, effective)
+    header_edits = [
+        Edit(
+            project.include[-1] / name,
+            (project.include[-1] / name).read_text() if (project.include[-1] / name).is_file() else "",
+            text,
+            versions,
+        )
+        for name, text in effective.items()
+        if not (project.include[-1] / name).is_file() or (project.include[-1] / name).read_text() != text
+    ]
+    if header_edits:
+        _prove_includers(project, [*header_edits, *source_edits], host, project.src / f"{function}.c")
     header_loss.check(
         project,
         {
             project.src / f"{function}.c": folded.encode(),
             **{project.include[-1] / n: t.encode() for n, t in headers.items()},
+            **{edit.path: edit.after.encode() for edit in source_edits},
         },
     )
-    return Folded(function, folded, headers, tuple(split_edits), tuple(learned))
+    return Folded(function, folded, headers, tuple(split_edits), tuple(learned), source_edits)
 
 
 def private_headers(project: Project, function: str) -> dict[str, str]:
