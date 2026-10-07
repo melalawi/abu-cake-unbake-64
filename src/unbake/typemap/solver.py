@@ -871,7 +871,7 @@ def _map_parts(facts: dict[str, Any], inventory: Any) -> list[str]:
                     name: {
                         **item,
                         "versions": {
-                            version: {k: v for k, v in placement.items() if k != "kind"}
+                            version: {k: v for k, v in placement.items() if k not in ("kind", "_refresh")}
                             for version, placement in item["versions"].items()
                         },
                     }

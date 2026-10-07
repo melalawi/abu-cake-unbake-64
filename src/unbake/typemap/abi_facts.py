@@ -8,13 +8,36 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
-from unbake import inputs
-from unbake.config import Held, Project
+from unbake import inputs, pool, tui
+from unbake.config import Held, Host, Project
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis
 
 
-def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
+@pool.cpu
+def _refined(shared: Any, job: Any) -> bytes:
+    project, targets, symbols = shared
+    name, version, body = job
+    with project.version(version).baserom.open("rb") as stream:
+        stream.seek(body["start"])
+        binary = stream.read(body["end"] - body["start"])
+    if hashlib.sha256(binary).hexdigest() != body["target_sha256"]:
+        raise Held("solve", f"map.abi.target_sha256: {version}: {name}: ROM target changed")
+    words = [word for (word,) in struct.iter_unpack(">I", binary)]
+    result = Analysis(name, version, body["address"], body["start"], words, targets[version], symbols[version]).run()
+    return shards.pack(
+        {
+            "register_inputs": result["register_inputs"],
+            "register_outputs": result["register_outputs"],
+            "value_types": result["value_types"],
+            "memory": {str(row["instruction"]): row for row in result["memory"]},
+            "calls": {str(call["instruction"]): call["arguments"] for call in result["calls"]},
+            "returns": {str(exit_["instruction"]): exit_["values"] for exit_ in result["returns"]},
+        }
+    )
+
+
+def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) -> dict[str, Any]:
     """Keep the original map shard; pin a separate ABI evidence supplement."""
     analyzer = inputs.digest(Path(__file__).with_name("mips.py"))
     if facts.get("abi_analysis_sha256") == analyzer:
@@ -44,7 +67,7 @@ def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
                     for version, body in item["versions"].items()
                 }
             }
-            for name, item in functions.items()
+            for name, item in getattr(functions, "inventory", functions).items()
         }
         targets = {
             version: {
@@ -65,32 +88,18 @@ def refine(project: Project, facts: dict[str, Any]) -> dict[str, Any]:
         }
         writer = shards.Writer(index.parent)
         try:
-            for name, item in inventory.items():
-                for version, body in item["versions"].items():
-                    with project.version(version).baserom.open("rb") as stream:
-                        stream.seek(body["start"])
-                        binary = stream.read(body["end"] - body["start"])
-                    if hashlib.sha256(binary).hexdigest() != body["target_sha256"]:
-                        raise Held("solve", f"map.abi.target_sha256: {version}: {name}: ROM target changed")
-                    words = [word for (word,) in struct.iter_unpack(">I", binary)]
-                    result = Analysis(
-                        name, version, body["address"], body["start"], words, targets[version], symbols[version]
-                    ).run()
-                    record = {
-                        "register_inputs": result["register_inputs"],
-                        "register_outputs": result["register_outputs"],
-                        "value_types": result["value_types"],
-                        "memory": {str(row["instruction"]): row for row in result["memory"]},
-                        "calls": {
-                            str(call["instruction"]): {reg: value for reg, value in call["arguments"].items()}
-                            for call in result["calls"]
-                        },
-                        "returns": {
-                            str(exit_["instruction"]): {reg: value for reg, value in exit_["values"].items()}
-                            for exit_ in result["returns"]
-                        },
-                    }
-                    writer.add(name, version, record)
+            jobs = [
+                (name, version, body) for name, item in inventory.items() for version, body in item["versions"].items()
+            ]
+            shared = project, targets, symbols
+            with tui.task("Upgrading assembly ABI facts", len(jobs)):
+                rows = (
+                    [_refined(shared, job) for job in jobs]
+                    if policy is None
+                    else pool.run(policy, _refined, jobs, shared)
+                )
+            for (name, version, _), body in zip(jobs, rows, strict=True):
+                writer.add_packed(name, version, body)
             path = writer.finish()
         finally:
             writer.close()

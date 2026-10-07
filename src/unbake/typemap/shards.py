@@ -145,6 +145,20 @@ class Writer:
     def add(self, name: str, version: str, body: dict[str, Any]) -> None:
         self.connection.execute("INSERT INTO functions VALUES (?,?,?)", (name, version, pack(body)))
 
+    def add_packed(self, name: str, version: str, body: bytes) -> None:
+        """Workers compress changed rows; copying existing rows never decodes them."""
+        self.connection.execute("INSERT OR REPLACE INTO functions VALUES (?,?,?)", (name, version, body))
+
+    def copy(self, source: Path, owners: list[tuple[str, str]]) -> None:
+        """Copy opaque bodies of retained owners with one SQLite operation."""
+        self.connection.execute("ATTACH DATABASE ? AS prior", (str(source),))
+        self.connection.execute("CREATE TEMP TABLE owners (name TEXT, version TEXT, PRIMARY KEY(name,version))")
+        self.connection.executemany("INSERT INTO owners VALUES (?,?)", owners)
+        self.connection.execute(
+            "INSERT INTO functions SELECT f.name, f.version, f.body "
+            "FROM prior.functions f JOIN owners o USING(name,version)"
+        )
+
     def finish(self) -> Path:
 
         self.connection.commit()

@@ -592,11 +592,20 @@ def session(host: Host) -> Iterator[None]:
         yield
 
 
+def cpu(fn: Callable[..., R]) -> Callable[..., R]:
+    """Require worker admission even for a single CPU item; retain its importable identity."""
+    fn._pool_worker = True  # type: ignore[attr-defined]
+    return fn
+
+
 def run(host: Host, fn: Callable[..., R], items: Sequence[T], shared: Any = None) -> list[R]:
-    """Run fn over items in the shared pool, else the host's pool; a single item runs in this process.
+    """Run fn over items in the shared pool, else the host's pool.
+    CPU-marked functions run in workers even for a single item.
     With SHARED, fn takes it first: fn(shared, item)."""
-    if len(items) < 2:
+    if len(items) < 2 and not getattr(fn, "_pool_worker", False):
         return [fn(item) if shared is None else fn(shared, item) for item in items]
+    if not items:
+        return []
     if _shared is not None:
         return _shared.run(fn, items, shared)
     with Pool.from_host(host) as pool:
