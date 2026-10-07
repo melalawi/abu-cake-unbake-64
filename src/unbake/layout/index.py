@@ -169,21 +169,53 @@ def encoded(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
 
 
-def update(project: Project, changes: dict[Path, str]) -> None:
-    """Register explicit fold outputs; never rediscover headers by scanning."""
+def overlay(value: dict[str, Any], changes: dict[str, str]) -> dict[str, Any]:
+    """Catalogue explicit current header bytes, including typedef definition homes.
+
+    A fold can change a module header without regenerating the whole index.
+    Replace that home's old exports and type entries before rewriting imports.
+    """
     import hashlib
 
     from unbake.cdecl import declarations
-    from unbake.typemap import storage
+    from unbake.typemap.header_names import alias_types
 
-    value = load(project)
-    changed_names = {target.relative_to(project.include[0]).as_posix() for target in changes}
-    value["symbols"] = {symbol: home for symbol, home in value["symbols"].items() if home not in changed_names}
-    for target, text in changes.items():
-        name = target.relative_to(project.include[0]).as_posix()
+    result = {**value, "headers": dict(value["headers"])}
+    result["symbols"] = {symbol: home for symbol, home in value["symbols"].items() if home not in changes}
+    types = {symbol: set(homes) - changes.keys() for symbol, homes in value.get("type_headers", {}).items()}
+    aliases = {}
+    for name, text in sorted(changes.items()):
         safe(name)
-        value["headers"][name] = hashlib.sha256(text.encode()).hexdigest()
+        result["headers"][name] = hashlib.sha256(text.encode()).hexdigest()
         row = declarations(text)
         for symbol in row.typedefs | row.declared | row.exports:
-            value["symbols"][symbol] = name
+            result["symbols"][symbol] = name
+        for symbol in row.typedefs | row.tags | row.declared | row.exports:
+            types.setdefault(symbol, set()).add(name)
+        aliases.update(alias_types(text))
+    # A typedef may only forward its tag; consumers that access fields need
+    # both the typedef provider and the complete definition provider.
+    for alias, target in aliases.items():
+        pending = [target]
+        seen = {alias}
+        while pending:
+            target = pending.pop()
+            match = re.fullmatch(r"(?:struct|union|enum)\s+(\w+)", target)
+            name = match[1] if match else target
+            if name in seen and not match:
+                continue
+            types.setdefault(alias, set()).update(types.get(name, set()))
+            if name not in seen:
+                seen.add(name)
+                if name in aliases:
+                    pending.append(aliases[name])
+    result["type_headers"] = {symbol: sorted(homes) for symbol, homes in types.items() if homes}
+    return result
+
+
+def update(project: Project, changes: dict[Path, str]) -> None:
+    """Register explicit fold outputs; never rediscover headers by scanning."""
+    from unbake.typemap import storage
+
+    value = overlay(load(project), {p.relative_to(project.include[0]).as_posix(): t for p, t in changes.items()})
     storage.write(path(project), encoded(value))

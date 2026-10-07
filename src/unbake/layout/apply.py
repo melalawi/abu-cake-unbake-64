@@ -134,16 +134,31 @@ def source(
         pending = outputs.get(index.path(project))
         lookup = json.loads(pending) if isinstance(pending, bytes) else index.load(project)
         if not isinstance(pending, bytes):
-            from unbake.cdecl import declarations
-
+            changes = {}
             for path, data in outputs.items():
-                if path.suffix != ".h" or not isinstance(data, bytes):
+                if path.suffix != ".h" or not isinstance(data, (bytes, Path)):
                     continue
                 name = path.relative_to(project.include[0]).as_posix()
-                lookup["headers"][name] = storage.digest(data)
-                row = declarations(data.decode())
-                for symbol in row.typedefs | row.declared | row.exports:
-                    lookup["symbols"][symbol] = name
+                changes[name] = (data.read_bytes() if isinstance(data, Path) else data).decode()
+            # imports.resolve has already selected live canonical homes. Their
+            # installed bytes can be newer than the disposable layout index;
+            # catalogue only these imports and their listed dependencies.
+            names = list(_INCLUDE.findall(text))
+            seen = set()
+            while names:
+                name = names.pop()
+                if name in seen or (name not in lookup["headers"] and name not in changes):
+                    continue
+                seen.add(name)
+                if name not in changes:
+                    home = next((root / name for root in project.include if (root / name).is_file()), None)
+                    if home is None:
+                        continue
+                    changes[name] = home.read_text()
+                for dependency in _INCLUDE.findall(changes[name]):
+                    relative = os.path.normpath(str(Path(name).parent / dependency))
+                    names.append(relative if relative in lookup["headers"] else dependency)
+            lookup = index.overlay(lookup, changes)
     ownership = ownership or map.load(project)
     previous = previous_names(project) if previous is None else previous
     path = project.src / f"{member}.c"

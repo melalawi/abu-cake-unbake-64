@@ -94,6 +94,10 @@ def _units(path: Path, text: str) -> tuple[Unit, ...]:
         ):
             continue
         uses = row.uses | row.complete_uses
+        # Pointer tag references are not complete/by-value uses in the name
+        # parser, but retained consumers can dereference them. Follow their
+        # installed definitions and same-named canonical typedefs as well.
+        uses.update(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", declaration_source(statement)))
         # Array extents and conditional tests are declaration dependencies
         # too, although the declarator reader deliberately skips expressions.
         for expression in re.findall(r"\[([^]]*)\]|^[ \t]*#[ \t]*(?:if|elif|ifdef|ifndef)\b([^\n]*)", statement, re.M):
