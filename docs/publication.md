@@ -1,0 +1,65 @@
+# Publishing a measured group
+
+Publish accepts several draft files. `--compare` runs the public comparison and
+records the current source measurement before each native publication gate.
+`--events` flushes each successful commit receipt immediately, including its
+proved versions and input hashes. A refused sibling does not erase that prefix.
+
+```sh
+unbake --config host.toml publish --compare --events --push origin build/work/a/a.c build/work/b/b.c
+```
+
+`--push` uses the host's `[publish].branch` and ordinary Git credentials. A
+concurrent update triggers fetch/rebase and native reconciliation of changed
+function/version inputs. Shared headers are read once per snapshot; unrelated
+functions and unchanged versions retain their proof. A mismatch refuses the
+push and restores the prior local commit, so a retry must reconcile again.
+Conflicting Git edits abort the rebase and retain the local commits. Neither
+path force-pushes. A transport refusal names its cause and leaves the commits
+available for retry:
+
+```sh
+unbake --config host.toml publish --push origin
+```
+
+An interrupted command exits 130 with `status: interrupted`, `key: null` and
+`retryable: true`. It records no held cause. Publication returns its successful
+prefix and the still-ready suffix; its Next command names only that suffix.
+A committed prefix remains committed if subsequent maintenance is interrupted.
+This classification does not introduce a resumable proof cache or attempt store.
+
+Equal guarded aggregate definitions and typedefs use one installed shared owner.
+Comparison stages the same ownership view without editing the draft headers.
+Publication reconciles both its initial catalogue and final proposed headers
+before proving their existing consumers. Different declarations, conflicting
+typedef dependencies, conditional uncertainty and import cycles refuse with
+provider locations. The native source, ABI, consumer and ROM proof gates remain
+required.
+
+Publication needs no separate identity/reconciliation driver. The public compare
+checks a draft against its configured holding placements; setup's
+`--redo-symbol-matching` reviews correspondence when those placements need
+changing. Fresh `publish --compare` measurements replace phase-wide freshness
+claims, and native publication proves the exact current input view. The final
+Result's landed/failed/ready lists and the `fn.committed` stream replace a separate
+publication evidence matrix. Historical raw-source searches remain provenance;
+their scores and names cannot substitute for public comparison or publication.
+
+Use a public host configuration to bound cores, workers, parent/worker memory
+reservations and cache memory. For aggregate enforcement across commands, run
+`unbake resources domain.toml` and select that domain in the host configuration
+as described in [resource domains](resource-domain.md). This provides public
+command admission without patching configuration loading in a private launcher.
+
+The former publication helpers map to public commands as follows:
+
+| Helper role | Public command |
+| --- | --- |
+| `bulk_identity.py` publication queue and attempt stamps | `unbake publish --compare --events --push REMOTE FILE...` |
+| `run_admitted_tool.py` resource envelope | `unbake --config HOST publish ...`, with `unbake resources DOMAIN` for shared admission |
+| `phase_integrity.py` current-input eligibility | `unbake publish --compare ...`; after concurrent changes, `publish --push REMOTE` rechecks affected scopes |
+| `stream_reconcile.py` publication aggregation | `unbake publish --events ...` commit stream and final landed/failed/ready lists |
+| `MATCHED-GROUP-RETRY.py` fresh compare then same-pass publication/push | `unbake publish --compare --events --push REMOTE FILE...` |
+
+These commands own publication correctness. They do not import historical private
+raw-scan evidence into the attempts store or promote an unverified raw identity.
