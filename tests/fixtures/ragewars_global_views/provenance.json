@@ -1,0 +1,62 @@
+{
+  "types.h": {
+    "source": "include/types.h",
+    "input_sha256": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e",
+    "slice_sha256": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e",
+    "selection": "Complete scalar provider."
+  },
+  "scalar.h": {
+    "source": "include/shared/func_8027AD4C_de_closed.h",
+    "input_sha256": "26e1cf9b6380026445eccbb94a0ed75cee799423a22410efab71bb63e2b51bdf",
+    "slice_sha256": "edf601ef32f2594163239704067696a2ac23a848ffb90cbb66baa75e81157192",
+    "selection": "Exact scalar object declaration; existing pointer callee contract copied from menu consumer header."
+  },
+  "byte.h": {
+    "source": "include/shared/func_80286080_de_closed.h",
+    "input_sha256": "1185969d843f989a88f9ad6f408dc26fbe6a42b4168fe9896417a05af4678a39",
+    "slice_sha256": "9000482a58ebbe3f98f414f6791e099832cc2c465ee7f9b0e0144402fa0149c7",
+    "selection": "Exact byte object declaration and existing address callee contract."
+  },
+  "menu_layout.h": {
+    "source": "include/shared/func_804235A8_eu_layout.h",
+    "input_sha256": "781ca8426294ced1fcf658c5379c773ac00e9303aaa280750e1796b159362dc6",
+    "slice_sha256": "d634dd936790c3f0bfc9fbda8e22c7f6a29a226eb0e382a4fda68b0b5108a0f1",
+    "selection": "Complete exact Shared_MenuObject and Shared_MenuData layouts, retaining all extents and member names."
+  },
+  "menu.h": {
+    "source": "include/shared/func_804235A8_eu_closed.h",
+    "input_sha256": "f0a41c2de856d6af003ec6d3b091f7c2191c8b2c3b53fe313634d72bf8f980f6",
+    "slice_sha256": "c50189ef7b90197c8856286105810a0fe74c9205f7140aba931ae245b597b960",
+    "selection": "Exact structured object declaration; irrelevant unrelated callees excluded."
+  },
+  "world.h": {
+    "source": "include/span_1000/code_80233920.h",
+    "input_sha256": "bdd3eef7e638743426a184c1e7458aefb17b75483f1499e49e347eacf50a38e3",
+    "slice_sha256": "98050df4b1606a4c9b86a6e4fbe4ee856d546730bd465a0d5a6997e42f18c8ea",
+    "selection": "Complete exact replay layout and real source object declaration."
+  },
+  "scalar.c": {
+    "source": "build/work/func_80231BB0_de/func_80231BB0_de.c",
+    "input_sha256": "ab5140ad2139e686274e597f7dfefcf40eb2b3b889775c7226e6d1b8d053387d",
+    "slice_sha256": "aebc01634291c1d00330187588e758c39ab08827db0d2932b5be2de2bd471c1b",
+    "selection": "Reduced address use from exact canonical candidate; prototype and name adapted only for fixture grouping."
+  },
+  "byte.c": {
+    "source": "src/func_80286080_de.c",
+    "input_sha256": "64546e6c314d6621ae33063f26c3141a6c2c07d4ab97413ee15db04cad867cf2",
+    "slice_sha256": "cf57af1f7ccb17cf39d8b194a416415e6e911fa47d77542ef73e9055f674587b",
+    "selection": "Exact pointer call expression; fixture function shell."
+  },
+  "menu.c": {
+    "source": "src/func_804235A8_eu.c",
+    "input_sha256": "c3bf237f5cddbfd27e2662c29992614f180cd23c1000a5e78cc201b5739ed8fd",
+    "slice_sha256": "aa624c091f779764890c6af9476f6a53f26790780c9fe1545837ff4b8dd99d8e",
+    "selection": "Exact pause/stage writes; language member access from func_80443B3C_de; fixture function shell."
+  },
+  "world.c": {
+    "source": "src/func_80236F1C_de.c",
+    "input_sha256": "215d482974c159db9c8b79eea4ac28e74f9040274a244b4f2d66d208d40d9cf5",
+    "slice_sha256": "faec59f7f3f7eca9ebc8ef97049360fe7a1d2ca1b725574622bb11d0eb3fbcca",
+    "selection": "Exact replay test; fixture function shell."
+  }
+}

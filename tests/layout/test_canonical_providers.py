@@ -32,7 +32,15 @@ class CanonicalProvidersTests(TempCase):
         root = self.root / "project"
         shutil.copytree(FIXTURE / "include", root / "include")
         (root / "src").mkdir()
-        self.project = SimpleNamespace(root=root, include=(root / "include",), src=root / "src", build=root / "build")
+        self.project = SimpleNamespace(
+            id="00000000-0000-4000-8000-000000000001",
+            root=root,
+            include=(root / "include",),
+            src=root / "src",
+            build=root / "build",
+            cache=root / ".cache",
+            work_include=(),
+        )
         self.lookup = json.loads((FIXTURE / "index.json").read_text())
         self.contents = {path: path.read_text() for path in self.project.include[0].rglob("*.h")}
 

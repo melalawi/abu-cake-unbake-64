@@ -13,6 +13,7 @@ from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held
 from unbake.decomp.draft_context import ordered_declarations, ordered_headers
 from unbake.layout.map import Group, Map
+from unbake.project.headers import Graph
 from unbake.typemap.header_names import alias_types
 from unbake.typemap.split import guarded, required_providers
 
@@ -242,6 +243,11 @@ class Layout:
         users = {path: {home.relative_to(root).as_posix() for home in fixed.get(path, set())} for path in contents}
         source_providers: dict[Path, set[Path]] = {}
         self.local_names: dict[str, set[str]] = {}
+        # Authored object declarations can intentionally expose different C
+        # views of the same link symbol in separate translation units. Keep
+        # the consumer's installed view; a group header must not combine those
+        # source-only imports into a new, contradictory shared declaration.
+        scope = Graph.contents({**contents, **sources}, (root,))
         for source, text in sources.items():
             owner = owners.get(source.stem)
             if owner is None:
@@ -257,12 +263,24 @@ class Layout:
                     for variant in redeclarations.variants(text[start:end])
                 )
             )
+            preferred = set(scope.closure((source,)).paths)
+            authored_roots = {
+                edge.target for edge in scope.edges(source) if edge.target is not None and edge.target in authored
+            }
+            covered = set(scope.closure(authored_roots).paths)
             for provider in required_providers(
-                text, self.providers, self.tags, self.aliases, local | local_types, redeclarations.local_tags(text)
+                text,
+                self.providers,
+                self.tags,
+                self.aliases,
+                local | local_types,
+                redeclarations.local_tags(text),
+                preferred=preferred,
             ):
                 if provider not in fixed:
                     users[provider].add(owner.header)
-                    source_providers.setdefault(root / owner.header, set()).add(provider)
+                    if provider not in covered:
+                        source_providers.setdefault(root / owner.header, set()).add(provider)
         for name, text in (declarations_by_name or {}).items():
             selected = {self._declaration_home(name, owners, symbol_segments)}
             for provider in required_providers(text, self.providers, self.tags, self.aliases):

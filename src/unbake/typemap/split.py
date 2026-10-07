@@ -21,11 +21,20 @@ def required_providers(
     aliases: dict[str, str],
     blocked: set[str] | None = None,
     blocked_tags: set[str] | None = None,
+    *,
+    preferred: set[Path] | None = None,
 ) -> set[Path]:
     """Resolve one consumer's names; both generation and imported C use this closure."""
     from unbake.layout.apply import spelled
 
     selected: set[Path] = set()
+
+    def offered(paths: set[Path]) -> set[Path]:
+        # Existing include scope proves which declaration view this consumer
+        # uses. Without that evidence retain every alternative for the normal
+        # contradiction checks; never choose a type by path or address usage.
+        return (paths & preferred) or paths if preferred is not None else paths
+
     code = re.sub(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', " ", declaration_source(text))
     explicit_tags = set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", code))
     pending = list(spelled(text))
@@ -36,9 +45,9 @@ def required_providers(
             continue
         seen.add(name)
         if name not in (blocked or set()):
-            selected.update(providers.get(name, set()))
+            selected.update(offered(providers.get(name, set())))
         if name not in (blocked_tags or set()) and (name not in (blocked or set()) or name in explicit_tags):
-            selected.update(tags.get(name, set()))
+            selected.update(offered(tags.get(name, set())))
         if name not in (blocked or set()):
             pending.extend(re.findall(r"\b[A-Za-z_]\w*\b", aliases.get(name, "")))
     return selected

@@ -106,7 +106,9 @@ class HeaderLossTests(ProjectCase):
             self.assertEqual(self.header.read_bytes(), before)
 
     def test_types_publisher_checks_even_cached_outputs_before_staging(self):
-        session = SimpleNamespace(sources={}, render=lambda *args: {self.header: b""})
+        session = SimpleNamespace(
+            sources={}, authored={}, installed={}, provider_catalogs={}, render=lambda *args: {self.header: b""}
+        )
         with (
             patch.object(database.regeneration, "Session", return_value=session),
             patch.object(database.types_db, "stage") as stage,
