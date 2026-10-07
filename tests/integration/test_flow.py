@@ -54,6 +54,24 @@ class ProjectFlowTests(FixtureCase):
         self.assertEqual(len(data["commits"]), 1)
         self.assertTrue((self.root / "src" / "alpha.c").is_file())
         self.assertEqual(self.subjects()[0], "Match alpha")
+        accepted = data["commits"][0]
+        self.assertEqual(
+            run(["git", "show", f"{accepted}:src/alpha.c"], self.root).stdout, (self.root / "src/alpha.c").read_text()
+        )
+        # Local publication leaves subsequent generated maintenance pending.
+        # Transport refuses a dirty tree and checks the committed final tree.
+        remote = self.base / "remote.git"
+        run(["git", "init", "--bare", str(remote)], self.root)
+        run(["git", "push", str(remote), "HEAD:main"], self.root)
+        code, lines, stderr = self.unbake("publish", "--push", str(remote))
+        self.assertEqual((code, lines[-1]["status"]), (1, "held"), stderr)
+        self.assertEqual(lines[-1]["key"], "publish.push_dirty")
+        run(["git", "add", "-A"], self.root)
+        run(["git", "commit", "-qm", "Refresh generated files"], self.root)
+        code, lines, stderr = self.unbake("publish", "--push", str(remote))
+        self.assertEqual((code, lines[-1]["status"]), (0, "ok"), stderr)
+        final = run(["git", "rev-parse", "HEAD"], self.root).stdout.strip()
+        self.assertEqual(run(["git", "--git-dir", str(remote), "rev-parse", "main"], self.root).stdout.strip(), final)
         self.assertEqual(run(["git", "status", "--porcelain"], self.root).stdout.strip(), "")
 
     def test_publish_of_a_mismatch_writes_and_commits_nothing(self) -> None:
@@ -70,11 +88,21 @@ class ProjectFlowTests(FixtureCase):
         self.work("gamma", EXACT.format(name="gamma", value=3))
         code, lines, stderr = self.unbake("cycle", "--functions", "gamma", "--stop", "all-landed")
         self.assertEqual(code, 0, stderr)
-        names = [line["event"] for line in lines]
-        self.assertTrue(all(line["v"] == 2 for line in lines))
-        self.assertEqual([line["seq"] for line in lines], sorted(line["seq"] for line in lines))
+        self.assertEqual((lines[-1]["command"], lines[-1]["status"]), ("cycle", "ok"))
+        events = lines[:-1]
+        names = [line["event"] for line in events]
+        self.assertTrue(all(line["v"] == 2 for line in events))
+        self.assertEqual([line["seq"] for line in events], sorted(line["seq"] for line in events))
         for event in ("cycle.start", "fn.landed", "fn.committed", "cycle.end"):
             self.assertIn(event, names)
         self.assertLess(names.index("fn.landed"), names.index("fn.committed"))
-        self.assertEqual(lines[-1]["exit"], 0)
-        self.assertEqual(self.subjects()[0], "Match gamma")
+        self.assertEqual(events[-1]["exit"], 0)
+        committed = next(line for line in events if line["event"] == "fn.committed")
+        self.assertEqual(committed["message"], "Match gamma")
+        self.assertEqual(
+            run(["git", "show", f"{committed['commit']}:src/gamma.c"], self.root).stdout,
+            (self.root / "src/gamma.c").read_text(),
+        )
+        self.assertEqual(run(["git", "status", "--porcelain"], self.root).stdout.strip(), "")
+        code, lines, stderr = self.unbake("check")
+        self.assertEqual((code, lines[-1]["status"]), (0, "ok"), stderr)

@@ -76,6 +76,31 @@ class CanonicalProvidersTests(TempCase):
                 if unit != "func_80119C34":
                     self.assertIn(canonical, row.typedefs)
 
+    def test_import_insertion_keeps_existing_source_scope_and_retained_body(self):
+        from unbake.work import attempts
+
+        ownership = Map(32, (Group("owner", "main", "default", ("consumer",)),))
+        lookup = {"headers": {}, "symbols": {}}
+        for body in ('#include "authored.h"\nint consumer(void) {return 1;}\n', "int consumer(void) {return 1;}\n"):
+            with self.subTest(body=body):
+                before = attempts.guarded(body)
+                after = apply.rewrite(Path("consumer.c"), before, "consumer", ownership, lookup, previous=set())
+                retained = attempts.unguarded(after)
+                self.assertIn('#include "main/owner.h"\n', retained)
+                self.assertIn(body, retained)
+                self.assertTrue(after.startswith(attempts.FUZZY_PREFIX))
+                self.assertEqual(
+                    apply.rewrite(
+                        Path("consumer.c"),
+                        after,
+                        "consumer",
+                        ownership,
+                        {**lookup, "headers": {"main/owner.h": "hash"}},
+                        previous=set(),
+                    ),
+                    after,
+                )
+
     def test_staged_exports_replace_stale_symbols_and_import_the_separate_definition_home(self):
         old = {
             "schema": 1,

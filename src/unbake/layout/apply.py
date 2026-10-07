@@ -11,7 +11,7 @@ from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import pool
-from unbake.cdecl import SOURCE_TOKEN
+from unbake.cdecl import SOURCE_TOKEN, declaration_source
 from unbake.config import Held, Host, Project
 from unbake.layout import index, map, redeclarations
 from unbake.process import named as cause_named
@@ -71,16 +71,19 @@ def rewrite(
 
     def replace(match: re.Match[str]) -> str:
         nonlocal first
-        if match[1] not in previous and match[1] not in lookup["headers"]:
-            return match[0]
+        retained = match[0] if match[1] not in previous and match[1] not in lookup["headers"] else ""
         if first:
             first = False
-            return includes
-        return ""
+            return includes + retained
+        return retained
 
     result = _INCLUDE.sub(replace, text)
     if first:
-        result = includes + result
+        # Imports occupy the existing declaration scope. Prepending before a
+        # source's opening directives would move them outside that scope.
+        declaration = re.search(r"\S", declaration_source(result))
+        at = declaration.start() if declaration is not None else len(result)
+        result = result[:at] + includes + result[at:]
     return result
 
 

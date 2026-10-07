@@ -73,6 +73,23 @@ class ProviderReuseTests(ProjectCase):
         self.assertEqual(len(edits), 2)
         self.assertEqual(sum(edit.after.count("struct Shared_CallbackHook {") for edit in edits), 0)
 
+    def test_unchanged_transitive_alias_needs_declaration_proof_and_retains_unproved_negatives(self):
+        from unbake.fold import provider_reuse
+
+        view, contents = self.contents()
+        types = self.project.include[0] / "types.h"
+        edits = provider_reuse.plan(view, contents, ("us",))
+        self.assertEqual(len(edits), 2)
+        self.assertNotIn(types, {edit.path for edit in edits})
+        before = dict(contents)
+        for conditional in (
+            "#if VERSION\ntypedef unsigned int u32;\n#endif\n",
+            "#ifndef TYPES_H\n#define TYPES_H\n#else\ntypedef unsigned int u32;\n#endif\n",
+        ):
+            with self.subTest(conditional=conditional), self.assertRaises(Held):
+                provider_reuse.plan(view, {**contents, types: conditional}, ("us",))
+        self.assertEqual(contents, before)
+
     def test_layout_and_callback_conflicts_name_both_locations_without_edits(self):
         from unbake.fold import provider_reuse
 

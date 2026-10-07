@@ -11,6 +11,9 @@ versions = ["us", "us-rev1"]
 default_compiler = "ido-7.1"
 
 [version.us]
+cartridge_id = "NUBE"
+region = "USA"
+description = "Synthetic fixture, first body"
 baserom = "roms/baserom.us.z64"
 baserom_sha1 = "21758de98b69907bcac48b82f833f14833a5f7cc"
 split = "versions/us/fixture.yaml"
@@ -18,6 +21,9 @@ symbols = "versions/us/symbol_addrs.txt"
 macros = ["VERSION_US"]
 
 [version.us-rev1]
+cartridge_id = "NUBE"
+region = "USA"
+description = "Synthetic fixture, second body"
 baserom = "roms/baserom.us-rev1.z64"
 baserom_sha1 = "eafd5564f7042dd6128314aadcb802dbb9ff8cfa"
 split = "versions/us-rev1/fixture.yaml"

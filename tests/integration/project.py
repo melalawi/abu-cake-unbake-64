@@ -1,8 +1,8 @@
 """A tiny fixture project with fake tool scripts, a real git repo.
 
 The fake tools stand in for the cross toolchain: cpp passes text through, the compiler emits the three
-instruction words of `return N;`, as/n64link/objcopy copy bytes and ld (any --oformat) concatenates its inputs in
-command-line order. Make and git are the real ones.
+instruction words of `return N;` in explicit MIPS ELF32 tables. n64link copies the relocatable
+fixture object; ld and objcopy extract its .text bytes or produce a linked ELF. Make and git are the real ones.
 """
 
 import hashlib
@@ -22,6 +22,7 @@ from unbake.buildfiles import N64LINK_RELEASE
 FIXTURE = Path(__file__).resolve().parents[1] / "fixture"
 SRC = Path(__file__).resolve().parents[2] / "src"
 REPO = Path(__file__).resolve().parents[2]
+PYTHON_TOOL = f"#!{sys.executable}\nimport sys\nsys.path[:0] = {[str(SRC), str(REPO)]!r}\n"
 
 COPY = """#!/bin/sh
 # copy: the last two plain arguments are input and output
@@ -30,44 +31,108 @@ for a in "$@"; do prev="$last"; last="$a"; done
 cp "$prev" "$last"
 """
 N64LINK = (
-    f"#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s' '{N64LINK_RELEASE}'; exit 0; fi\n" + COPY.split("\n", 1)[1]
+    PYTHON_TOOL
+    + f"RELEASE = {N64LINK_RELEASE!r}\n"
+    + """import argparse, shutil, sys
+from unbake.objects.elf import Object
+if sys.argv[1:] == ["--version"]:
+    print(RELEASE, end="")
+    raise SystemExit(0)
+parser = argparse.ArgumentParser()
+parser.add_argument("command", choices=["place"])
+parser.add_argument("input")
+parser.add_argument("-o", required=True)
+parser.add_argument("--rom", required=True)
+parser.add_argument("--text", required=True)
+parser.add_argument("--map", action="append", default=[])
+parser.add_argument("--symbols", required=True)
+parser.add_argument("--trim", action="store_true")
+parser.add_argument("--score", action="store_true")
+args = parser.parse_args()
+Object(args.input)
+shutil.copyfile(args.input, args.o)
+"""
 )
-CC = """#!/bin/sh
-for arg in "$@"; do last="$arg"; done
-for arg in "$@"; do
-    if [ "$arg" = "-show" ]; then
-        printf '/usr/lib/cfe -D__sgi -I/usr/include %s -E -D_LANGUAGE_C -std\\n' "$last" >&2
-        exit 0
-    fi
-done
-# emit `li v0, N; jr ra; nop` for the first `return N;` in the input
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) in="$1"; shift ;; esac; done
-n=$(sed -n 's/.*return \\([0-9]*\\);.*/\\1/p' "$in" | head -1)
-printf "\\044\\002\\000\\\\$(printf %03o "$n")\\003\\340\\000\\010\\000\\000\\000\\000" > "$out"
+CC = (
+    PYTHON_TOOL
+    + r"""import os, re, shlex, struct, subprocess, sys
+from pathlib import Path
+from tests.elf_fixture import write_object
+args = sys.argv[1:]
+source = args[-1]
+if "-show" in args:
+    print(f"/usr/lib/cfe -D__sgi -I/usr/include {source} -E -D_LANGUAGE_C -std", file=sys.stderr)
+    raise SystemExit(0)
+if "-E" in args or "-M" in args:
+    flags = [a for a in args if a.startswith(("-I", "-D", "-U")) or a in ("-E", "-M", "-P")]
+    if "-M" in args:
+        output = subprocess.check_output(["/usr/bin/cpp", *flags, source], text=True)
+        target, _, names = output.replace("\\\n", " ").partition(":")
+        for name in shlex.split(names):
+            print(f"{target}: {name}")
+        raise SystemExit(0)
+    os.execv("/usr/bin/cpp", ["cpp", *flags, source])
+out_at = args.index("-o")
+out = args[out_at + 1]
+source = next(a for i, a in enumerate(args) if not a.startswith("-") and i != out_at + 1)
+text = Path(source).read_text()
+function = re.search(r"(\w+)\s*\([^)]*\)\s*\{\s*return\s+(\d+);", text)
+if function is None:
+    raise SystemExit("fixture compiler: expected an integer-return function")
+name, value = function.groups()
+code = struct.pack(">3I", 0x24020000 | int(value), 0x03E00008, 0)
+write_object(Path(out), {".text": code}, [(name, ".text", 0, len(code))])
 """
-LD = """#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in
-  -o) out="$2"; shift 2 ;;
-  -T|-Map|--defsym|--oformat) shift 2 ;;
-  -*) shift ;;
-  *) files="$files $1"; shift ;;
-esac; done
-cat $files > "$out"
+)
+LD = (
+    PYTHON_TOOL
+    + """import sys
+from pathlib import Path
+from tests.elf_fixture import linked_fixture
+from unbake.objects.elf import Object
+args = iter(sys.argv[1:])
+files, binary, address = [], False, 0
+for arg in args:
+    if arg == "-o":
+        out = Path(next(args))
+    elif arg == "--oformat":
+        binary = next(args) == "binary"
+    elif arg in ("-T", "-Map", "--defsym"):
+        next(args)
+    elif arg.startswith("--section-start=.text="):
+        address = int(arg.split("=", 2)[2], 0)
+    elif not arg.startswith("-"):
+        files.append(Path(arg))
+if binary:
+    out.write_bytes(b"".join(Object(p).content(Object(p).section(".text")) for p in files))
+else:
+    linked_fixture(out, files, {".text": address})
 """
-OBJCOPY = """#!/bin/sh
-while [ $# -gt 0 ]; do case "$1" in
-  -I|-O|--rename-section|--pad-to|--gap-fill) shift 2 ;;
-  -*) shift ;;
-  *) files="$files $1"; shift ;;
-esac; done
-set -- $files
-cp "$1" "$2"
+)
+OBJCOPY = (
+    PYTHON_TOOL
+    + """import sys
+from pathlib import Path
+from unbake.objects.elf import Object
+args = iter(sys.argv[1:])
+files, section = [], ".text"
+for arg in args:
+    if arg == "-j":
+        section = next(args)
+    elif arg in ("-I", "-O", "--rename-section", "--pad-to", "--gap-fill"):
+        next(args)
+    elif not arg.startswith("-"):
+        files.append(Path(arg))
+obj = Object(files[0])
+index = obj.section(section)
+if index is None:
+    raise SystemExit(f"fixture objcopy: missing {section}")
+files[1].write_bytes(obj.content(index))
 """
+)
 OBJDIFF = "#!/bin/sh\nexit 0\n"
 SPLAT = (
-    "#!"
-    + sys.executable
-    + "\n"
+    PYTHON_TOOL
     + """import csv, json, struct, sys
 from pathlib import Path
 from tests.project_fixture import assembly
@@ -133,12 +198,18 @@ class FixtureCase(unittest.TestCase):
         self.base, self.root = base, base / "project"
         shutil.copytree(FIXTURE, self.root, ignore=shutil.ignore_patterns("__pycache__", "__init__.py", "make_rom.py"))
         make_rom.write_roms(self.root)
+        # These input C files are draft proposals, with assembly still owning
+        # every build row. Keep them outside the retained-source inventory.
+        for source in (self.root / "src").glob("*.c"):
+            proposal = self.root / "build" / "work" / source.stem / source.name
+            proposal.parent.mkdir(parents=True, exist_ok=True)
+            source.rename(proposal)
         self.install_tools()
         self.write_host()
         ignore = self.root / ".gitignore"
         ignore.write_text(
             (ignore.read_text() if ignore.exists() else "")
-            + "\n/roms/\n/build/\n/tools/ido-7.1/\n/tools/.downloads/\n/.attempts.lock\n"
+            + "\n/roms/\n/build/\n/asm/\n/.splat/\n/.unbake/\n/tools/ido-7.1/\n/tools/.downloads/\n/.attempts.lock\n"
         )
         self.init_git()
 

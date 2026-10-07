@@ -31,8 +31,12 @@ class SharedConsumerTests(ProjectCase):
                 text = path.read_text().replace("alpha", FUNCTION).replace("beta", CONSUMER)
                 if path.suffix == ".yaml":
                     text = text.replace("name: main", "name: span_1000")
+                    text = re.sub(r"vram: 0x[0-9A-Fa-f]+", "vram: 0x8007EBA0", text)
                     text = text.replace(f"asm, {FUNCTION}", f"c, {FUNCTION}")
                     text = text.replace(f"asm, {CONSUMER}", f"c, {CONSUMER}")
+                else:
+                    for index, name in enumerate((FUNCTION, CONSUMER, "gamma")):
+                        text = re.sub(rf"{name} = 0x[0-9A-Fa-f]+", f"{name} = 0x{0x8007EBA0 + index * 12:X}", text)
                 path.write_text(text)
         (self.project.root / "layout.toml").write_bytes(
             ownership.encoded(

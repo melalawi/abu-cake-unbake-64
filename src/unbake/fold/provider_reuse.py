@@ -80,14 +80,17 @@ def _catalog(text: str) -> Catalog:
                 guard = None
             else:
                 start = stack.pop()
-                if stack:
+                if stack or guard is None:
                     conditional.append((start, directive.end()))
                 elif directive is not significant[-1]:
                     guard = None
         elif directive_kind in {"define", "undef"}:
             if match := re.match(r"\w+", argument):
                 macros.add(match[0])
-        elif directive_kind not in {"else", "elif"}:
+        elif directive_kind in {"else", "elif"}:
+            if len(stack) <= 1:
+                guard = None
+        else:
             unknown = True
     if stack:
         guard = None
@@ -228,7 +231,7 @@ def plan(
             for name in sorted(pending):
                 rows = typedefs[name]
                 checked.add(name)
-                if any(not catalogs[home].proved("alias", name) for home, _ in rows):
+                if any(("alias", name) in catalogs[home].unproved for home, _ in rows):
                     _refuse(
                         project,
                         contents,
