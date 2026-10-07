@@ -33,10 +33,30 @@ _IDENTIFIER = re.compile(r"[A-Za-z_]\w*\Z")
 _SCALARS = set(["void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "_Bool", "_Complex"])
 _QUALIFIERS = set(["const", "volatile", "restrict", "__restrict", "__restrict__"])
 _STORAGE = set(["typedef", "extern", "static", "auto", "register", "inline", "__inline", "__inline__", "__extension__"])
+_INLINE_DECORATIONS = {"inline", "__inline", "__inline__", "__extension__"}
 
 
 def declaration_source(source: str) -> str:
     """Hide comments and complete logical directives without moving edit offsets."""
+    return _declaration_source(source)
+
+
+def declaration_context(source: str) -> tuple[str, frozenset[str]]:
+    """Clean source and collect locally proven, declaration-neutral inline macros.
+
+    Every definition must be object-like and expand only to inline decorations
+    or nothing. Unevaluated branches can differ between those spellings; type,
+    linkage, function-like and undefined macros remain visible to the parser.
+    The original source and its offsets are never expanded or rewritten.
+    """
+    decorations: set[str] = set()
+    clean = _declaration_source(source, decorations)
+    return clean, frozenset(decorations)
+
+
+def _declaration_source(source: str, decorations: set[str] | None = None) -> str:
+    blocked: set[str] = set()
+    first_definition: dict[str, int] = {}
 
     def blank(match: re.Match[str]) -> str:
         return "".join("\n" if char == "\n" else " " for char in match[0])
@@ -47,7 +67,31 @@ def declaration_source(source: str) -> str:
         source,
         flags=re.S,
     )
-    return re.sub(r"^[ \t]*#(?:\\\n|[^\n])*", blank, source, flags=re.M)
+
+    def directive(match: re.Match[str]) -> str:
+        if decorations is not None:
+            definition = re.match(r"#\s*(define|undef)\s+([A-Za-z_]\w*)(.*)", match[0].lstrip(), re.S)
+            if definition:
+                kind, name, body = definition.groups()
+                first_definition.setdefault(name, match.end())
+                if kind == "undef" or body.startswith("("):
+                    blocked.add(name)
+                elif all(token in _INLINE_DECORATIONS for token in NAME_TOKEN.findall(re.sub(r"\\\n", "", body))):
+                    decorations.add(name)
+                else:
+                    blocked.add(name)
+        return blank(match)
+
+    clean = re.sub(r"^[ \t]*#(?:\\\n|[^\n])*", directive, source, flags=re.M)
+    if decorations is not None:
+        decorations.difference_update(blocked)
+        # A later definition cannot retroactively qualify an earlier declaration.
+        if decorations:
+            for token in NAME_TOKEN.finditer(clean):
+                if token[0] in decorations and token.start() < first_definition[token[0]]:
+                    blocked.add(token[0])
+            decorations.difference_update(blocked)
+    return clean
 
 
 def attribute_source(source: str) -> str:
@@ -99,8 +143,13 @@ class NameParser:
     belong to different positions and cannot become type providers or uses.
     """
 
-    def __init__(self, source: str) -> None:
-        source = re.sub(r"\\\n", "", attribute_source(declaration_source(source)))
+    def __init__(self, source: str, *, decorations: frozenset[str] | None = None) -> None:
+        if decorations is None:
+            source, self.decorations = declaration_context(source)
+        else:
+            self.decorations = decorations
+            source = declaration_source(source)
+        source = re.sub(r"\\\n", "", attribute_source(source))
         self.tokens = NAME_TOKEN.findall(source)
         self.index = 0
         self.result = Declarations()
@@ -127,7 +176,7 @@ class NameParser:
     def specifiers(self) -> tuple[str, str]:
         referenced_tag = ""
         referenced_alias = ""
-        while self.peek() in _QUALIFIERS:
+        while self.peek() in _QUALIFIERS | self.decorations:
             self.take()
         if self.peek() in ("struct", "union", "enum"):
             kind = self.take()
@@ -146,7 +195,7 @@ class NameParser:
             elif kind != "enum":
                 referenced_tag = tag
         elif self.peek() in _SCALARS:
-            while self.peek() in _SCALARS | _QUALIFIERS:
+            while self.peek() in _SCALARS | _QUALIFIERS | self.decorations:
                 self.take()
         else:
             name = self.take()
@@ -154,7 +203,7 @@ class NameParser:
                 raise Held("m2c", f"header declaration: expected type, found {name!r}")
             self.result.uses.add(name)
             referenced_alias = name
-        while self.peek() in _QUALIFIERS:
+        while self.peek() in _QUALIFIERS | self.decorations:
             self.take()
 
         return referenced_tag, referenced_alias
@@ -164,7 +213,7 @@ class NameParser:
         while self.peek() == "*":
             pointer = True
             self.take()
-            while self.peek() in _QUALIFIERS:
+            while self.peek() in _QUALIFIERS | self.decorations:
                 self.take()
         name = ""
         # Parentheses group a declarator; suffix parentheses contain parameters.
@@ -188,7 +237,7 @@ class NameParser:
                     if self.peek() == "...":
                         self.take()
                     else:
-                        while self.peek() in _STORAGE:
+                        while self.peek() in _STORAGE | self.decorations:
                             self.take()
                         tag, alias = self.specifiers()
                         _, indirect = self.declarator(abstract=True)
@@ -204,8 +253,10 @@ class NameParser:
 
     def declaration(self, *, external: bool = False) -> None:
         storage = set()
-        while self.peek() in _STORAGE | _QUALIFIERS:
-            storage.add(self.take())
+        while self.peek() in _STORAGE | _QUALIFIERS | self.decorations:
+            token = self.take()
+            if token not in self.decorations:
+                storage.add(token)
         tag, alias = self.specifiers()
         if self.peek() == ";":
             self.take()

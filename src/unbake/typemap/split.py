@@ -8,7 +8,7 @@ from pathlib import Path
 
 from unbake import cache as retention
 from unbake.cache import memo
-from unbake.cdecl import SOURCE_TOKEN, NameParser, declaration_source
+from unbake.cdecl import SOURCE_TOKEN, NameParser, declaration_context, declaration_source
 from unbake.config import Held
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
@@ -65,16 +65,17 @@ def statements(text: str) -> tuple[str, ...]:
     )
 
 
-def _function_body(prefix: str) -> bool:
+def _function_body(prefix: str, decorations: frozenset[str]) -> bool:
     """Let the declaration parser distinguish a body from an aggregate/initializer."""
     try:
-        row = NameParser(prefix + " {}").parse()
+        row = NameParser(prefix + " {}", decorations=decorations).parse()
     except Held:
         return False
     return bool(row.declared) and not row.typedefs
 
 
 def _split(text: str) -> tuple[str, ...]:
+    _, decorations = declaration_context(text)
     tokens = SOURCE_TOKEN.finditer(text)
     directives = re.finditer(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M)
     events = sorted([(m.start(), "token", m) for m in tokens] + [(m.start(), "directive", m) for m in directives])
@@ -119,7 +120,7 @@ def _split(text: str) -> tuple[str, ...]:
         boundary = False
         if token in pairs:
             if token == "{" and not stack:
-                function = previous == ")" and _function_body(text[declaration:offset])
+                function = previous == ")" and _function_body(text[declaration:offset], decorations)
             stack.append(pairs[token])
         elif token in pairs.values():
             if not stack or stack.pop() != token:
