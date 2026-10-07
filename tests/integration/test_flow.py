@@ -68,7 +68,7 @@ class ProjectFlowTests(FixtureCase):
         code, lines, stderr = self.unbake("cycle", "--functions", "gamma", "--stop", "all-landed")
         self.assertEqual(code, 0, stderr)
         names = [line["event"] for line in lines]
-        self.assertTrue(all(line["v"] == 1 for line in lines))
+        self.assertTrue(all(line["v"] == 2 for line in lines))
         self.assertEqual([line["seq"] for line in lines], sorted(line["seq"] for line in lines))
         for event in ("cycle.start", "fn.landed", "fn.committed", "cycle.end"):
             self.assertIn(event, names)

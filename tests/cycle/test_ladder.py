@@ -27,7 +27,9 @@ class LadderTests(unittest.TestCase):
             ladder.Ladder(skipped={"types": "n/a", "registers": "n/a"}, tried={"order": 1.0}).next_method(), "permute"
         )
         self.assertIsNone(
-            ladder.Ladder(skipped={"types": "n/a", "registers": "n/a", "order": "n/a", "permute": "n/a"}).next_method()
+            ladder.Ladder(
+                skipped={"types": "n/a", "registers": "n/a", "order": "n/a", "permute": "n/a", "scheduler-birth": "n/a"}
+            ).next_method()
         )
 
     def test_only_a_strictly_higher_percent_is_a_gain(self) -> None:

@@ -19,7 +19,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from unbake import pool, tui
+from unbake import atomic, pool, tui
 from unbake.config import Host
 from unbake.typemap import evidence, shards, storage
 
@@ -381,7 +381,7 @@ def _function_ops(shared: Any, job: tuple[list[str], Path]) -> Path:
     overwrites its own incomplete file; the caller owns the directory until every result has been replayed.
     """
     names, path = job
-    with path.open("wb") as output:
+    with atomic.stream(path, "wb", durable=False) as output:
         for row in _function_rows(shared, names):
             pickle.dump(row, output, protocol=5)
         pickle.dump(None, output, protocol=5)

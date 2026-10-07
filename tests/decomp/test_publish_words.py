@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.kit import TempCase
+from tests.project_fixture import ProjectCase
 from unbake import land
 from unbake.config import Held
 from unbake.cycle import engine
@@ -20,9 +21,9 @@ def attempt(sha: str, *, percents: dict[str, float], exact: bool, best: float | 
     return attempts.Attempt("t", "alpha", sha, 8, versions, best or min(percents.values()), exact, 0.1, "ido-7.1")
 
 
-class ExactAttemptTests(TempCase):
+class ExactAttemptTests(ProjectCase):
     def test_every_way_a_publish_is_refused_or_allowed(self) -> None:
-        file = self.root / "alpha.c"
+        file = self.project.src / "alpha.c"
         asm = 'int alpha(void) { __asm__("nop"); }\n'
         cases = [
             (
@@ -57,12 +58,15 @@ class ExactAttemptTests(TempCase):
         for label, text, build, refusal in cases:
             file.write_text(text)
             log = build(hashlib.sha256(text.encode()).hexdigest())
-            with self.subTest(label), patch.object(attempts, "read", return_value=log):
+            with (
+                self.subTest(label),
+                patch.object(attempts, "ledger", return_value=SimpleNamespace(history=lambda function, rows=log: rows)),
+            ):
                 if refusal is None:
-                    self.assertIs(land.exact_attempt(SimpleNamespace(), "alpha", file), log[-1])
+                    self.assertIs(land.exact_attempt(self.project, "alpha", file), log[-1])
                 else:
                     with self.assertRaisesRegex(Held, refusal):
-                        land.exact_attempt(SimpleNamespace(), "alpha", file)
+                        land.exact_attempt(self.project, "alpha", file)
 
 
 class RuleTests(TempCase):

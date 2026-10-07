@@ -7,6 +7,7 @@ from unittest.mock import patch
 from tests.project_fixture import ProjectCase
 from unbake.config import Held
 from unbake.process import named
+from unbake.typemap import database
 from unbake.work import draft
 
 
@@ -15,10 +16,11 @@ class DraftFileTests(ProjectCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(draft.exclusions, "load", return_value=set()))
             stack.enter_context(patch.object(draft.split, "holding_versions", return_value=("us",)))
-            stack.enter_context(patch.object(draft.type_context, "snapshot", return_value=("d", "")))
+            stack.enter_context(patch.object(database, "digest", return_value="d"))
+            stack.enter_context(patch.object(database, "context", return_value=""))
             stack.enter_context(patch.object(draft.extract, "directory", return_value=self.root))
             stack.enter_context(patch.object(draft.m2c, "draft", side_effect=m2c_draft))
-            return draft.draft(self.project, self.host, "alpha", replace=False).file
+            return draft.draft(self.project, self.host, "alpha", replace=False, expected_output=None).file
 
     def test_proved_draft_is_written_with_its_include_directory(self) -> None:
         file = self.run_draft(lambda *args, **kwargs: "int alpha(void) { return 0; }\n")
@@ -37,7 +39,7 @@ class DraftFileTests(ProjectCase):
         with self.assertRaises(Held) as raised:
             self.run_draft(unproven)
         file = self.project.work / "alpha" / "alpha.c"
-        self.assertEqual(raised.exception.key, "draft.unproven")
+        self.assertEqual(raised.exception.key, "alpha")
         self.assertIn("too few arguments", raised.exception.reason)
         self.assertEqual(file.read_text(), "int alpha(void) { return f(); }\n")
         self.assertFalse((file.parent / ".m2c").exists())
@@ -69,7 +71,7 @@ class DraftFileTests(ProjectCase):
             private = self.project.work / "alpha/include"
             private.mkdir(parents=True)
             (private / "stale.h").write_text("stale")
-            made = draft.draft(self.project, self.host, "alpha", replace=True)
+            made = draft.draft(self.project, self.host, "alpha", replace=True, expected_output=None)
             text = made.file.read_text()
         self.assertFalse((private / "stale.h").exists())
         self.assertIsNotNone(text)

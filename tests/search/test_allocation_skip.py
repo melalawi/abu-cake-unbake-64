@@ -18,7 +18,7 @@ class AllocationSkip(unittest.TestCase):
             source = root / "f.c"
             source.write_text("int f(void) { return 0; }\n")
             trial = SimpleNamespace(
-                compares={"us": SimpleNamespace(identical=3)},
+                compares={"us": SimpleNamespace(identical_words=3)},
                 identical_everywhere=False,
                 source_sha256="a",
                 best_percent=75.0,

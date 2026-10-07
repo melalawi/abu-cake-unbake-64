@@ -678,7 +678,7 @@ def prove(
         mirror = include / path.relative_to(root)
         if path.is_file() and not mirror.exists():
             mirror.parent.mkdir(parents=True, exist_ok=True)
-            mirror.symlink_to(path)
+            atomic_files.copyfile(path, mirror)
     file = stage / "src" / f"{function}.c"
     atomic_files.text(file, source)
     view = replace(project, work_include=(include,))

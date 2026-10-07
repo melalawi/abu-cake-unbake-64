@@ -52,6 +52,9 @@ class PublicMembershipTests(ProjectCase):
         self.layout = self.project.root / "layout.toml"
         self.layout.write_text(toml.dumps(self.payload["layout"]))
         self.project = config.load(self.project.root)
+        for compiler in self.project.compilers.values():
+            compiler.cc.parent.mkdir(parents=True, exist_ok=True)
+            compiler.cc.write_bytes(b"fixture compiler identity")
         self.files = {}
         for function, data in self.payload["drafts"].items():
             path = self.project.work / function / (function + ".c")
@@ -109,7 +112,7 @@ class PublicMembershipTests(ProjectCase):
         def declared(project, host, function, source, versions, **kwargs):
             # Real fold/view has already loaded the map; only the full type solver is replaced.
             self.folds.append((function, layout_map.load(project).owners))
-            return [split.Edit(project.src / (function + ".c"), "", source, versions)]
+            return declarations.Edits([split.Edit(project.src / (function + ".c"), "", source, versions)], None)
 
         with (
             patch.object(layout_map, "ensure", wraps=layout_map.ensure) as admit,

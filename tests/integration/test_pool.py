@@ -36,7 +36,7 @@ class PoolTests(unittest.TestCase):
     def test_second_crash_raises_task_failed_naming_the_item(self) -> None:
         with make_pool(self.scratch) as workers_pool, self.assertRaises(pool.TaskFailed) as raised:
             list(workers_pool.map(workers.crash_always, [1, 2]))
-        self.assertIn("worker.crash", str(raised.exception))
+        self.assertEqual(raised.exception.key, "worker.crash")
 
     def test_recycle_constant_is_explicit(self) -> None:
         self.assertEqual(pool.RECYCLE_AFTER, 64)

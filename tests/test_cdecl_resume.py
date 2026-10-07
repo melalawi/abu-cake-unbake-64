@@ -4,7 +4,7 @@ import unittest
 
 from unbake import cache, cdecl, prefixes
 
-PREFIX = "".join(f"int a{i};\n" for i in range(700))
+PREFIX = "".join(f"int retained_prefix_declaration_{i};\n" for i in range(180))
 
 
 def places(tree) -> list[tuple[str, str, int]]:  # type: ignore[no-untyped-def]
@@ -31,7 +31,13 @@ class ResumedParseTests(unittest.TestCase):
                 cdecl.resumable_parse(first, {})
                 resumed = cdecl.resumable_parse(second, {})
                 self.assertEqual(places(resumed), places(cdecl.parser({}).parse(second)))
-                self.assertTrue(cache.retained("prefixes"), "the second parse must resume from the kept prefix")
+                if not first.startswith("#"):
+                    self.assertTrue(cache.retained("prefixes"), "the second parse must resume from the kept prefix")
+                else:
+                    self.assertTrue(
+                        all(not store.states for _, store in cache.retained("prefixes")),
+                        "line directives are checkpoint barriers",
+                    )
 
     def test_the_marker_names_the_last_file_and_the_resumed_line(self) -> None:
         text = '# 3 "a.h"\nint a;\nint b;\n'

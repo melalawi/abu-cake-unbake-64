@@ -18,7 +18,7 @@ class CatalogueDirectoryTests(ProjectCase):
         (self.project.include[0] / "gbi.h").write_text(SDK)
         project = replace(self.project, unit_flags={"alpha": ("-imacros", "flags.h")})
 
-        def cpp(command, work, phase):
+        def cpp(command, work, phase, *, temporary_root=None):
             if "-imacros" not in command:
                 return "#define __STDC__ 1\n"
             forced = command[command.index("-imacros") + 1]

@@ -13,6 +13,7 @@ from unbake.fold import declarations, provider_reuse
 from unbake.layout import map as layout_map
 from unbake.layout import split
 from unbake.layout.header_context import Headers
+from unbake.process import named
 from unbake.project.headers import include_headers
 from unbake.work import compare
 
@@ -148,15 +149,19 @@ class ProviderSemanticTests(ProjectCase):
         original = original.replace('#include "types.h"', '#include "types.h"\n#include "span/owner.h"')
         self.private.write_text(original)
         with (
-            patch.object(runner, "compile_unit", side_effect=Held("compile", "compile.fixture_reached")) as native,
+            patch.object(
+                runner,
+                "compile_unit",
+                side_effect=Held(
+                    named("compile.fixture_reached", "compile.fixture_reached", owner="fixture", stage="compile")
+                ),
+            ) as native,
             patch.object(compare, "view_for", return_value=self.view),
         ):
             measured = compare.measure(self.project, self.host, self.source)
         self.assertEqual(native.call_count, 5)
         self.assertEqual(set(measured.faults), set(self.versions))
-        self.assertTrue(
-            all(fault["chain"][0]["key"] == "compile.fixture_reached" for fault in measured.faults.values())
-        )
+        self.assertTrue(all(fault["cause"]["key"] == "compile.fixture_reached" for fault in measured.faults.values()))
 
     def test_real_semantic_fallback_parses_each_needed_declaration_once_without_io(self):
         from unbake import cdecl

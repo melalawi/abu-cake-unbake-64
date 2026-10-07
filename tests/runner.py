@@ -2,6 +2,8 @@
 
 import io
 import json
+import multiprocessing.process
+import multiprocessing.util
 import os
 import signal
 import struct
@@ -63,6 +65,8 @@ class Runner:
     def run(self, suite):
         global _ACTIVE
         tests = list(cases(suite))
+        if not tests:
+            raise AssertionError("test selection is empty")
         workers = min(24, 2 * (os.cpu_count() or 1), len(tests))
         if workers <= 1 or os.environ.get("UNIT_TEST_WORKERS") == "1":
             return unittest.TextTestRunner(
@@ -151,10 +155,12 @@ def main():
     sys.addaudithook(audit)
     with (
         patch.object(subprocess, "Popen", side_effect=forbidden),
+        patch.object(multiprocessing.process.BaseProcess, "start", side_effect=forbidden),
+        patch.object(multiprocessing.util, "spawnv_passfds", side_effect=forbidden),
         patch.object(os, "fsync"),
     ):
         # Unit fixtures verify writes and publication; disk durability is an OS service.
-        unittest.main(module=None, defaultTest="discover", testRunner=Runner)
+        unittest.main(module=None, defaultTest="discover", testRunner=Runner, verbosity=2)
 
 
 if __name__ == "__main__":

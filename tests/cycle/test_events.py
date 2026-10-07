@@ -18,7 +18,7 @@ REQUIRED = {
     "fn.search.done": "function method ok seconds",
     "fn.creative": "function best_percent methods trouble",
     "fn.exact": "function bytes sha256",
-    "fn.landed": "function bytes versions seconds retried",
+    "fn.landed": "function bytes versions seconds",
     "fn.fuzzy_landed": "function bytes versions commit best_percent",
     "fn.land_failed": "function versions diagnostic returned_to_worker",
     "fn.committed": "function commit message",
@@ -91,7 +91,7 @@ class EventTests(unittest.TestCase):
             emitter.emit("fn.exact", function="alpha")
         lines = [json.loads(line) for line in stream.getvalue().splitlines()]
         self.assertEqual(
-            [(r["v"], r["seq"], r["event"]) for r in lines], [(1, 1, "fn.draft.start"), (1, 2, "fn.exact")]
+            [(r["v"], r["seq"], r["event"]) for r in lines], [(2, 1, "fn.draft.start"), (2, 2, "fn.exact")]
         )
         self.assertTrue(all(r["t"] for r in lines))
 

@@ -27,7 +27,11 @@ class MembersTests(unittest.TestCase):
             ),
             "asm and single-function rows pass through": (
                 [ASM_WITH_ENTRY, PLAIN],
-                [(r.name, r.start, r.end, r.address, r.aliases) for r in (ASM_WITH_ENTRY, PLAIN)],
+                [
+                    ("g", 0x140, 0x148, 0x80001040, ("g",)),
+                    ("g_inner", 0x148, 0x160, 0x80001048, ("g_inner",)),
+                    ("h", 0x160, 0x170, 0x80001060, ("h",)),
+                ],
             ),
         }
         for name, (rows, expected) in cases.items():

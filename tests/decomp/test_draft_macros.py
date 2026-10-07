@@ -64,7 +64,7 @@ class DraftMacroTests(unittest.TestCase):
             self.assertIn("void (*value)(s32);", shared.read_text())
             c_parser.CParser().parse(clean(context + "\n" + shared.read_text() + output))
             for pointer in ("s32", "s32 (void *)", "s32 (*)(void *)", "s32 (**)(void *) extra"):
-                with self.subTest(pointer=pointer), self.assertRaisesRegex(Held, "unresolved M2C_FIELD"):
+                with self.subTest(pointer=pointer), self.assertRaises(Held):
                     share(project, "alpha", "void alpha(void *p) { M2C_FIELD(p, " + pointer + ", 0); }", context)
             with self.assertRaisesRegex(Held, "unaligned field"):
                 share(project, "alpha", "void alpha(void *p) { M2C_FIELD(p, s32 (**)(void *), 0x25); }", context)

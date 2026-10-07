@@ -204,6 +204,7 @@ class FoldTests(unittest.TestCase):
                     macros=(), split=root / (version + ".yaml"), symbols=root / (version + ".txt")
                 ),
                 src=root / "src",
+                build=root / "build",
             )
             policy = SimpleNamespace(cpp=Path("fixture-cpp"))
             pending = [

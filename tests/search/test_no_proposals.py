@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from unbake.config import Held
 from unbake.search import core
 
 
@@ -24,7 +23,7 @@ class NoProposals(unittest.TestCase):
             root = Path(directory)
             source = root / "f.c"
             source.write_text("int f(void) { return 0; }\n")
-            compare = SimpleNamespace(identical=3)
+            compare = SimpleNamespace(identical_words=3)
             trial = SimpleNamespace(
                 compares={"us": compare},
                 identical_everywhere=False,
@@ -55,17 +54,17 @@ class NoProposals(unittest.TestCase):
 
     def test_nothing_proposed_within_budget_returns_the_start(self) -> None:
         result = self.run_core(30.0)
-        self.assertEqual(result.score, 3)
+        self.assertEqual(result.trial.compares["us"].identical_words, 3)
         self.assertEqual(result.trial.source_sha256, "a")
 
-    def test_an_exhausted_budget_is_still_refused(self) -> None:
-        # The clock jumps past the budget once the starting source is measured.
+    def test_no_mutation_budget_returns_the_measured_baseline(self) -> None:
+        # Baseline/context setup has its own clock scope; an expired mutation
+        # budget still returns that measured baseline with zero mutations.
         ticks = iter(range(10_000))
-        with (
-            patch.object(core.time, "monotonic", lambda: next(ticks) * 100.0),
-            self.assertRaisesRegex(Held, "zero mutations evaluated"),
-        ):
-            self.run_core(5.0)
+        with patch.object(core.time, "monotonic", lambda: next(ticks) * 100.0):
+            result = self.run_core(5.0)
+        self.assertEqual(result.trials, 1)
+        self.assertEqual(result.trial.source_sha256, "a")
 
 
 if __name__ == "__main__":

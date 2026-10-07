@@ -57,11 +57,9 @@ def resident_peak() -> int:
 def _reset_peak() -> None:
     # A kernel control write (resets VmHWM to the current RSS), not a file the tool publishes.
     with contextlib.suppress(OSError):
-        descriptor = os.open("/proc/self/clear_refs", os.O_WRONLY)
-        try:
-            os.write(descriptor, b"5")
-        finally:
-            os.close(descriptor)
+        from unbake import atomic
+
+        atomic.control(Path("/proc/self/clear_refs"), b"5")
 
 
 def window() -> None:

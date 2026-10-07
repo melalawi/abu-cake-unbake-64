@@ -97,7 +97,7 @@ class HeaderContextTests(unittest.TestCase):
                         root=Path("/p"),
                     )
                 self.assertIn("duplicate definition", caught.exception.reason)
-                self.assertIn("providers: a.h:1, b.h:2", caught.exception.reason)
+                self.assertIn("providers: a.h:1, b.h:2", str(caught.exception.fault.document()))
 
     def test_split_alias_and_definition_have_distinct_homes_and_value_order(self):
         root = Path("/p")

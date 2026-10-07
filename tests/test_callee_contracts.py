@@ -97,7 +97,7 @@ class CalleeContractTests(unittest.TestCase):
                 scalar: "typedef unsigned long long u64;\n",
             }
             headers = Headers(contents, root=include)
-            project = SimpleNamespace(root=root, include=(include,))
+            project = SimpleNamespace(root=root, include=(include,), src=root / "src", cache=root / "cache")
             manifest = {"headers": {"span/code.h": "0" * 64}}
             with (
                 patch("unbake.typemap.types_db.path", return_value=database),
@@ -124,7 +124,7 @@ class CalleeContractTests(unittest.TestCase):
             database = root / "types.sqlite"
             database.touch()
             headers = Headers({root / "span/code.h": GENERATED, root / "menu_render.h": AUTHORED}, root=root)
-            project = SimpleNamespace(root=root, include=(root,))
+            project = SimpleNamespace(root=root, include=(root,), src=root / "src", cache=root / "cache")
             with (
                 patch("unbake.typemap.types_db.path", return_value=database),
                 patch("unbake.typemap.types_db.entries") as read,

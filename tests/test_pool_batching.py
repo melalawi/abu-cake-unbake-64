@@ -71,7 +71,7 @@ class MemoryFailure(unittest.TestCase):
             self.assertRaises(pool.TaskFailed) as raised,
         ):
             list(workers.map(double, ["batch-first"]))
-        self.assertEqual(fresh.call_count, 1)
+        self.assertEqual(fresh.call_count, 0)
         self.assertIn("actual.c", raised.exception.reason)
         self.assertNotIn("batch-first", raised.exception.reason)
         self.assertEqual(fault_evidence(raised.exception.fault)["configured_cap_bytes"], 512_000_000)
@@ -89,7 +89,7 @@ class MemoryFailure(unittest.TestCase):
             self.assertRaises(pool.TaskFailed) as raised,
         ):
             list(workers.map(double, [1]))
-        self.assertIn("worker.crash", str(raised.exception))
+        self.assertEqual(raised.exception.fault.cause.key, "worker.crash")
         self.assertNotIn("peak", str(raised.exception))
 
 

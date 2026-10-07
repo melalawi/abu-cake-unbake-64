@@ -1,18 +1,19 @@
 """Imported sources use installed split and SDK providers, without body edits."""
 
-from pathlib import Path
+import re
 from types import SimpleNamespace
-from unittest import TestCase
 from unittest.mock import patch
 
+from tests.kit import TempCase
 from tests.project_fixture import ProjectCase
 from unbake.fold import declarations, imports
 from unbake.layout.header_context import Headers
 
 
-class ImportTests(TestCase):
+class ImportTests(TempCase):
     def test_consumer_prerequisites(self):
-        root = Path("/project/include")
+        root = self.root / "include"
+        root.mkdir()
         bodies = {
             "types.h": "typedef unsigned int u32;\n",
             "shared/types/record.h": "typedef struct Record { int value; } Record;\n",
@@ -30,7 +31,13 @@ class ImportTests(TestCase):
             "shared/consumers/other.h": '#include "shared/record.h"\n',
         }
         context = SimpleNamespace(texts={root / p: s for p, s in bodies.items()})
-        project = SimpleNamespace(include=(root,), build=Path("/project/build"))
+        project = SimpleNamespace(
+            include=(root,), build=self.root / "build", src=self.root / "src", cache=self.root / "cache"
+        )
+        for relative, text in bodies.items():
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
         old_lookup = {"headers": dict.fromkeys(("shared/old/session.h", "shared/typemap.h", "shared/old.h"), "a" * 64)}
         mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
         mock_index.start()
@@ -94,8 +101,14 @@ class ImportTests(TestCase):
         for label, prefix, body, expected in cases:
             with self.subTest(label=label):
                 result = imports.resolve(project, context, prefix + body, "alpha")
-                added = set(imports._INCLUDE.findall(imports._without_comments(result))) - set(
-                    imports._INCLUDE.findall(imports._without_comments(prefix))
+                added = set(
+                    re.compile(r'^[ \t]*#[ \t]*include[ \t]+[<"]([^>"]+)[>"]', re.M).findall(
+                        imports._without_comments(result)
+                    )
+                ) - set(
+                    re.compile(r'^[ \t]*#[ \t]*include[ \t]+[<"]([^>"]+)[>"]', re.M).findall(
+                        imports._without_comments(prefix)
+                    )
                 )
                 self.assertEqual(added, expected)
                 self.assertTrue(result.endswith(body))
@@ -109,8 +122,11 @@ class ImportTests(TestCase):
                     self.assertLess(result.index("types.h"), result.index("gbi.h"))
 
     def test_sdk_configuration_precedes_recovered_macros(self):
-        root = Path("/project/include")
-        project = SimpleNamespace(include=(root,), build=Path("/project/build"))
+        root = self.root / "include"
+        root.mkdir()
+        project = SimpleNamespace(
+            include=(root,), build=self.root / "build", src=self.root / "src", cache=self.root / "cache"
+        )
         old_lookup = {"headers": dict.fromkeys(("shared/old/session.h", "shared/typemap.h", "shared/old.h"), "a" * 64)}
         mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
         mock_index.start()
@@ -127,8 +143,11 @@ class ImportTests(TestCase):
                 self.assertEqual(imports.resolve(project, context, result, "alpha"), result)
 
     def test_current_overlay_is_the_provider_and_cache_changes_with_edits(self):
-        root = Path("/project/include")
-        project = SimpleNamespace(include=(root,), build=Path("/project/build"))
+        root = self.root / "include"
+        root.mkdir()
+        project = SimpleNamespace(
+            include=(root,), build=self.root / "build", src=self.root / "src", cache=self.root / "cache"
+        )
         old_lookup = {"headers": dict.fromkeys(("shared/old/session.h", "shared/typemap.h", "shared/old.h"), "a" * 64)}
         mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
         mock_index.start()

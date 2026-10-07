@@ -34,6 +34,7 @@ except (Held, OSError) as error:
 PY
 status=0
 bin/test || status=1
+bin/integration || status=1
 bin/lint || status=1
 bin/hygiene || status=1
 exit "$status"

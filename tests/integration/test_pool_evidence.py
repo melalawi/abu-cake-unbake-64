@@ -4,9 +4,9 @@ import os
 import resource
 import tempfile
 import time
-import unittest
 from pathlib import Path
 
+from tests.kit import TempCase
 from tests.ledger_fixture import fault_evidence
 from unbake import effort, pool
 from unbake.config import Held
@@ -50,9 +50,9 @@ def always(value):
     os._exit(7)
 
 
-class PoolEvidenceTests(unittest.TestCase):
+class PoolEvidenceTests(TempCase):
     def workers(self):
-        return pool.Pool(10, 16 << 30, 4 << 30, CAP)
+        return pool.Pool(10, 16 << 30, 4 << 30, CAP, scratch=self.root / "workers")
 
     def test_real_crash_retries_in_new_worker_at_same_cap(self):
         with tempfile.TemporaryDirectory() as directory, self.workers() as workers:
@@ -70,18 +70,18 @@ class PoolEvidenceTests(unittest.TestCase):
             row = _result(future)
         self.assertEqual(row["key"], "integration.refused")
         self.assertGreaterEqual(row["seconds"], 0.03)
-        self.assertGreaterEqual(row["fault"]["chain"][0]["fault"]["cpu_seconds"], 0.03)
-        self.assertEqual(row["fault"]["chain"][0]["fault"]["counts"]["integration.work"], (1, 1))
+        self.assertGreaterEqual(fault_evidence(future.exception().fault)["cpu_seconds"], 0.03)
+        self.assertEqual(fault_evidence(future.exception().fault)["counts"]["integration.work"], (1, 1))
         self.assertEqual(effort.counted()["integration.work"], (before[0] + 1, before[1] + 1))
 
-    def test_actual_allocation_retry_keeps_both_failed_attempts_and_cap(self):
+    def test_actual_allocation_refuses_once_with_measured_attempt_and_cap(self):
         before = effort.counted().get("integration.work", (0, 0))
         with self.workers() as workers, self.assertRaises(pool.TaskFailed) as caught:
             list(workers.map(allocation, [None]))
         self.assertEqual(caught.exception.key, "worker.memory")
         self.assertEqual(fault_evidence(caught.exception.fault)["configured_cap_bytes"], CAP)
         self.assertGreaterEqual(fault_evidence(caught.exception.fault)["cpu_seconds"], 0.03)
-        self.assertEqual(effort.counted()["integration.work"], (before[0] + 2, before[1] + 2))
+        self.assertEqual(effort.counted()["integration.work"], (before[0] + 1, before[1] + 1))
 
     def test_abrupt_child_exit_reports_observed_submission_wall(self):
         with self.workers() as workers:
@@ -91,7 +91,7 @@ class PoolEvidenceTests(unittest.TestCase):
             row = _result(future)
         self.assertEqual(row["key"], "worker.crash")
         self.assertGreaterEqual(row["seconds"], 0.03)
-        self.assertEqual(row["fault"]["chain"][0]["fault"]["wall_scope"], "submission-to-completion")
+        self.assertEqual(fault_evidence(future.exception().fault)["wall_scope"], "submission-to-completion")
 
     def test_submit_allocation_failure_retains_measured_worker_wall(self):
         with self.workers() as workers:

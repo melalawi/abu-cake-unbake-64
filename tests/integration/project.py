@@ -138,6 +138,8 @@ class FixtureCase(unittest.TestCase):
         # host_values writes stub tools into DIR/bin; keep them out of self.bin, which holds the fixture tools.
         (self.base / "kit").mkdir()
         values = host_values(self.base / "kit")
+        # These isolated public fixtures own their worker budget and use no live broker.
+        values["resources"]["domain"] = "standalone"
         tools = values["tools"]
         for key in (
             "cpp",

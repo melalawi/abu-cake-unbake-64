@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+TESTS = Path(__file__).resolve().parent
+
 # Generous step budgets: a test that checks budgets sets its own.
 BUDGETS = {
     "recompute_seconds": 3600,

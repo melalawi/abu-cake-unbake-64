@@ -91,7 +91,7 @@ class RomTests(unittest.TestCase):
             (valid[:64], "ipl3"),
             (bytes(corrupt), "crc1"),
         ):
-            with self.subTest(field=field), self.assertRaisesRegex(Held, field + ".*bad"):
+            with self.subTest(field=field), self.assertRaisesRegex(Held, field + ":"):
                 self.load("bad.txt", data)
         with self.assertRaisesRegex(Held, "missing.z64"):
             rom.load(self.root / "missing.z64")

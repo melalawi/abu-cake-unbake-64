@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import math
-import shutil
-import sqlite3
 import uuid
 from contextlib import closing
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
-from unbake import atomic, inputs, strict_json
+from unbake import atomic, inputs, sqlite, strict_json
 from unbake.config import Held, Project
 from unbake.inputs import DependencySet, LogicalPath
 from unbake.journal import INDEX, Journal
@@ -326,7 +324,7 @@ def imported(project: Project, migration: dict[str, Any]) -> tuple[bytes, dict[s
         add("history.steps", "steps", {"records": strict_json.read(steps), "proof_reusable": False})
     database = project.build / "types.sqlite"
     if database.relative_to(project.root).as_posix() in migration["inputs"]:
-        with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+        with closing(sqlite.connect(f"file:{database}?mode=ro", uri=True)) as connection:
             rows = connection.execute("SELECT function,value FROM redraft").fetchall()
         for function, value in rows:
             add("draft.required", function, {"mark": strict_json.loads(value, database)})
@@ -433,8 +431,8 @@ def apply(project: Project, migration: dict[str, Any]) -> dict[str, Any]:
         database = project.build / "types.sqlite"
         if database.relative_to(project.root).as_posix() in migration["inputs"]:
             staged = backup / "types-current.sqlite"
-            shutil.copyfile(database, staged)
-            with closing(sqlite3.connect(staged)) as connection, connection:
+            atomic.copyfile(database, staged)
+            with closing(sqlite.connect(staged)) as connection, connection:
                 connection.execute("DROP TABLE redraft")
                 connection.execute("PRAGMA user_version=2")
                 metadata = {key for (key,) in connection.execute("SELECT key FROM meta")}

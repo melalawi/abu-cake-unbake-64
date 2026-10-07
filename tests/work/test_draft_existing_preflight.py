@@ -48,7 +48,7 @@ class ExistingDraftPreflight(ProjectCase):
         self.assertEqual(prerequisites.call_count, 0)
         self.assertEqual(backend.call_count, 0)
         self.assertEqual(file.read_bytes(), content)
-        self.assertIn("compare", held.exception.next_action)
+        self.assertIn("compare", held.exception.fault.cause.action.argv)
 
     def test_replace_reaches_normal_prerequisites_and_backend_without_claiming_success(self):
         self.file().write_text("int alpha(void) { return 1; }\n")

@@ -76,3 +76,8 @@ def verdict(kind: Literal["cracked", "creative"], text: str) -> None:
         sys.stderr.write(f"{'CRACKED' if kind == 'cracked' else 'NEEDS CREATIVE'}  {text}\n")
         return
     renderer.verdict(kind, text, progress.depth())
+
+
+def flush() -> None:
+    """Flush the same stream that owns human and progress output."""
+    (_stream if _stream is not None else sys.stderr).flush()

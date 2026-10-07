@@ -27,7 +27,7 @@ class PreludeTests(unittest.TestCase):
         self.assertIn("    s32 temp = *arg0;", result)
         self.assertIn("(M2C_UNK_OTHER)0", result)
         self.assertNotIn("\n\n\n", result)
-        self.assertEqual(checks.run(result), [])
+        self.assertEqual([finding.rule for finding in checks.run(result)], ["decompiler-placeholder"])
 
     def test_a_source_without_the_prelude_is_unchanged(self) -> None:
         self.assertEqual(prelude.resolve("s32 f(void) { return 0; }\n"), "s32 f(void) { return 0; }\n")

@@ -28,7 +28,7 @@ class CanonicalHostGeneratorTests(TempCase):
         self.host = self.root / "host.toml"
         self.host.write_text(toml.dumps(host_values(self.root)))
         self.environment = dict(os.environ, TMPDIR=str(self.root / "tmp"), UNBAKE_CONFIG=str(self.host))
-        for name in ("test", "lint", "hygiene"):
+        for name in ("test", "integration", "lint", "hygiene"):
             path = self.root / "bin" / name
             path.write_text(f'#!/bin/sh\nprintf "{name}\\n" >> "$TMPDIR/checks"\nexit 0\n')
             path.chmod(0o755)

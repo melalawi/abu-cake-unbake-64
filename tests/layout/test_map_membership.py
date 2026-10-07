@@ -39,6 +39,7 @@ class MembershipTests(TempCase):
             versions[version] = SimpleNamespace(split=yaml, symbols=symbols, baserom=directory / "rom")
         project = SimpleNamespace(
             root=self.root,
+            build=self.root / "build",
             src=self.root / "src",
             include=(self.root / "include",),
             names_from=payload["names_from"],
@@ -255,7 +256,7 @@ class MembershipTests(TempCase):
                     patch.object(buildfiles, "generate", return_value=[]) as generate,
                     patch.object(buildfiles, "write", return_value=[]) as generate_write,
                     patch.object(build, "check", side_effect=proof) as check,
-                    patch.object(split_apply, "write", wraps=split_apply.write) as write,
+                    patch.object(split_apply.atomic_files, "write", wraps=split_apply.atomic_files.write) as write,
                 ):
                     result = split_apply.apply(project, None, edits)
                     self.assertEqual(result.ok, ok)
@@ -263,7 +264,7 @@ class MembershipTests(TempCase):
                         (prepare.call_count, generate.call_count, generate_write.call_count, check.call_count),
                         (1, 1, 1, 1),
                     )
-                    self.assertEqual(write.call_count, 3 if ok else 6)
+                    self.assertEqual(write.call_count, 3 if ok else 5)
                 if not ok:
                     self.assertEqual({p: p.read_bytes() for p in before}, before)
                 else:

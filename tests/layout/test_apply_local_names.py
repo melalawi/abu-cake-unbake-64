@@ -7,7 +7,7 @@ from pathlib import Path
 from unbake.config import Held, Unfinished
 from unbake.layout import redeclarations
 from unbake.layout.apply import _local_names
-from unbake.process import named
+from unbake.process import Action, named
 from unbake.typemap.database import source_private
 
 
@@ -34,14 +34,22 @@ class LocalNamesTests(unittest.TestCase):
 class HeldPickleTests(unittest.TestCase):
     def test_refusals_cross_process_boundaries_intact(self) -> None:
         for held in (
-            Held(named("fixture.refusal", "cc1 exited 1: x", owner="fixture", stage="compile"), next_action="fix"),
+            Held(
+                named(
+                    "fixture.refusal",
+                    "cc1 exited 1: x",
+                    owner="fixture",
+                    stage="compile",
+                    action=Action("edit", paths=("src/f.c",)),
+                )
+            ),
             Unfinished("solve", "types.thing"),
         ):
             with self.subTest(type(held).__name__):
                 back = pickle.loads(pickle.dumps(held))
                 self.assertEqual(
-                    (type(back), back.phase, back.reason, back.next_action, back.args),
-                    (type(held), held.phase, held.reason, held.next_action, held.args),
+                    (type(back), back.phase, back.reason, back.fault.cause.action, back.args),
+                    (type(held), held.phase, held.reason, held.fault.cause.action, held.args),
                 )
 
 
@@ -49,7 +57,8 @@ class DeclarationRefusalTests(unittest.TestCase):
     def test_refusal_names_source_and_symbol(self) -> None:
         with self.assertRaises(Held) as caught:
             redeclarations.parse(Path("src/func_1.c"), "extern int D_1 D_2;")
-        self.assertIn("src/func_1.c: D_2:", caught.exception.reason)
+        self.assertEqual(caught.exception.fault.cause.owner, "cdecl")
+        self.assertIn("D_2", caught.exception.reason)
 
 
 class SourcePrivateTests(unittest.TestCase):

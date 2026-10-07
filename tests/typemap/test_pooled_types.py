@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tests.integration.typemap.test_closure import PROGRAMS, SOURCES
 from tests.kit import TempCase
-from tests.typemap.test_closure import PROGRAMS, SOURCES
 from tests.typemap.test_solver import facts
 from unbake import pool
 from unbake.config import Held

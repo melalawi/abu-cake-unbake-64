@@ -598,8 +598,8 @@ def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True
             continue
         pointer = match["ptr"] if match["access"] == "->" else "&" + match["ptr"]
         start, end = match.span()
-        # Collapse a dedicated three-statement builder block. Other pointer
-        # assignments are retained because the temporary may escape or be reused.
+        # Replace the dedicated temporary and stores while retaining its braces:
+        # the enclosing scope can be the function body or an if/else block.
         packet = "Acmd" if audio else gfx_names
         prefix = re.search(
             r"\{\s*" + packet + r"\s*\*\s*" + re.escape(match["ptr"]) + r"\s*=\s*([^;{}]+);\s*$", masked[:start]
@@ -608,7 +608,7 @@ def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True
         scoped = bool(prefix and suffix)
         if prefix and suffix:
             pointer = source[prefix.start(1) : prefix.end(1)].strip()
-            start, end = prefix.start(), end + suffix.end()
+            start = prefix.start() + 1
         if fold_pointers and not scoped and len(re.findall(r"\b" + re.escape(match["ptr"]) + r"\b", masked)) == 4:
             assigned = re.search(r"\b" + re.escape(match["ptr"]) + r"\s*=\s*([^;{}]+);\s*$", masked[:start])
             if assigned and re.search(r"\bGfx\s*\*\s*" + re.escape(match["ptr"]) + r"\s*;", masked):
@@ -620,8 +620,6 @@ def lower(source: str, variant: str | None = None, *, fold_pointers: bool = True
         text = ("\n" + indent).join(
             [*comments, *([middle] if middle else []), f"{name}({', '.join([pointer, *args])});"]
         )
-        if scoped and re.match(r"\s*else\b", masked[end:]):
-            text = text.removesuffix(";")
         edits.append((start, end, text))
         result.macros[name] += 1
         result.headers.add("abi" if audio else "gbi")

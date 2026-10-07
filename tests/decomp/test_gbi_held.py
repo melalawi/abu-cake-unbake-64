@@ -186,7 +186,7 @@ class HeldPacketsTest(unittest.TestCase):
             root = Path(temporary)
             include = root / "include"
             include.mkdir()
-            project = cast(Project, SimpleNamespace(root=root, include=[include]))
+            project = cast(Project, SimpleNamespace(root=root, include=[include], compilers={}))
             old = "/* previous canonical asset */"
             header = include / "gbi.h"
             header.write_text(old)

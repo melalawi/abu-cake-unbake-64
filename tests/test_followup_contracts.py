@@ -33,7 +33,11 @@ class FollowupContracts(ProjectCase):
 
         def refresh(project, policy):
             owners = storage.map_inputs(project)
-            return {"shard_sha256": cache.key(json.dumps(owners), shard), "shard": {}, "abi_supplement": None}
+            return {
+                "shard_sha256": cache.key(json.dumps(owners), shard.read_bytes()),
+                "shard": {},
+                "abi_supplement": None,
+            }
 
         with (
             patch.object(solver, "refresh_map", side_effect=refresh) as refreshed,
@@ -76,10 +80,10 @@ class FollowupContracts(ProjectCase):
 
         with patch.object(process.subprocess, "run", side_effect=native), self.assertRaises(Held) as caught:
             process.run_native(["native", "input"], self.root, "compile")
-        record = caught.exception.fault
-        self.assertEqual(record["exit"], 7)
-        self.assertEqual(record["stdout"].encode("utf-8", "surrogateescape"), b"\xff")
-        self.assertEqual(record["stderr"], "normal native diagnostic\n")
+        record = process.native_results(caught.exception.fault)[0]
+        self.assertEqual(record.exit, 7)
+        self.assertEqual(record.stdout.encode("utf-8", "surrogateescape"), b"\xff")
+        self.assertEqual(record.stderr, "normal native diagnostic\n")
 
     def test_recorded_build_recipe_schema_is_invalidated_in_normal_step_readiness(self):
         with patch.object(buildfiles, "SCHEMA", 1):
@@ -89,9 +93,8 @@ class FollowupContracts(ProjectCase):
         step = steps.Step(
             "buildfiles", "generation contract changed", "Writing build files", buildfiles.input_key, publish
         )
-        command = MagicMock()
         with patch.object(steps, "STEPS", {"buildfiles": step}):
-            steps._ensure(self.project, self.host, ["buildfiles"], force=False, report=None, command=command)
+            steps._ensure(self.project, self.host, ["buildfiles"], force=False, report=None)
         self.assertEqual(publish.call_count, 1)
         self.assertNotEqual(steps.recorded(self.project, "buildfiles"), old_key)
 

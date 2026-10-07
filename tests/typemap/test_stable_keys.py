@@ -12,7 +12,14 @@ from unbake.typemap import declarations, facts, regeneration, storage
 class StableKeyTests(TempCase):
     def project(self, root: Path) -> SimpleNamespace:
         return SimpleNamespace(
-            root=root, build=root / "build", cache=self.root / "cache", include=(), versions=("us",), id="p"
+            root=root,
+            build=root / "build",
+            src=root / "src",
+            cache=self.root / "cache",
+            include=(),
+            versions=("us",),
+            id="p",
+            version=lambda name: SimpleNamespace(split=root / "split.yaml", symbols=root / "symbols.txt"),
         )
 
     def test_text_key_ignores_the_project_root(self) -> None:
@@ -26,7 +33,7 @@ class StableKeyTests(TempCase):
             captured.clear()
             with patch.object(facts, "text_key", lambda *args: captured.append(args) or "k"):
                 store = facts.Store(project, None)
-                store.memory["k"] = [{}]
+                store.get = lambda key: [{}]
                 store.text(text, {"v": 1}, {header}, lambda: {})
             keys.append(captured[0])
         self.assertEqual(keys[0], keys[1])
@@ -53,7 +60,7 @@ class StableKeyTests(TempCase):
             patch("unbake.typemap.declaration_evidence.feedback_components", lambda project: {}),
         ):
             for run in range(2):
-                declarations.collect(project, object(), [])  # type: ignore[arg-type]
+                declarations.collect(project, SimpleNamespace(memory_worker_bytes=512_000_000), [])  # type: ignore[arg-type]
                 self.assertEqual(len(calls), 1, f"run {run}")
 
     def test_relocatable_spells_paths_under_the_root_relative(self) -> None:

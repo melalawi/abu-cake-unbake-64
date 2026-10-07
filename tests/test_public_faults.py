@@ -168,5 +168,8 @@ class PublicFaultTests(ProjectCase):
         self.assertIn("native_artifact", caught.exception.fault.cause.evidence)
         self.assertEqual(native.call_count, 0)
         self.assertTrue(
-            any(frame.reason.endswith("exact comparison unavailable") for frame in caught.exception.fault.chain)
+            any(
+                getattr(frame, "reason", "").endswith("exact comparison unavailable")
+                for frame in caught.exception.fault.chain
+            )
         )

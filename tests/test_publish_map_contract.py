@@ -48,7 +48,7 @@ class PublishMapContractTests(ProjectCase):
         ):
             main.main(["--project", str(self.project.root), "publish", "--fuzzy", "--compare", *map(str, files)])
         return json.loads(out.getvalue()), (
-            read.call_count,
+            sum(call.args[0] == self.project.build / "map/facts.json" for call in read.call_args_list),
             compare.call_count,
             publish.call_count,
             maintained.call_count,

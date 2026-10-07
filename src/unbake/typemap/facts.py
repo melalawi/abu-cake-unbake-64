@@ -999,7 +999,7 @@ def _decode_job(
     (cache_root,) = cast(tuple[Path | None], shared)
     if cache_root is None:
         return facts_decode.decode(rows)
-    import shutil
+    from unbake import atomic
 
     cache = Cache(cache_root)
     found: facts_decode.Batch = []
@@ -1013,9 +1013,9 @@ def _decode_job(
         def make(target: Path, index: int = index, payload: facts_decode.Payload = payload) -> None:
             [(_, decoded)] = facts_decode.decode([(index, payload)])
             if isinstance(decoded, Path):
-                shutil.copyfile(decoded, target)
+                atomic.copyfile(decoded, target, durable=False)
             else:
-                target.write_bytes(decoded)
+                atomic.fresh(target, decoded)
 
         found.append((index, cache.produce("facts-decoded-v1", content_key, make)))
     return found

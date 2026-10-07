@@ -27,8 +27,8 @@ class SearchViewTests(TempCase):
             (out / "steps").write_text("{}\n")
             return SimpleNamespace(
                 source=best,
-                fuzzy=75.0,
-                trial=SimpleNamespace(exact=False),
+                best_percent=75.0,
+                trial=SimpleNamespace(exact=False, best_percent=75.0, compares={}),
                 steps=out / "steps",
                 trials=1,
                 score=3,

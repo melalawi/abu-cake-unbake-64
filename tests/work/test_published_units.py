@@ -6,6 +6,7 @@ from tests.project_fixture import ProjectCase
 from unbake import config
 from unbake.config import Held
 from unbake.cycle import rank
+from unbake.typemap import database
 from unbake.work import draft, plan
 
 BROKEN = "int alpha(void) { do {} while (0); return 1; }\n"
@@ -38,11 +39,12 @@ class PublishedUnitTests(ProjectCase):
     def drafted(self) -> str:
         with (
             patch.object(draft.exclusions, "load", return_value=set()),
-            patch.object(draft.type_context, "snapshot", return_value=("d", "")),
+            patch.object(database, "digest", return_value="d"),
+            patch.object(database, "context", return_value=""),
             patch.object(draft.extract, "directory", return_value=self.root),
             patch.object(draft.m2c, "draft", return_value=M2C) as m2c,
         ):
-            made = draft.draft(self.project, self.host, "alpha", replace=False)
+            made = draft.draft(self.project, self.host, "alpha", replace=False, expected_output=None)
         self.assertEqual(m2c.called, made.file.read_text() == M2C)
         return made.file.read_text()
 

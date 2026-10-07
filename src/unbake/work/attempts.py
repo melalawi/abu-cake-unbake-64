@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import math
@@ -351,9 +350,7 @@ class Ledger:
         value = portable_tree(self.project, event.document())
         validate_event(value)
         lock = self.project.root / ".attempts.lock"
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        with lock.open("a+b") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
+        with atomic.lock(lock):
             self._refresh()
             prior = self.events.get(event.event_id)
             if prior is not None:

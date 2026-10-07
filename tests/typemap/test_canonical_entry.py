@@ -48,7 +48,9 @@ class CanonicalEntryTests(unittest.TestCase):
             patch("unbake.typemap.types_db.entries", return_value={name: record}),
             patch("unbake.typemap.types_db.meta", return_value={}),
         ):
-            land._fuzzy_signature(SimpleNamespace(), name, PROGRAMS[name]["version"], source)
+            land._fuzzy_signature(
+                SimpleNamespace(compiler_for=lambda function: "ido-7.1"), name, PROGRAMS[name]["version"], source
+            )
 
     def test_real_bt_partial_temporaries_allow_only_void_transport(self):
         name = "func_800D1BA0_us"

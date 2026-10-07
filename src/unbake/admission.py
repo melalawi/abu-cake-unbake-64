@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic
 from unbake.config import Held, Host
 from unbake.process import capture
 from unbake.process import named as cause_named
@@ -216,10 +217,10 @@ class Groups:
                 previous.rmdir()
         broker = domain.control / f"unbake-broker-{os.getpid()}"
         broker.mkdir()
-        (broker / "cgroup.procs").write_text(str(os.getpid()))
-        (domain.jobs.parent / "cgroup.subtree_control").write_text("+cpu +memory")
+        atomic.control(broker / "cgroup.procs", str(os.getpid()).encode())
+        atomic.control(domain.jobs.parent / "cgroup.subtree_control", b"+cpu +memory")
         domain.jobs.mkdir(exist_ok=True)
-        (domain.jobs / "cgroup.subtree_control").write_text("+cpu +memory")
+        atomic.control(domain.jobs / "cgroup.subtree_control", b"+cpu +memory")
         self.check_client(os.getpid())
         if any(path.is_dir() for path in domain.jobs.iterdir()):
             raise Held(
@@ -265,14 +266,14 @@ class Groups:
                 ("memory.swap.max", "0"),
                 ("memory.oom.group", "1"),
             ):
-                (path / name).write_text(value)
+                atomic.control(path / name, value.encode())
         except BaseException:
             path.rmdir()
             raise
         return path
 
     def kill(self, path: Path) -> None:
-        (path / "cgroup.kill").write_text("1")
+        atomic.control(path / "cgroup.kill", b"1")
 
     def populated(self, path: Path) -> bool:
         return bool(_fields(path / "cgroup.events")["populated"])
@@ -597,7 +598,7 @@ def command(host: Host | None) -> Iterator[None]:
                         stage="resources",
                     )
                 )
-            (group / "cgroup.procs").write_text(str(os.getpid()))
+            atomic.control(group / "cgroup.procs", str(os.getpid()).encode())
             receipt.update(grant)
         except (OSError, ValueError, KeyError) as error:
             raise Held(

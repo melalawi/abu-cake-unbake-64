@@ -79,7 +79,7 @@ def _refuse(project: Project, contents: dict[Path, str], name: str, paths: list[
         labels.append(f"{label}:{line}")
     raise Held(
         cause_named(
-            "fold.provider_reuse._refuse",
+            "headers.declaration.duplicate-shared-provider",
             f"headers.declaration.duplicate-shared-provider: {name}: {detail}; providers: "
             + ", ".join(map(str, labels)),
             owner="fold.provider_reuse",

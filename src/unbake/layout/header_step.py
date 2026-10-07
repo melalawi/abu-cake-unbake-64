@@ -152,7 +152,7 @@ def validate(
             mirror = staged_headers / path.relative_to(root)
             if path.is_file() and not mirror.exists():
                 mirror.parent.mkdir(parents=True, exist_ok=True)
-                mirror.symlink_to(path)
+                atomic_files.copyfile(path, mirror)
     before = Graph.capture(project)
     after = Graph(before.view.overlay({**dict.fromkeys(obsolete), **changed}), before.search)
     affected = set(after.affected(before, headers | set(changed), project.src.rglob("*.c")))

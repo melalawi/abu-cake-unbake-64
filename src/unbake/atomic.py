@@ -15,7 +15,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import IO, Any
 
-from unbake.process import temporary_environment
+from unbake.config import Held
+from unbake.process import named, temporary_environment
 
 _recorder: ContextVar[Callable[[Path], None] | None] = ContextVar("atomic.recorder", default=None)
 
@@ -241,3 +242,28 @@ def append_record(path: Path, content: bytes, *, durable: bool) -> None:
             os.fsync(directory)
         finally:
             os.close(directory)
+
+
+@contextmanager
+def lock(path: Path) -> Iterator[None]:
+    """Hold the stable inode for one operation; the lock itself contains no published data."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def control(path: Path, content: bytes) -> None:
+    """Write one kernel control value; proc/cgroup inodes cannot be published by rename."""
+    descriptor = os.open(path, os.O_WRONLY)
+    try:
+        devices = {os.stat(root).st_dev for root in ("/proc", "/sys/fs/cgroup")}
+        if os.fstat(descriptor).st_dev not in devices:
+            raise Held(named("atomic.control", "expected a kernel control filesystem", owner="atomic", stage="write"))
+        if os.write(descriptor, content) != len(content):
+            raise OSError("incomplete kernel control write")
+    finally:
+        os.close(descriptor)

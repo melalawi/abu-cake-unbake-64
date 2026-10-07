@@ -76,7 +76,8 @@ class CapturedHandlers(TempCase):
         compiler = next(iter(captured.values()))["compiler"]
         configured = project.compilers["ido-7.1"]
         project = replace(project, default_compiler=compiler, compilers={compiler: configured})
-        file = home / f"{function}.c"
+        file = project.work / function / f"{function}.c"
+        file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(text)
         return project, host, file
 

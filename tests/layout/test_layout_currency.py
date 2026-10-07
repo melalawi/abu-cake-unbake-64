@@ -3,7 +3,6 @@ names an edit rather than a command that reaches it again; a draft waits for the
 
 import json
 from contextlib import nullcontext
-from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import patch
@@ -139,11 +138,12 @@ class LayoutHoldNextTests(TempCase):
     def test_a_layout_refusal_names_an_edit_not_next(self) -> None:
         context = SimpleNamespace(command="cycle", cmd=lambda *words: "unbake " + " ".join(words))
         for reason, expected in [
-            ("layout.member.func_8020402C_de: unknown member", "stop: fix the layout.toml group named above"),
-            ("cycle.pick: nothing to work on", "unbake next"),
+            ("layout.member.func_8020402C_de: unknown member", "stop: layout.member.func_8020402C_de: unknown member"),
+            ("cycle.pick: nothing to work on", "stop: cycle.pick: nothing to work on"),
             (
                 "compile.func_80294340_de: src/func_80294340_de.c: compile.cc1: cc1 exited 33: too many arguments",
-                "stop: fix the C source named above (or the header the compiler names) so it compiles",
+                "stop: compile.func_80294340_de: src/func_80294340_de.c: "
+                "compile.cc1: cc1 exited 33: too many arguments",
             ),
         ]:
             with self.subTest(reason):
@@ -171,7 +171,7 @@ class HistoryRenameTests(TempCase):
         attempts.install(carries)
         self.assertFalse(source.exists())
         self.assertEqual((work / new / f"{new}.c").read_text(), f"void {new}(void) {{}}\n")
-        self.assertEqual(json.loads((work / new / "attempts.jsonl").read_text())["function"], new)
+        self.assertFalse((work / new / "attempts.jsonl").exists())  # immutable history stays in the owning Ledger
         self.assertFalse((work / new / "us" / f"{new}.o").exists())  # objects are rebuilt, not carried
         self.assertEqual(sorted(p.name for p in work.iterdir()), [new])
 
@@ -189,14 +189,24 @@ class HistoryRenameTests(TempCase):
         self.assertEqual(sorted(p.name for p in work.iterdir()), ["func_A", "func_B", "func_C"])
 
     def test_the_committed_summary_follows_a_rename(self) -> None:
+        from tests.ledger_fixture import log_attempt
+        from tests.project_fixture import make
         from unbake.work import attempts
 
-        project = SimpleNamespace(root=self.root)
-        row = {"attempts": 1, "best": {"us": 50.0}, "bytes": 8, "exact": False, "minutes": 1.0}
-        Path(self.root / "attempts.json").write_text(json.dumps({"functions": {"func_A": row}, "v": 1}))
-        self.assertIsNone(attempts.renamed_summary(project, {"func_X": "func_Y"}))  # type: ignore[arg-type]
-        renamed = json.loads(attempts.renamed_summary(project, {"func_A": "func_B"}) or b"")  # type: ignore[arg-type]
-        self.assertEqual(renamed["functions"], {"func_B": row})
+        project, _ = make(self.root)
+        ledger = attempts.ledger(project)
+        log_attempt(
+            project,
+            attempts.Attempt(
+                "t", "func_A", "a" * 64, 8, {"us": {"percent": 50.0, "exact": False}}, 50.0, False, 60.0, "ido-7.1"
+            ),
+        )
+        prior = ledger.summaries()["func_A"]
+        ledger.rename({"func_X": "func_Y"})
+        self.assertEqual(ledger.summaries()["func_A"], prior)
+        ledger.rename({"func_A": "func_B"})
+        self.assertNotIn("func_A", ledger.summaries())
+        self.assertEqual(ledger.summaries()["func_B"], prior)
 
 
 class HeaderCompileFailureTests(ProjectCase):
@@ -216,27 +226,31 @@ class HeaderCompileFailureTests(ProjectCase):
             self.assertIsNone(header_step._compile(job))
         compile_unit.assert_called_once_with(*job[:4], unit="alpha", non_matching=False)
 
-        expected = []
-        for unit in ("alpha", "beta"):
-            for version in self.versions:
-                reason = f"compile.{unit}: src/{unit}.c: `missing' undeclared"
-                expected.append(
-                    {
-                        "key": f"compile.{unit}",
-                        "reason": f"VERSION {version}: {reason}",
-                        "fault": {"chain": [{"phase": "compile", "key": f"compile.{unit}", "reason": reason}]},
-                    }
-                )
-
-        def refuse(view, host, file, version, *, unit, non_matching):
-            raise Held(
+        def refusal(unit, version):
+            return Held(
                 named(
-                    "fixture.refusal",
+                    f"compile.{unit}",
                     f"compile.{unit}: src/{unit}.c: `missing' undeclared",
-                    owner="fixture",
+                    owner="runner",
                     stage="compile",
+                    subject=f"{unit}:{version}",
                 )
             )
+
+        expected = [
+            {
+                "key": f"compile.{unit}",
+                "reason": f"VERSION {version}: {refusal(unit, version).reason}",
+                "fault": refusal(unit, version)
+                .fault.framed("layout.header_step", "layout", refusal(unit, version).reason)
+                .document(),
+            }
+            for unit in ("alpha", "beta")
+            for version in self.versions
+        ]
+
+        def refuse(view, host, file, version, *, unit, non_matching):
+            raise refusal(unit, version)
 
         with patch.object(runner, "compile_unit", side_effect=refuse):
             self.assertEqual(header_step._compile(job), expected[0])

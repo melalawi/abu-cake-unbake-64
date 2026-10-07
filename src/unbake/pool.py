@@ -42,7 +42,7 @@ from types import FrameType
 from typing import Any, TypeVar, cast
 
 from unbake import atomic as atomic_files
-from unbake import process
+from unbake import process, tui
 from unbake.config import Held, Host
 from unbake.process import Fault, Frame, RetryRule, temporary_environment
 from unbake.process import named as cause_named
@@ -677,8 +677,8 @@ class Pool:
             "running": sum(row.pid is not None for row in self.watchdog.current.values()),
         }
         with contextlib.suppress(OSError, ValueError):
-            sys.stderr.write(json.dumps(record) + "\n")
-            sys.stderr.flush()
+            tui.write(json.dumps(record) + "\n")
+            tui.flush()
 
     def _observe(self) -> None:
         while not self._stop.is_set():

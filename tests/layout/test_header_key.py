@@ -18,9 +18,16 @@ class HeaderKeyTests(TempCase):
         )
 
     def solve(self, revision: int, functions: dict) -> str:
-        value = {"revision": revision, "functions": functions, "globals": {}, "structs": {}, "arrays": {}}
+        value = {
+            **dict.fromkeys(types_db.REUSE_META, "fixture"),
+            "revision": revision,
+            "functions": functions,
+            "globals": {},
+            "structs": {},
+            "arrays": {},
+        }
         database = types_db.path(self.project)
-        staged, _ = types_db.stage(database, types_db.encode(value), {}, {})
+        staged, _ = types_db.stage(database, types_db.encode(value), {})
         types_db.install(database, staged)
         return header_step.input_key(self.project)
 

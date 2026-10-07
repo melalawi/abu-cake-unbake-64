@@ -18,10 +18,7 @@ _LOCKS = {
 # Writes that are atomic by construction: one O_APPEND line per attempt, and a tarball into the fresh
 # path the cache hands its producer (the cache publishes it by rename).
 _STATE: dict[str, set[str]] = {
-    "work/attempts.py": {"os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)"},
     "extract.py": {'tarfile.open(destination, "w")'},
-    # A kernel control write: resets this process's peak RSS counter; no file is written.
-    "effort.py": {'os.open("/proc/self/clear_refs", os.O_WRONLY)'},
 }
 
 
@@ -70,7 +67,7 @@ def violations(path: Path, content: str) -> list[str]:
             "shutil.copytree",
         }
         if attr == "open" or called in {"open", "io.open", "tarfile.open"}:
-            index = 1 if called in {"open", "io.open", "tarfile.open"} else 0
+            index = 1 if called in {"open", "io.open", "tarfile.open", "gzip.open", "bz2.open", "lzma.open"} else 0
             modes = [node.args[index]] if len(node.args) > index else []
             modes += [item.value for item in node.keywords if item.arg == "mode"]
             for mode in modes:
@@ -81,6 +78,19 @@ def violations(path: Path, content: str) -> list[str]:
                 ):
                     unsafe = True
                 # Exclusive creation cannot truncate an existing shared inode.
+        if called == "os.open" and len(node.args) > 1:
+            flags = node.args[1]
+            names = {
+                aliases.get(ast.unparse(part.value), ast.unparse(part.value)) + "." + part.attr
+                for part in ast.walk(flags)
+                if isinstance(part, ast.Attribute)
+            }
+            readonly = {"os.O_RDONLY", "os.O_CLOEXEC", "os.O_DIRECTORY", "os.O_NOFOLLOW", "os.O_NONBLOCK"}
+            known = all(
+                not isinstance(part, ast.Name) or aliases.get(part.id, part.id) == "os" for part in ast.walk(flags)
+            ) and all(not isinstance(part, ast.Constant) or part.value == 0 for part in ast.walk(flags))
+            if (known and names and names <= readonly) or (isinstance(flags, ast.Constant) and flags.value == 0):
+                continue
         if called in {"os.open", "os.fdopen"} or attr == "touch":
             # One descriptor stream: storage's mkstemp-backed JSON writer.
             unsafe = not (

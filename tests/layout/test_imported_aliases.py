@@ -95,14 +95,14 @@ class ImportedAliasTests(ProjectCase):
 
     def test_linked_typedef_is_read_once_with_repeated_imports(self):
         project, source, _, _ = self.install(ROUTES[0])
-        read_text = Path.read_text
+        read_bytes = Path.read_bytes
         reads = Counter()
 
         def read(path, *args, **kwargs):
             reads[path.resolve()] += 1
-            return read_text(path, *args, **kwargs)
+            return read_bytes(path, *args, **kwargs)
 
-        with patch.object(Path, "read_text", read):
+        with patch.object(Path, "read_bytes", read):
             bodies = apply.imported(source + source, project.include, {})
         self.assertEqual(len(bodies), 2)
         self.assertEqual(sorted(reads.values()), [1, 1])
@@ -184,10 +184,8 @@ class ImportedAliasTests(ProjectCase):
         outside.write_bytes((FIXTURES / "types.h").read_bytes())
         (project.include[0] / "types.h").symlink_to(outside)
         # With only the private root authorized, an unrelated symlink target is never imported.
-        bodies = apply.imported(source, project.include[0], {})
-        self.assertNotIn("s32", redeclarations.aliases(bodies))
-        with self.assertRaisesRegex(Held, "layout.redeclaration.func_800B9C0C_us"):
-            redeclarations.strip(source, bodies)
+        with self.assertRaisesRegex(Held, "headers.symlink"):
+            apply.imported(source, project.include[0], {})
 
     def test_all_foundational_aliases_reconcile_without_name_exceptions(self):
         project, _, _, _ = self.install(ROUTES[0])

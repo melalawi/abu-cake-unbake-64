@@ -409,7 +409,9 @@ def _compatible(shared: Any, job: Any) -> bool:
     if agrees and cache_root is not None:
 
         def write(target: Path) -> None:
-            target.write_bytes(b"compatible")
+            from unbake import atomic
+
+            atomic.fresh(target, b"compatible")
 
         Cache(cache_root).produce("types-contract", content_key, write)
     return agrees

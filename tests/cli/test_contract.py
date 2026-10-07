@@ -45,7 +45,7 @@ class ContractTests(TempCase):
         value = json.loads(lines[0])
         self.assertIsInstance(value, dict)
         self.assertEqual(set(value), KEYS)
-        self.assertEqual(value["v"], 1)
+        self.assertEqual(value["v"], 2)
         return value
 
     def assert_stdout_is_json_only(self, stdout: str) -> None:
@@ -96,7 +96,7 @@ class ContractTests(TempCase):
         self.assertEqual((code, result["status"], result["key"]), (1, "held", "check.unexpected"))
         self.assertIn("FileNotFoundError", result["data"]["reason"])
         self.assertIn("include/common/data.h", result["data"]["reason"])
-        self.assertRegex(result["next"], r"^unbake \S")
+        self.assertEqual(result["next"], "stop: " + result["data"]["reason"])
         self.assertNotIn("Traceback", stderr)
 
     def test_deleted_verbs_are_usage_refusals(self) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tests.project_fixture import ProjectCase
 from unbake import runner
 from unbake.compilers import candidates
 from unbake.config import Held
@@ -36,7 +37,7 @@ class DerivedSymbolsTests(unittest.TestCase):
                     self.assertEqual(runner.derived_symbols(names, known, "us", SOURCE), expected)
 
 
-class LinkRefusalTests(unittest.TestCase):
+class LinkRefusalTests(ProjectCase):
     def test_a_link_refusal_is_never_a_zero_percent_compare(self) -> None:
         refusal = Held(
             named(
@@ -50,7 +51,7 @@ class LinkRefusalTests(unittest.TestCase):
         with (
             patch.object(compare, "function_of", return_value="func_800C3EF0_us"),
             patch.object(compare.split, "holding_versions", return_value=("us",)),
-            patch.object(compare, "view_for", return_value=SimpleNamespace()),
+            patch.object(compare, "view_for", return_value=self.project),
             patch.object(compare, "row_of", return_value=row),
             patch.object(compare.split, "words", return_value=b"\0" * 16),
             patch.object(runner, "compile_unit", return_value=nullcontext(Path("unit.o"))),
@@ -58,7 +59,7 @@ class LinkRefusalTests(unittest.TestCase):
             patch.object(Path, "read_bytes", return_value=b"void f(void) {}\n"),
             self.assertRaises(Held) as caught,
         ):
-            compare.measure(SimpleNamespace(), SimpleNamespace(), SOURCE)
+            compare.measure(self.project, self.host, SOURCE)
         self.assertIs(caught.exception, refusal)
 
     def test_an_undefined_symbol_is_not_retried_under_other_compilers(self) -> None:

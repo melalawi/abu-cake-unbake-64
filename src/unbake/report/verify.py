@@ -18,9 +18,10 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from unbake import config, strict_json
+from unbake import atomic, config, strict_json
 from unbake.config import Held, Project
 from unbake.process import named as cause_named
+from unbake.process import temporary_environment
 from unbake.report import data, progress, state
 
 BUNDLE = "tools/report-verifier.zip"
@@ -286,7 +287,12 @@ def main() -> int:
             sha = os.environ.get("GITHUB_SHA") or os.environ.get("CI_COMMIT_SHA")
             if sha is None:
                 sha = subprocess.run(
-                    ["git", "rev-parse", "HEAD"], cwd=project.root, check=True, capture_output=True, text=True
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=project.root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    env=temporary_environment(project.build),
                 ).stdout.strip()
                 if subprocess.run(
                     ["git", "status", "--porcelain", "--untracked-files=no"],
@@ -294,6 +300,7 @@ def main() -> int:
                     check=True,
                     capture_output=True,
                     text=True,
+                    env=temporary_environment(project.build),
                 ).stdout:
                     raise Held(
                         cause_named(
@@ -315,7 +322,7 @@ def main() -> int:
             args.artifacts.mkdir(parents=True, exist_ok=True)
             for version, values in manifest["versions"].items():
                 receipt = {"source_commit": sha, "tool_sha256": manifest["tool_sha256"], "version": version, **values}
-                (args.artifacts / f"{version}_report.manifest.json").write_text(json.dumps(receipt, indent=2) + "\n")
+                atomic.text(args.artifacts / f"{version}_report.manifest.json", json.dumps(receipt, indent=2) + "\n")
         return 0
     except (Held, OSError, ValueError) as error:
         parser.exit(1, f"report verification failed: {error}\n")

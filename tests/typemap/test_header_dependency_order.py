@@ -69,11 +69,11 @@ class HeaderDependencyOrderTests(ProjectCase):
         path = self.project.include[0] / "aa-prototype.h"
         with self.assertRaises(Held) as held:
             self.validation({path: PROTOTYPE.encode()})
-        self.assertIn(str(path), held.exception.reason)
+        self.assertIn(str(path), str(held.exception.fault.document()))
         contexts = list((self.project.build / "types").glob("held-header-context-us-*.c"))
         self.assertEqual(len(contexts), 1)
         context = contexts[0]
-        self.assertIn(str(context), held.exception.reason)
+        self.assertIn(str(context), str(held.exception.fault.document()))
         self.assertEqual(context.read_text().strip(), PROTOTYPE.strip())
 
     def test_declaration_parse_refusal_names_the_staged_header(self):

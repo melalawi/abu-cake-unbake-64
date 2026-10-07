@@ -70,7 +70,7 @@ class Held(Exception):
         return self.fault.cause.reason
 
     def __reduce__(self) -> tuple[Any, ...]:
-        return _held, (type(self), (self.fault,), self.__dict__)
+        return _held, (type(self), self.args, self.__dict__)
 
 
 class Unfinished(Held, NotImplementedError):

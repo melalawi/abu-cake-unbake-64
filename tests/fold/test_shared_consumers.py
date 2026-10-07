@@ -108,13 +108,51 @@ class SharedConsumerTests(ProjectCase):
                 },
             )
         )
-        self.stack.enter_context(patch.object(land, "exact_attempt", return_value=SimpleNamespace(compiler="ido-7.1")))
+        self.stack.enter_context(
+            patch.object(
+                land,
+                "exact_attempt",
+                side_effect=lambda project, function, file, **kwargs: SimpleNamespace(
+                    compiler="ido-7.1",
+                    function=function,
+                    sha256=__import__("hashlib").sha256(file.read_bytes()).hexdigest(),
+                    versions={v: {"percent": 100, "exact": True} for v in project.versions},
+                    exact=True,
+                ),
+            )
+        )
         self.stack.enter_context(patch.object(land.buildfiles, "write", return_value=[]))
         self.stack.enter_context(patch.object(land.steps, "record"))
         self.stack.enter_context(patch("unbake.report.progress.write", return_value=[]))
         self.fail_commit = False
         self.mismatch = None
         self.git = []
+
+        def native_git(argv, cwd, phase, **kwargs):
+            args = argv[1:]
+            if args[:1] == ["cat-file"]:
+                output = b""
+                for name in kwargs["stdin"].splitlines():
+                    data = (self.project.root / name.split(":", 1)[1]).read_bytes()
+                    output += f"{'0' * 40} blob {len(data)}\n".encode() + data + b"\n"
+                return SimpleNamespace(stdout=output.decode("utf-8", "surrogateescape"))
+            if args[:1] == ["ls-tree"]:
+                return SimpleNamespace(
+                    stdout="\0".join(
+                        str(p.relative_to(self.project.root))
+                        for root in (self.project.src, *self.project.include)
+                        for p in root.rglob("*")
+                        if p.is_file()
+                    )
+                    + "\0"
+                )
+            if args[:1] == ["log"]:
+                return SimpleNamespace(stdout="")
+            if "index" in args:
+                return SimpleNamespace(stdout=str(self.project.root / ".git/index"))
+            return SimpleNamespace(stdout=self.git_command(self.project, *args))
+
+        self.stack.enter_context(patch("unbake.process.run_native", side_effect=native_git))
         self.stack.enter_context(patch.object(land, "_git", side_effect=self.git_command))
 
     def compile_overlay(self, project, edits, host, republished):

@@ -198,8 +198,22 @@ class HostRefusalTests(TempCase):
         cases = [
             ("trim equals max", {"cache.trim_to_bytes": 1_000}, cache, "trim_to_bytes"),
             ("trim above max", {"cache.trim_to_bytes": 2_000}, cache, "trim_to_bytes"),
-            ("parent equals total", {"resources.memory_parent_bytes": 8_000}, memory, "memory_parent_bytes"),
-            ("worker over remainder", {"resources.memory_worker_bytes": 7_001}, memory, "memory_worker_bytes"),
+            (
+                "parent equals total",
+                {"resources.memory_parent_bytes": self.values["resources"]["memory_total_bytes"]},
+                memory,
+                "memory_parent_bytes",
+            ),
+            (
+                "worker over remainder",
+                {
+                    "resources.memory_worker_bytes": self.values["resources"]["memory_total_bytes"]
+                    - self.values["resources"]["memory_parent_bytes"]
+                    + 1
+                },
+                memory,
+                "memory_worker_bytes",
+            ),
         ]
         for label, changes, keys, name in cases:
             with self.subTest(label):
@@ -209,7 +223,11 @@ class HostRefusalTests(TempCase):
                 with self.assertRaisesRegex(Held, name):
                     Host.from_values(values, "compare").require(keys)
         with self.subTest("worker exactly the remainder is accepted"):
-            values = edited(self.values, "resources.memory_worker_bytes", 7_000)
+            values = edited(
+                self.values,
+                "resources.memory_worker_bytes",
+                self.values["resources"]["memory_total_bytes"] - self.values["resources"]["memory_parent_bytes"],
+            )
             Host.from_values(values, "compare").require(memory)
 
     def test_the_retired_push_keys_are_unknown(self) -> None:
