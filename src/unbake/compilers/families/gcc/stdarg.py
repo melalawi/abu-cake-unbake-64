@@ -26,8 +26,20 @@ static __unbake_stdarg_inline char *__unbake_stdarg_take(va_list *ap, unsigned i
     *ap = slot + ((size + 3) & -4);
     return slot;
 }
+/* Keep the expression sequencing boundary of historical GNU va_arg expansion.
+ * Inlining a C helper is ABI-equivalent but can reorder an enclosing assignment. */
+#ifdef __STRICT_ANSI__
 #define va_arg(ap, type) (*(type *)__unbake_stdarg_take(&(ap), sizeof(type), \
                          __unbake_va_alignment(type) > 4 ? 8 : 4))
+#else
+#define va_arg(ap, type) ({ \
+    va_list *__unbake_cursor = &(ap); \
+    char *__unbake_slot = (char *)(((unsigned int)*__unbake_cursor + \
+        (__unbake_va_alignment(type) > 4 ? 8 : 4) - 1) & \
+        -(__unbake_va_alignment(type) > 4 ? 8 : 4)); \
+    *__unbake_cursor = __unbake_slot + ((sizeof(type) + 3) & -4); \
+    *(type *)__unbake_slot; })
+#endif
 #define va_end(ap) ((void)(ap))
 #define va_copy(dst, src) ((dst) = (src))
 """

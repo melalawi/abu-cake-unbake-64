@@ -37,3 +37,17 @@ class ResumedParseTests(unittest.TestCase):
         text = '# 3 "a.h"\nint a;\nint b;\n'
         self.assertEqual(cdecl.resume_marker(text, text.index("int b")), '# 4 "a.h"\n')
         self.assertEqual(cdecl.resume_marker("int a;\nint b;\n", 7), "# 2\n")
+
+
+class GnuScopeParserTests(unittest.TestCase):
+    def test_expression_boundaries_work_in_seeded_and_unseeded_parser(self):
+        from pycparser import c_ast
+
+        body = "int f(T *p) { return ({ T value = *p; value; }) + 1; }"
+        for text, scope in (("typedef int T; " + body, {}), (body, {"T": True})):
+            with self.subTest(seeded=bool(scope)):
+                tree = cdecl.parser(scope).parse(text)
+                returned = tree.ext[-1].body.block_items[0].expr
+                self.assertIsInstance(returned, c_ast.BinaryOp)
+                self.assertIsInstance(returned.left, c_ast.Compound)
+                self.assertEqual(returned.op, "+")

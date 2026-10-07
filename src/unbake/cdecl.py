@@ -730,7 +730,29 @@ class LayoutParser:
         return result
 
 
-class SeededParser(c_parser.CParser):  # type: ignore[misc]
+class GnuParser(c_parser.CParser):  # type: ignore[misc]
+    """Represent GNU statement expressions as scoped compound expression nodes."""
+
+    def _parse_assignment_expression(self) -> Any:
+        # pycparser's assignment-level GNU shortcut returns before consuming
+        # postfix operators. Parse compounds at the primary-expression boundary.
+        node = self._parse_conditional_expression()
+        if self._is_assignment_op():
+            operator = self._advance().value
+            right = self._parse_assignment_expression()
+            return c_ast.Assignment(operator, node, right, node.coord)
+        return node
+
+    def _parse_primary_expression(self) -> Any:
+        if self._peek_type() == "LPAREN" and self._peek_type(2) == "LBRACE":
+            self._advance()
+            node = self._parse_compound_statement()
+            self._expect("RPAREN")
+            return node
+        return super()._parse_primary_expression()
+
+
+class SeededParser(GnuParser):
     """Resume the file scope of an exact preprocessed prefix (pinned pycparser 3)."""
 
     def __init__(self, scope: dict[str, bool]) -> None:
@@ -807,31 +829,9 @@ def resumable_parse(text: str, scope: dict[str, bool]) -> c_ast.FileAST:
     return prefixes.resumed("cdecl.parse." + repr(sorted(scope.items())), text, advance, finish)
 
 
-class GnuParser(c_parser.CParser):  # type: ignore[misc]
-    """Represent GNU statement expressions as scoped compound expression nodes."""
-
-    def _parse_assignment_expression(self) -> Any:
-        # pycparser's assignment-level GNU shortcut returns before consuming
-        # postfix operators. Parse compounds at the primary-expression boundary.
-        node = self._parse_conditional_expression()
-        if self._is_assignment_op():
-            operator = self._advance().value
-            right = self._parse_assignment_expression()
-            return c_ast.Assignment(operator, node, right, node.coord)
-        return node
-
-    def _parse_primary_expression(self) -> Any:
-        if self._peek_type() == "LPAREN" and self._peek_type(2) == "LBRACE":
-            self._advance()
-            node = self._parse_compound_statement()
-            self._expect("RPAREN")
-            return node
-        return super()._parse_primary_expression()
-
-
 def parser(typedefs: Iterable[str] | dict[str, bool] = ()) -> c_parser.CParser:
     scope = typedefs if isinstance(typedefs, dict) else dict.fromkeys(typedefs, True)
-    return SeededParser(scope) if scope else c_parser.CParser()
+    return SeededParser(scope) if scope else GnuParser()
 
 
 def parse(text: str, *, typedefs: Iterable[str] | dict[str, bool] = ()) -> c_ast.FileAST:
