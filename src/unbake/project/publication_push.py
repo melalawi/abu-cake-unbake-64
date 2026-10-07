@@ -1,213 +1,111 @@
-"""Push a publication after reconciling the proofs reached by a concurrent update."""
+"""Publish changed functions after comparing existing native linked bytes with ROM."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import re
-from dataclasses import asdict
+import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from unbake import atomic, build, config, journal, pool, process, runner, scratch, strict_json
+from unbake import atomic, config, journal, process, strict_json
 from unbake.cache import Cache
-from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.process import capture
 from unbake.process import named as cause_named
 from unbake.work import attempts
 
-ProofKey = tuple[str, str]
-_INCLUDE = re.compile(r'^[ \t]*(?:#[ \t]*include|\.include)[ \t]*([<"])([^>"\n]+)[>"]', re.M)
-_DIRECTIVE = re.compile(r"^[ \t]*#[ \t]*include\b[^\n]*", re.M)
-_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
-
 
 def _git(project: Project, *args: str) -> str:
     return process.run_tool(["git", *args], project.root, "publish").strip()
 
 
-def snapshot(project: Project, host: Host) -> dict[ProofKey, str]:
-    """One source/header read and one split scan per version; retain only compact pins.
-
-    Literal imports deliberately overapproximate conditional branches. A computed
-    import uses native dependency discovery for that unit/version. Shared headers
-    are parsed once, and cycles cannot truncate another source's closure.
-    """
-    rows = {version: split.functions(project, version) for version in project.versions}
-    fuzzy = attempts.ledger(project).fuzzy_sources()
-    files: dict[Path, tuple[str, tuple[Path, ...], bool]] = {}
-
-    def read(path: Path) -> tuple[str, tuple[Path, ...], bool]:
-        path = path.resolve()
-        if path in files:
-            return files[path]
-        if not path.is_file():
-            files[path] = ("missing", (), False)
-            return files[path]
-        data = path.read_bytes()
-        text = _COMMENT.sub("", data.decode(errors="replace"))
-        edges = []
-        for match in _INCLUDE.finditer(text):
-            roots = (path.parent, *project.include) if match[1] == '"' else project.include
-            choices = [(root / match[2]).resolve() for root in roots]
-            edges.append(next((choice for choice in choices if choice.is_file()), choices[0]))
-        computed = any(not _INCLUDE.match(match[0]) for match in _DIRECTIVE.finditer(text))
-        files[path] = (hashlib.sha256(data).hexdigest(), tuple(edges), computed)
-        return files[path]
-
-    def closure(source: Path) -> tuple[dict[str, str], bool]:
-        pins = {}
-        pending = [source.resolve()]
-        computed = False
-        while pending:
-            path = pending.pop()
-            label = path.as_posix()
-            if label in pins:
-                continue
-            digest, edges, dynamic = read(path)
-            pins[label] = digest
-            computed |= dynamic
-            pending.extend(edges)
-        return pins, computed
-
-    scopes = {}
-    closures: dict[Path, tuple[dict[str, str], bool]] = {}
-    for version, members in rows.items():
-        symbols = read(project.version(version).symbols)[0]
-        for row in members:
-            unit = Path(row.path).name
-            if row.kind not in ("c", "hasm") and unit not in fuzzy:
-                continue
-            source = project.src / f"{unit}.{'s' if row.kind == 'hasm' else 'c'}"
-            if source not in closures:
-                closures[source] = closure(source)
-            pins, computed = closures[source]
-            pins = dict(pins)
-            if computed and row.kind != "hasm":
-                for path in runner.dependencies(project, host, source, version, unit=unit, non_matching=unit in fuzzy):
-                    pins[str(path.resolve())] = read(path)[0]
-            compiler = project.compiler_for(unit)
-            values = {
-                "files": pins,
-                "row": asdict(row),
-                "rom": project.version(version).baserom_sha1,
-                "symbols": symbols,
-                "compiler": compiler.id,
-                "compiler_pin": read(compiler.sha256)[0],
-                "flags": drivers.flags(project, version, unit, non_matching=unit in fuzzy),
-                "cppflags": project.cppflags,
-                "asflags": project.asflags,
-                "gnu_asflags": project.gnu_asflags,
-                "macros": project.version(version).macros,
-                "host": host.values,
-                "fuzzy": unit in fuzzy,
-            }
-            if row.kind == "hasm":
-                from unbake.decomp import original_asm
-
-                values["original_rule"] = read(project.root / original_asm.MANIFEST)[0]
-            scopes[unit, version] = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
-    return scopes
-
-
-def _prove(job: tuple[Project, Host, str, str]) -> dict[str, Any] | None:
-    """Use the existing native publication gates on exactly one affected scope."""
-    from unbake import land
-    from unbake.decomp import original_asm
-    from unbake.work import compare
-
-    project, host, unit, version = job
-    row = compare.row_of(project, unit, version)
-    try:
-        if row.kind == "hasm":
-            source = project.src / f"{unit}.s"
-            with scratch.temporary(host, project, "land", prefix="push-asm-") as temporary:
-                data = original_asm.assemble(project, host, source.read_text(), row, Path(temporary))
-            original_asm.prove(project, row, data)
-            equal = data == split.words(project, row)
-        elif unit in attempts.ledger(project).fuzzy_sources():
-            source = project.src / f"{unit}.c"
-            measured, _ = land._fuzzy_builds_row((project, project, host, unit, source, version))
-            equal = measured["compiled"]
-        else:
-            equal, _ = land._builds_row((project, project, host, unit, project.src / f"{unit}.c", version))
-        if not equal:
-            raise Held(
-                cause_named(
-                    "publish.push_proof",
-                    f"publish.push_proof: {unit} VERSION {version}: rebased native proof differs",
-                    owner="project.publication_push",
-                    stage="publish",
-                )
-            )
-    except Held as error:
-        return {
-            "function": unit,
-            "version": version,
-            "key": error.key,
-            "reason": error.reason,
-            "fault": capture(
-                error,
-                cause=cause_named(
-                    "project.publication_push.unexpected", str(error), owner="project.publication_push", stage="project"
-                ),
-            ).document(),
-        }
-    return None
-
-
-def reconcile(
-    project: Project, host: Host, before: dict[ProofKey, str]
-) -> tuple[list[dict[str, str]], dict[ProofKey, str]]:
-    from unbake.report import state
-
-    state.inventory(project)
-    after = snapshot(project, host)
-    affected = [key for key, digest in after.items() if before.get(key) != digest]
-    # Source admission remains a publication gate after the rebase. Scan each
-    # affected C unit once, before starting native workers for its versions.
-    sources = tuple(
-        sorted({project.src / f"{unit}.c" for unit, _ in affected if (project.src / f"{unit}.c").is_file()})
-    )
-    if sources:
-        from unbake.decomp import checks
-
-        fuzzy = attempts.ledger(project).fuzzy_sources()
-        findings = checks.findings(project, sources, Cache(project.cache))
-        blocked = [row for row in findings.rows if Path(row.path).stem in fuzzy or row.finding.fakematch is None]
-        if blocked:
-            first = blocked[0]
-            detail = checks.plain(first.finding)
-            raise Held(
-                cause_named(
-                    "publish.push_rules",
-                    f"publish.push_rules: {first.path}:{first.finding.line}: {detail}; nothing pushed",
-                    owner="project.publication_push",
-                    stage="publish",
-                )
-            )
-    failures = (
-        tuple(
-            failure
-            for failure in pool.run(host, _prove, [(project, host, unit, version) for unit, version in affected])
-            if failure is not None
-        )
-        if affected
-        else ()
-    )
-    if failures:
+def admission(project: Project, host: Host, head: str, base: str) -> dict[str, Any]:
+    """Only changed-function native linked bytes and relevant source hygiene."""
+    started = time.perf_counter_ns()
+    if _git(project, "status", "--porcelain"):
         raise Held(
             cause_named(
-                "publish.push_proof",
-                "publish.push_proof: affected rebased proofs failed; nothing pushed",
+                "publish.push_dirty",
+                "Commit owned edits before admission",
                 owner="project.publication_push",
                 stage="publish",
-            ),
-            failures=failures,
+            )
         )
-    return [{"function": unit, "version": version} for unit, version in affected], after
+    changed = set(_git(project, "diff", "--name-only", "-z", base, head).split("\0")) - {""}
+    sources = tuple(
+        sorted(
+            project.root / name
+            for name in changed
+            if (project.root / name).parent == project.src and Path(name).suffix in (".c", ".s")
+        )
+    )
+    from unbake.decomp import checks
+
+    findings = checks.findings(project, sources, Cache(project.cache))
+    if findings.rows:
+        raise Held(
+            cause_named(
+                "publish.push_rules",
+                checks.plain(findings.rows[0].finding),
+                owner="project.publication_push",
+                stage="publish",
+            )
+        )
+    scopes = []
+    work = {"native_bytes_read": 0, "rom_bytes_read": 0, "functions_compared": 0}
+    for version in project.versions:
+        for row in split.functions(project, version):
+            if row.kind not in ("c", "hasm"):
+                continue
+            unit = Path(row.path).name
+            source = project.src / (unit + (".s" if row.kind == "hasm" else ".c"))
+            if source not in sources:
+                continue
+            if not source.is_file():
+                raise Held(
+                    cause_named(
+                        "publish.source_missing",
+                        f"Changed source missing: {source.name}",
+                        owner="project.publication_push",
+                        stage="publish",
+                    )
+                )
+            native = project.build_link(version) / ("hasm" if row.kind == "hasm" else "units") / (unit + ".bin")
+            if not native.is_file():
+                target = native.relative_to(project.root).as_posix()
+                raise Held(
+                    cause_named(
+                        "publish.native_missing",
+                        f"Native linked output missing; prepare: make -j12 {target}",
+                        owner="project.publication_push",
+                        stage="publish",
+                    )
+                )
+            linked = native.read_bytes()
+            original = split.words(project, row)
+            if linked != original:
+                raise Held(
+                    cause_named(
+                        "publish.native_mismatch",
+                        f"{unit} {version}: native linked bytes differ from ROM slice",
+                        owner="project.publication_push",
+                        stage="publish",
+                    )
+                )
+            scopes.append({"function": unit, "version": version, "bytes": len(linked)})
+            work["native_bytes_read"] += len(linked)
+            work["rom_bytes_read"] += len(original)
+            work["functions_compared"] += 1
+    return {
+        "ok": True,
+        "head": head,
+        "base": base,
+        "scopes": scopes,
+        "source_findings": [],
+        "work": work,
+        "elapsed_ns": time.perf_counter_ns() - started,
+    }
 
 
 def resolve_conflicts(project: Project, host: Host) -> bool:
@@ -295,9 +193,8 @@ def rebase(project: Project, host: Host) -> None:
 def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) -> dict[str, Any]:
     """Fetch, rebase when needed, reprove affected scopes, and push without force.
 
-    No persistent proof or resumable session is introduced. Each lost push race
-    reconciles the next remote delta against the immediately prior proved view.
-    An unfinished proof restores the prior local commit for a fresh retry.
+    The existing native CAS supplies current qualified linked extents. Every
+    changed commit repeats admission; missing proof refuses without native work.
     """
     if not remote or remote.startswith("-"):
         raise Held(
@@ -308,14 +205,9 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                 stage="publish",
             )
         )
+    started = time.perf_counter_ns()
     branch = host.publish_branch
     _git(project, "check-ref-format", "refs/heads/" + branch)
-    from unbake.report import state
-
-    attempts.ledger(project).assert_portable()
-    state.inventory(project)
-    before: dict[ProofKey, str] | None = None
-    reconciled = []
     original = _git(project, "rev-parse", "HEAD")
     validated = None
     checked: dict[str, Any] = {}
@@ -333,16 +225,11 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                         stage="publish",
                     )
                 )
-            if before is None:
-                before = snapshot(config.load(project.root), host)
-            prior = _git(project, "rev-parse", "HEAD")
             try:
                 rebase(project, host)
             except KeyboardInterrupt:
-                try:
+                with suppress(Held):
                     _git(project, "rebase", "--abort")
-                except Held:
-                    _git(project, "reset", "--keep", prior)
                 raise
             except Held as error:
                 _git(project, "rebase", "--abort")
@@ -357,18 +244,7 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                         ),
                     )
                 ) from error
-            try:
-                current = config.load(project.root)
-                proved, before = reconcile(current, host, before)
-            except BaseException:
-                # Retain the pre-rebase local commit on any unfinished proof.
-                # A fresh retry will see the same remote divergence and must
-                # reconcile again, without a second proof/resume ledger.
-                _git(project, "reset", "--keep", prior)
-                raise
-            reconciled.extend(proved)
         current = config.load(project.root)
-        attempts.ledger(current).assert_portable()
         head = _git(project, "rev-parse", "HEAD")
         if _git(project, "status", "--porcelain", "--untracked-files=no"):
             raise Held(
@@ -379,20 +255,23 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                     stage="publish",
                 )
             )
-        if validated != head:
+        if validated != (head, tip):
             untracked = _git(project, "ls-files", "--others", "--exclude-standard", "-z")
-            outcome = build.check(current, host, files_only=False)
-            checked = outcome.document()
-            if outcome.ok is not True or outcome.built is not True:
-                fault = (
-                    process.Fault.read(outcome.fault)
-                    if outcome.fault is not None
-                    else process.Fault(
-                        cause_named("check.failed", "basic check failed; nothing pushed", owner="build", stage="check")
-                    )
-                )
+            checked = admission(current, host, head, tip)
+            if (
+                not isinstance(checked, dict)
+                or checked.get("ok") is not True
+                or checked.get("head") != head
+                or checked.get("base") != tip
+                or not isinstance(checked.get("scopes"), list)
+            ):
                 raise Held(
-                    fault.framed("project.publication_push", "publish", "final commit check failed"),
+                    cause_named(
+                        "publish.check_failed",
+                        "Canonical admission did not pass for the final SHA",
+                        owner="project.publication_push",
+                        stage="publish",
+                    ),
                     data={"check": checked, "head": head},
                 )
             if (
@@ -409,7 +288,7 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                     ),
                     data={"check": checked, "head": head},
                 )
-            validated = head
+            validated = (head, tip)
         try:
             _git(project, "push", "--", remote, head + ":refs/heads/" + branch)
         except Held as error:
@@ -435,7 +314,8 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             "before": original,
             "head": head,
             "check": checked,
-            "reconciled": reconciled,
+            "elapsed_ns": time.perf_counter_ns() - started,
+            "reconciled": checked.get("affected_consumers", []),
         }
     raise Held(
         cause_named(
