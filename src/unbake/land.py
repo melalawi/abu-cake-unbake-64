@@ -489,6 +489,8 @@ class Proof:
     versions: list[str]
     dependencies: set[Path]
     scores: dict[str, dict[str, Any]] | None = None
+    dependency_headers: dict[str, str] = field(default_factory=dict)
+    proposed_source: str | None = None
 
 
 def prove(
@@ -505,7 +507,11 @@ def prove(
 ) -> Proof:
     """Prove folded source against staged headers: exact ROM bytes, or admitted C in every holding version."""
     from unbake.layout import header_step
+    from unbake.project import header_dependencies
 
+    closed = header_dependencies.complete(project, source, headers)
+    dependency_headers = {name: text for name, text in closed.headers.items() if headers.get(name) != text}
+    headers, source = closed.headers, closed.source
     include = stage / "include"
     for name, text in headers.items():
         atomic_files.text(include / name, text)
@@ -563,7 +569,7 @@ def prove(
             header_step.validate(project, host, changed, prove_all=True, preproved=frozenset({function}))
         else:
             header_step.validate(project, host, {**changed, project.src / f"{function}.c": source.encode()})
-    return Proof(list(versions), publish_inputs, scores)
+    return Proof(list(versions), publish_inputs, scores, dependency_headers, source)
 
 
 def _fuzzy_score(project: Project, function: str, scores: dict[str, dict[str, Any]]) -> float | None:
@@ -696,6 +702,8 @@ def land(
             options["source_edits"] = folded.source_edits
         proof = prove(project, host, function, source, headers, stage, versions=selected, **options)
         versions, dependencies = proof.versions, proof.dependencies
+        headers.update(proof.dependency_headers)
+        source = proof.proposed_source if proof.proposed_source is not None else source
         fuzzy_receipt: dict[str, Any] | None = None
         if fuzzy:
             assert proof.scores is not None

@@ -1,0 +1,89 @@
+{
+  "clusters": {
+    ".published_0756070c6fca00ba6039ab71.h": "common/types_d507c48987bb.h",
+    ".published_07a6a2039a177bdbbefa5b58.h": "span_1000/code_800F45C8.h",
+    ".published_088de745f195192d427a0563.h": "span_1000/code_800F45C8.h",
+    ".published_2324a3b162fd64225be1237f.h": "common/types_d507c48987bb.h",
+    ".published_3d1e2993526d7186ea4bab56.h": "common/types_d507c48987bb.h",
+    ".published_4e5082b9ca7f34df547c84e9.h": "span_1000/code_800F45C8.h",
+    ".published_60778d2a829571a8ff1f9275.h": "common/types_d507c48987bb.h",
+    ".published_782d945c2a73d4d2b10526a9.h": "span_1000/code_800F45C8.h",
+    ".published_7836b84287ac3397905b4f57.h": "common/types_d507c48987bb.h",
+    ".published_a9ca04f42f71f8bf3bec2709.h": "span_1000/code_800F45C8.h",
+    ".published_cd9b84adb68e2ec87de99591.h": "common/types_d507c48987bb.h",
+    ".published_e35999cbb490e5ae38fc178e.h": "common/types_d507c48987bb.h",
+    "shared/.layout-Shape_func_800E3F90_us.h": "common/types_d507c48987bb.h",
+    "shared/.layout-Shape_func_800E73BC_us.h": "common/types_d507c48987bb.h",
+    "shared/.layout-Shape_func_801125F0_us.h": "common/types_d507c48987bb.h"
+  },
+  "headers": {
+    "common/types_d507c48987bb.h": "2edf60c6496e4db621690f35325b9eade54da895c6c80a9d11a3252f7d3fdbd3",
+    "common/types_f8bfabebf96f.h": "6bb8d65f9591889cb49cf98ba3bc84c75b5dccedca75f188b0cb337e6c5fb678",
+    "span_1000/code_800F45C8.h": "a1b9832d301185876f78e19c9f0ce6da28d965b1eb2e671c4d9408ec181ed5cc"
+  },
+  "schema": 1,
+  "symbols": {
+    "D_801257D0": "common/types_d507c48987bb.h",
+    "D_8035CD24": "span_1000/code_800F45C8.h",
+    "QueryBox": "common/types_d507c48987bb.h",
+    "Shape_func_800B8804_us": "common/types_d507c48987bb.h",
+    "Shape_func_800E3F90_us": "common/types_d507c48987bb.h",
+    "Shape_func_800E6970_us": "common/types_d507c48987bb.h",
+    "Shape_func_800E73BC_us": "common/types_d507c48987bb.h",
+    "Shape_func_801125F0_us": "common/types_d507c48987bb.h",
+    "Shape_func_8011B9E0": "common/types_d507c48987bb.h",
+    "func_800F4794_us": "span_1000/code_800F45C8.h",
+    "func_800F4DFC": "span_1000/code_800F45C8.h",
+    "func_800F5128": "span_1000/code_800F45C8.h",
+    "func_800F5178": "span_1000/code_800F45C8.h",
+    "func_800F53B8_us": "span_1000/code_800F45C8.h",
+    "func_800F5610_us": "span_1000/code_800F45C8.h",
+    "func_800F5850_us": "span_1000/code_800F45C8.h",
+    "func_800F58A0_us": "span_1000/code_800F45C8.h",
+    "func_800F58F0": "span_1000/code_800F45C8.h"
+  },
+  "type_headers": {
+    "D_801257D0": [
+      "common/types_d507c48987bb.h"
+    ],
+    "D_8035CD24": [
+      "span_1000/code_800F45C8.h"
+    ],
+    "QueryBox": [
+      "common/types_d507c48987bb.h"
+    ],
+    "QueryResult": [
+      "common/types_d507c48987bb.h"
+    ],
+    "Shape_func_800B8804_us": [
+      "common/types_d507c48987bb.h"
+    ],
+    "Shape_func_800E3F90_us": [
+      "common/types_d507c48987bb.h"
+    ],
+    "Shape_func_800E6970_us": [
+      "common/types_d507c48987bb.h"
+    ],
+    "Shape_func_800E73BC_us": [
+      "common/types_d507c48987bb.h"
+    ],
+    "Shape_func_801125F0_us": [
+      "common/types_d507c48987bb.h"
+    ],
+    "Shape_func_8011B9E0": [
+      "common/types_d507c48987bb.h"
+    ],
+    "func_800F4DFC": [
+      "span_1000/code_800F45C8.h"
+    ],
+    "func_800F5128": [
+      "span_1000/code_800F45C8.h"
+    ],
+    "func_800F5178": [
+      "span_1000/code_800F45C8.h"
+    ],
+    "func_800F58F0": [
+      "span_1000/code_800F45C8.h"
+    ]
+  }
+}
