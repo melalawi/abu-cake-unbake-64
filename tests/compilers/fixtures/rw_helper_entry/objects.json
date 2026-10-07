@@ -1,0 +1,151 @@
+{
+  "candidate": {
+    "text_bytes": 412,
+    "undefined": [
+      "D_8010C070",
+      "D_8010C074",
+      "D_8010C078",
+      "D_8010C07C",
+      "D_8010C080_de",
+      "D_8010C084",
+      "func_80264F60_de"
+    ],
+    "relocations": [
+      {
+        "offset": 124,
+        "kind": 5,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 128,
+        "kind": 6,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 144,
+        "kind": 5,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 148,
+        "kind": 6,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 176,
+        "kind": 5,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 180,
+        "kind": 6,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 192,
+        "kind": 5,
+        "symbol": "D_8010C080_de"
+      },
+      {
+        "offset": 196,
+        "kind": 6,
+        "symbol": "D_8010C080_de"
+      },
+      {
+        "offset": 200,
+        "kind": 5,
+        "symbol": "D_8010C084"
+      },
+      {
+        "offset": 204,
+        "kind": 6,
+        "symbol": "D_8010C084"
+      },
+      {
+        "offset": 220,
+        "kind": 5,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 224,
+        "kind": 6,
+        "symbol": "D_8010C07C"
+      },
+      {
+        "offset": 256,
+        "kind": 5,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 260,
+        "kind": 6,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 280,
+        "kind": 5,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 284,
+        "kind": 6,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 304,
+        "kind": 5,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 308,
+        "kind": 6,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 316,
+        "kind": 5,
+        "symbol": "D_8010C074"
+      },
+      {
+        "offset": 320,
+        "kind": 6,
+        "symbol": "D_8010C074"
+      },
+      {
+        "offset": 324,
+        "kind": 5,
+        "symbol": "D_8010C078"
+      },
+      {
+        "offset": 328,
+        "kind": 6,
+        "symbol": "D_8010C078"
+      },
+      {
+        "offset": 340,
+        "kind": 5,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 344,
+        "kind": 6,
+        "symbol": "D_8010C070"
+      },
+      {
+        "offset": 348,
+        "kind": 4,
+        "symbol": "func_80264F60_de"
+      }
+    ]
+  },
+  "native-compare-helper": {
+    "text_bytes": 72,
+    "undefined": [],
+    "relocations": []
+  },
+  "generated-compare-call": {
+    "text_bytes": 40,
+    "undefined": [],
+    "relocations": []
+  }
+}

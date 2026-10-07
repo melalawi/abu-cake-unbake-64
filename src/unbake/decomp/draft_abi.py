@@ -131,13 +131,26 @@ def declarations(
 
 def mapped_body(project: Project, function: str, version: str) -> dict[str, Any] | None:
     """Use a draft snapshot only when its selected caller bytes are unchanged."""
+    from unbake.typemap import shards
     from unbake.typemap.mapping import load_map
 
     mapped = load_map(project, allow_stale=True)
-    item = next((item for name, item in mapped["functions"].items() if function in (name, *item["aliases"])), None)
-    if item is None or version not in item["versions"]:
+    functions = mapped["functions"]
+    inventory = getattr(functions, "inventory", functions)
+    name = (
+        function
+        if function in inventory
+        else next((name for name, item in inventory.items() if function in item["aliases"]), None)
+    )
+    if name is None or version not in inventory[name]["versions"]:
         return None
-    body: dict[str, Any] = item["versions"][version]
+    # Entry evidence comes only from this containing body. Unrelated entries
+    # (including compiler runtime symbols) cannot establish or block its ABI.
+    body: dict[str, Any] = (
+        functions.version(name, version)
+        if isinstance(functions, shards.Functions)
+        else functions[name]["versions"][version]
+    )
     rows = [row for row in split.functions(project, version) if function in row.aliases]
     if len(rows) != 1 or hashlib.sha256(split.words(project, rows[0])).hexdigest() != body.get("target_sha256"):
         raise Held("m2c", f"{function}: types.abi.target_stale: caller bytes changed; run unbake recompute types")
