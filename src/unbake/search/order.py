@@ -147,6 +147,67 @@ class _Safety:
         return not (lb or rb or lw & (rr | rw) or rw & lr)
 
 
+def _terminal_tails(function: Any, ast: Any, safety: _Safety) -> Iterator[tuple[Any, str, Callable[[Any], Any]]]:
+    items = function.body.block_items or []
+    declarations = Counter(node.name for node in walk(function) if isinstance(node, ast.Decl))
+    bindings = {node.name for node in items if isinstance(node, ast.Decl)}
+    params = function.decl.type.args
+    if params:
+        bindings.update(node.name for node in params.params if isinstance(node, ast.Decl))
+    unsupported = (
+        ast.Decl,
+        ast.Label,
+        ast.Goto,
+        ast.If,
+        ast.For,
+        ast.While,
+        ast.DoWhile,
+        ast.Switch,
+        ast.Case,
+        ast.Default,
+        ast.Break,
+        ast.Continue,
+        ast.Compound,
+    )
+    for index, label in enumerate(items):
+        if not isinstance(label, ast.Label):
+            continue
+        tail = [label.stmt]
+        for statement in items[index + 1 :]:
+            if isinstance(tail[-1], ast.Return):
+                break
+            tail.append(statement)
+        if not isinstance(tail[-1], ast.Return) or any(
+            isinstance(child, unsupported) for statement in tail for child in walk(statement)
+        ):
+            continue
+        refs = {child.name for statement in tail for child in walk(statement) if isinstance(child, ast.ID)}
+        if any(declarations[name] > 1 or (name in safety.types and name not in bindings) for name in refs):
+            continue
+        jumps = [
+            child
+            for statement in items[:index]
+            for child in walk(statement)
+            if isinstance(child, ast.Goto) and child.name == label.name
+        ]
+        all_jumps = [child for child in walk(function.body) if isinstance(child, ast.Goto) and child.name == label.name]
+        if not jumps or len(jumps) != len(all_jumps):
+            continue
+
+        def duplicate(target: Any, index: int = index, name: str = label.name, tail: list[Any] = tail) -> None:
+            predecessors = [child for child in walk(target) if isinstance(child, ast.Goto) and child.name == name]
+            for jump in predecessors:
+                _replace(target, jump, lambda _: ast.Compound(deepcopy(tail)))
+            # The original path keeps precisely its existing suffix, without its handled label.
+            target.block_items[index] = target.block_items[index].stmt
+
+        yield (
+            function.body,
+            f"expand labelled tail {label.name} ({len(jumps)} goto edges; fallthrough retained)",
+            duplicate,
+        )
+
+
 def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tuple[Any, str, Callable[[Any], Any]]]:
     safety = _Safety(function, ast, tree)
     yield from loop_variants(function, ast, tree)
@@ -198,39 +259,9 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                             del target.block_items[index + 1]
 
                         yield node, "expand shared tail", expand
-            # Expand a terminating, same-scope labelled tail at each incoming jump.
-            for label_index, label in enumerate(items):
-                if not isinstance(label, ast.Label):
-                    continue
-                tail = [label.stmt, *items[label_index + 1 :]]
-                if not tail or not isinstance(tail[-1], (ast.Return, ast.Goto)):
-                    continue
-                if any(isinstance(child, (ast.Decl, ast.Label)) for statement in tail for child in walk(statement)):
-                    continue
-                jumps = [
-                    child
-                    for statement in items[:label_index]
-                    for child in walk(statement)
-                    if isinstance(child, ast.Goto) and child.name == label.name
-                ]
-                all_jumps = [
-                    child for child in walk(function.body) if isinstance(child, ast.Goto) and child.name == label.name
-                ]
-                if not jumps or len(jumps) != len(all_jumps):
-                    continue
-                if any(
-                    isinstance(child, ast.Decl)
-                    for statement in items[:label_index]
-                    for child in walk(statement)
-                    if child not in items
-                ):
-                    continue
-                for jump in jumps:
-
-                    def duplicate(target: Any, tail: list[Any] = tail) -> Any:
-                        return ast.Compound(deepcopy(tail))
-
-                    yield jump, "expand labelled tail", duplicate
+            # Only outer-function terminal suffixes can be copied across nested predecessors.
+            if node is function.body:
+                yield from _terminal_tails(function, ast, safety)
             # Shorten an uninitialised scalar's scope to its first assignment and remaining uses.
             for index, decl in enumerate(items):
                 if (

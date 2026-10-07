@@ -1,0 +1,63 @@
+[
+  {
+    "fixture": "func_800B1520_us--baseline",
+    "source_sha256": "84b9f12c483fe50c9bed6cb0380b20bfe098f2af6f684e1c74dfe77a5d320b2a",
+    "versions": [
+      "us"
+    ]
+  },
+  {
+    "fixture": "func_800B1520_us--web-split-dead-cast",
+    "source_sha256": "d73fc891f86a154b51c54758b0684525c145c01a1bc51864271e5e5ddef1690f",
+    "versions": [
+      "us"
+    ]
+  },
+  {
+    "fixture": "func_802800C0_de--baseline",
+    "source_sha256": "e6169b8dd10604f6a4483d03b8bb98e30b2e54016b9f1110d0c5bc6981196a32",
+    "versions": [
+      "de",
+      "eu-x",
+      "eu",
+      "us-rev1",
+      "us"
+    ]
+  },
+  {
+    "fixture": "func_80200840_de--control-before-bound",
+    "source_sha256": "42f910821571a95bd040ea0cc2fcb91f34f39b4aa4e006d8a87254162feca754",
+    "versions": [
+      "de",
+      "eu-x",
+      "eu",
+      "us-rev1",
+      "us"
+    ]
+  },
+  {
+    "fixture": "func_8044DCC0_de--control-before-bound",
+    "source_sha256": "447d95570826983a2bbed083fb4586fd3c9ada0869743856be89e1b84ff235f2",
+    "versions": [
+      "de",
+      "eu-x",
+      "eu",
+      "us-rev1",
+      "us"
+    ]
+  },
+  {
+    "fixture": "func_8010AC90_us--baseline",
+    "source_sha256": "90f004aef87f997ba2af4fdb6356ee2b5b12b67d7858ecde1c286c481303f1fc",
+    "versions": [
+      "us"
+    ]
+  },
+  {
+    "fixture": "func_8010AC90_us--tail-duplicate-1",
+    "source_sha256": "ee0cbcfcb23f11025d02ff9184da630e763b62c3eba8d378f5d78737f60c8b79",
+    "versions": [
+      "us"
+    ]
+  }
+]

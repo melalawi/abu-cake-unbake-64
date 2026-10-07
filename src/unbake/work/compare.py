@@ -29,6 +29,7 @@ class Compared:
     rule_lines: list[str] = field(default_factory=list)
     faults: dict[str, dict[str, Any]] = field(default_factory=dict)
     required_versions: tuple[str, ...] | None = None
+    facts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def required_exact(self) -> bool:
@@ -75,6 +76,7 @@ class Compared:
             "preconditions": list(self.preconditions),
             "seconds": round(self.seconds, 3),
             "compiler": self.compiler,
+            **({"facts": self.facts} if self.facts else {}),
             **(
                 {"required_versions": list(self.required_versions), "required_exact": self.required_exact}
                 if self.required_versions is not None
@@ -84,6 +86,9 @@ class Compared:
 
     def lines(self) -> list[str]:
         output = [line for result in self.compares.values() for line in result.lines]
+        from unbake.work.compare_facts import lines
+
+        output.extend(line for version, facts in self.facts.items() for line in lines(version, facts))
         output.extend(f"rule broken: {line}" for line in self.rule_lines)
         output.append(
             f"{self.function}: {'EXACT in every version' if self.exact else f'best {self.best_percent:.2f}%'}"
@@ -226,6 +231,9 @@ def compare(project: Project, host: Host, file: Path, *, required_versions: tupl
     assert isinstance(chosen, Compared)
     measured = chosen
     measured.required_versions = required
+    from unbake.work.compare_facts import attach
+
+    attach(project, measured)
     first = row_of(project, measured.function, next(iter(measured.compares)))
     size = first.end - first.start
     attempts.append(
