@@ -174,7 +174,6 @@ def _preprocessed_lines(
                 (absent / name).parent.mkdir(parents=True, exist_ok=True)
                 atomic_files.fresh(absent / name, b"")
         from unbake.compilers import drivers
-        from unbake.process import run_tool
 
         local = replace(project, work_include=(*include, *project.work_include))
         command = drivers.preprocess_command(
@@ -182,8 +181,13 @@ def _preprocessed_lines(
         )
         command[1:1] = [f"-I{project.src}"]
         command[-1:-1] = [f"-I{absent}"]
-        output = run_tool(
-            command, project.root, "solve", temporary_root=project.build, context={"function": unit, "version": version}
+        output = drivers.run_preprocess(
+            project,
+            command,
+            "solve",
+            unit=unit,
+            temporary_root=project.build,
+            context={"function": unit, "version": version},
         )
     active: set[int] = set()
     current, number = "", 1

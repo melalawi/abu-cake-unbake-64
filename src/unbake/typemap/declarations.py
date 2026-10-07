@@ -393,15 +393,15 @@ def _cpp_command(
 
 
 def _preprocess(project: Project, command: list[str], source: str) -> str:
-    from unbake.process import run_tool
+    from unbake.compilers import drivers
 
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".headers-", dir=project.build) as temporary:
         wrapper = Path(temporary) / "context.c"
         atomic_files.fresh(wrapper, source.encode())
-        return run_tool([*command[:-1], str(wrapper)], project.root, "solve", temporary_root=project.build).replace(
-            str(wrapper), "<unbake-context>"
-        )
+        return drivers.run_preprocess(
+            project, [*command[:-1], str(wrapper)], "solve", temporary_root=project.build
+        ).replace(str(wrapper), "<unbake-context>")
 
 
 def source_unit(
@@ -421,7 +421,6 @@ def source_unit(
             include_generated=False,
         )
     from unbake.compilers import drivers
-    from unbake.process import run_tool
 
     unit = source.stem
     # A header uses the explicitly configured compiler's contract, never a guessed C unit.
@@ -435,7 +434,7 @@ def source_unit(
         command = drivers.preprocess_command(
             project, str(policy.cpp), version, unit, wrapper, non_matching=False, line_markers=line_markers
         )
-        return run_tool(command, project.root, "solve", temporary_root=project.build).replace(
+        return drivers.run_preprocess(project, command, "solve", unit=unit, temporary_root=project.build).replace(
             str(wrapper), "<unbake-unit>"
         )
 

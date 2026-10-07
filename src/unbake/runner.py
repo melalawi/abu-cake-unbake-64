@@ -64,10 +64,11 @@ def compile_unit(
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host), non_matching=non_matching)
     try:
-        preprocessed = process.run_tool(
+        preprocessed = drivers.run_preprocess(
+            project,
             list(commands.preprocess),
-            project.root,
             "compile",
+            unit=unit,
             context={"source": str(file), "function": unit, "version": version},
         )
     except Held as error:
@@ -386,10 +387,11 @@ def preprocess(project: Project, host: Host, file: Path, version: str, *, unit: 
     file = Path(file).resolve()
     source = str(file.relative_to(project.root)) if file.is_relative_to(project.root) else str(file)
     commands = drivers.steps(project, version, unit, source, tools(host))
-    return process.run_tool(
+    return drivers.run_preprocess(
+        project,
         list(commands.preprocess),
-        project.root,
         "compile",
+        unit=unit,
         context={"source": str(file), "function": unit, "version": version},
     )
 
@@ -402,8 +404,8 @@ def dependencies(
 
     argv = drivers.preprocess_command(project, str(host.cpp), version, unit, file, non_matching=non_matching)
     argv = family_for(project.compiler_for(unit)).dependency_command(argv)
-    output = process.run_tool(
-        argv, project.root, "compile", context={"source": str(file), "function": unit, "version": version}
+    output = drivers.run_preprocess(
+        project, argv, "compile", unit=unit, context={"source": str(file), "function": unit, "version": version}
     )
     paths = {
         Path(os.path.abspath(project.root / name))

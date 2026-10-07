@@ -22,9 +22,13 @@ if TYPE_CHECKING:
     )
     from unbake.compilers.registry import CompilerSpec
     from unbake.config import Host, PendingProject, Project
+    from unbake.process import NativeResult
 
 
 class Gcc:
+    def preprocessed(self, result: NativeResult) -> str:
+        return result.stdout
+
     def diagnose(self, result: Any, context: Any) -> Any | None:
         return None
 

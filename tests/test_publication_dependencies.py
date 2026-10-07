@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
 from unbake import land, pool, process, runner
+from unbake.compilers import drivers
 from unbake.config import Held
 from unbake.fold.apply import Folded
 from unbake.layout import split
@@ -74,7 +75,11 @@ class PublicationDependencyTests(ProjectCase):
                 "link",
                 side_effect=lambda project, host, obj, version, row, work, file: split.words(project, row),
             ),
-            patch.object(process, "run_tool", side_effect=preprocess),
+            patch.object(
+                drivers,
+                "run_preprocess",
+                side_effect=lambda project, argv, phase, **kw: preprocess(argv, project.root, phase, **kw),
+            ),
             patch.object(land, "_commit", side_effect=lambda project, host, paths, message: staged.extend(paths)),
             patch.object(land, "_git", return_value="committed\n"),
             patch.object(land.buildfiles, "write", return_value=[]),
@@ -130,7 +135,7 @@ class PublicationDependencyTests(ProjectCase):
         file = self.project.src / "alpha.c"
         file.write_text("int alpha(void) { return 1; }\n")
         with (
-            patch.object(process, "run_tool", return_value="alpha.o:\n"),
+            patch.object(drivers, "run_preprocess", return_value="alpha.o:\n"),
             self.assertRaisesRegex(Held, "compile.dependencies"),
         ):
             runner.dependencies(self.project, self.host, file, "us", unit="alpha")
@@ -185,5 +190,5 @@ class PublicationDependencyTests(ProjectCase):
         nested = self.project.include[-1] / "nested.h"
         spaced = self.project.include[-1] / "space name.h"
         text = "\n".join(f"alpha.o:\t{path}" for path in (file, nested, spaced)) + "\n"
-        with patch.object(process, "run_tool", return_value=text):
+        with patch.object(drivers, "run_preprocess", return_value=text):
             self.assertEqual(runner.dependencies(self.project, self.host, file, "us", unit="alpha"), {nested, spaced})

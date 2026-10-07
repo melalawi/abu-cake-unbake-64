@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
 from unbake import process, runner
+from unbake.compilers import drivers
 from unbake.config import Held
 from unbake.process import named
 from unbake.work import compare
@@ -40,6 +41,11 @@ class CompileLifetimeTests(ProjectCase):
 
         with (
             patch.object(process, "run_tool", side_effect=self.native),
+            patch.object(
+                drivers,
+                "run_preprocess",
+                side_effect=lambda project, argv, phase, **kw: self.native(argv, project.root, phase, **kw),
+            ),
             patch.object(runner, "link_function", side_effect=link),
             ThreadPoolExecutor(max_workers=2) as workers,
         ):
@@ -59,7 +65,14 @@ class CompileLifetimeTests(ProjectCase):
         refusal = Held(
             named("link.undefined", "link.undefined: missing canonical symbol", owner="fixture", stage="link")
         )
-        with patch.object(process, "run_tool", side_effect=self.native):
+        with (
+            patch.object(process, "run_tool", side_effect=self.native),
+            patch.object(
+                drivers,
+                "run_preprocess",
+                side_effect=lambda project, argv, phase, **kw: self.native(argv, project.root, phase, **kw),
+            ),
+        ):
             with (
                 self.assertRaises(Held) as caught,
                 runner.compile_unit(self.project, self.host, file, "us", unit="alpha") as obj,

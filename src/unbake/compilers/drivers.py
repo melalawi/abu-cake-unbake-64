@@ -314,16 +314,15 @@ def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: s
     """Preprocess in-memory C through the same family stage, with source ownership supplied."""
     import tempfile
 
-    from unbake.process import run_tool
-
     project.build.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".preprocess-", dir=project.build) as temporary:
         source = Path(temporary) / "unit.c"
         atomic_files.fresh(source, text.encode())
-        return run_tool(
+        return run_preprocess(
+            project,
             preprocess_command(project, cpp, version, unit, source, non_matching=True),
-            project.root,
             phase,
+            unit=unit,
             context={"function": unit, "version": version},
         )
 
@@ -362,3 +361,21 @@ def assembler_release() -> str:
             )
         )
     return next(value for value in values if value is not None)
+
+
+def run_preprocess(
+    project: Project,
+    argv: list[str],
+    phase: str,
+    *,
+    unit: str | None = None,
+    context: dict[str, object] | None = None,
+    temporary_root: Path | None = None,
+) -> str:
+    """The actual native result must satisfy the selected family's directive contract."""
+    from unbake import process
+    from unbake.compilers.families import family_for
+
+    compiler = project.compilers[project.default_compiler] if unit is None else project.compiler_for(unit)
+    result = process.run_native(argv, project.root, phase, context=context, temporary_root=temporary_root)
+    return family_for(compiler).preprocessed(result)

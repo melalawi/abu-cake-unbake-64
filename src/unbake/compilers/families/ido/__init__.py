@@ -25,9 +25,15 @@ if TYPE_CHECKING:
     )
     from unbake.compilers.registry import CompilerSpec
     from unbake.config import Host, PendingProject, Project
+    from unbake.process import NativeResult
 
 
 class Ido:
+    def preprocessed(self, result: NativeResult) -> str:
+        from unbake.compilers.families.ido.directives import preprocessed
+
+        return preprocessed(result)
+
     def diagnose(self, result: Any, context: Any) -> Any | None:
         return None
 

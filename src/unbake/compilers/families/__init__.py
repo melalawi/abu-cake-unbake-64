@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from unbake.config import Host, PendingProject, Project
     from unbake.objects.elf import Object
     from unbake.objects.rodata import Pool
+    from unbake.process import NativeResult
 
 from unbake.config import Held
 from unbake.process import capture
@@ -35,6 +36,7 @@ class CompilerIdentity(Protocol):
 
 @runtime_checkable
 class Family(Protocol):
+    def preprocessed(self, result: NativeResult) -> str: ...
     def diagnose(self, result: Any, context: Any) -> Any | None: ...
     def source_intrinsics(self) -> tuple[str, ...]: ...
     def public_headers(self) -> tuple[PublicHeader, ...]: ...
