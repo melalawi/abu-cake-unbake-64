@@ -91,7 +91,13 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
         and ((abi.get("return_register") == "f0") == (returned in ("float", "double")))
     )
     observed_uses = {reg for uses in abi.get("caller_return_uses", {}).values() for reg in uses}
-    if not used and not observed_uses and abi.get("call_sites", 0) and not proven_return:
+    if abi.get("return_width") == 8:
+        if not abi.get("return_pair_known") or abi["return_register"] != "r2" or abi.get("conflicts"):
+            return {"prototype": None, "reasons": ["types.abi.pair_return: consumed v0/v1 pair is not proven"]}
+        if returned not in ("long long", "unsigned long long"):
+            returned = "unsigned long long"
+        reasons.append("types.abi.pair_return: callers consume v0/v1, both defined at every callee exit")
+    elif not used and not observed_uses and abi.get("call_sites", 0) and not proven_return:
         # The direct-call contract has no observable result. Preserve the
         # unknown function signature in the DB; this is only a call carrier.
         returned = "void"

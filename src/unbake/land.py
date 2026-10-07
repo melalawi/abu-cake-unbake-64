@@ -321,6 +321,8 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     database = types_db.path(project)
     record = types_db.entries(database, "functions", [function]).get(function, {})
     abi = record.get("abi", {})
+    if abi.get("return_width") == 8 and (not abi.get("return_pair_known") or abi.get("conflicts")):
+        raise Held("land", f"land.fuzzy_abi: {function}: consumed integer return pair is unproven or contradictory")
     expected = record.get("prototype") if record.get("state") == "known" else None
     if (
         expected is None
@@ -340,6 +342,19 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     ):
         _fuzzy_calls(function, source)
         return
+    if (
+        expected
+        and record.get("state") != "known"
+        and abi.get("arity_known")
+        and not abi.get("registers")
+        and (abi.get("return_known") or abi.get("discardable_return"))
+        and not abi.get("conflicts")
+        and not abi.get("missing")
+    ):
+        # Incidental caller argument registers can keep a call carrier's C
+        # list unspecified. The callee's own empty entry-read set still
+        # proves an explicit no-argument definition's transport.
+        expected = re.sub(r"(\b" + re.escape(function) + r"\s*)\(\s*\)", r"\g<1>(void)", expected)
     if not expected or re.search(r"\b" + re.escape(function) + r"\s*\(\s*\)", expected):
         raise Held("land", f"land.fuzzy_abi: {function}: canonical entry signature is unresolved")
     expected = header_names.rewrite(expected, types_db.meta(database, "shared_aliases"), set())

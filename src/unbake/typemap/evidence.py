@@ -116,7 +116,7 @@ def _summaries(
                         "return_register_use": {
                             reg: bool(uses)
                             for reg, uses in call.get("return_register_use", {}).items()
-                            if reg in ("r2", "f0")
+                            if reg in ("r2", "r3", "f0")
                         },
                     }
                 )
@@ -125,7 +125,10 @@ def _summaries(
                 "register_inputs": sorted(inputs[version]),
                 "register_outputs": [reg for reg in body["register_outputs"] if reg in ("r2", "f0")],
                 "calls": calls_,
-                "returns": [{"values": {reg: row["values"][reg] for reg in ("r2", "f0")}} for row in body["returns"]],
+                "returns": [
+                    {"values": {reg: row["values"].get(reg, {}) for reg in ("r2", "r3", "f0")}}
+                    for row in body["returns"]
+                ],
             }
         found.append((name, stack_aliases, inputs, {"versions": versions}))
     return found
@@ -210,7 +213,7 @@ def abi(
         for name, item in facts["functions"].items():
             exits = [(version, exit_) for version, body in item["versions"].items() for exit_ in body["returns"]]
             exit_tails = [call for body in item["versions"].values() for call in body["calls"] if call.get("tail")]
-            for reg in ("r2", "f0"):
+            for reg in ("r2", "r3", "f0"):
                 if (
                     reg not in available[name]
                     and (exits or exit_tails)
@@ -222,12 +225,25 @@ def abi(
         if not changed:
             break
     consumed_by = {
-        name: {reg for call in calls.get(name, []) for reg, uses in call.get("return_register_use", {}).items() if uses}
+        name: {
+            reg
+            for call in calls.get(name, [])
+            for reg, uses in call.get("return_register_use", {}).items()
+            if uses and reg in ("r2", "f0")
+        }
+        for name in facts["functions"]
+    }
+    paired = {
+        name: any(call.get("return_register_use", {}).get("r3") for call in calls.get(name, []))
         for name in facts["functions"]
     }
     for name, reg in (declared_returns or {}).items():
         if name in consumed_by:
-            consumed_by[name].add(reg)
+            consumed_by[name].add("r2" if reg == "r2:r3" else reg)
+            paired[name] |= reg == "r2:r3"
+    for name in consumed_by:
+        if paired[name]:
+            consumed_by[name].add("r2")
     # Forwarding an evidenced result at an epilogue is a use even when no
     # instruction reads v0/f0 between the call and jr ra.
     changed = True
@@ -236,7 +252,7 @@ def abi(
         for caller, item in facts["functions"].items():
             for version, body in item["versions"].items():
                 for exit_ in body["returns"]:
-                    for reg in consumed_by[caller]:
+                    for reg in consumed_by[caller] | ({"r3"} if paired[caller] else set()):
                         value = exit_["values"].get(reg, {})
                         origins = {origin["id"] for origin in value.get("origins", [])} | set(
                             value.get("dependencies", [])
@@ -257,9 +273,14 @@ def abi(
                             callee = site["callee"] if site else None
                             if site is not None:
                                 site["return_register_use"][returned_reg] = True
-                            if callee in consumed_by and returned_reg not in consumed_by[callee]:
-                                consumed_by[callee].add(returned_reg)
-                                changed = True
+                            if callee in consumed_by:
+                                primary = "r2" if returned_reg == "r3" else returned_reg
+                                if primary not in consumed_by[callee]:
+                                    consumed_by[callee].add(primary)
+                                    changed = True
+                                if returned_reg == "r3" and not paired[callee]:
+                                    paired[callee] = True
+                                    changed = True
     output: dict[str, dict[str, Any]] = {}
     for name, item in facts["functions"].items():
         observed = [inputs[name, version] for version in item["versions"]]
@@ -304,6 +325,9 @@ def abi(
                         return_incomplete = True
             return_regs.update(defined)
         used_returns = consumed_by[name]
+        pair_known = {"r2", "r3"} <= available[name]
+        if paired[name] and not pair_known:
+            conflicts.append("callers consume an integer return pair not defined at every callee exit")
         if used_returns - return_regs:
             conflicts.append("callers consume return registers not defined at callee exits")
         # Either result register can hold an incidental temporary. Consumption
@@ -351,6 +375,7 @@ def abi(
             and any(body["returns"] for body in item["versions"].values()),
             "return_known": not return_incomplete
             and len(returned) <= 1
+            and (not paired[name] or pair_known)
             and (not used_returns or bool(consumed))
             and any(body["returns"] for body in item["versions"].values()),
             "arity_known": not any("input registers differ" in reason for reason in conflicts) and not missing,
@@ -359,6 +384,8 @@ def abi(
             "call_sites": len(calls.get(name, [])),
             "used_returns": sorted(consumed),
             "defined_returns": [reg for reg in ("r2", "f0") if reg in available[name]],
+            "return_width": 8 if paired[name] else None,
+            "return_pair_known": pair_known,
             # Partial writes that leave the incoming result register alive
             # cannot promise a value. An explicitly void definition may
             # discard them when no caller or declaration demands a result.

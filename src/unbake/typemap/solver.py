@@ -19,9 +19,9 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 11
+SCHEMA = 12
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
-ABI_SCHEMA = 7
+ABI_SCHEMA = 8
 MACHINE_SCHEMA = 6
 
 
@@ -301,7 +301,11 @@ def infer(
                     declared.seed("global:" + name, type_, record["provenance"])
                     declared.seed("address:" + name, type_ + " *", record["provenance"])
         declared_returns = {
-            name: "f0" if resolve(record["return"]) in ("float", "double") else "r2"
+            name: "f0"
+            if resolve(record["return"]) in ("float", "double")
+            else "r2:r3"
+            if resolve(record["return"]) in ("long long", "unsigned long long")
+            else "r2"
             for name, record in functions.items()
             if record["return"] != "void"
             and not declarations.unknown(record["return"])
@@ -405,6 +409,7 @@ def infer(
             if (
                 returned_representation is not None
                 and not abi["void"]
+                and abi.get("return_width") != 8
                 and (register == "f0") != (returned_representation in ("float", "double"))
             ):
                 abi["return_known"] = False
@@ -588,6 +593,10 @@ def infer(
                     and not signature.get("declaration_conflict")
                     and returned["state"] == "known"
                     and all(p["state"] == "known" for p in params)
+                    and (
+                        signatures.get(name, {}).get("return_width") != 8
+                        or signatures[name].get("return_pair_known", False)
+                    )
                 )
             else:
                 abi = signatures[name]
@@ -612,6 +621,16 @@ def infer(
                         {"state": "unknown", "type": None, "provenance": [], "users": [name]},
                     )
                 )
+                if abi.get("return_width") == 8:
+                    # Scalar constraints on v0 describe only the high word.
+                    # Keep their uncertainty; the ABI carrier proves the pair
+                    # without choosing the C result's signedness or semantics.
+                    returned = {
+                        **returned,
+                        "state": "conflict" if returned["state"] == "conflict" else "unknown",
+                        "type": None,
+                        "transport_width": 8,
+                    }
                 if returned.get("type") and returned["type"].rstrip().endswith("]"):
                     # A declaration of array storage describes the object, not a C
                     # scalar return value. Keep the constraint, but do not publish
