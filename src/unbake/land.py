@@ -272,9 +272,40 @@ def exact_attempt(
 
 def _with_compiler(project: Project, function: str, ident: str) -> Project:
     units = {name: value for name, value in project.units.items() if name != function}
-    if ident != project.default_compiler:
+    if ident != project.default_compiler or project.unit_flags.get(function):
         units[function] = ident
     return replace(project, units=units)
+
+
+def _compiler_config(project: Project, function: str, ident: str, before: bytes) -> bytes:
+    """Keep the proved unit options and refuse config edits outside this publication's scope."""
+    path = project.root / "config.toml"
+    if path.read_bytes() != before:
+        raise Held("land", "land.config: config.toml changed since proof")
+    data = toml.loads(before.decode())
+    if "config.toml" in dirty(project):
+        committed = toml.loads(_git(project, "show", "HEAD:config.toml"))
+
+        def other_options(document: dict[str, Any]) -> dict[str, Any]:
+            units = {name: row for name, row in document.get("units", {}).items() if name != function}
+            return {**{key: value for key, value in document.items() if key != "units"}, "units": units}
+
+        if other_options(data) != other_options(committed):
+            raise Held("land", f"land.config: {function}: unproved config changes outside its unit options")
+    units = dict(data.get("units", {}))
+    flags = project.unit_flags.get(function, ())
+    if ident != project.default_compiler or flags:
+        units[function] = {"compiler": ident, **({"flags": list(flags)} if flags else {})}
+    else:
+        units.pop(function, None)
+    if units == data.get("units", {}):
+        return before
+    if units:
+        data["units"] = dict(sorted(units.items()))
+    else:
+        data.pop("units", None)
+    text: str = toml.dumps(data)
+    return text.encode()
 
 
 def _builds_row(spec: tuple[Project, Project, Host, str, Path, str]) -> tuple[bool, set[Path]]:
@@ -643,6 +674,8 @@ def land(
         else publication_versions(project, function, attempt, required_versions)
     )
     ident = (attempt.compiler if attempt is not None else "") or project.compiler_reference(function)
+    config_path = project.root / "config.toml"
+    config_before = config_path.read_bytes()
     project = _with_compiler(project, function, ident)
     folded = fold_apply.fold(project, host, function, text, versions=selected)
     broken = checks.run(folded.source) if fuzzy else checks.unmarked(folded.source)
@@ -719,6 +752,7 @@ def land(
             )
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+    config_content = _compiler_config(project, function, ident, config_before)
     # A private work directory can retain declarations from an abandoned draft.
     # Only native prerequisites follow the source; explicit shared fold edits
     # still belong to their separately validated consumers.
@@ -758,24 +792,17 @@ def land(
         for edit in [] if fuzzy else [*folded.split_edits, *_row_edits(project, function, versions)]:
             current = Path(edit.path).read_text() if Path(edit.path).is_file() else ""
             put(Path(edit.path), (edit.after if current == edit.before else current).encode())
-        config_path = project.root / "config.toml"
-        data = toml.loads(config_path.read_text())
-        units = dict(data.get("units", {}))
-        if ident != project.default_compiler or units.get(function, {}).get("flags"):
-            units[function] = {**units.get(function, {}), "compiler": ident}
-        else:
-            units.pop(function, None)
-        if units != data.get("units", {}):
-            data["units"] = dict(sorted(units.items()))
-            if not units:
-                data.pop("units")
-            put(config_path, toml.dumps(data).encode())
+        # Unchanged dirty options still supplied the proof and must travel with the source.
+        put(config_path, config_content)
         from unbake import config
 
         if fuzzy or previous_fuzzy is not None:
             put(attempts.summary_path(project), attempts.fuzzy_edit(project, function, fuzzy_receipt))
         updated = config.load(project.root)
         generated = buildfiles.write(updated, host)
+        units_path = project.root / "units.mk"
+        if units_path.is_file():
+            generated.append(units_path)
         steps.record(updated, "buildfiles", buildfiles.input_key(updated, host))
         generated += progress.write(updated, host)
         steps.record(updated, "progress", steps.STEPS["progress"].key(updated, host))

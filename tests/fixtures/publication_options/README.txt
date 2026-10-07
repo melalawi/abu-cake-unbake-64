@@ -1,0 +1,1 @@
+Small source, header, compiler-option config slice and generated unit rules from the publication failure in TOOL-ROUTE-6. The test embeds these payloads in the three-function project fixture; native compile/place/link boundaries are substituted, while config parsing, version selection, generated rules and Git commits are real.
