@@ -8,7 +8,7 @@ from pathlib import Path
 
 from unbake import cache as retention
 from unbake.cache import memo
-from unbake.cdecl import declaration_source
+from unbake.cdecl import SOURCE_TOKEN, NameParser, declaration_source
 from unbake.config import Held
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"\n]+)[>"]', re.M)
@@ -65,34 +65,75 @@ def statements(text: str) -> tuple[str, ...]:
     )
 
 
+def _function_body(prefix: str) -> bool:
+    """Let the declaration parser distinguish a body from an aggregate/initializer."""
+    try:
+        row = NameParser(prefix + " {}").parse()
+    except Held:
+        return False
+    return bool(row.declared) and not row.typedefs
+
+
 def _split(text: str) -> tuple[str, ...]:
-    cleaned = declaration_source(text)
-    tokens = list(re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{};]|\S', cleaned))
-    directives = list(re.finditer(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M))
+    tokens = SOURCE_TOKEN.finditer(text)
+    directives = re.finditer(r"^[ \t]*#(?:\\\n|[^\n])*", text, re.M)
     events = sorted([(m.start(), "token", m) for m in tokens] + [(m.start(), "directive", m) for m in directives])
-    depth = conditional = 0
-    start = None
+    pairs = {"{": "}", "(": ")", "[": "]"}
+    stack: list[str] = []
+    conditional = consumed = 0
+    start = declaration = None
+    function = False
+    previous = ""
     result = []
     for offset, kind, match in events:
+        if offset < consumed:
+            continue
+        token = match[0]
+        if kind == "token" and token.startswith(("/*", "//")):
+            # SOURCE_TOKEN keeps comments and quoted braces atomic. A continued
+            # line comment also owns any directive-looking following lines.
+            comment = re.match(r"//(?:\\\n|[^\n])*", text[offset:]) if token.startswith("//") else None
+            consumed = offset + comment.end() if comment else match.end()
+            continue
         if start is None:
             start = offset
         if kind == "directive":
-            directive = re.match(r"#\s*(\w+)", match[0].lstrip())
-            assert directive is not None
+            consumed = match.end()
+            directive = re.match(r"#\s*(\w+)", token.lstrip())
+            if directive is None:
+                continue
             if directive[1] in ("if", "ifdef", "ifndef"):
                 conditional += 1
             elif directive[1] == "endif":
                 conditional -= 1
                 if conditional < 0:
                     raise Held("solve", "types.split: unmatched endif")
-            if not conditional and not depth:
+            elif directive[1] in ("else", "elif") and not conditional:
+                raise Held("solve", "types.split: unmatched conditional branch")
+            if not conditional and not stack and declaration is None:
                 result.append(text[start : match.end()])
                 start = None
-        else:
-            depth += (match[0] == "{") - (match[0] == "}")
-            if match[0] == ";" and not depth and not conditional:
+            continue
+        if declaration is None:
+            declaration = offset
+        boundary = False
+        if token in pairs:
+            if token == "{" and not stack:
+                function = previous == ")" and _function_body(text[declaration:offset])
+            stack.append(pairs[token])
+        elif token in pairs.values():
+            if not stack or stack.pop() != token:
+                raise Held("solve", "types.split: unmatched declaration delimiter")
+            boundary = token == "}" and not stack and function
+        elif token == ";" and not stack:
+            boundary = True
+        if boundary:
+            declaration = None
+            function = False
+            if not conditional:
                 result.append(text[start : match.end()])
                 start = None
-    if depth or conditional or start is not None:
+        previous = token
+    if stack or conditional or start is not None:
         raise Held("solve", "types.split: incomplete declaration or conditional")
     return tuple(result)
