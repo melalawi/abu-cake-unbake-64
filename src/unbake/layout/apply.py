@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -69,19 +70,40 @@ def rewrite(
     return result
 
 
-def imported(text: str, root: Path, outputs: Mapping[Path, bytes | Path]) -> list[str]:
-    """Read the source's actual transitive includes, using staged header bytes."""
+def imported(text: str, root: Path | tuple[Path, ...], outputs: Mapping[Path, bytes | Path]) -> list[str]:
+    """Read transitive includes in search order, using staged bytes and all effective include roots.
+
+    A draft's private headers link foundational typedefs into the shared include tree. Keep the include's
+    spelling for parent-relative lookup, while allowing resolved links only inside the effective roots.
+    """
+    roots = tuple(path.resolve() for path in ((root,) if isinstance(root, Path) else root))
+
+    def includes(body: str, parent: Path | None = None) -> list[Path]:
+        paths = []
+        for match in _INCLUDE.finditer(body):
+            quoted = '"' in match[0].split(match[1], 1)[0]
+            search = (parent, *roots) if quoted and parent is not None else roots
+            for directory in search:
+                path = Path(os.path.abspath(directory / match[1]))
+                resolved = path.resolve()
+                if not any(resolved.is_relative_to(home) for home in roots):
+                    continue
+                if path in outputs or resolved in outputs or path.is_file():
+                    paths.append(path)
+                    break
+        return paths
+
     result = []
-    pending = [root / m[1] for m in _INCLUDE.finditer(text)]
+    pending = list(reversed(includes(text)))
     seen = set()
     while pending:
-        path = pending.pop().resolve()
-        if path in seen:
+        path = pending.pop()
+        resolved = path.resolve()
+        identity = path if path in outputs else resolved
+        if identity in seen:
             continue
-        seen.add(path)
-        if not path.resolve().is_relative_to(root.resolve()):
-            continue
-        data = outputs.get(path)
+        seen.add(identity)
+        data = outputs.get(path, outputs.get(resolved))
         if isinstance(data, Path):
             body = data.read_text()
         elif isinstance(data, bytes):
@@ -91,9 +113,7 @@ def imported(text: str, root: Path, outputs: Mapping[Path, bytes | Path]) -> lis
         else:
             continue
         result.append(body)
-        for match in _INCLUDE.finditer(body):
-            relative = (path.parent / match[1]).resolve()
-            pending.append(relative if relative in outputs or relative.is_file() else root / match[1])
+        pending.extend(reversed(includes(body, path.parent)))
     return result
 
 
@@ -128,13 +148,13 @@ def source(
     previous = previous_names(project) if previous is None else previous
     path = project.src / f"{member}.c"
     rewritten = rewrite(path, text, member, ownership, lookup, previous=previous)
-    bodies = imported(rewritten, project.include[0], outputs)
+    bodies = imported(rewritten, project.include, outputs)
     # A local declaration the imports cover only in part (a per-version conditional) also imports the homes of
     # its other names, so it is removed whole rather than refused.
     wanted = frozenset(redeclarations.uncovered(rewritten, bodies) & lookup["symbols"].keys())
     if wanted:
         rewritten = rewrite(path, text, member, ownership, lookup, previous=previous, wanted=wanted)
-        bodies = imported(rewritten, project.include[0], outputs)
+        bodies = imported(rewritten, project.include, outputs)
     text = rewritten
     text, _ = redeclarations.privatize_tags(text, bodies, member)
     return redeclarations.strip(text, bodies, disagreements)

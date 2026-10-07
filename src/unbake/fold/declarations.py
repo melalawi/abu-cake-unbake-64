@@ -312,7 +312,7 @@ def fold_source(
     else:
         from unbake.layout import redeclarations
 
-        final = redeclarations.strip(final, apply.imported(final, project.include[0], {}))
+        final = redeclarations.strip(final, apply.imported(final, project.include, {}))
     from unbake.layout import header_loss
 
     header_loss.check(
