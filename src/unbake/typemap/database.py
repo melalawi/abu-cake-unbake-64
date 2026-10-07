@@ -731,11 +731,13 @@ def validate_headers(
 
     cache = Cache(project.cache)
     environment = session.environment if session is not None else regeneration.environment(project, policy)
-    generated = storage.generated_view(project)
+    is_generated = storage.generated_view(project)
     authored = (
         session.authored
         if session is not None
-        else {path: path.read_text() for root in project.include for path in root.rglob("*.h") if not generated(path)}
+        else {
+            path: path.read_text() for root in project.include for path in root.rglob("*.h") if not is_generated(path)
+        }
     )
     bundle_key = key(
         environment,
