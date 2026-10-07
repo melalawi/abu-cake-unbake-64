@@ -107,6 +107,27 @@ def ordered_headers(contents: dict[Path, str], *, aliases: dict[str, str] | None
     return ordered
 
 
+def ordered_declarations(text: str, path: Path, *, aliases: dict[str, str] | None = None) -> str:
+    """Order individual generated declarations, including providers in the same header."""
+    from unbake.typemap.header_names import alias_types
+    from unbake.typemap.split import statements
+
+    try:
+        parts = statements(text)
+        contents = {}
+        cursor = 0
+        for index, part in enumerate(parts):
+            start = text.index(part, cursor)
+            # The splitter skips leading comments. Keep provenance attached
+            # to the declaration it describes when moving that declaration.
+            contents[Path(str(index))] = text[cursor:start] + part
+            cursor = start + len(part)
+        mapping = {**alias_types(text), **(aliases or {})}
+        return "\n".join(contents[key] for key in ordered_headers(contents, aliases=mapping)) + text[cursor:]
+    except Held as error:
+        raise Held("m2c", f"{path}: {error.reason}") from error
+
+
 def required_headers(contents: dict[Path, str], output: str) -> set[Path]:
     """Select declaration providers and their transitive type dependencies."""
     providers: dict[str, Path] = {}

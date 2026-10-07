@@ -11,7 +11,7 @@ from typing import Any
 
 from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held
-from unbake.decomp.draft_context import ordered_headers
+from unbake.decomp.draft_context import ordered_declarations, ordered_headers
 from unbake.layout.map import Group, Map
 from unbake.typemap.header_names import alias_types
 from unbake.typemap.split import guarded, required_providers
@@ -394,7 +394,8 @@ class Layout:
         for destination, lines in bodies.items():
             imports = sorted(edges.get(destination, set()), key=lambda dep: (rank.get(dep, -1), dep))
             includes = [self.include(dep, destination) for dep in imports]
-            self.headers[destination] = self.render(destination, "\n".join(includes + lines))
+            body = ordered_declarations("\n".join(lines), destination, aliases=self.aliases)
+            self.headers[destination] = self.render(destination, "\n".join([*includes, body]))
         self.index: dict[str, Any] = {
             "schema": 1,
             "symbols": self.symbols,

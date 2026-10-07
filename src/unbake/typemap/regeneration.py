@@ -426,7 +426,10 @@ def validation_inputs(
             def analyze(data: bytes = data) -> Declarations:
                 return declarations(data.decode())
 
-            row = memo("typemap.validation-symbols", data, analyze, keep=32768)
+            try:
+                row = memo("typemap.validation-symbols", data, analyze, keep=32768)
+            except Held as error:
+                raise Held("m2c", f"{path}: {error.reason}") from error
             for name in row.typedefs | row.exports | row.tags:
                 if storage.generated(project, path) or name not in providers:
                     providers.setdefault(name, set()).add(path)

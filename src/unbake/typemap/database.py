@@ -843,7 +843,7 @@ def _validate_version(job: _Validation) -> str:
     from dataclasses import replace
 
     from unbake.cache import key
-    from unbake.decomp.draft_context import preprocess_context
+    from unbake.decomp.draft_context import ordered_headers, preprocess_context
     from unbake.process import run_tool
     from unbake.typemap import declarations
 
@@ -881,9 +881,11 @@ def _validate_version(job: _Validation) -> str:
         )
         assembly = scratch / "validate.s"
         atomic_files.text(assembly, ".text\nglabel __unbake_validate_context\n jr $ra\n nop\n", durable=False)
+        context_text = source.read_text()
         try:
             if policy is None:
-                expanded = "\n".join(declarations.clean(contents[path].decode()) for path in sorted(selected))
+                ordered = ordered_headers({path: contents[path].decode() for path in sorted(selected)})
+                expanded = "\n".join(declarations.clean(contents[path].decode()) for path in ordered)
             else:
                 expanded = preprocess_context(source, staged_project, policy, version, "__unbake_validate_context")
             context_text = expanded + "\n" + "\n".join(job.texts)
@@ -907,5 +909,11 @@ def _validate_version(job: _Validation) -> str:
                     raise Held("solve", "policy.m2c: required shared context parser")
                 declarations.extract(context_text, {"kind": "declared"})
         except Held as error:
-            raise Held("solve", f"types.header_parse: {version}: {error.reason}") from error
+            context = project.build / "types" / f"held-header-context-{version}-{key(context_text)[:12]}.c"
+            context.parent.mkdir(parents=True, exist_ok=True)
+            atomic_files.text(context, context_text, durable=False)
+            headers = ", ".join(map(str, entry_points))
+            raise Held(
+                "solve", f"types.header_parse: {version}: headers {headers}; context {context}: {error.reason}"
+            ) from error
     return key(context_text)
