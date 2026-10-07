@@ -8,6 +8,7 @@ from pathlib import Path
 from pycparser import c_parser  # type: ignore[import-untyped]
 
 from tests.decomp.support import fixture, solved
+from unbake.cdecl import records
 from unbake.config import Held
 from unbake.decomp import checks, measured_storage
 from unbake.decomp.draft_abi import declarations
@@ -95,6 +96,64 @@ class MeasuredStorageTests(unittest.TestCase):
     def test_unaligned_field_width_refuses_instead_of_guessing_padding(self):
         with self.assertRaisesRegex(Held, "unaligned field"):
             share(self.project, "alpha", "int alpha(void *p) { return M2C_FIELD(p, int *, 1); }", "")
+
+    def test_real_negative_offset_word_copies_need_only_byte_addresses(self):
+        payloads = Path(__file__).parent / "fixtures" / "unaligned_words"
+        for function in ("func_80114190", "func_80113E10"):
+            with self.subTest(function=function):
+                source = (payloads / (function + ".c")).read_text()
+                assembly = (payloads / (function + ".s")).read_text()
+                output, stack = measured_storage.prepare(self.project, function, source, assembly)
+                self.assertIsNone(stack)
+                self.assertEqual(output.count("const unsigned char *unbake_bytes_"), 3)
+                self.assertEqual(output.count("[0] << 24"), 3)
+                output = normalize(output, "typedef int s32;", frozenset({1, 4}))
+                output, shared = share(self.project, function, output, "typedef int s32;")
+                self.assertIsNotNone(shared)
+                layouts = records(shared.read_text())
+                self.assertEqual(len(layouts), 6)
+                self.assertEqual(
+                    sorted(field.size for row in layouts for field in row.fields if field.name == "value"),
+                    [1, 1, 1, 4, 4, 4],
+                )
+                self.assertNotIn("M2C_UNK", output + shared.read_text())
+                self.assertNotIn("M2C_FIELD", output)
+                c_parser.CParser().parse("typedef int s32;\n" + clean(shared.read_text() + output))
+                self.assertFalse(checks.run(output))
+
+    def test_word_address_does_not_settle_nested_base_or_other_unknown_uses(self):
+        nested = "M2C_FIELD(M2C_FIELD(p, M2C_UNK **, 4), M2C_UNK *, -8)"
+        output, _ = measured_storage.prepare(
+            self.project, "alpha", "int alpha(void *p) { return M2C_UNALIGNED32(" + nested + "); }", ""
+        )
+        self.assertIn("M2C_FIELD(p, M2C_UNK **, 4)", output)
+        self.assertIn("unsigned char *, -8", output)
+        for operand in (
+            "*M2C_FIELD(p, M2C_UNK **, -8)",
+            "M2C_FIELD(p, M2C_UNK *, -8) + 1",
+        ):
+            with self.subTest(operand=operand):
+                source = "int alpha(void *p) { return M2C_UNALIGNED32(" + operand + "); }"
+                output, _ = measured_storage.prepare(self.project, "alpha", source, "")
+                with self.assertRaisesRegex(Held, "no measured layout"):
+                    normalize(output, "")
+        source = (
+            "int alpha(void *p) { int word = M2C_UNALIGNED32(M2C_FIELD(p, M2C_UNK *, -8));"
+            " return word + M2C_FIELD(p, M2C_UNK *, -8); }"
+        )
+        output, _ = measured_storage.prepare(self.project, "alpha", source, "")
+        with self.assertRaisesRegex(Held, "no measured layout"):
+            normalize(output, "")
+
+    def test_word_address_can_be_unaligned_and_evaluates_base_once(self):
+        source = "int alpha(void) { return M2C_UNALIGNED32(M2C_FIELD(next(), M2C_UNK2 *, -7)); }"
+        output, _ = measured_storage.prepare(self.project, "alpha", source, "")
+        output = normalize(output, "")
+        output, shared = share(self.project, "alpha", output, "")
+        self.assertEqual(output.count("next()"), 1)
+        self.assertIn("unsigned char value;", shared.read_text())
+        self.assertIn("unbake_bytes_0[3]", output)
+        c_parser.CParser().parse("void *next(void);\n" + clean(shared.read_text() + output))
 
     def test_explicit_solved_callee_prototype_precedes_unknown_transport(self):
         database = {"functions": {"beta": {"state": "known", "prototype": "extern int beta(int);"}}}

@@ -196,12 +196,28 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
     def unaligned(args: list[str]) -> str:
         if len(args) != 1:
             raise Held("m2c", f"{function}: invalid unaligned word operand")
+        operand = args[0]
+        fields: list[list[str]] = []
+
+        def note(field: list[str]) -> str:
+            fields.append(field)
+            return f"M2C_FIELD({', '.join(field)})"
+
+        canonical = calls(operand, "M2C_FIELD", note)
+        # An unaligned word consumes four bytes at the operand's address.
+        # Its unknown scalar spelling establishes no pointee layout. Only
+        # the outer lvalue supplies that address; nested bases still need
+        # their own evidence before they can be lowered.
+        if fields and canonical == f"M2C_FIELD({', '.join(fields[-1])})":
+            field = fields[-1]
+            if len(field) == 3 and re.fullmatch(r"M2C_UNK\d*\s*\*", field[1]):
+                operand = f"M2C_FIELD({field[0]}, unsigned char *, {field[2]})"
         name = "unbake_bytes_" + str(len(addresses))
         while re.search(r"\b" + name + r"\b", source):
             name += "_"
         addresses.append(name)
         return (
-            f"({name} = (const unsigned char *)&({args[0]}), "
+            f"({name} = (const unsigned char *)&({operand}), "
             f"((unsigned int){name}[0] << 24) | ((unsigned int){name}[1] << 16) | "
             f"((unsigned int){name}[2] << 8) | {name}[3])"
         )
