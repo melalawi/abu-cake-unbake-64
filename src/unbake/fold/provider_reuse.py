@@ -1,8 +1,8 @@
 """Reuse an equal installed declaration instead of publishing a second provider.
 
-A stable installed header owns each reused layout. Equality requires the complete
-declaration tokens and their typedef dependencies, including field names and
-qualifiers; matching size or a compatible prefix never authorizes reuse.
+A stable installed header owns each reused layout. Equality requires complete
+declarators and each provider's transitive alias/tag identity, including member
+names, order, widths, extents and qualifiers; size alone never authorizes reuse.
 The caller parses the staged context and proves publication before any writes.
 """
 
@@ -105,6 +105,9 @@ def plan(
             providers.setdefault(name, []).append(path)
         for name, (_, _, tokens) in catalog.typedefs.items():
             typedefs.setdefault(name, []).append((path, tokens))
+    from unbake.fold.provider_identity import Identity
+
+    identity = Identity(contents, catalogs, tuple(project.include))
     edits = []
     for path in sorted(contents):
         catalog = catalogs[path]
@@ -119,7 +122,7 @@ def plan(
             other_kind, _, _, other_tokens = catalogs[home].tags[name]
             if catalog.guard is not None and catalog.guard == catalogs[home].guard:
                 continue  # Already one provider under native include-guard semantics.
-            if (kind, tokens) != (other_kind, other_tokens):
+            if (kind, tokens) != (other_kind, other_tokens) and not identity.equal("tag", name, path, home):
                 _refuse(project, contents, name, [path, home], "conflicting complete declaration")
             if not catalog.guard or not catalogs[home].guard:
                 _refuse(project, contents, name, [path, home], "conditional or macro context is not proved")
@@ -139,7 +142,7 @@ def plan(
             home = candidates[0]
             if len(candidates) < 2 or home == path or catalog.guard == catalogs[home].guard:
                 continue
-            if tokens != catalogs[home].typedefs[name][2]:
+            if tokens != catalogs[home].typedefs[name][2] and not identity.equal("alias", name, path, home):
                 _refuse(project, contents, name, [path, home], "conflicting typedef dependency")
             if not catalog.guard or not catalogs[home].guard:
                 _refuse(project, contents, name, [path, home], "conditional or macro context is not proved")
@@ -157,14 +160,19 @@ def plan(
             for name in sorted(pending):
                 rows = typedefs[name]
                 checked.add(name)
-                if len({tokens for _, tokens in rows}) != 1:
+                if len({tokens for _, tokens in rows}) != 1 and not all(
+                    tokens == rows[0][1] or identity.equal("alias", name, rows[0][0], home) for home, tokens in rows[1:]
+                ):
                     _refuse(project, contents, name, [home for home, _ in rows], "conflicting typedef dependency")
                 required.update(rows[0][1])
         for name, (start, end, tokens) in catalog.typedefs.items():
-            shared = [catalogs[home].typedefs[name][2] for home in imported if name in catalogs[home].typedefs]
+            shared = [home for home in imported if name in catalogs[home].typedefs]
             if not shared:
                 continue
-            if any(tokens != row for row in shared):
+            if any(
+                tokens != catalogs[home].typedefs[name][2] and not identity.equal("alias", name, path, home)
+                for home in shared
+            ):
                 _refuse(project, contents, name, [path, *sorted(homes)], "conflicting imported typedef")
             removed = [(left, right) for left, right in removed if not (start <= left and right <= end)]
             removed.append((start, end))

@@ -33,6 +33,7 @@ def environment(project: Project, policy: Host | None) -> str:
     modules = (
         "cdecl.py",
         "fold/provider_reuse.py",
+        "fold/provider_identity.py",
         "prefixes.py",
         "typemap/regeneration.py",
         "typemap/header_names.py",
