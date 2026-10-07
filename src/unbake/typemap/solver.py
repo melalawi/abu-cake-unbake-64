@@ -20,7 +20,7 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 16
+SCHEMA = 17
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 10
 MACHINE_SCHEMA = 7
@@ -354,7 +354,7 @@ def infer(
     # discrepancy is recorded instead of rewriting their prototype.
     for name, signature in list(functions.items()):
         abi = signatures.get(name, {})
-        extra = set(abi.get("registers", ())) - set(signature["registers"])
+        extra = set(abi.get("registers", ())) - o32.argument_words(signature, aliases)
         if extra and signature["arity_known"] and not signature["variadic"]:
             declared.facts.append(
                 {
@@ -754,6 +754,9 @@ def infer(
                 output_functions[name]["source_params"] = signature["source_params"]
                 output_functions[name]["transport_known"] = signature["transport_known"]
             if signature is not None:
+                footprint = o32.argument_words(signature, aliases)
+                if footprint != set(signature["registers"]):
+                    output_functions[name]["argument_words"] = sorted(footprint)
                 reconciliation = abi_declarations.reconcile_entry(name, output_functions[name], signature, aliases)
                 if reconciliation is not None:
                     output_functions[name]["entry_reconciliation"] = reconciliation

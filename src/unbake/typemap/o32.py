@@ -9,6 +9,26 @@ from unbake.config import Held
 from unbake.typemap import declarations
 
 
+def argument_words(signature: dict[str, Any], aliases: dict[str, str]) -> set[str]:
+    """The complete word footprint of an explicit C contract, including GPR pairs.
+
+    A double at a2 consumes a3 too; a1 remains its alignment hole rather
+    than a fabricated formal. Floating prefix registers keep their O32 names.
+    """
+    words = set()
+    for parameter, reg in zip(signature["params"], signature["registers"], strict=True):
+        if reg is None:
+            continue
+        words.add(reg)
+        type_ = declarations.canonical(parameter["type"], aliases)
+        if type_ in ("double", "long long", "unsigned long long"):
+            if reg.startswith("r"):
+                words.add("r" + str(int(reg[1:]) + 1))
+            elif reg.startswith("stack"):
+                words.add("stack" + str(int(reg[5:]) + 4))
+    return words
+
+
 def declared_slots(
     signature: dict[str, Any], layouts: dict[str, Any], aliases: dict[str, str]
 ) -> list[dict[str, Any]] | None:
