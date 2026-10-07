@@ -81,6 +81,12 @@ class Vec3RegenerationTests(ProjectCase):
         source.write_text("struct Vec3 { int local; }; void func_80272018_de(void) {}\n")
         self.test_real_regeneration_without_vec3_facts_retains_the_typedef_and_definition()
 
+    def test_authored_forward_tag_keeps_the_published_alias_reachable(self):
+        forward = self.project.include[0] / "forward.h"
+        forward.write_text("struct Vec3;\n")
+        self.source.write_text('#include "forward.h"\n' + self.source.read_text())
+        self.test_real_regeneration_without_vec3_facts_retains_the_typedef_and_definition()
+
     def test_proven_incompatible_vec3_names_both_contracts(self):
         value = {kind: {} for kind in ("structs", "functions", "globals", "arrays")}
         value["structs"]["Vec3"] = {

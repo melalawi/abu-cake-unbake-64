@@ -20,8 +20,8 @@ from unbake.layout import map as layout_map
 from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
-SOURCE_NAMES_SCHEMA = 4
-RENDER_SCHEMA = 5
+SOURCE_NAMES_SCHEMA = 5
+RENDER_SCHEMA = 6
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:

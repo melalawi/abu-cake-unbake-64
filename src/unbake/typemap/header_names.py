@@ -48,14 +48,6 @@ class _Declarations(NameParser):
         start = self.index
         while self.tokens[start] in ("const", "volatile", "restrict", "__restrict", "__restrict__"):
             start += 1
-        if (
-            self.depth >= 1
-            and self.tokens[start] in ("struct", "union", "enum")
-            and start + 2 < len(self.tokens)
-            and re.fullmatch(r"[A-Za-z_]\w*", self.tokens[start + 1])
-            and self.tokens[start + 2] in ("{", ";")
-        ):
-            self.names.add(self.tokens[start + 1])
         tag, alias = super().specifiers()
         if placeholder(alias) and alias not in self.replacements and self.replacements:
             raise Held("solve", f"types.header_parse: {alias}: missing concrete placeholder type")

@@ -133,8 +133,7 @@ class NameParser:
             if self.peek() == "{":
                 if tag:
                     self.result.exports.add(tag)
-                    if kind != "enum":
-                        self.result.tags.add(tag)
+                    self.result.tags.add(tag)
                 self.take("{")
                 if kind == "enum":
                     self.skip({"}"})

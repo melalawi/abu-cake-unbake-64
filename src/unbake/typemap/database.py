@@ -115,9 +115,10 @@ def source_private(declaration: str, tags: set[str], typedefs: set[str]) -> bool
     from unbake.cdecl import declaration_source
 
     code = declaration_source(declaration)
+    ordinary = re.sub(r"\b(?:struct|union|enum)\s+\w+", "", code)
     return bool(
         tags & set(re.findall(r"\b(?:struct|union|enum)\s+(\w+)", code))
-        or typedefs & set(re.findall(r"\b[A-Za-z_]\w*\b", code))
+        or typedefs & set(re.findall(r"\b[A-Za-z_]\w*\b", ordinary))
     )
 
 
