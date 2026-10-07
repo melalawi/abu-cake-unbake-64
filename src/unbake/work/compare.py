@@ -154,33 +154,36 @@ def measure(
     rule_lines = [checks.plain(finding) for finding in broken]
     results: dict[str, Compare] = {}
     faults: dict[str, dict[str, Any]] = {}
-    for version in selected:
-        row = row_of(project, function, version)
-        target = split.words(project, row)
-        compiling = True
-        try:
-            options: dict[str, Any] = {"non_matching": True} if non_matching else {}
-            with runner.compile_unit(view, host, file, version, unit=function, **options) as obj:
-                compiling = False
-                linked, problems = runner.link_function(project, host, obj, version, row, file)
-        except Held as error:
-            if not compiling and not retain_link_faults:
-                raise
-            faults[version] = process.fault(error)
-            results[version] = Compare(
-                version,
-                0,
-                len(target) // 4,
-                dict.fromkeys(TYPES, 0) | {"changed": len(target) // 4},
-                [f"VERSION {version}: {error.reason}"],
-                0.0,
-            )
-            continue
-        result = compare_words(version, target, linked)
-        if problems:
-            result.typed["relocation"] += len(problems)
-            result.lines.extend(f"constant: {problem}" for problem in problems)
-        results[version] = result
+    from unbake.fold import provider_reuse
+
+    with provider_reuse.view(view, host, tuple(selected)) as view:
+        for version in selected:
+            row = row_of(project, function, version)
+            target = split.words(project, row)
+            compiling = True
+            try:
+                options: dict[str, Any] = {"non_matching": True} if non_matching else {}
+                with runner.compile_unit(view, host, file, version, unit=function, **options) as obj:
+                    compiling = False
+                    linked, problems = runner.link_function(project, host, obj, version, row, file)
+            except Held as error:
+                if not compiling and not retain_link_faults:
+                    raise
+                faults[version] = process.fault(error)
+                results[version] = Compare(
+                    version,
+                    0,
+                    len(target) // 4,
+                    dict.fromkeys(TYPES, 0) | {"changed": len(target) // 4},
+                    [f"VERSION {version}: {error.reason}"],
+                    0.0,
+                )
+                continue
+            result = compare_words(version, target, linked)
+            if problems:
+                result.typed["relocation"] += len(problems)
+                result.lines.extend(f"constant: {problem}" for problem in problems)
+            results[version] = result
     digest = hashlib.sha256(content).hexdigest()
     compiler = view.compiler_reference(function)
     return Compared(

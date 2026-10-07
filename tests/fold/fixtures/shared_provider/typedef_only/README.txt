@@ -1,0 +1,1 @@
+Current closed header plus exact prior VoidCallback declaration and guard sliced from the included common provider. The compiler reports VoidCallback redefinition in every holding version. Tests stub unrelated imports, never alter this payload.

@@ -269,6 +269,11 @@ class Headers:
 
     @classmethod
     def read(cls, project: Any) -> Headers:
+        return cls(cls.contents(project), root=getattr(project, "root", None))
+
+    @staticmethod
+    def contents(project: Any) -> dict[Path, str]:
+        """Read the effective declaration providers once, before constructing a context."""
         from unbake.layout import index
 
         # A present manifest identifies the current generated view. A retained
@@ -288,9 +293,7 @@ class Headers:
             or not any(index.marked(path, root.resolve()) for root in project.include)
         }
         selected = include_closure(texts, tuple(project.include), selected)
-        return cls(
-            {path: text for path, text in texts.items() if path in selected}, root=getattr(project, "root", None)
-        )
+        return {path: text for path, text in texts.items() if path in selected}
 
     def seeded(self, text: str) -> LayoutParser:
         """A parser for text that sees every type declared by these headers."""

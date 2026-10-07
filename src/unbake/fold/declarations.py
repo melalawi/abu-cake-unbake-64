@@ -368,8 +368,31 @@ def folded_edits(
     project: Project, policy: Host, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
 ) -> list[Edit]:
     """The folded source, the header edits and the split rows the fold absorbed (land converts F's own row)."""
-    folded = fold_source(project, policy, Headers.read(project), function, text, versions, prove_headers=prove_headers)
+    from unbake.fold import provider_reuse
+
+    contents = Headers.contents(project)
+    catalogs: dict[str, provider_reuse.Catalog] = {}
+    reused = provider_reuse.plan(project, contents, versions, cache=catalogs)
+    context = Headers({**contents, **{edit.path: edit.after for edit in reused}}, root=project.root)
+    folded = fold_source(project, policy, context, function, text, versions, prove_headers=False)
+    # A later fold edit can extend a reconciled private header. Publication must
+    # still compare against its original bytes, and write each provider once.
+    by_path = {edit.path: edit for edit in reused}
+    for edit in folded.headers:
+        previous = by_path.get(edit.path)
+        by_path[edit.path] = replace(edit, before=previous.before) if previous is not None else edit
+    # Folding can copy declarations into a consumer header after its initial
+    # catalogue was built. Reconcile the final effective providers before the
+    # native includer proof; unchanged installed homes retain ownership.
+    staged = {**contents, **{edit.path: edit.after for edit in by_path.values()}}
+    for edit in provider_reuse.plan(project, staged, versions, changed=frozenset(by_path), cache=catalogs):
+        previous = by_path.get(edit.path)
+        by_path[edit.path] = replace(edit, before=previous.before) if previous is not None else edit
     path = project.src / f"{function}.c"
+    if prove_headers and by_path:
+        from unbake.layout.structs_fold import _prove_includers
+
+        _prove_includers(project, list(by_path.values()), policy, path)
     edits = [Edit(path, path.read_text() if path.exists() else "", folded.source, versions)]
     for version, removed in folded.removed_rows.items():
         split_path = project.version(version).split
@@ -377,7 +400,7 @@ def folded_edits(
         after = _remove_rows(before, removed)
         if after != before:
             edits.append(Edit(split_path, before, after, (version,)))
-    return [*folded.headers, *edits]
+    return [*by_path.values(), *edits]
 
 
 def _remove_rows(text: str, removed: Iterable[str]) -> str:
