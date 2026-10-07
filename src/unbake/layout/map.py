@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
@@ -73,25 +73,43 @@ def unknown(row: dict[str, Any], allowed: set[str], key: str) -> None:
         refuse(f"{key}.{name}", "unknown key")
 
 
-def catalog(project: Project) -> dict[str, Member]:
-    """Union version members; anchor addresses and segments in names_from."""
+def catalog(project: Project, proposed: Mapping[Path, str] | None = None) -> dict[str, Member]:
+    """Union version members; anchor addresses and segments in names_from.
+
+    Proposed split text supplies the inventory for a validated boundary plan without writing it.
+    Existing rows retain the function reader's explicit disassembler-data exclusions.
+    """
     result: dict[str, Member] = {}
     order = (project.names_from, *(v for v in project.versions if v != project.names_from))
     for version in order:
         path = project.version(version).split
         owners: dict[str, Any] = {}
-        for segment in split.layout(path)[2]:
+        original = split.layout(path)[2]
+        functions = split.functions(project, version)
+        entries = [(function.path, function.address) for function in functions]
+        segments = original
+        if proposed is not None and path in proposed:
+            segments = split.parse_layout(path, proposed[path])[2]
+            known = {function.path for function in functions}
+            kinds = {row.path: row.kind for segment in original for row in segment.rows}
+            entries = [
+                (row.path, split.address(row, path))
+                for segment in segments
+                for row in segment.rows
+                if row.kind in split.CODE_KINDS and (row.path in known or kinds.get(row.path) not in split.CODE_KINDS)
+            ]
+        for segment in segments:
             for row in segment.rows:
                 owners.setdefault(row.path, segment)
-        for function in split.functions(project, version):
-            segment = owners[function.path]
-            name = Path(function.path).name
+        for entry_path, address in entries:
+            segment = owners[entry_path]
+            name = Path(entry_path).name
             segment_name = split.plain(segment.fields.get("name", f"span_{int(segment.fields['start'], 0):X}"))
             if name in result:
                 old = result[name]
                 result[name] = Member(name, old.segment, old.address, (*old.versions, version))
             else:
-                result[name] = Member(name, segment_name, function.address, (version,))
+                result[name] = Member(name, segment_name, address, (version,))
     return result
 
 
@@ -210,16 +228,24 @@ def load(project: Project) -> Map:
 
 
 def stale(project: Project) -> tuple[str, ...]:
-    """The members layout.toml names that no VERSION's split holds (rows renamed or folded since it was written);
-    the map step's key, so a disagreeing layout.toml makes it run again."""
+    """Names whose ownership disagrees with the current catalog, in either direction.
+
+    The map step's key must change for unowned new rows as well as removed or renamed rows.
+    """
     target = project.root / "layout.toml"
     try:
         value = tomllib.loads(target.read_text())
     except (OSError, tomllib.TOMLDecodeError):
         return ()
     members = catalog(project)
-    named = (m for group in value.get("group", []) if isinstance(group, dict) for m in group.get("members", []))
-    return tuple(sorted({m for m in named if isinstance(m, str) and m not in members}))
+    named = {
+        m
+        for group in value.get("group", [])
+        if isinstance(group, dict)
+        for m in group.get("members", [])
+        if isinstance(m, str)
+    }
+    return tuple(sorted(named ^ members.keys()))
 
 
 def _retain(group: dict[str, Any], names: list[str]) -> None:
@@ -236,8 +262,10 @@ def _retain(group: dict[str, Any], names: list[str]) -> None:
 def _drop_stale_defaults(value: dict[str, Any], members: dict[str, Member]) -> None:
     """Drop names no split holds from `default` groups (inference plans their rows again); authored and proven
     groups keep them, so validation names the conflict."""
+    if not isinstance(value.get("group"), list):
+        return
     kept = []
-    for group in value.get("group", []):
+    for group in value["group"]:
         if isinstance(group, dict) and group.get("evidence") == "default" and isinstance(group.get("members"), list):
             _retain(group, [m for m in group["members"] if m in members])
             if not group["members"]:
@@ -248,23 +276,34 @@ def _drop_stale_defaults(value: dict[str, Any], members: dict[str, Member]) -> N
 
 
 def ensure(project: Project) -> bool:
-    """Infer modules for every `default` group (all members when there are no groups); True when layout.toml changed.
-    Rendered from the current split only: a `default` group's names the split no longer holds are planned again."""
+    """Infer default and unowned catalog members; preserve every other valid group.
+
+    Validate existing ownership before inference, then validate complete coverage before the one write.
+    """
     from unbake.layout import modules
 
     target = project.root / "layout.toml"
     try:
-        value = tomllib.loads(target.read_text())
-    except (OSError, tomllib.TOMLDecodeError) as error:
+        before = target.read_bytes()
+        value = tomllib.loads(before.decode("utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         raise Held("layout", f"layout.map: {target}: {error}") from error
     members = catalog(project)
     _drop_stale_defaults(value, members)
-    cap = positive(value.get("cap"), "cap")
-    current = validate(value, project.versions, members) if value.get("group") else Map(cap, ())
-    if current.groups and all(group.evidence != "default" for group in current.groups):
+    named = {
+        name
+        for group in (value["group"] if isinstance(value.get("group"), list) else [])
+        if isinstance(group, dict) and isinstance(group.get("members"), list)
+        for name in group["members"]
+        if isinstance(name, str)
+    }
+    # Only coverage is deferred: unknown names, duplicate owners and every authored constraint stay strict.
+    current = validate(value, project.versions, {name: member for name, member in members.items() if name in named})
+    if named == members.keys() and all(group.evidence != "default" for group in current.groups):
         return False
     encoded_map = encoded(modules.infer(project, current, members))
-    if encoded_map == target.read_bytes():
+    validate(tomllib.loads(encoded_map.decode("utf-8")), project.versions, members)
+    if encoded_map == before:
         return False
     atomic_files.write(target, encoded_map)
     return True

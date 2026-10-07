@@ -51,7 +51,9 @@ class StaleMemberTests(TempCase):
             'schema = 1\ncap = 32\n[[group]]\nname = "g"\nmembers = ["func_8020402C_de", "func_80204030_de"]\n'
         )
         with patch.object(layout_map, "catalog", return_value=MEMBERS):
-            self.assertEqual(layout_map.stale(SimpleNamespace(root=self.root)), ("func_8020402C_de",))
+            self.assertEqual(
+                layout_map.stale(SimpleNamespace(root=self.root)), ("func_8020402C_de", "func_80204308_de")
+            )
 
 
 class RegroupTests(TempCase):

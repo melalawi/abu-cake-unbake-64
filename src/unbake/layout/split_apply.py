@@ -66,16 +66,18 @@ def _validated(project: Project, edits: Iterable[split.Edit]) -> tuple[list[spli
     affected: set[str] = set()
     for edit in edits:
         path = Path(edit.path)
-        shared = False
+        shared = path.resolve() == (project.root / "layout.toml").resolve()
         source = path.resolve().is_relative_to(Path(project.src).resolve())
-        if path.resolve() not in allowed:
+        if path.resolve() not in allowed and not shared:
             if not hasattr(project, "include"):
                 raise Held("split", "project.include: missing value")
             shared = any(path.resolve().is_relative_to(Path(directory).resolve()) for directory in project.include)
         if (path.resolve() not in allowed and not shared and not source) or not path.resolve().is_relative_to(
             project.root.resolve()
         ):
-            raise Held("split", f"{path}: edit must target a configured split, symbols, src or include file")
+            raise Held(
+                "split", f"{path}: edit must target layout.toml or a configured split, symbols, src or include file"
+            )
         if (split.read(path) if path.exists() else "") != edit.before:
             raise Held("split", f"{path}: changed since dry run")
         for v in edit.versions:

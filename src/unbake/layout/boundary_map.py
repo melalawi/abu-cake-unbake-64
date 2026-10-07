@@ -212,6 +212,50 @@ def plan(project: Project, changes: Sequence[Change]) -> list[split.Edit]:
             edits.append(split.Edit(config.split, before, after, (version,)))
         if symbols_after != symbols_before:
             edits.append(split.Edit(config.symbols, symbols_before, symbols_after, (version,)))
+    layout = project.root / "layout.toml"
+    if edits and layout.is_file():
+        import tomllib
+
+        from unbake.layout import map as layout_map
+
+        before = layout.read_text()
+        value = tomllib.loads(before)
+        original_members = layout_map.catalog(project)
+        current = layout_map.validate(value, project.versions, original_members)
+        members = layout_map.catalog(project, {edit.path: edit.after for edit in edits})
+        owned = current.owners
+        replacements: dict[str, tuple[str, ...]] = {}
+        for change in changes:
+            if change.function not in owned:
+                continue
+            children = list(replacements.get(change.function, ()))
+            if change.function in members and change.function not in children:
+                children.append(change.function)
+            if change.action == "entry" and change.neighbour not in children:
+                children.append(change.neighbour)
+            replacements[change.function] = tuple(children)
+        # Explicit code restoration can introduce an owner as well as remove or replace one.
+        # New default groups come only from this plan's measured catalog additions.
+        group_names = {(group.segment, group.name) for group in current.groups}
+        replaced = {child for children in replacements.values() for child in children}
+        for name in sorted(members.keys() - original_members.keys() - replaced):
+            member = members[name]
+            group_name = f"code_{member.address:08X}"
+            while (member.segment, group_name) in group_names:
+                group_name += "_new"
+            group_names.add((member.segment, group_name))
+            value["group"].append(
+                {
+                    "name": group_name,
+                    "segment": member.segment,
+                    "evidence": "default",
+                    "members": [name],
+                    "only": {name: list(member.versions)} if set(member.versions) != set(project.versions) else {},
+                }
+            )
+        after = layout_map.encoded(layout_map.regroup(value, members, project.versions, replacements)).decode("utf-8")
+        if before != after:
+            edits.append(split.Edit(layout, before, after, project.versions))
     return edits
 
 
