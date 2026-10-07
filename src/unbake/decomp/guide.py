@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from unbake.decomp.rom import RomReader
 
+from unbake.compilers.families import family_for
 from unbake.config import Held, Host, Project
 from unbake.decomp.commands import prefix
 from unbake.decomp.indexed import table_guidance
@@ -212,7 +213,14 @@ def for_version(project: Project, host: Host, function: str, version: str) -> st
                 f"reference: 0x{ref.address:08X}; size 0x{ref.size:X}; runtime data without ROM contents"
             )
             continue
-        rows += (DataRow(f"resident_{mapping.address:08X}", mapping.address, mapping.end, ".rodata"),)
+        rows += (
+            DataRow(
+                f"resident_{mapping.address:08X}",
+                mapping.address,
+                mapping.end,
+                family_for(project.compiler_for(function)).m2c_section(),
+            ),
+        )
     inferred = from_words(target, version, (), rows, values.get("_gp"), frozenset(settled))
     bindings = []
     for need in inferred:

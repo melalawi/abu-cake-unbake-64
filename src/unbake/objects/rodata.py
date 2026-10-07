@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from unbake.compilers.families import constant_sections
 from unbake.objects.elf import Object
 
 
@@ -199,10 +200,10 @@ def fragment(rows: Iterable[Mapping[str, object]]) -> str:
         name, section, address = row["object"], row["section"], row["address"]
         if not isinstance(name, str) or not re.fullmatch(r"[\w./-]+\.o", name) or ".." in name.split("/"):
             raise ValueError("rodata.object: expected object path")
-        if section not in (".rdata", ".rodata") and not (
+        if section not in constant_sections() and not (
             isinstance(section, str) and re.fullmatch(r"\.unbake_pool_[0-9A-F]{8}", section)
         ):
-            raise ValueError("rodata.section: expected .rdata or .rodata")
+            raise ValueError("rodata.section: expected registered constant section")
         if isinstance(address, bool) or not isinstance(address, int) or not 0 <= address <= 0xFFFFFFFF:
             raise ValueError("rodata.address: expected 32-bit address")
         result.append(f"  .resident_{address:08X} 0x{address:08X} (NOLOAD) : SUBALIGN(1) {{ {name}({section}) }}")
@@ -223,7 +224,7 @@ def unresolved_sections(obj: Object) -> list[str]:
     """Constant sections still reachable through relocations after native placement.
 
     Proved references are already absolute. Score mode can leave references to
-    unplaced constants, including unallocated GCC literal pools. Follow their
+    unplaced constants, including unallocated compiler literal pools. Follow their
     dependencies too, so a retained table never points into a discarded pool.
     """
     text = obj.section(".text")
@@ -239,7 +240,7 @@ def unresolved_sections(obj: Object) -> list[str]:
             section, name = obj.sections[index], obj.names[index]
             if section[1] not in (1, 8) or not section[5]:
                 continue
-            if not (section[2] & 2 or name in (".rdata", ".rodata")):
+            if not (section[2] & 2 or name in constant_sections()):
                 continue
             retained.add(index)
             pending.append(index)

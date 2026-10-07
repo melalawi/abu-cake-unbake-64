@@ -730,8 +730,8 @@ def _source_tasks(
         compiler = project.compiler_for(source.stem)
         default = project.compilers[project.default_compiler]
         unit_options, unit_codegen = drivers._options(list(project.unit_flags.get(source.stem, ())))
-        baseline, _ = drivers.stage_flags(default.kind, list(default.cflags))
-        effective, _ = drivers.stage_flags(compiler.kind, [*compiler.cflags, *unit_options, *unit_codegen])
+        baseline, _ = drivers.stage_flags(default.id, list(default.cflags))
+        effective, _ = drivers.stage_flags(compiler.id, [*compiler.cflags, *unit_options, *unit_codegen])
         if compiler.cc != default.cc or effective != baseline:
             return None  # Header parts parsed in a different macro/language contract cannot be substituted.
     placeholder = _provenance(project, _FUNCTION, _VERSION, source)

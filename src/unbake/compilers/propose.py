@@ -193,12 +193,17 @@ def propose_compilers(
             family = "undecided"
             if moves >= rules["minimum_moves"]:
                 numerator, denominator = rules["agreement_numerator"], rules["agreement_denominator"]
-                if measured["addu_moves"] * denominator >= moves * numerator:
-                    family = "gcc"
-                elif measured["or_moves"] * denominator >= moves * numerator:
-                    family = "ido"
-                else:
-                    family = "mixed"
+                from unbake.compilers.families import family_from_idioms
+
+                family = (
+                    family_from_idioms(
+                        {"addu": measured["addu_moves"], "or": measured["or_moves"]},
+                        rules["minimum_moves"],
+                        numerator,
+                        denominator,
+                    )
+                    or "mixed"
+                )
             region = f"{version}:{family}"
             matches = {
                 ident: [example.name for example in profile.exemplars if example.matches(words)]

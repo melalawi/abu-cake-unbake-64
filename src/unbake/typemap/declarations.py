@@ -158,7 +158,7 @@ def _unit_clean(stream: str, source: str, *, line_markers: bool) -> str:
 def _unit_bodies_blanked(source: str) -> str:
     """Keep function definitions' signatures, never parse their implementation.
 
-    Proven GCC code may contain label addresses, computed goto or inline asm.
+    Proven source code may contain label addresses, computed goto or inline asm.
     None contributes to declaration evidence. Blank bodies without moving line
     markers; aggregate definitions and file-scope initializers remain intact.
     """
@@ -327,18 +327,9 @@ def _cpp_command(
             *(f"-D{macro}" for macro in project.version(version).macros),
         ]
     )
-    preprocess, _ = drivers.stage_flags(compiler.kind, effective)
+    preprocess, _ = drivers.stage_flags(compiler.id, effective)
     options = [*preprocess, *(("-DUNBAKE_PROTOTYPES_H",) if extra else ())]
-    if compiler.kind == "ido":
-        return [str(compiler.cc), *options, "-E", "-"]
-    return [
-        str(policy.cpp),
-        *(flag for flag in project.cppflags if not line_markers or flag != "-P"),
-        *options,
-        "-x",
-        "c",
-        "-",
-    ]
+    return drivers.context_command(project, str(policy.cpp), compiler, options, line_markers=line_markers)
 
 
 def _preprocess(project: Project, command: list[str], source: str) -> str:

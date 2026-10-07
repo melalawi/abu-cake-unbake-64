@@ -50,7 +50,7 @@ def declaration_source(source: str) -> str:
 
 
 def attribute_source(source: str) -> str:
-    """Hide balanced GCC attribute clauses while preserving all source offsets."""
+    """Hide balanced C extension attribute clauses while preserving all source offsets."""
     if "__attribute" not in source:
         return source
     tokens = list(re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\S', source))

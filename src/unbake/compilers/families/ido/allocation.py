@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from unbake.compilers.families.types import Allocation
 from unbake.config import Held
-from unbake.decomp.explain import Allocation
 
 
 def dump_flags() -> tuple[str, ...]:
@@ -30,4 +30,5 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
             "pseudo assignment, priority, references and live ranges are unavailable.",
         ),
         tuple(assigned),
+        "ido",
     )

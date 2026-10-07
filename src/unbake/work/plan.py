@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
     from unbake.project.flow import ProviderRecord
 
-M2C_KINDS = ("gnu", "ido")
+from unbake.compilers.registry import specification
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ def candidates(project: Project, host: Host, *, selected: frozenset[str] | None 
         if any(item.name != canonical.name for item in items):
             continue
         compiler = project.compiler_for(canonical.name)
-        if compiler.kind not in M2C_KINDS:
+        if not specification(compiler.id).m2c:
             continue
         target = shapes.get(canonical.name, shapes[compiler.id])
         picked.append((canonical, tuple(items)))
@@ -209,7 +209,7 @@ def refusal(project: Project, name: str) -> str:
         if name not in (item.name, *item.aliases):
             continue
         compiler = project.compiler_for(item.name)
-        if compiler.kind not in M2C_KINDS:
+        if not specification(compiler.id).m2c:
             reasons.append(f"{item.version} {item.name}: compiler {compiler.id} has no drafter")
             continue
         target = shapes.get(item.name, shapes[compiler.id])

@@ -828,8 +828,7 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                 if compiler.id not in verified:
                     toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
                     verified.add(compiler.id)
-                if compiler.kind not in ("gnu", "ido"):
-                    held(label, f"cannot prove {source} VERSION {version}: unsupported compiler {compiler.kind}")
+                drivers.templates(compiler.kind)
                 flags = [flag.replace(str(project.root) + "/", str(overlay) + "/") for flag in flags]
                 for nonmatching in (False, True):
                     options = [*flags, "-DNON_MATCHING=1"] if nonmatching else [*flags, "-UNON_MATCHING"]
@@ -837,11 +836,11 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                     output = overlay / f"proof-{index}-{int(nonmatching)}.o"
                     try:
                         commands = drivers.from_flags(
-                            compiler.kind,
+                            compiler.id,
                             str(compiler.cc),
                             tuple(options),
                             project.cppflags,
-                            drivers.gnu_as_flags(project),
+                            drivers.assembly_flags(project, compiler.id),
                             output.stem,
                             str(staged),
                             drivers.Tools(str(policy.cpp), str(policy.mips_as), str(policy.n64link)),

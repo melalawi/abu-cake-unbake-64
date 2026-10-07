@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-from unbake.compilers.families.gcc.schedule import Schedule
+from unbake.compilers.families.types import Schedule
 
 
 def schedule(dumps: Mapping[str, str | Path] | None) -> Schedule:

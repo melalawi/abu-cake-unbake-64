@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from unbake.compilers.families.gcc.schedule import Schedule
-from unbake.objects.elf import Object
-from unbake.objects.rodata import Pool
+from unbake.compilers.families.types import Schedule
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
-    from unbake.decomp.explain import Allocation
+    from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, RuntimeHelper, View
+    from unbake.compilers.registry import CompilerSpec
+    from unbake.config import Host, PendingProject, Project
+    from unbake.objects.elf import Object
+    from unbake.objects.rodata import Pool
 
 from unbake.config import Held
 
@@ -24,6 +26,34 @@ class CompilerIdentity(Protocol):
 
 @runtime_checkable
 class Family(Protocol):
+    def region_name(self) -> str: ...
+    def recognizes_idioms(self, counts: Mapping[str, int], minimum: int, numerator: int, denominator: int) -> bool: ...
+    def probe_commands(
+        self, cache: Path, spec: CompilerSpec, policy: Host, project: PendingProject, work: Path, source: Path
+    ) -> tuple[list[str], ...]: ...
+    def assembler_release(self) -> str | None: ...
+    def dependency_command(self, command: list[str]) -> list[str]: ...
+    def macro_command(self, command: list[str], probe: str) -> list[str]: ...
+    def make_preprocess(self, render: Callable[[tuple[str, ...]], str]) -> str: ...
+    def runtime_helpers(
+        self, data: bytes, read_memory: Callable[[int, int], bytes]
+    ) -> tuple[tuple[int, RuntimeHelper], ...]: ...
+    def native_templates(self) -> dict[str, tuple[str, ...] | None]: ...
+    def uses_host_cpp(self) -> bool: ...
+    def preserve_padding(self) -> bool: ...
+    def assembly_flags(self, extra: tuple[str, ...]) -> tuple[str, ...]: ...
+    def accepts_codegen(self, flag: str) -> bool: ...
+    def analysis_cppflags(self, flags: tuple[str, ...]) -> tuple[str, ...]: ...
+    def analysis_location_flags(self) -> tuple[str, ...]: ...
+    def token_view(self, output: str, source: str, filename: str, boundary_line: int) -> View: ...
+    def m2c_registers(self, assembly: str, flags: tuple[str, ...], function: str) -> str: ...
+    def m2c_section(self) -> str: ...
+    def schedule_available(self) -> bool: ...
+    def collect_allocation(
+        self, project: Project, policy: Host, source: Path, version: str, work: Path
+    ) -> Allocation: ...
+    def collect_schedule(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Schedule: ...
+    def allocation_hints(self, difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list[str]: ...
     def dependency_paths(self, output: str) -> tuple[str, ...]: ...
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]: ...
     def analysis_flags(
@@ -61,20 +91,63 @@ def dependency_rules(output: str) -> tuple[str, ...]:
     return tuple(result)
 
 
-def family_for(compiler: str | CompilerIdentity) -> Family:
-    from unbake.compilers.families.gcc import Gcc
-    from unbake.compilers.families.ido import Ido
-    from unbake.compilers.registry import registry
+def family_named(name: str) -> Family:
+    """Load a family's declared adapter; no caller or central registration changes."""
+    import importlib
+    import re
 
-    ident = compiler if isinstance(compiler, str) else getattr(compiler, "id", None)
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+        raise Held("families", f"compiler.family {name}: unsafe module name")
+    try:
+        module = importlib.import_module(f"{__name__}.{name}")
+        adapter = module.adapter()
+    except (ImportError, AttributeError) as error:
+        raise Held("families", f"compiler.family {name}: missing adapter") from error
+    if not isinstance(adapter, Family):
+        raise Held("families", f"compiler.family {name}: incomplete protocol")
+    return adapter
+
+
+def family_for(compiler: str | CompilerIdentity) -> Family:
+    from unbake.compilers.registry import specification
+
+    ident = compiler if isinstance(compiler, str) else compiler.id
     if not ident:
         raise Held("families", "compiler.id: missing value")
-    specs = registry()
-    if ident not in specs:
-        raise Held("families", f"compiler {ident}: missing registry entry")
-    family = specs[ident].family
-    if family == "gcc":
-        return Gcc()
-    if family == "ido":
-        return Ido()
-    raise Held("families", f"compiler {ident}.family {family}: unsupported")
+    return family_named(specification(ident).family)
+
+
+def family_for_kind(kind: str) -> Family:
+    from unbake.compilers.registry import registry
+
+    names = {spec.family for spec in registry().values() if spec.kind == kind}
+    if not names:
+        raise Held("compile", f"compile.kind: {kind}: missing family contract")
+    adapters = [family_named(name) for name in sorted(names)]
+    first = adapters[0]
+    if any(
+        adapter.native_templates() != first.native_templates()
+        or adapter.preserve_padding() != first.preserve_padding()
+        or adapter.uses_host_cpp() != first.uses_host_cpp()
+        for adapter in adapters[1:]
+    ):
+        raise Held("compile", f"compile.kind: {kind}: families disagree on execution path")
+    return first
+
+
+def constant_sections() -> frozenset[str]:
+    """All registry families' constant selectors for compiler-neutral object readers."""
+    from unbake.compilers.registry import registry
+
+    return frozenset(family_named(name).rodata_section() for name in {s.family for s in registry().values()})
+
+
+def family_from_idioms(counts: Mapping[str, int], minimum: int, numerator: int = 4, denominator: int = 5) -> str | None:
+    from unbake.compilers.registry import registry
+
+    matches = [
+        name
+        for name in sorted({spec.family for spec in registry().values()})
+        if family_named(name).recognizes_idioms(counts, minimum, numerator, denominator)
+    ]
+    return matches[0] if len(matches) == 1 else None

@@ -86,30 +86,10 @@ def reproduce(
                 try:
                     cache = policy.cache_machine_root / "compilers" / ident
                     toolchain.verify(cache, spec)
-                    if spec.kind == "ido":
-                        run_tool(
-                            [str(cache / spec.cc), *spec.cflags, "-c", str(path), "-o", str(work / "probe.o")],
-                            work,
-                            "setup",
-                        )
-                    else:
-                        run_tool(
-                            [str(cache / spec.cc), "-quiet", *spec.cflags, str(path), "-o", str(work / "probe.s")],
-                            work,
-                            "setup",
-                        )
-                        run_tool(
-                            [
-                                str(policy.mips_as),
-                                *project.asflags,
-                                *project.gnu_asflags,
-                                str(work / "probe.s"),
-                                "-o",
-                                str(work / "probe.o"),
-                            ],
-                            work,
-                            "setup",
-                        )
+                    from unbake.compilers.families import family_for
+
+                    for command in family_for(ident).probe_commands(cache, spec, policy, project, work, path):
+                        run_tool(command, work, "setup")
                     examples = exemplars(work / "probe.o")
                 except (Held, OSError, ValueError, struct.error) as error:
                     reason = str(error).replace(str(work), "<probe>")

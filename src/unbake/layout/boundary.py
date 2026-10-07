@@ -288,7 +288,7 @@ def evidence(
         result.append("proved-dead-zero-island:" + ",".join(f"0x{offset + bias:X}" for offset in sorted(dead)))
     copies = set()
     if "likely_copy" in compiler_shape.rules:
-        # IDO can move the target's first instruction into a likely delay slot,
+        # An optimizing compiler can move the target's first instruction into a likely delay slot,
         # retarget the branch past it, and retain the now unreachable original.
         # It belongs only to that exact in-body branch/target pair, never an
         # independently nominated entry or an arbitrary unreachable instruction.

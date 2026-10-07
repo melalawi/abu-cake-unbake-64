@@ -12,9 +12,14 @@
 # it is deliberately excluded from matching probes. -fno-defer-pop is accepted
 # by GCC but does not change this MIPS sample (there is no callee-pop ABI).
 
+[build_aliases]
+sn64_asflags = "gnu_asflags"
+
 [compilers."ido-7.1"]
 kind = "ido"
 family = "ido"
+m2c = "mips-ido-c"
+permuter = "ido"
 splat = "IDO"
 source = "download"
 host = "linux-x86_64"
@@ -49,6 +54,8 @@ files = ["NCC", "acpp", "as0", "as1", "cc", "cfe", "edgcpfe", "err.english.cc", 
 [compilers."ido-5.3"]
 kind = "ido"
 family = "ido"
+m2c = "mips-ido-c"
+permuter = "ido"
 splat = "IDO"
 source = "download"
 host = "linux-x86_64"
@@ -92,6 +99,8 @@ files = ["acpp", "as0", "as1", "c++filt", "cc", "cfe", "copt", "crt1.o", "crtn.o
 [compilers."gcc-2.7.2-kmc"]
 kind = "gnu"
 family = "gcc"
+m2c = "mips-gcc-c"
+permuter = "gcc"
 splat = "KMC"
 source = "download"
 host = "linux-x86_64"
@@ -121,6 +130,8 @@ files = ["cc1"]
 [compilers."gcc-2.8.1-sn64"]
 kind = "gnu"
 family = "gcc"
+m2c = "mips-gcc-c"
+permuter = "gcc"
 splat = "SN64"
 source = "download"
 host = "linux-x86_64"

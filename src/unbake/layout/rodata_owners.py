@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from unbake.compilers.families import constant_sections
 from unbake.config import Held, Project
 from unbake.decomp.rom import project_reader
 from unbake.layout import split
@@ -187,7 +188,7 @@ def proved_tables(
     result = []
     for section in obj.names:
         explicit = re.fullmatch(r"\.unbake_(?:pool_([0-9A-F]{8})|piece_([0-9A-F]{8})_[0-9A-F]+)", section)
-        if section not in (".rdata", ".rodata") and explicit is None:
+        if section not in constant_sections() and explicit is None:
             continue
         addresses = table_addresses(obj, section, target_words)
         runs = pools(obj, section, True)
@@ -318,7 +319,7 @@ def classify(
                     size = 0
                 if address in table_ends:
                     size = table_ends[address] - address
-                    kind, proof = "jump table", "byte-proved compiler .rdata/.rodata relocations"
+                    kind, proof = "jump table", "byte-proved compiler constant relocations"
             if not size:
                 if "f64" in types:
                     kind, size, proof = "double", 8, "f64 memory load"

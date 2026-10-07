@@ -301,7 +301,7 @@ def _variants(function: Any, ast: Any, printer: Any, tree: Any) -> Iterator[tupl
                 target.cond = ast.UnaryOp("!", target.cond)
                 target.iftrue, target.iffalse = target.iffalse, target.iftrue
 
-            # Swapping arms keeps the conditional's type; arm order decides what GCC evaluates
+            # Swapping arms keeps the conditional's type; arm order decides evaluation order
             # into an outgoing argument slot first.
             yield node, "conditional arm order", arms
         if (

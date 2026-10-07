@@ -1,9 +1,6 @@
 """The exact commands that compile one C unit for one version: one source of argv for make and the runner.
 
-Two invocation kinds exist in the registry:
-- ido:  the compiler's own driver preprocesses (`cc -E`), then compiles the .i (`cc ... -c UNIT.i`).
-- gnu: host cpp preprocesses, cc1 compiles to assembly, `n64link asn64` normalises it for GNU as,
-        and GNU as assembles (KMC gcc 2.7.2 and SN64 gcc 2.8.1 both use this path).
+Registry families supply each native invocation contract.
 Every path is relative to the project root, where make and the runner both run.
 """
 
@@ -14,10 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake.config import Held, Host, Project
+from unbake.compilers.families import Family
+from unbake.config import Compiler, Held, Host, Project
 
 PREPROCESSOR_PAIRS = frozenset({"-I", "-D", "-U", "-include", "-imacros", "-isystem", "-iquote"})
-GNU_AS_FLAGS = ("-march=vr4300", "-mabi=32", "-EB", "-G0", "--no-pad-sections")
 
 
 @dataclass(frozen=True)
@@ -31,23 +28,19 @@ class Tools:
 
 MAKE_TOOLS = Tools("$(CPP)", "$(AS)", "$(N64LINK)")
 
+
 # One template per invocation kind. Each {field} is a list of words (runner) or one make variable (Makefile).
 # preprocess writes UNIT.i on stdout from the project root; compile and assemble run in the object's directory.
-TEMPLATES: dict[str, dict[str, tuple[str, ...] | None]] = {
-    "ido": {
-        "preprocess": ("{cc}", "{preprocess}", "-E", "{source}"),
-        "compile": ("{cc}", "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
-        "assemble": None,
-    },
-    "gnu": {
-        "preprocess": ("{cpp}", "{cppflags}", "{preprocess}", "{source}"),
-        "compile": ("{cc}", "-quiet", "{codegen}", "{name}.i", "-o", "{name}.s"),
-        "assemble": ("{n64link}", "asn64", "--as", "{as}", "{asflags}", "{name}.s", "-o", "{name}.o"),
-    },
-}
-DEPEND = ("{cpp}", "-MM", "-MG", "{cppflags}", "{preprocess}", "{source}")
-# Kinds whose objects keep trailing zero padding after the last function (n64link place --trim otherwise).
-UNTRIMMED = frozenset({"gnu"})
+def templates(kind: str) -> dict[str, tuple[str, ...] | None]:
+    from unbake.compilers.families import family_for_kind
+
+    return family_for_kind(kind).native_templates()
+
+
+def preserves_padding(kind: str) -> bool:
+    from unbake.compilers.families import family_for_kind
+
+    return family_for_kind(kind).preserve_padding()
 
 
 @dataclass(frozen=True)
@@ -127,13 +120,14 @@ def _options(values: list[str]) -> tuple[list[str], list[str]]:
     return preprocess, codegen
 
 
-def _supported(kind: str, values: list[str]) -> None:
-    import re
+def _supported(selector: str, values: list[str]) -> None:
     import tomllib
 
     from unbake import inputs
     from unbake.cache import memo
     from unbake.compilers.registry import REGISTRY_PATH
+
+    kind, family = _selection(selector)
 
     def read() -> frozenset[str]:
         definitions = tomllib.loads(REGISTRY_PATH.read_text())["compilers"]
@@ -143,11 +137,11 @@ def _supported(kind: str, values: list[str]) -> None:
             if spec["kind"] == kind
             for flags in [spec["cflags"], *spec["flag_variants"]]
             for flag in flags
-        ) | {"-ansi", "-fsigned-char"}
+        )
 
     supported = memo("compiler.supported-flags", (kind, REGISTRY_PATH, inputs.signature(REGISTRY_PATH)), read, keep=8)
     for flag in values:
-        if flag in supported or re.fullmatch(r"-G[0-9]+|-mips[1-4]|-O[0-3s]?|-g[0-3]?", flag):
+        if flag in supported or family.accepts_codegen(flag):
             continue
         raise Held("compile", f"compile.flags: {flag}: unsupported by the {kind} driver")
 
@@ -156,26 +150,27 @@ def codegen_flags(values: list[str]) -> list[str]:
     return _options(values)[1]
 
 
-def stage_flags(kind: str, values: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The family's explicit stage contract, shared by all native consumers."""
-    from unbake.compilers.families.gcc import Gcc
-    from unbake.compilers.families.ido import Ido
+def _selection(selector: str) -> tuple[str, Family]:
+    from unbake.compilers.families import family_for, family_for_kind
+    from unbake.compilers.registry import registry
 
+    spec = registry().get(selector)
+    return (spec.kind, family_for(selector)) if spec is not None else (selector, family_for_kind(selector))
+
+
+def stage_flags(selector: str, values: list[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Compiler identity selects preprocessing semantics; kind selects only execution."""
+    _kind, adapter = _selection(selector)
     preprocess, codegen = _options(values)
-    _supported(kind, codegen)
-    adapter: Gcc | Ido
-    if kind == "gnu":
-        adapter = Gcc()
-    elif kind == "ido":
-        adapter = Ido()
-    else:
-        raise Held("compile", f"compile.kind: {kind}: unsupported driver")
+    _supported(selector, codegen)
     return adapter.preprocess_flags(tuple(preprocess), tuple(codegen)), tuple(codegen)
 
 
-def gnu_as_flags(project: Project) -> tuple[str, ...]:
-    """The proven replacement for ASN64's -mips3 recipe."""
-    return (*GNU_AS_FLAGS, *(flag for flag in project.gnu_asflags if flag != "-mips3"))
+def assembly_flags(project: Project, compiler: str | None = None) -> tuple[str, ...]:
+    """The selected unit's family owns its external assembler options."""
+    from unbake.compilers.families import family_for
+
+    return family_for(compiler or project.default_compiler).assembly_flags(project.gnu_asflags)
 
 
 def _split(values: list[str]) -> tuple[list[str], list[str], list[str]]:
@@ -205,11 +200,10 @@ def unit_parts(project: Project, unit: str) -> tuple[list[str], list[str], list[
 def parts(project: Project, version: str, unit: str, *, non_matching: bool = False) -> Parts:
     """Everything a template needs for UNIT in VERSION; the Makefile composes the same lists from variables."""
     compiler = project.compiler_for(unit)
-    if compiler.kind not in TEMPLATES:
-        raise Held("compile", f"compiler.{compiler.id}.kind: {compiler.kind}: no driver")
+    templates(compiler.kind)
     root = project.root
     effective = flags(project, version, unit, non_matching=non_matching)
-    preprocess, codegen = stage_flags(compiler.kind, effective)
+    preprocess, codegen = stage_flags(compiler.id, effective)
     includes, _, defines = _split(effective)
     cc = str(compiler.cc.relative_to(root) if compiler.cc.is_relative_to(root) else compiler.cc)
     return Parts(compiler.kind, cc, tuple(includes), codegen, tuple(defines), preprocess, tuple(effective))
@@ -219,7 +213,14 @@ def steps(project: Project, version: str, unit: str, source: str, tools: Tools, 
     """The commands for UNIT from SOURCE (a path relative to the project root, or any quoted word)."""
     owned = parts(project, version, unit, non_matching=non_matching)
     return from_flags(
-        owned.kind, owned.cc, owned.effective, project.cppflags, gnu_as_flags(project), unit, source, tools
+        project.compiler_for(unit).id,
+        owned.cc,
+        owned.effective,
+        project.cppflags,
+        assembly_flags(project, project.compiler_for(unit).id),
+        unit,
+        source,
+        tools,
     )
 
 
@@ -247,7 +248,8 @@ def from_flags(
         "source": (source,),
         "name": (Path(unit).name,),
     }
-    template = TEMPLATES[kind]
+    kind, selected = _selection(kind)
+    template = selected.native_templates()
     assemble = template["assemble"]
     return Steps(
         kind,
@@ -263,7 +265,9 @@ def preprocess_command(
     """Exactly the build stage; callers run from the project root."""
     commands = steps(project, version, unit, str(source), Tools(cpp, "", ""), non_matching=non_matching)
     argv = list(commands.preprocess)
-    if commands.kind == "ido":
+    from unbake.compilers.families import family_for_kind
+
+    if not family_for_kind(commands.kind).uses_host_cpp():
         argv[0] = str(project.compiler_for(unit).cc)
     elif line_markers:
         argv = [flag for flag in argv if flag != "-P"]
@@ -271,11 +275,7 @@ def preprocess_command(
 
 
 def analysis_command(project: Project, policy: Host, version: str, unit: str) -> list[str]:
-    """GCC token-location analysis with the actual unit's ordered macro/include environment.
-
-    The analysis provider is host cpp even for an IDO unit. Native compilation
-    remains owned by that unit's family; GCC analysis switches never reach IDO.
-    """
+    """Family-owned host analysis in the unit's effective macro/include environment."""
     from unbake import scratch
     from unbake.compilers.families import family_for
 
@@ -285,7 +285,7 @@ def analysis_command(project: Project, policy: Host, version: str, unit: str) ->
     options = family_for(compiler).analysis_flags(
         compiler.cc, cpp, project.root, tuple(preprocess), tuple(codegen), scratch.root(policy, project, "compile")
     )
-    return [cpp, *(project.cppflags if compiler.kind == "gnu" else ()), *options, "-x", "c", "-"]
+    return [cpp, *family_for(compiler).analysis_cppflags(project.cppflags), *options, "-x", "c", "-"]
 
 
 def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: str, phase: str) -> str:
@@ -304,3 +304,32 @@ def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: s
             phase,
             context={"function": unit, "version": version},
         )
+
+
+def context_command(
+    project: Project, cpp: str, compiler: Compiler, options: list[str], *, line_markers: bool
+) -> list[str]:
+    from unbake.compilers.families import family_for
+
+    family = family_for(compiler)
+    if not family.uses_host_cpp():
+        return [str(compiler.cc), *options, "-E", "-"]
+    return [
+        cpp,
+        *(flag for flag in family.analysis_cppflags(project.cppflags) if not line_markers or flag != "-P"),
+        *options,
+        "-x",
+        "c",
+        "-",
+    ]
+
+
+def assembler_release() -> str:
+    from unbake.compilers.families import family_named
+    from unbake.compilers.registry import registry
+
+    values = {family_named(spec.family).assembler_release() for spec in registry().values()}
+    values.discard(None)
+    if len(values) != 1:
+        raise Held("buildfiles", "build.assembler_release: expected one external assembler release")
+    return next(value for value in values if value is not None)

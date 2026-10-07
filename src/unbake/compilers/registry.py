@@ -50,6 +50,8 @@ class CompilerSpec:
     family: str
     decompme: str
     splat: str
+    m2c: str
+    permuter: str
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -72,6 +74,12 @@ def _text(value: object, label: str) -> str:
     return value
 
 
+def _target(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise Held("setup", f"{label}: expected target string (empty when unsupported)")
+    return value
+
+
 def _strings(value: object, label: str) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise Held("setup", f"{label}: expected array of strings")
@@ -84,7 +92,7 @@ def _digest(value: object, label: str) -> str:
     return value
 
 
-def registry() -> dict[str, CompilerSpec]:
+def _registry() -> dict[str, CompilerSpec]:
     """Read process data; no project facts or silent compiler choice."""
     tables = _required(_read(REGISTRY_PATH), "compilers", str(REGISTRY_PATH))
     if not isinstance(tables, dict) or not tables:
@@ -98,8 +106,8 @@ def registry() -> dict[str, CompilerSpec]:
             name: _text(_required(table, name, label), f"{label}.{name}")
             for name in ("kind", "source", "host", "cc", "as")
         }
-        if fields["kind"] not in ("ido", "gnu"):
-            raise Held("setup", f"{label}.kind: expected ido or gnu")
+        if not re.fullmatch(r"[a-z][a-z0-9_-]*", fields["kind"]):
+            raise Held("setup", f"{label}.kind: expected safe execution-path name")
         if fields["source"] not in ("download", "supplied", "mixed"):
             raise Held("setup", f"{label}.source: expected download, supplied or mixed")
         pins = _required(table, "pins", label)
@@ -143,8 +151,17 @@ def registry() -> dict[str, CompilerSpec]:
             _text(_required(table, "family", label), label + ".family"),
             _text(_required(table, "decompme", label), label + ".decompme"),
             _text(_required(table, "splat", label), label + ".splat"),
+            _target(_required(table, "m2c", label), label + ".m2c"),
+            _target(_required(table, "permuter", label), label + ".permuter"),
         )
     return result
+
+
+def registry() -> dict[str, CompilerSpec]:
+    from unbake import inputs
+    from unbake.cache import memo
+
+    return memo("compiler.registry", (REGISTRY_PATH, inputs.signature(REGISTRY_PATH)), _registry, keep=4)
 
 
 def specification(ident: str) -> CompilerSpec:

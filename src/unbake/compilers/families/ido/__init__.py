@@ -2,20 +2,137 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.compilers.families.gcc.schedule import Schedule
+from unbake.compilers.families.types import Schedule
 from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
-    from unbake.decomp.explain import Allocation
+    from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, RuntimeHelper, View
+    from unbake.compilers.registry import CompilerSpec
+    from unbake.config import Host, PendingProject, Project
 
 
 class Ido:
+    def region_name(self) -> str:
+        return "ido"
+
+    def recognizes_idioms(self, counts: Mapping[str, int], minimum: int, numerator: int, denominator: int) -> bool:
+        total = sum(counts.values())
+        return total >= minimum and counts.get(self.move_idiom(), 0) * denominator >= total * numerator
+
+    def probe_commands(
+        self, cache: Path, spec: CompilerSpec, policy: Host, project: PendingProject, work: Path, source: Path
+    ) -> tuple[list[str], ...]:
+        return ([str(cache / spec.cc), *spec.cflags, "-c", str(source), "-o", str(work / "probe.o")],)
+
+    def assembler_release(self) -> str | None:
+        return None
+
+    def dependency_command(self, command: list[str]) -> list[str]:
+        command = [word for word in command if word not in ("-E", "-P")]
+        command.insert(len(command) - 1, "-M")
+        return command
+
+    def macro_command(self, command: list[str], probe: str) -> list[str]:
+        # Macro catalogue uses the host analysis provider, including for native-driver units.
+        return [*command[:-1], "-dM", "-undef", "-nostdinc", probe]
+
+    def make_preprocess(self, render: Callable[[tuple[str, ...]], str]) -> str:
+        preprocess = self.native_templates()["preprocess"]
+        assert preprocess is not None
+        dependency = render(("{cc}", "{preprocess}", "-M", "{source}"))
+        return (
+            f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$(@D)/$(*F).i:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
+            f" && rm $(@D)/$(*F).deps && {render(preprocess)} > $(@D)/$(*F).i"
+        )
+
+    def runtime_helpers(
+        self, data: bytes, read_memory: Callable[[int, int], bytes]
+    ) -> tuple[tuple[int, RuntimeHelper], ...]:
+        return ()
+
+    def native_templates(self) -> dict[str, tuple[str, ...] | None]:
+        return {
+            "preprocess": ("{cc}", "{preprocess}", "-E", "{source}"),
+            "compile": ("{cc}", "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
+            "assemble": None,
+        }
+
+    def uses_host_cpp(self) -> bool:
+        return False
+
+    def preserve_padding(self) -> bool:
+        return False
+
+    def assembly_flags(self, extra: tuple[str, ...]) -> tuple[str, ...]:
+        return ()
+
+    def accepts_codegen(self, flag: str) -> bool:
+        import re
+
+        return (
+            flag in ("-ansi", "-fsigned-char")
+            or re.fullmatch(r"-G[0-9]+|-mips[1-4]|-O[0-3s]?|-g[0-3]?", flag) is not None
+        )
+
+    def analysis_cppflags(self, flags: tuple[str, ...]) -> tuple[str, ...]:
+        return ()
+
+    def analysis_location_flags(self) -> tuple[str, ...]:
+        from unbake.compilers.families.gcc import Gcc
+
+        return Gcc().analysis_location_flags()
+
+    def token_view(self, output: str, source: str, filename: str, boundary_line: int) -> View:
+        from unbake.compilers.families.gcc.token_locations import decode, source_output
+
+        return decode(source_output(output, boundary_line), source, filename)
+
+    def m2c_registers(self, assembly: str, flags: tuple[str, ...], function: str) -> str:
+        return assembly
+
+    def m2c_section(self) -> str:
+        # Input to the external decompiler, independent of emitted object selectors.
+        return ".rodata"
+
+    def schedule_available(self) -> bool:
+        return False
+
+    def collect_allocation(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Allocation:
+        from unbake.compilers import drivers
+        from unbake.config import Held
+        from unbake.decomp.explain import _absolute_includes
+        from unbake.process import run_tool
+
+        flags = _absolute_includes(project, drivers.flags(project, version, source.stem))
+        run_tool(
+            [
+                str(project.compiler_for(source).cc),
+                *flags,
+                *self.dump_flags(),
+                str(source),
+                "-o",
+                str(work / "source.s"),
+            ],
+            work,
+            "explain",
+        )
+        listing = work / "source.s"
+        if not listing.is_file():
+            raise Held("explain", "dumps.ido: -K emitted no textual assignment listing")
+        return self.allocation({"ido": listing.read_text()})
+
+    def collect_schedule(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Schedule:
+        return self.schedule(None)
+
+    def allocation_hints(self, difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list[str]:
+        return []
+
     def dependency_paths(self, output: str) -> tuple[str, ...]:
         """IDO emits one complete, unescaped filename per target rule."""
         from unbake.compilers.families import dependency_rules
@@ -148,3 +265,7 @@ class Ido:
         from unbake.compilers.families.ido.schedule import schedule
 
         return schedule(dumps)
+
+
+def adapter() -> Ido:
+    return Ido()

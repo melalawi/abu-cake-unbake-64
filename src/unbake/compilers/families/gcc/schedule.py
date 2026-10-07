@@ -2,30 +2,12 @@
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 
+from unbake.compilers.families.types import Instruction, Schedule
 from unbake.config import Held
 
 _INSTRUCTION = r"\((insn|jump_insn|call_insn)(?:/[a-z]+)*(?::[A-Z][A-Z0-9]*)?\s+(\d+)\b"
-
-
-@dataclass(frozen=True)
-class Instruction:
-    uid: int
-    kind: str
-    line: int
-    rtl: str
-
-
-@dataclass(frozen=True)
-class Schedule:
-    family: str
-    available: bool
-    sched2: tuple[Instruction, ...]
-    dbr: tuple[Instruction, ...]
-    delay_slots: tuple[tuple[int, ...], ...]
-    reason: str | None
 
 
 def _text(value: str | Path, name: str) -> str:

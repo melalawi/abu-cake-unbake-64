@@ -1,0 +1,105 @@
+;; Reorg pass #1:
+;; Reorg function #0
+;; 12 insns needing delay slots
+;; 2 got 0 delays, 10 got 1 delays
+;; Reorg function #1
+;; 2 insns needing delay slots
+;; 1 got 0 delays, 1 got 1 delays
+;; Reorg pass #2:
+;; Reorg function #0
+;; 1 insns needing delay slots
+;; 1 got 0 delays
+;; Reorg function #1
+;; 1 insns needing delay slots
+;; 1 got 0 delays
+
+;; Function func_8010AA6C_us
+
+(note 1 0 2 ("source.i") 9)
+
+(note 2 1 15 "" NOTE_INSN_DELETED)
+
+(note 15 2 16 "" NOTE_INSN_FUNCTION_BEG)
+
+(note 16 15 18 "" NOTE_INSN_DELETED)
+
+(note 18 16 282 "" NOTE_INSN_BLOCK_BEG)
+
+;; Insn is not within a basic block
+(insn 282 18 8 (set (reg:SI 29 sp)
+        (minus:SI (reg:SI 29 sp)
+            (const_int 16))) 16 {subsi3_internal} (nil)
+    (nil))
+
+;; Insn is not within a basic block
+(insn:QI 8 282 19 (set (mem/s:SI (plus:SI (reg:SI 29 sp)
+                (const_int 24)))
+        (reg:SI 6 a2)) 172 {movsi_internal2} (insn_list 282 (nil))
+    (expr_list:REG_DEAD (reg:SI 6 a2)
+        (nil)))
+
+(note 19 8 21 ("source.i") 11)
+
+;; Insn is not within a basic block
+(insn:QI 21 19 293 (set (reg:SF 34 $f2)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 24)))) 192 {movsf_internal1} (insn_list 282 (insn_list 8 (nil)))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 24)))
+        (nil)))
+
+(note 293 21 4 ("source.i") 9)
+
+;; Insn is not within a basic block
+(insn:QI 4 293 294 (set (mem/s:SI (plus:SI (reg:SI 29 sp)
+                (const_int 16)))
+        (reg:SI 4 a0)) 172 {movsi_internal2} (insn_list 282 (nil))
+    (expr_list:REG_DEAD (reg:SI 4 a0)
+        (nil)))
+
+(note 294 4 23 ("source.i") 11)
+
+;; Insn is not within a basic block
+(insn:QI 23 294 33 (set (reg:SF 40 $f8)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 16)))) 192 {movsf_internal1} (insn_list 282 (insn_list 4 (nil)))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 16)))
+        (nil)))
+
+(note 33 23 35 ("source.i") 13)
+
+;; Insn is not within a basic block
+(insn:QI 35 33 256 (set (reg:SF 32 $f0)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 44)))) 192 {movsf_internal1} (insn_list 282 (nil))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 44)))
+        (nil)))
+
+(note 256 35 24 ("source.i") 11)
+
+;; Insn is not within a basic block
+(insn 24 256 257 (set (reg:SF 34 $f2)
+        (minus:SF (reg:SF 34 $f2)
+            (reg:SF 40 $f8))) 14 {subsf3} (insn_list 21 (insn_list 23 (nil)))
+    (expr_list:REG_DEAD (reg:SF 34 $f2)
+        (nil)))
+
+(note 257 24 37 ("source.i") 13)
+
+;; Insn is not within a basic block
+(insn:QI 37 257 38 (set (reg:SF 44 $f12)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 36)))) 192 {movsf_internal1} (insn_list 282 (nil))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 36)))
+        (nil)))
+
+;; Insn is not within a basic block
+(insn 38 37 295 (set (reg:SF 32 $f0)
+        (minus:SF (reg:SF 32 $f0)
+            (reg:SF 44 $f12))) 14 {subsf3} (insn_list 35 (insn_list 37 (nil)))
+    (expr_list:REG_DEAD (reg:SF 32 $f0)
+        (nil)))
+

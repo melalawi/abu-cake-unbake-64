@@ -2,20 +2,137 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from unbake.compilers.families.gcc.schedule import Schedule
+from unbake.compilers.families.types import Schedule
 from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
-    from unbake.decomp.explain import Allocation
+    from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, RuntimeHelper, View
+    from unbake.compilers.registry import CompilerSpec
+    from unbake.config import Host, PendingProject, Project
 
 
 class Gcc:
+    def region_name(self) -> str:
+        return "main"
+
+    def recognizes_idioms(self, counts: Mapping[str, int], minimum: int, numerator: int, denominator: int) -> bool:
+        total = sum(counts.values())
+        return total >= minimum and counts.get(self.move_idiom(), 0) * denominator >= total * numerator
+
+    def probe_commands(
+        self, cache: Path, spec: CompilerSpec, policy: Host, project: PendingProject, work: Path, source: Path
+    ) -> tuple[list[str], ...]:
+        return (
+            [str(cache / spec.cc), "-quiet", *spec.cflags, str(source), "-o", str(work / "probe.s")],
+            [
+                str(policy.mips_as),
+                *project.asflags,
+                *project.gnu_asflags,
+                str(work / "probe.s"),
+                "-o",
+                str(work / "probe.o"),
+            ],
+        )
+
+    def assembler_release(self) -> str | None:
+        return "n64link 0.3.1 (SN ASN64 2.81 rules)\n"
+
+    def dependency_command(self, command: list[str]) -> list[str]:
+        command = [word for word in command if word not in ("-E", "-P")]
+        command.insert(len(command) - 1, "-M")
+        return command
+
+    def macro_command(self, command: list[str], probe: str) -> list[str]:
+        # Macro catalogue uses the host analysis provider, including for native-driver units.
+        return [*command[:-1], "-dM", "-undef", "-nostdinc", probe]
+
+    def make_preprocess(self, render: Callable[[tuple[str, ...]], str]) -> str:
+        preprocess = self.native_templates()["preprocess"]
+        assert preprocess is not None
+        return f"{render(preprocess)} -MMD -MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d > $(@D)/$(*F).i"
+
+    def runtime_helpers(
+        self, data: bytes, read_memory: Callable[[int, int], bytes]
+    ) -> tuple[tuple[int, RuntimeHelper], ...]:
+        from unbake.compilers.families.gcc.runtime import helpers
+
+        return helpers(data, read_memory)
+
+    def native_templates(self) -> dict[str, tuple[str, ...] | None]:
+        return {
+            "preprocess": ("{cpp}", "{cppflags}", "{preprocess}", "{source}"),
+            "compile": ("{cc}", "-quiet", "{codegen}", "{name}.i", "-o", "{name}.s"),
+            "assemble": ("{n64link}", "asn64", "--as", "{as}", "{asflags}", "{name}.s", "-o", "{name}.o"),
+        }
+
+    def uses_host_cpp(self) -> bool:
+        return True
+
+    def preserve_padding(self) -> bool:
+        return True
+
+    def assembly_flags(self, extra: tuple[str, ...]) -> tuple[str, ...]:
+        return (
+            "-march=vr4300",
+            "-mabi=32",
+            "-EB",
+            "-G0",
+            "--no-pad-sections",
+            *(flag for flag in extra if flag != "-mips3"),
+        )
+
+    def accepts_codegen(self, flag: str) -> bool:
+        import re
+
+        return (
+            flag in ("-ansi", "-fsigned-char")
+            or re.fullmatch(r"-G[0-9]+|-mips[1-4]|-O[0-3s]?|-g[0-3]?", flag) is not None
+        )
+
+    def analysis_cppflags(self, flags: tuple[str, ...]) -> tuple[str, ...]:
+        return flags
+
+    def analysis_location_flags(self) -> tuple[str, ...]:
+        return ("-P", "-fdebug-cpp", "-ftrack-macro-expansion=2", "-ftabstop=1")
+
+    def token_view(self, output: str, source: str, filename: str, boundary_line: int) -> View:
+        from unbake.compilers.families.gcc.token_locations import decode, source_output
+
+        return decode(source_output(output, boundary_line), source, filename)
+
+    def m2c_registers(self, assembly: str, flags: tuple[str, ...], function: str) -> str:
+        from unbake.compilers.families.gcc.decompiler import register_pairs
+
+        return register_pairs(assembly, flags, function)
+
+    def m2c_section(self) -> str:
+        # Input to the external decompiler, independent of emitted object selectors.
+        return ".rodata"
+
+    def schedule_available(self) -> bool:
+        return True
+
+    def collect_allocation(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Allocation:
+        from unbake.compilers.families.gcc.diagnostics import collect_allocation
+
+        return collect_allocation(project, policy, source, version, work)
+
+    def collect_schedule(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Schedule:
+        from unbake.compilers.families.gcc.diagnostics import collect_schedule
+
+        return collect_schedule(project, policy, source, version, work)
+
+    def allocation_hints(self, difference: RegisterDifference, by_number: dict[int, Pseudo]) -> list[str]:
+        from unbake.compilers.families.gcc.diagnostics import allocation_hints
+
+        return allocation_hints(difference, by_number)
+
     def dependency_paths(self, output: str) -> tuple[str, ...]:
         """GCC emits make-escaped words, with optional continuation/phony rules."""
         import re
@@ -99,3 +216,7 @@ class Gcc:
         from unbake.compilers.families.gcc.schedule import schedule
 
         return schedule(dumps)
+
+
+def adapter() -> Gcc:
+    return Gcc()

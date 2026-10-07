@@ -1,6 +1,6 @@
 """Loop form rewrites: a pointer walked beside a counter becomes an indexed access.
 
-GCC's loop strength reduction builds a different induction variable for `p->f` with `p++`
+Loop strength reduction builds a different induction variable for `p->f` with `p++`
 than for `base[i].f`, which moves register choices and schedule slots; neither form can be
 reached by statement reordering alone.
 """

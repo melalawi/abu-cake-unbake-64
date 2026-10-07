@@ -15,7 +15,7 @@ class DriverTests(ProjectCase):
     def setUp(self) -> None:
         super().setUp()
         tools = self.project.tools
-        sn64 = Compiler("gcc-2.8.1-sn", "gnu", tools / "sn/cc1", tools / "sn/as", ("-O2", "-G0"), tools / "x")
+        sn64 = Compiler("gcc-2.8.1-sn64", "gnu", tools / "sn/cc1", tools / "sn/as", ("-O2", "-G0"), tools / "x")
         self.project = replace(
             self.project,
             compilers={**self.project.compilers, sn64.id: sn64},
@@ -56,7 +56,7 @@ class DriverTests(ProjectCase):
     def test_runner_and_makefile_render_the_same_template(self) -> None:
         self.assertEqual(self.steps("beta"), self.steps("beta"))
         made = drivers.render(
-            drivers.TEMPLATES["gnu"]["compile"] or (), {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)}
+            drivers.templates("gnu")["compile"] or (), {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)}
         )
         self.assertEqual(made, ("$(CC)", "-quiet", "$(CG)", "$*.i", "-o", "$*.s"))
 

@@ -215,9 +215,9 @@ class Permuter:
             if importlib.util.find_spec(dependency) is None:
                 raise Held("permute", f"dependency {dependency}: missing from interpreter {sys.executable}")
         compiler = project.compiler_for(source_path)
-        family = toolchain.specification(compiler.id).family
-        if family not in ("gcc", "ido"):
-            raise Held("permute", f"compiler.family {family}: unsupported scorer")
+        family = toolchain.specification(compiler.id).permuter
+        if not family:
+            raise Held("permute", f"compiler.{compiler.id}: no registered scorer target")
         toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
         try:
             if not target.is_file():

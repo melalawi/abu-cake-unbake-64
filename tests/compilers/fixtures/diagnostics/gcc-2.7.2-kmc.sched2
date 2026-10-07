@@ -1,0 +1,574 @@
+
+;; Function func_8010AA6C_us
+
+;;	 -- basic block number 0 from 267 to 69 --
+;; ready list initially:
+;; 69 
+
+;; insn[ 267]: priority =    1, ref_count =   15
+;; insn[ 269]: priority =    1, ref_count =    1
+;; insn[   4]: priority =    1, ref_count =    1
+;; insn[   6]: priority =    1, ref_count =    2
+;; insn[   8]: priority =    1, ref_count =    2
+;; insn[  10]: priority =    1, ref_count =    1
+;; insn[  21]: priority =    1, ref_count =    1
+;; insn[  23]: priority =    1, ref_count =    2
+;; insn[  35]: priority =    1, ref_count =    1
+;; insn[  24]: priority =    3, ref_count =    3
+;; insn[  37]: priority =    1, ref_count =    3
+;; insn[  38]: priority =    3, ref_count =    3
+;; insn[  25]: priority =    6, ref_count =    2
+;; insn[  28]: priority =    1, ref_count =    1
+;; insn[  30]: priority =    1, ref_count =    2
+;; insn[  39]: priority =    6, ref_count =    1
+;; insn[  42]: priority =    6, ref_count =    1
+;; insn[  44]: priority =    1, ref_count =    2
+;; insn[  31]: priority =    3, ref_count =    2
+;; insn[  62]: priority =    6, ref_count =    1
+;; insn[  45]: priority =    8, ref_count =    2
+;; insn[  32]: priority =    6, ref_count =    1
+;; insn[  46]: priority =   11, ref_count =    1
+;; insn[  63]: priority =   11, ref_count =    1
+;; insn[  52]: priority =    3, ref_count =    2
+;; insn[  64]: priority =   18, ref_count =    1
+;; insn[  67]: priority =    1, ref_count =    1
+;; insn[  68]: priority =   21, ref_count =    1
+;; insn[  59]: priority =    3, ref_count =    1
+;; insn[  12]: priority =    1, ref_count =    1
+;; insn[  14]: priority =    1, ref_count =    1
+;; insn[  53]: priority =    6, ref_count =    1
+;; insn[  60]: priority =    6, ref_count =    1
+;; insn[  69]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 69 (7ffffef4), now 69
+;; ready list at T-2: 12 (1) 14 (1) 53 (6) 60 (6), now 60 53 14 12
+;; ready list at T-3: 53 (6) 14 (1) 12 (1), now 53 14 12
+;; launching 68 before 53 with no stalls at T-4
+;; ready list at T-4: 14 (1) 12 (1) 68 (15), now 68 14 12
+;; ready list at T-5: 14 (1) 12 (1), now 14 12
+;; launching 59 before 14 with no stalls at T-6
+;; ready list at T-6: 12 (1) 59 (3)
+;; blocking insn 59 for 2 cycles, now 12
+;; launching 67 before 12 with no stalls at T-7
+;; ready list at T-7: 67 (1), now 67
+;; launching 59 before 67 with no stalls at T-8
+;; launching 64 before 67 with no stalls at T-8
+;; ready list at T-8: 59 (3) 64 (12), now 64 59
+;; ready list at T-9: 59 (3) 52 (3)
+;; blocking insn 59 for 3 cycles
+;; blocking insn 52 for 3 cycles
+;; launching 52 before 64 with 2 stalls at T-10
+;; launching 59 before 64 with 2 stalls at T-10
+;; ready list at T-12: 52 (3) 59 (3), now 59 52
+;; ready list at T-13: 52 (3)
+;; blocking insn 52 for 3 cycles
+;; launching 52 before 59 with 2 stalls at T-14
+;; launching 63 before 59 with 2 stalls at T-14
+;; launching 62 before 59 with 2 stalls at T-14
+;; ready list at T-16: 52 (3) 63 (b) 62 (6), now 63 62 52
+;; ready list at T-17: 62 (6) 52 (3) 32 (6) 46 (b), now 46 32 62 52
+;; ready list at T-18: 32 (6) 62 (6) 52 (3)
+;; blocking insn 62 for 6 cycles, now 32 52
+;; ready list at T-19: 52 (3), now 52
+;; launching 45 before 52 with 1 stalls at T-20
+;; ready list at T-21: 45 (8)
+;; blocking insn 45 for 2 cycles
+;; launching 31 before 52 with no stalls at T-22
+;; ready list at T-22: 31 (3)
+;; blocking insn 31 for 1 cycles
+;; launching 31 before 52 with no stalls at T-23
+;; launching 45 before 52 with no stalls at T-23
+;; ready list at T-23: 31 (3) 45 (8), now 45 31
+;; launching 62 before 45 with no stalls at T-24
+;; ready list at T-24: 31 (3) 62 (6), now 62 31
+;; ready list at T-25: 31 (3) 39 (6), now 39 31
+;; launching 44 before 39 with no stalls at T-26
+;; launching 42 before 39 with no stalls at T-26
+;; ready list at T-26: 31 (3) 269 (1) 44 (1) 42 (6), now 42 31 44 269
+;; ready list at T-27: 31 (3) 44 (1) 269 (1) 25 (6), now 25 31 44 269
+;; ready list at T-28: 31 (3) 44 (1) 269 (1), now 31 44 269
+;; launching 38 before 31 with no stalls at T-29
+;; ready list at T-29: 44 (1) 269 (1) 38 (3)
+;; blocking insn 38 for 3 cycles, now 44 269
+;; insn 269 has a greater potential hazard, now 269 44
+;; ready list at T-30: 44 (1)
+;; blocking insn 44 for 2 cycles
+;; launching 30 before 269 with no stalls at T-31
+;; launching 28 before 269 with no stalls at T-31
+;; launching 24 before 269 with no stalls at T-31
+;; ready list at T-31: 30 (1) 28 (1) 24 (3)
+;; blocking insn 24 for 1 cycles
+;; blocking insn 30 for 1 cycles
+;; blocking insn 28 for 1 cycles
+;; launching 28 before 269 with no stalls at T-32
+;; launching 30 before 269 with no stalls at T-32
+;; launching 24 before 269 with no stalls at T-32
+;; launching 44 before 269 with no stalls at T-32
+;; launching 38 before 269 with no stalls at T-32
+;; ready list at T-32: 28 (1) 30 (1) 24 (3) 44 (1) 38 (3), now 38 24 44 30 28
+;; ready list at T-33: 24 (3) 44 (1) 30 (1) 28 (1)
+;; blocking insn 24 for 3 cycles, now 44 30 28
+;; insn 44 has a greater potential hazard, now 44 30 28
+;; ready list at T-34: 30 (1) 28 (1), now 30 28
+;; launching 37 before 30 with no stalls at T-35
+;; launching 35 before 30 with no stalls at T-35
+;; ready list at T-35: 28 (1) 6 (1) 37 (1) 35 (1), now 28 37 35 6
+;; insn 6 has a greater potential hazard, now 6 28 37 35
+;; launching 24 before 6 with no stalls at T-36
+;; ready list at T-36: 28 (1) 37 (1) 35 (1) 24 (3), now 24 28 37 35
+;; ready list at T-37: 28 (1) 37 (1) 35 (1)
+;; blocking insn 28 for 1 cycles
+;; blocking insn 37 for 1 cycles
+;; blocking insn 35 for 1 cycles
+;; launching 35 before 24 with no stalls at T-38
+;; launching 37 before 24 with no stalls at T-38
+;; launching 28 before 24 with no stalls at T-38
+;; ready list at T-38: 35 (1) 37 (1) 28 (1), now 28 37 35
+;; launching 23 before 28 with no stalls at T-39
+;; launching 21 before 28 with no stalls at T-39
+;; ready list at T-39: 37 (1) 35 (1) 10 (1) 23 (1) 21 (1), now 37 35 23 21 10
+;; insn 10 has a greater potential hazard, now 10 37 35 23 21
+;; ready list at T-40: 37 (1) 35 (1) 23 (1) 21 (1)
+;; blocking insn 37 for 2 cycles
+;; blocking insn 35 for 2 cycles
+;; blocking insn 23 for 2 cycles
+;; blocking insn 21 for 2 cycles
+;; launching 21 before 10 with 1 stalls at T-41
+;; launching 23 before 10 with 1 stalls at T-41
+;; launching 35 before 10 with 1 stalls at T-41
+;; launching 37 before 10 with 1 stalls at T-41
+;; ready list at T-42: 21 (1) 23 (1) 35 (1) 37 (1), now 37 35 23 21
+;; ready list at T-43: 35 (1) 23 (1) 21 (1), now 35 23 21
+;; ready list at T-44: 23 (1) 21 (1), now 23 21
+;; ready list at T-45: 21 (1) 4 (1), now 21 4
+;; insn 4 has a greater potential hazard, now 4 21
+;; ready list at T-46: 21 (1)
+;; blocking insn 21 for 2 cycles
+;; launching 21 before 4 with 1 stalls at T-47
+;; ready list at T-48: 21 (1), now 21
+;; ready list at T-49: 8 (1), now 8
+;; ready list at T-50: 267 (1), now 267
+;; added 8 line-number notes
+;; total time = 50
+;; new basic block head = 265
+;; new basic block end = 69
+
+;;	 -- basic block number 1 from 72 to 78 --
+;; ready list initially:
+;; 78 
+
+;; insn[  72]: priority =    1, ref_count =    1
+;; insn[  73]: priority =    1, ref_count =    1
+;; insn[  74]: priority =    8, ref_count =    1
+;; insn[  77]: priority =   11, ref_count =    1
+;; insn[ 240]: priority =    1, ref_count =    1
+;; insn[  78]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 78 (7ffffef4), now 78
+;; ready list at T-2: 240 (1), now 240
+;; launching 77 before 240 with 1 stalls at T-3
+;; ready list at T-4: 77 (b), now 77
+;; launching 74 before 77 with 3 stalls at T-5
+;; ready list at T-8: 74 (8), now 74
+;; launching 73 before 74 with 7 stalls at T-9
+;; launching 72 before 74 with 7 stalls at T-9
+;; ready list at T-16: 73 (1) 72 (1), now 73 72
+;; ready list at T-17: 72 (1)
+;; blocking insn 72 for 7 cycles
+;; launching 72 before 73 with 6 stalls at T-18
+;; ready list at T-24: 72 (1), now 72
+;; total time = 24
+;; new basic block head = 72
+;; new basic block end = 78
+
+;;	 -- basic block number 2 from 80 to 88 --
+;; ready list initially:
+;; 88 
+
+;; insn[  80]: priority =    1, ref_count =    1
+;; insn[  88]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 88 (7ffffef4), now 88
+;; ready list at T-2: 80 (1), now 80
+;; total time = 2
+;; new basic block head = 80
+;; new basic block end = 88
+
+;;	 -- basic block number 3 from 90 to 112 --
+;; ready list initially:
+;; 112 
+
+;; insn[  93]: priority =    1, ref_count =    1
+;; insn[  94]: priority =    1, ref_count =    3
+;; insn[  95]: priority =    8, ref_count =    3
+;; insn[  96]: priority =   11, ref_count =    2
+;; insn[  98]: priority =    8, ref_count =    1
+;; insn[  99]: priority =   11, ref_count =    1
+;; insn[ 100]: priority =   18, ref_count =    1
+;; insn[ 104]: priority =    1, ref_count =    1
+;; insn[ 111]: priority =   46, ref_count =    1
+;; insn[ 108]: priority =    1, ref_count =    1
+;; insn[ 101]: priority =   21, ref_count =    1
+;; insn[ 112]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 112 (7ffffef4), now 112
+;; ready list at T-2: 101 (15) 104 (1) 108 (1), now 101 108 104
+;; ready list at T-3: 108 (1) 104 (1), now 108 104
+;; launching 111 before 108 with no stalls at T-4
+;; ready list at T-4: 104 (1) 111 (2e), now 111 104
+;; ready list at T-5: 104 (1), now 104
+;; launching 100 before 104 with no stalls at T-6
+;; ready list at T-6: 100 (12)
+;; blocking insn 100 for 2 cycles
+;; launching 100 before 104 with 1 stalls at T-7
+;; ready list at T-8: 100 (12), now 100
+;; launching 99 before 100 with 7 stalls at T-9
+;; launching 98 before 100 with 7 stalls at T-9
+;; ready list at T-16: 99 (b) 98 (8), now 99 98
+;; ready list at T-17: 98 (8)
+;; blocking insn 98 for 7 cycles
+;; launching 98 before 99 with 6 stalls at T-18
+;; ready list at T-24: 98 (8), now 98
+;; launching 96 before 98 with 15 stalls at T-25
+;; ready list at T-40: 96 (b), now 96
+;; launching 95 before 96 with 3 stalls at T-41
+;; ready list at T-44: 95 (8), now 95
+;; launching 94 before 95 with 7 stalls at T-45
+;; launching 93 before 95 with 7 stalls at T-45
+;; ready list at T-52: 94 (1) 93 (1), now 94 93
+;; ready list at T-53: 93 (1)
+;; blocking insn 93 for 7 cycles
+;; launching 93 before 94 with 6 stalls at T-54
+;; ready list at T-60: 93 (1), now 93
+;; total time = 60
+;; new basic block head = 90
+;; new basic block end = 112
+
+;;	 -- basic block number 4 from 114 to 114 --
+;; ready list initially:
+;; 114 
+
+;; insn[ 114]: priority =    1, ref_count =    0
+;; ready list at T-1: 114 (1), now 114
+;; total time = 1
+;; new basic block head = 114
+;; new basic block end = 114
+
+;;	 -- basic block number 5 from 115 to 123 --
+;; ready list initially:
+;; 123 
+
+;; insn[ 121]: priority =    1, ref_count =    1
+;; insn[ 122]: priority =    3, ref_count =    1
+;; insn[ 119]: priority =    1, ref_count =    1
+;; insn[ 123]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 123 (7ffffef4), now 123
+;; ready list at T-2: 119 (1), now 119
+;; launching 122 before 119 with 1 stalls at T-3
+;; ready list at T-4: 122 (3), now 122
+;; launching 121 before 122 with 2 stalls at T-5
+;; ready list at T-7: 121 (1), now 121
+;; total time = 7
+;; new basic block head = 115
+;; new basic block end = 123
+
+;;	 -- basic block number 6 from 125 to 125 --
+;; ready list initially:
+;; 125 
+
+;; insn[ 125]: priority =    1, ref_count =    0
+;; ready list at T-1: 125 (1), now 125
+;; total time = 1
+;; new basic block head = 125
+;; new basic block end = 125
+
+;;	 -- basic block number 7 from 126 to 129 --
+;; ready list initially:
+;; 129 
+
+;; insn[ 127]: priority =    1, ref_count =    1
+;; insn[ 129]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 129 (7ffffef4), now 129
+;; ready list at T-2: 127 (1), now 127
+;; total time = 2
+;; new basic block head = 126
+;; new basic block end = 129
+
+;;	 -- basic block number 8 from 136 to 137 --
+;; ready list initially:
+;; 137 
+
+;; insn[ 136]: priority =    1, ref_count =    1
+;; insn[ 133]: priority =    1, ref_count =    1
+;; insn[ 137]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 137 (7ffffef4), now 137
+;; ready list at T-2: 133 (1), now 133
+;; launching 136 before 133 with 1 stalls at T-3
+;; ready list at T-4: 136 (1), now 136
+;; total time = 4
+;; new basic block head = 136
+;; new basic block end = 137
+
+;;	 -- basic block number 9 from 139 to 139 --
+;; ready list initially:
+;; 139 
+
+;; insn[ 139]: priority =    1, ref_count =    0
+;; ready list at T-1: 139 (1), now 139
+;; total time = 1
+;; new basic block head = 139
+;; new basic block end = 139
+
+;;	 -- basic block number 10 from 140 to 148 --
+;; ready list initially:
+;; 148 
+
+;; insn[ 147]: priority =    1, ref_count =    1
+;; insn[ 144]: priority =    1, ref_count =    1
+;; insn[ 148]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 148 (7ffffef4), now 148
+;; ready list at T-2: 144 (1), now 144
+;; launching 147 before 144 with 1 stalls at T-3
+;; ready list at T-4: 147 (1), now 147
+;; total time = 4
+;; new basic block head = 140
+;; new basic block end = 148
+
+;;	 -- basic block number 11 from 150 to 150 --
+;; ready list initially:
+;; 150 
+
+;; insn[ 150]: priority =    1, ref_count =    0
+;; ready list at T-1: 150 (1), now 150
+;; total time = 1
+;; new basic block head = 150
+;; new basic block end = 150
+
+;;	 -- basic block number 12 from 151 to 154 --
+;; ready list initially:
+;; 154 
+
+;; insn[ 152]: priority =    1, ref_count =    1
+;; insn[ 154]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 154 (7ffffef4), now 154
+;; ready list at T-2: 152 (1), now 152
+;; total time = 2
+;; new basic block head = 151
+;; new basic block end = 154
+
+;;	 -- basic block number 13 from 156 to 156 --
+;; ready list initially:
+;; 156 
+
+;; insn[ 156]: priority =    1, ref_count =    0
+;; ready list at T-1: 156 (1), now 156
+;; total time = 1
+;; new basic block head = 156
+;; new basic block end = 156
+
+;;	 -- basic block number 14 from 157 to 187 --
+;; ready list initially:
+;; 187 
+
+;; insn[ 160]: priority =    1, ref_count =    4
+;; insn[ 163]: priority =    1, ref_count =    3
+;; insn[ 166]: priority =    3, ref_count =    2
+;; insn[ 167]: priority =    6, ref_count =    1
+;; insn[ 168]: priority =    6, ref_count =    3
+;; insn[ 161]: priority =    3, ref_count =    1
+;; insn[ 169]: priority =   13, ref_count =    4
+;; insn[ 170]: priority =   16, ref_count =    3
+;; insn[ 172]: priority =   16, ref_count =    2
+;; insn[ 175]: priority =   16, ref_count =    3
+;; insn[ 178]: priority =   16, ref_count =    2
+;; insn[ 181]: priority =   18, ref_count =    2
+;; insn[ 182]: priority =   21, ref_count =    1
+;; insn[ 183]: priority =   21, ref_count =    1
+;; insn[ 176]: priority =   18, ref_count =    1
+;; insn[ 184]: priority =   28, ref_count =    1
+;; insn[ 185]: priority =   31, ref_count =    1
+;; insn[ 187]: priority =   31, ref_count =    0
+;; ready list at T-1: 187 (1f), now 187
+;; ready list at T-2: 185 (1f), now 185
+;; launching 184 before 185 with 3 stalls at T-3
+;; ready list at T-6: 184 (1c), now 184
+;; ready list at T-7: 176 (12), now 176
+;; launching 183 before 176 with 6 stalls at T-8
+;; ready list at T-14: 183 (15), now 183
+;; ready list at T-15: 182 (15), now 182
+;; launching 181 before 182 with 3 stalls at T-16
+;; ready list at T-19: 181 (12), now 181
+;; launching 178 before 181 with 2 stalls at T-20
+;; launching 175 before 181 with 2 stalls at T-20
+;; ready list at T-22: 178 (10) 175 (10), now 178 175
+;; ready list at T-23: 175 (10), now 175
+;; ready list at T-24: 172 (10), now 172
+;; ready list at T-25: 170 (10), now 170
+;; launching 169 before 170 with 3 stalls at T-26
+;; ready list at T-29: 169 (d), now 169
+;; ready list at T-30: 161 (3), now 161
+;; launching 168 before 161 with 6 stalls at T-31
+;; ready list at T-37: 168 (6), now 168
+;; ready list at T-38: 167 (6), now 167
+;; launching 166 before 167 with 3 stalls at T-39
+;; ready list at T-42: 166 (3), now 166
+;; launching 163 before 166 with 2 stalls at T-43
+;; launching 160 before 166 with 2 stalls at T-43
+;; ready list at T-45: 163 (1) 160 (1), now 163 160
+;; ready list at T-46: 160 (1), now 160
+;; total time = 46
+;; new basic block head = 157
+;; new basic block end = 187
+
+;;	 -- basic block number 15 from 189 to 193 --
+;; ready list initially:
+;; 193 
+
+;; insn[ 192]: priority =    1, ref_count =    1
+;; insn[ 193]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 193 (7ffffef4), now 193
+;; ready list at T-2: 192 (1), now 192
+;; total time = 2
+;; new basic block head = 189
+;; new basic block end = 193
+
+;;	 -- basic block number 16 from 231 to 233 --
+;; ready list initially:
+;; 233 
+
+;; insn[ 231]: priority =    1, ref_count =    1
+;; insn[ 233]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 233 (7ffffef4), now 233
+;; ready list at T-2: 231 (1), now 231
+;; total time = 2
+;; new basic block head = 231
+;; new basic block end = 233
+
+;;	 -- basic block number 17 from 228 to 220 --
+;; ready list initially:
+;; 220 223 
+
+;; insn[ 197]: priority =    1, ref_count =    5
+;; insn[ 199]: priority =    1, ref_count =    6
+;; insn[ 200]: priority =    3, ref_count =    3
+;; insn[ 202]: priority =    6, ref_count =    6
+;; insn[ 205]: priority =    6, ref_count =    4
+;; insn[ 207]: priority =    6, ref_count =    4
+;; insn[ 208]: priority =    8, ref_count =    2
+;; insn[ 210]: priority =   11, ref_count =    4
+;; insn[ 213]: priority =   11, ref_count =    3
+;; insn[ 215]: priority =   13, ref_count =    1
+;; insn[ 218]: priority =   13, ref_count =    1
+;; insn[ 223]: priority =    1, ref_count =    0
+;; insn[ 220]: priority =   15, ref_count =    0
+;; ready list at T-1: 220 (f) 223 (1), now 220 223
+;; ready list at T-2: 223 (1), now 223
+;; launching 218 before 223 with 1 stalls at T-3
+;; ready list at T-4: 218 (d), now 218
+;; ready list at T-5: 215 (d), now 215
+;; launching 213 before 215 with 2 stalls at T-6
+;; ready list at T-8: 213 (b), now 213
+;; ready list at T-9: 210 (b), now 210
+;; launching 208 before 210 with 3 stalls at T-10
+;; ready list at T-13: 208 (8), now 208
+;; launching 207 before 208 with 2 stalls at T-14
+;; launching 205 before 208 with 2 stalls at T-14
+;; ready list at T-16: 207 (6) 205 (6), now 207 205
+;; ready list at T-17: 205 (6), now 205
+;; ready list at T-18: 202 (6), now 202
+;; launching 200 before 202 with 3 stalls at T-19
+;; ready list at T-22: 200 (3), now 200
+;; launching 199 before 200 with 2 stalls at T-23
+;; launching 197 before 200 with 2 stalls at T-23
+;; ready list at T-25: 199 (1) 197 (1), now 199 197
+;; ready list at T-26: 197 (1), now 197
+;; total time = 26
+;; new basic block head = 228
+;; new basic block end = 220
+
+;;	 -- basic block number 18 from 244 to 243 --
+;; ready list initially:
+;; 243 
+
+;; insn[ 243]: priority = 2147483380, ref_count =    0
+;; ready list at T-1: 243 (7ffffef4), now 243
+;; total time = 1
+;; new basic block head = 244
+;; new basic block end = 243
+
+(note 1 0 2 ("source.i") 9)
+
+(note 2 1 15 "" NOTE_INSN_DELETED)
+
+(note 15 2 16 "" NOTE_INSN_FUNCTION_BEG)
+
+(note 16 15 18 "" NOTE_INSN_DELETED)
+
+(note 18 16 267 "" NOTE_INSN_BLOCK_BEG)
+
+(insn 267 18 8 (set (reg:SI 29 sp)
+        (minus:SI (reg:SI 29 sp)
+            (const_int 16))) 16 {subsi3_internal} (nil)
+    (nil))
+
+(insn:QI 8 267 19 (set (mem/s:SI (plus:SI (reg:SI 29 sp)
+                (const_int 24)))
+        (reg:SI 6 a2)) 159 {movsi_internal2} (insn_list 267 (nil))
+    (expr_list:REG_DEAD (reg:SI 6 a2)
+        (nil)))
+
+(note 19 8 21 ("source.i") 11)
+
+(insn:QI 21 19 271 (set (reg:SF 32 $f0)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 24)))) 168 {movsf_internal1} (insn_list 267 (insn_list 8 (nil)))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 24)))
+        (nil)))
+
+(note 271 21 4 ("source.i") 9)
+
+(insn:QI 4 271 272 (set (mem/s:SI (plus:SI (reg:SI 29 sp)
+                (const_int 16)))
+        (reg:SI 4 a0)) 159 {movsi_internal2} (insn_list 267 (nil))
+    (expr_list:REG_DEAD (reg:SI 4 a0)
+        (nil)))
+
+(note 272 4 23 ("source.i") 11)
+
+(insn:QI 23 272 33 (set (reg:SF 40 $f8)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 16)))) 168 {movsf_internal1} (insn_list 267 (insn_list 4 (nil)))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 16)))
+        (nil)))
+
+(note 33 23 35 ("source.i") 13)
+
+(insn:QI 35 33 37 (set (reg:SF 34 $f2)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 44)))) 168 {movsf_internal1} (insn_list 267 (nil))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 44)))
+        (nil)))
+
+(insn:QI 37 35 273 (set (reg:SF 44 $f12)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 36)))) 168 {movsf_internal1} (insn_list 267 (nil))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 36)))
+        (nil)))
+
+(note 273 37 10 ("source.i") 9)
+
+(insn:QI 10 273 26 (set (mem/s:SI (plus:SI (reg:SI 29 sp)
+                (const_int 28)))
+        (reg:SI 7 a3)) 159 {movsi_internal2} (insn_list 267 (nil))
+    (expr_list:REG_DEAD (reg:SI 7 a3)
+        (nil)))
+
+(note 26 10 28 ("source.i") 12)
+
+(insn:QI 28 26 246 (set (reg:SF 36 $f4)
+        (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 28)))) 168 {movsf_internal1} (insn_list 267 (insn_list 10 (nil)))
+    (expr_list:REG_EQUIV (mem/s:SF (plus:SI (reg:SI 29 sp)
+                (const_int 28)))
+        (nil)))
+

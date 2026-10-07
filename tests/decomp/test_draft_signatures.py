@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import cast
 
 from tests.decomp.support import fixture, solved
+from unbake.compilers.families.gcc.decompiler import register_pairs
 from unbake.config import Host
 from unbake.decomp.draft_abi import declarations
-from unbake.decomp.draft_fp import register_pairs
 
 
 class DraftSignatureTests(unittest.TestCase):

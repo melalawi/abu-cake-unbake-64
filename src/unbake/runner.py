@@ -134,7 +134,7 @@ def place(
         "--symbols",
         str(symbols_file(project, version)),
     ]
-    if row.kind == "hasm" or kind not in drivers.UNTRIMMED:
+    if row.kind == "hasm" or not drivers.preserves_padding(kind):
         argv.append("--trim")
     if score:
         argv.append("--score")
@@ -212,7 +212,13 @@ def link(
         trial = work / "trial.ld"
         atomic_files.text(trial, rodata.insert_fragment(script.read_text(), rodata.trial_fragment(sections)))
         script = trial
-    derived = derived_symbols(undefined(placed), provided(symbols_file(project, version)), version, source)
+    missing = undefined(placed)
+    known = provided(symbols_file(project, version))
+    from unbake.compilers.runtime import bindings
+
+    runtime = bindings(project, version) if missing - known else {}
+    derived = derived_symbols(missing, known | frozenset(runtime), version, source)
+    derived.extend(f"--defsym={name}=0x{runtime[name]:08X}" for name in sorted(missing - known) if name in runtime)
     try:
         process.run_tool(
             [
@@ -304,8 +310,7 @@ def dependencies(
     from unbake.compilers.families import family_for
 
     argv = drivers.preprocess_command(project, str(host.cpp), version, unit, file, non_matching=non_matching)
-    argv = [word for word in argv if word not in ("-E", "-P")]
-    argv.insert(len(argv) - 1, "-M")
+    argv = family_for(project.compiler_for(unit)).dependency_command(argv)
     output = process.run_tool(
         argv, project.root, "compile", context={"source": str(file), "function": unit, "version": version}
     )

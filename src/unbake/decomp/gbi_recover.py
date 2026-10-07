@@ -423,7 +423,9 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
         work = Path(temporary)
         probe = work / "sdk.c"
         atomic_files.text(probe, "\n".join([*directives, *(f'#include "{path}"' for path in sorted(headers))]) + "\n")
-        command = [*command[:-1], "-dM", "-undef", "-nostdinc", str(probe)]
+        from unbake.compilers.families import family_for
+
+        command = family_for(project.compiler_for(unit)).macro_command(command, str(probe))
         from unbake.cache import memo
 
         definitions = run_tool(command, project.root, "gbi", temporary_root=project.build)

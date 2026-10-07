@@ -32,7 +32,10 @@ class Reader:
 
 
 def run(words: dict[int, int], body: str = BODY, size: int = 8) -> str:
-    project = SimpleNamespace(version=lambda name: SimpleNamespace(symbols="symbols"))
+    project = SimpleNamespace(
+        version=lambda name: SimpleNamespace(symbols="symbols"),
+        compiler_for=lambda unit: SimpleNamespace(id="gcc-2.8.1-sn64"),
+    )
     with (
         patch("unbake.decomp.rom.symbol_values", return_value={}),
         patch("unbake.decomp.rom.function_span", return_value=FunctionSpan(0x80000000, 0, size)),

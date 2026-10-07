@@ -30,13 +30,9 @@ class Counts:
 
     @property
     def family(self) -> str | None:
-        total = self.addu + self.or_
-        if total >= 8:
-            if self.addu / total >= 0.8:
-                return "gcc"
-            if self.or_ / total >= 0.8:
-                return "ido"
-        return None
+        from unbake.compilers.families import family_from_idioms
+
+        return family_from_idioms({"addu": self.addu, "or": self.or_}, 8)
 
 
 @dataclass(frozen=True)
@@ -97,12 +93,9 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
     families = []
     for function in ordered:
         count = measured[function.start, function.end]
-        total = count.addu + count.or_
-        family = None
-        if total and count.addu / total >= 0.8:
-            family = "gcc"
-        elif total and count.or_ / total >= 0.8:
-            family = "ido"
+        from unbake.compilers.families import family_from_idioms
+
+        family = family_from_idioms({"addu": count.addu, "or": count.or_}, 1)
         families.append(family)
     image = rom.image()
     groups: list[tuple[str | None, list[Function]]] = []
@@ -114,7 +107,9 @@ def regions(functions: Iterable[Function], rom: Rom) -> list[Region]:
     names: dict[str, int] = {}
     output: list[Region] = []
     for family, members in groups:
-        base = "main" if family == "gcc" else family or "undecided"
+        from unbake.compilers.families import family_named
+
+        base = family_named(family).region_name() if family else "undecided"
         names[base] = names.get(base, 0) + 1
         name = base if names[base] == 1 else f"{base}_{members[0].address:08X}"
         counts = [_counts(image[function.start : function.end]) for function in members]

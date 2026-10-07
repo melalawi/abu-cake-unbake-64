@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 from tests.project_fixture import ProjectCase
 from unbake.cdecl import LayoutParser
+from unbake.compilers.families.gcc import token_locations
 from unbake.config import Held
 from unbake.fold import rewrite_view, type_rewrite
 from unbake.layout.structs import layouts
@@ -30,12 +31,12 @@ def expanded(source, filename="/source.c", extras=None):
     for line, text in enumerate(source.splitlines(), 1):
         if text.lstrip().startswith("#"):
             continue
-        for match in re.finditer(rewrite_view._TOKEN, text):
+        for match in re.finditer(token_locations._TOKEN, text):
             if extras and match[0] in extras:
                 tokens.extend(extras[match[0]])
             else:
                 tokens.append((match[0], filename, line, match.start() + 1))
-    return rewrite_view.decode(dump(tokens), source, filename)
+    return token_locations.decode(dump(tokens), source, filename)
 
 
 class RewriteViewTests(unittest.TestCase):
@@ -79,7 +80,7 @@ class RewriteViewTests(unittest.TestCase):
             ("old", "/source.c", 1, at + 1),
             (")", "/header.h", 8, 12),
         ]
-        view = rewrite_view.decode(dump(tokens), source, "/source.c")
+        view = token_locations.decode(dump(tokens), source, "/source.c")
         self.assertEqual(view.text, "(\nold\n+\nold\n)\n")
         self.assertEqual(view.origins, (None, at, None, at, None))
 
@@ -91,7 +92,7 @@ class RewriteViewTests(unittest.TestCase):
             ("ab", "/source.c", 1, 1),
             ("42", "/source.c", 1, 10),
         ]
-        view = rewrite_view.decode(dump(tokens), source, "/source.c")
+        view = token_locations.decode(dump(tokens), source, "/source.c")
         self.assertEqual(view.origins, (None, None))
 
     def test_map_looking_literals_exponents_and_operators_stay_whole_tokens(self):
@@ -104,7 +105,7 @@ class RewriteViewTests(unittest.TestCase):
 
     def test_missing_compiler_provenance_is_an_explicit_source_diagnostic(self):
         with self.assertRaisesRegex(Held, r"/source.c:1:.*-fdebug-cpp"):
-            rewrite_view.decode("int f(void) {return 0;}", "", "/source.c")
+            token_locations.decode("int f(void) {return 0;}", "", "/source.c")
 
     def rewrite(self, source, view, layout_source=None):
         parser = LayoutParser(source if layout_source is None else layout_source)
@@ -132,14 +133,14 @@ class RewriteViewTests(unittest.TestCase):
             (";", "<stdin>", 1, 40),
         ]
         for line, text in enumerate(source.splitlines(), 1):
-            for match in re.finditer(rewrite_view._TOKEN, text):
+            for match in re.finditer(token_locations._TOKEN, text):
                 if match[0] == "STMT":
                     tokens.append(("return", "/header.h", 2, 10))
                 else:
                     tokens.append((match[0], "/source.c", line, match.start() + 1))
                     if line == 2 and match[0] == ")" and match.start() == text.index(") else"):
                         tokens.append((";", "/header.h", 2, 20))
-        result = self.rewrite(source, rewrite_view.decode(dump(tokens), source, "/source.c"))
+        result = self.rewrite(source, token_locations.decode(dump(tokens), source, "/source.c"))
         self.assertEqual(
             result,
             source.replace("struct Old", "struct Canon")
@@ -277,15 +278,16 @@ class HeaderOutputSkipTests(unittest.TestCase):
         for prefix in prefixes:
             with self.subTest(prefix=prefix):
                 output = prefix + suffix
-                trimmed = rewrite_view._source_output(output, 30)
+                trimmed = token_locations.source_output(output, 30)
                 self.assertEqual(trimmed, suffix)
                 # The expected source suffix is identical, including its origins.
                 self.assertEqual(
-                    rewrite_view.decode(trimmed, source, filename), rewrite_view.decode(suffix, source, filename)
+                    token_locations.decode(trimmed, source, filename), token_locations.decode(suffix, source, filename)
                 )
                 if rewrite_view._BOUNDARY not in prefix:
                     self.assertEqual(
-                        rewrite_view.decode(trimmed, source, filename), rewrite_view.decode(output, source, filename)
+                        token_locations.decode(trimmed, source, filename),
+                        token_locations.decode(output, source, filename),
                     )
 
     def test_unsupported_or_missing_stdin_mapping_keeps_the_original_decoder_path(self):
@@ -295,7 +297,7 @@ class HeaderOutputSkipTests(unittest.TestCase):
             dump([(rewrite_view._BOUNDARY, "/header.h", 30, 12)]),
         ):
             with self.subTest(output=output):
-                self.assertEqual(rewrite_view._source_output(output, 30), output)
+                self.assertEqual(token_locations.source_output(output, 30), output)
 
 
 class BuiltinTokenTests(unittest.TestCase):
@@ -312,7 +314,7 @@ class BuiltinTokenTests(unittest.TestCase):
         )
         # Actual host cpp -fdebug-cpp output for __STDC__, not an editable source token.
         builtin = "{P:;F:;L:-1;C:-1;S:-1;M:(nil);E:-1,LOC:1,R:1}1"
-        view = rewrite_view.decode(
+        view = token_locations.decode(
             prefix + builtin + dump([("]", "/source.c", 1, 20), (";", "/source.c", 1, 21)]), source, "/source.c"
         )
         self.assertEqual(view.text, "int\nvalue\n[\n1\n]\n;\n")

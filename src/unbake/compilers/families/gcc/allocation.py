@@ -6,8 +6,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 
+from unbake.compilers.families.types import Allocation, Pseudo
 from unbake.config import Held
-from unbake.decomp.explain import Allocation, Pseudo
 
 
 def dump_flags() -> tuple[str, ...]:
@@ -301,4 +301,4 @@ def allocation(dumps: Mapping[str, str]) -> Allocation:
         limitations.append(
             "Global decision log unavailable; priority is floor_log2(refs) * refs / live_length * 10000 * words."
         )
-    return Allocation(tuple(facts.values()), (), tuple(limitations), tuple(sorted(set(dispositions.values()))))
+    return Allocation(tuple(facts.values()), (), tuple(limitations), tuple(sorted(set(dispositions.values()))), "gcc")

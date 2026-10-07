@@ -22,7 +22,7 @@ from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 7
+SCHEMA = 8
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -39,7 +39,7 @@ MAKE_VALUES: dict[str, tuple[str, ...]] = {
     "preprocess": ("$(PREPROCESS_FLAGS)",),
     "defines": ("$(COMPILER_DEFINES) $(VERSION_DEFINES) $(CONSUMER) $(UNIT_DEFINES)",),
     "cppflags": ("$(CPPFLAGS)",),
-    "asflags": ("$(SN64_ASFLAGS)",),
+    "asflags": ("$(ASSEMBLER_FLAGS)",),
     "source": ("src/$(*F).c",),
     "name": ("$(*F)",),
 }
@@ -133,6 +133,14 @@ def symbols_ld(project: Project, version: str) -> str:
         provided.setdefault(name, int(address, 16))
     for name, address in address_named(project).items():
         provided.setdefault(name, address)
+    from unbake.compilers.runtime import bindings
+
+    for name, address in bindings(project, version).items():
+        if name in provided and provided[name] != address:
+            raise Held(
+                "buildfiles", f"symbols.runtime_identity: {name}: configured address disagrees with proved native code"
+            )
+        provided[name] = address
     return "".join(f"PROVIDE({name} = 0x{address:08X});\n" for name, address in sorted(provided.items()))
 
 
@@ -193,7 +201,7 @@ def units_mk(project: Project) -> str:
             "-DUNBAKE_VERSION_PLACEHOLDER",
             *project.unit_flags.get(name, ()),
         ]
-        prep, _ = drivers.stage_flags(compiler.kind, effective)
+        prep, _ = drivers.stage_flags(compiler.id, effective)
         rendered = words(list(prep)).replace("-DUNBAKE_VERSION_PLACEHOLDER", "$(VERSION_DEFINES) $(CONSUMER)")
         if name in fuzzy:
             rendered += " -DNON_MATCHING"
@@ -205,7 +213,8 @@ def units_mk(project: Project) -> str:
             lines.append(f"{targets}: CODEGEN := {words(c_codegen)}\n")
             lines.append(f"{targets}: COMPILER_INCLUDES := {words(c_includes)}\n")
             lines.append(f"{targets}: COMPILER_DEFINES := {words(c_defines)}\n")
-            lines.append(f"{targets}: TRIM := {'' if compiler.kind in drivers.UNTRIMMED else '--trim'}\n")
+            lines.append(f"{targets}: ASSEMBLER_FLAGS := {words(list(drivers.assembly_flags(project, compiler.id)))}\n")
+            lines.append(f"{targets}: TRIM := {'' if drivers.preserves_padding(compiler.kind) else '--trim'}\n")
         u_includes, u_codegen, u_defines = drivers.unit_parts(project, name)
         if u_includes:
             lines.append(f"{targets}: UNIT_INCLUDES := {words(u_includes)}\n")
@@ -227,20 +236,13 @@ def _kind_recipes(kind: str) -> str:
     """PREPROCESS_<kind> writes UNIT.i and UNIT.d; COMPILE_<kind> turns UNIT.i into UNIT.o inside the unit's directory.
 
     A cpp preprocess writes the dependency file in the same pass; a compiler driver's -E needs its own cpp -MM."""
-    template = drivers.TEMPLATES[kind]
+    template = drivers.templates(kind)
     preprocess = template["preprocess"]
     compile_ = template["compile"]
     assert preprocess is not None and compile_ is not None
-    output = "> $(@D)/$(*F).i"
-    depend = "-MP -MT $(@D)/$(*F).i -MF $(@D)/$(*F).d"
-    if preprocess[0] == "{cpp}":
-        prep = f"{_recipe(preprocess)} -MMD {depend} {output}"
-    else:
-        dependency = _recipe(("{cc}", "{preprocess}", "-M", "{source}"))
-        prep = (
-            f"{dependency} > $(@D)/$(*F).deps && sed 's|^[^:]*:|$(@D)/$(*F).i:|' $(@D)/$(*F).deps > $(@D)/$(*F).d"
-            f" && rm $(@D)/$(*F).deps && {_recipe(preprocess)} {output}"
-        )
+    from unbake.compilers.families import family_for_kind
+
+    prep = family_for_kind(kind).make_preprocess(_recipe)
     commands = [_recipe(compile_)]
     if template["assemble"] is not None:
         commands.append(_recipe(template["assemble"]))
@@ -352,7 +354,7 @@ def setup_recipe(project: Project) -> list[str]:
 def makefile(project: Project, host: Host) -> str:
     default = project.compilers[project.default_compiler]
     c_includes, c_codegen, c_defines = drivers.compiler_parts(project, default.id)
-    default_preprocess, _ = drivers.stage_flags(default.kind, list(default.cflags))
+    default_preprocess, _ = drivers.stage_flags(default.id, list(default.cflags))
     includes = [f"-I{relative(project, path)}" for path in project.include]
     kinds = sorted({compiler.kind for compiler in project.compilers.values()})
     text = [
@@ -377,14 +379,14 @@ def makefile(project: Project, host: Host) -> str:
         f"INCLUDES := {words(includes)}\n",
         f"CPPFLAGS := {words(list(project.cppflags))}\n",
         f"PREPROCESS_FLAGS = $(INCLUDES) {words(list(default_preprocess))} $(VERSION_DEFINES) $(CONSUMER)\n",
-        f"SN64_ASFLAGS := {words(list(drivers.gnu_as_flags(project)))}\n",
+        f"ASSEMBLER_FLAGS := {words(list(drivers.assembly_flags(project, default.id)))}\n",
         f"HASM_ASFLAGS := {words(list(project.asflags))}\n",
         f"KIND := {default.kind}\n",
         f"CC := {relative(project, default.cc)}\n",
         f"CODEGEN := {words(c_codegen)}\n",
         f"COMPILER_INCLUDES := {words(c_includes)}\n",
         f"COMPILER_DEFINES := {words(c_defines)}\n",
-        f"TRIM := {'' if default.kind in drivers.UNTRIMMED else '--trim'}\n",
+        f"TRIM := {'' if drivers.preserves_padding(default.kind) else '--trim'}\n",
         "UNIT_INCLUDES :=\nUNIT_CODEGEN :=\nUNIT_DEFINES :=\nCONSUMER :=\n",
         "\n.PHONY: all check verify setup clean rom\nall: check\n\n",
         "check: verify $(ROMS)\n",
@@ -461,7 +463,7 @@ def gitlab_progress(project: Project) -> str:
 
 
 # The n64link release these build files need: 0.3.1 relocates jump-table words before its ROM proof.
-N64LINK_RELEASE = "n64link 0.3.1 (SN ASN64 2.81 rules)\n"
+N64LINK_RELEASE = drivers.assembler_release()
 
 
 def n64link_pin(host: Host) -> str:

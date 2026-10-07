@@ -9,6 +9,7 @@ import re
 import struct
 from pathlib import Path
 
+from unbake.compilers.families import family_for
 from unbake.config import Held, Project
 from unbake.extract import discovered_symbols
 from unbake.layout import split
@@ -156,7 +157,11 @@ def jump_tables(project: Project, version: str, function: str, assembly: str) ->
     for number in sorted(inserts, reverse=True):
         lines.insert(number, inserts[number])
     assembly = "\n".join(lines)
-    return assembly + ("\n.section .rodata\n" + "\n".join(tables) + "\n" if tables else "")
+    return assembly + (
+        "\n.section " + family_for(project.compiler_for(function)).m2c_section() + "\n" + "\n".join(tables) + "\n"
+        if tables
+        else ""
+    )
 
 
 def private_constants(
@@ -232,7 +237,11 @@ def private_constants(
                 additions.append("\n".join("glabel " + name for name in names) + "\n" + directive)
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise Held("m2c", f"draft.private_constants: {manifest}: {error}") from error
-    return assembly + ("\n.section .rodata\n" + "\n".join(additions) + "\n" if additions else "")
+    return assembly + (
+        "\n.section " + family_for(project.compiler_for(function)).m2c_section() + "\n" + "\n".join(additions) + "\n"
+        if additions
+        else ""
+    )
 
 
 def stack_locals(output: str, context: str, function: str, assembly: str = "") -> str:

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from unbake.layout.boundary import Boundary
 
 JR_RA, NOP = 0x03E00008, 0
-# MIPS III doubleword opcodes and SPECIAL functions; no -mips1/-mips2 compiler emits them.
+# MIPS III doubleword opcodes and SPECIAL functions; unsupported by lower target ISA levels.
 _MIPS3_OPS = frozenset({24, 25, 26, 27, 44, 45, 52, 55, 60, 63})
 _MIPS3_SPECIAL = frozenset({20, 22, 23, 28, 29, 30, 31, 44, 45, 46, 47, 56, 58, 59, 60, 62, 63})
 # COP0 moves (mfc0, dmfc0, mtc0, dmtc0) by rs, and CO functions (tlbr, tlbwi, tlbwr, tlbp, eret) by funct.
@@ -134,7 +134,7 @@ def original(words: list[int], emitted: Shape) -> Original | None:
     `cop0`: a COP0 move, TLB op, eret or cache (other op-16 words are not code).
     `fcsr`: cfc1/ctc1 on $31 with no float conversion in the body (compilers touch FCSR only around one).
     `kreg`: k0 or k1 written, then read (a def-use pair, never one stray word).
-    `isa`: an opcode above the highest configured -mipsN."""
+    `isa`: an opcode above the highest configured target ISA level."""
     if not any(_returns(word) for word in words):
         return None
     rules = emitted.rules
@@ -153,7 +153,7 @@ def original(words: list[int], emitted: Shape) -> Original | None:
     if "isa" in rules and emitted.isa_level < 3:
         for index, word in enumerate(words):
             if word >> 26 in _MIPS3_OPS or (word >> 26 == 0 and word & 63 in _MIPS3_SPECIAL):
-                return Original("isa", f"64-bit opcode at +0x{index * 4:X} above -mips{emitted.isa_level}")
+                return Original("isa", f"64-bit opcode at +0x{index * 4:X} above ISA level {emitted.isa_level}")
     return None
 
 
@@ -266,7 +266,7 @@ def _fragment(words: list[int], shape: Shape) -> str | None:
         and shape.isa_level < 3
         and any(word >> 26 in _MIPS3_OPS or (word >> 26 == 0 and word & 63 in _MIPS3_SPECIAL) for word in words)
     ):
-        return f"64-bit opcode outside -mips{shape.isa_level}"
+        return f"64-bit opcode outside ISA level {shape.isa_level}"
     if "entry_registers" in shape.rules:
         gprs, fprs = set(shape.entry_gprs), set(shape.entry_fprs)
         for word in words:

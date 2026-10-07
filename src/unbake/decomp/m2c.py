@@ -13,7 +13,7 @@ from unbake.decomp import draft_abi, gbi, measured_storage, similar
 from unbake.decomp.draft_asm import delay_slots, local_targets, saved_returns
 from unbake.decomp.draft_compile import prove
 from unbake.decomp.draft_context import ordered_headers, preprocess_context, required_headers
-from unbake.decomp.draft_fp import command, register_pairs
+from unbake.decomp.draft_fp import command
 from unbake.decomp.draft_input import (
     assembly_source,
     canonical_aliases,
@@ -126,12 +126,14 @@ def _draft(
     project.version(v)
     assembly_text, address = assembly_source(project, v, function, extracted)
     executable_path = str(policy.m2c)
-    targets = {"gnu": "mips-gcc-c", "ido": "mips-ido-c"}
+    from unbake.compilers.families import family_for
+    from unbake.compilers.registry import specification
+
     compiler = project.compiler_for(project.src / (function + ".c"))
-    if compiler.kind not in targets:
-        raise Held(
-            "m2c", f"compiler.kind {project.compiler_for(project.src / (function + '.c')).kind!r} has no m2c target"
-        )
+    target = specification(compiler.id).m2c
+    if not target:
+        raise Held("m2c", f"compiler.{compiler.id}: no registered decompiler target")
+    family = family_for(compiler)
     original_project = project
     work.mkdir(parents=True, exist_ok=True)
     headers = _headers(project)
@@ -213,13 +215,13 @@ def _draft(
         with atomic_files.stream(context, "a") as stream:
             stream.write("\n" + signatures + "\n")
     atomic_files.text(
-        assembly, register_pairs(body, tuple(drivers.flags(project, v, function)), function), encoding="utf-8"
+        assembly, family.m2c_registers(body, tuple(drivers.flags(project, v, function)), function), encoding="utf-8"
     )
     output = run_tool(
         [
             *command(executable_path, assembly.read_text()),
             "-t",
-            targets[compiler.kind],
+            target,
             "--valid-syntax",
             "--stack-structs",
             "--context",
