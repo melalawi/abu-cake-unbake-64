@@ -34,3 +34,10 @@ class StreamingUnitTests(unittest.TestCase):
     def test_unclosed_body_is_a_named_refusal(self):
         with self.assertRaisesRegex(Held, "unclosed function body"):
             declarations._unit_bodies_blanked('int f(void) { "}";')
+
+    def test_multiline_body_refusal_retains_cpp_location_and_function_context(self):
+        source = '# 12 "src/broken.c"\nint broken\n(void)\n{\n'
+        with self.assertRaises(Held) as raised:
+            declarations._unit_bodies_blanked(source)
+        self.assertIn("src/broken.c:14", raised.exception.reason)
+        self.assertIn("broken", raised.exception.reason)

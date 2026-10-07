@@ -99,6 +99,50 @@ def _declaration_unit(source: str) -> str:
     )
 
 
+def source_definition_units(
+    source: Path, text: str, project: Project | None = None, policy: Host | None = None
+) -> Iterator[str]:
+    """File-scope definition views, selecting configured versions for conditional braces.
+
+    Mutually exclusive branches may each open a block closed by shared code.
+    Only the actual preprocessor environment can distinguish that from a
+    malformed body; never suppress the refusal or concatenate those branches.
+    """
+    conditional_depth = 0
+    conditional_braces = False
+    for match in _C_TOKEN.finditer(text):
+        token = match[0]
+        directive = re.match(r"^[ \t]*#\s*(if|ifdef|ifndef|endif)\b", token)
+        if directive:
+            conditional_depth += -1 if directive[1] == "endif" else 1
+        elif conditional_depth and token in {"{", "}"}:
+            conditional_braces = True
+            break
+    if not conditional_braces or project is None or policy is None:
+        try:
+            unit = _declaration_unit(declaration_source(text))
+        except Held as error:
+            raise Held(error.phase, f"types.declaration: {source}: {error.reason}") from error
+        if conditional_braces:
+            raise Held("solve", f"types.declaration: {source}: conditional braces require a preprocessor environment")
+        yield unit
+        return
+    from unbake.fold.source_views import active_source
+
+    seen: set[str] = set()
+    for version in project.versions:
+        try:
+            view = active_source(project, policy, text, version, source.stem)
+            masked = declaration_source(view)
+            if masked in seen:
+                continue
+            seen.add(masked)
+            unit = _declaration_unit(masked)
+        except Held as error:
+            raise Held(error.phase, f"types.declaration: {source}: {version}: {error.reason}") from error
+        yield unit
+
+
 def _unit_clean(stream: str, source: str, *, line_markers: bool) -> str:
     """clean() of a whole unit, once per text, resumed after the header prefix shared with recent units."""
     return memo(
@@ -123,6 +167,7 @@ def _unit_bodies_blanked(source: str) -> str:
     depth = parens = 0
     assigned = False
     previous = ""
+    statement_start = 0
     for match in tokens:
         token = match[0]
         if token.startswith(("#", "/*", "//")):
@@ -138,8 +183,12 @@ def _unit_bodies_blanked(source: str) -> str:
                     spans.append((begin, closing.start()))
                     break
             else:
-                raise Held("solve", "types.declaration: unclosed function body")
+                line = source.count("\n", 0, match.start()) + 1
+                context = cdecl.located(source, f":{line}:1: unclosed function body")
+                signature = re.sub(r"\s+", " ", source[statement_start : match.start()]).strip()[-200:]
+                raise Held("solve", f"types.declaration: {context}: function {signature}")
             assigned, previous = False, "}"
+            statement_start = closing.end()
             continue
         if token == "{":
             depth += 1
@@ -151,6 +200,7 @@ def _unit_bodies_blanked(source: str) -> str:
                 assigned |= token == "="
                 if token == ";":
                     assigned = False
+                    statement_start = match.end()
         previous = token
     pieces: list[str] = []
     cursor = 0

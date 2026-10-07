@@ -393,6 +393,8 @@ def _render(
         published_homes,
         value.get("typedefs", {}),
         replacements,
+        project,
+        policy,
     )
     items = list(session.sources.items())
     decisions = (
@@ -458,14 +460,15 @@ class _Drops:
     published_homes: set[Path]
     typedefs: dict[str, str]
     replacements: dict[str, str]
+    project: Project | None = None
+    policy: Host | None = None
 
 
 def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set[str], set[Path]]:
     """Pool worker: one source's typedefs, the generated declarations it owns locally (names to drop) and the
     retained contracts it disagrees with (paths to drop). Mutates nothing."""
-    from unbake.cdecl import declaration_source
     from unbake.layout import redeclarations
-    from unbake.typemap.declarations import _declaration_unit
+    from unbake.typemap.declarations import source_definition_units
 
     source_path, text = item
     source_typedefs: set[str] = set()
@@ -482,9 +485,13 @@ def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set
     # A version-selected call can look like a signature after directives are
     # blanked. Read only file-scope signatures, using the same body scan as
     # declaration extraction, before deciding which contracts a source owns.
-    for match in _SIGNATURE.finditer(_declaration_unit(declaration_source(text))):
-        definitions.add(match["name"])
-        local.setdefault(match["name"], []).append(match["prototype"].strip() + ";")
+    for unit in source_definition_units(source_path, text, shared.project, shared.policy):
+        for match in _SIGNATURE.finditer(unit):
+            definitions.add(match["name"])
+            prototype = match["prototype"].strip() + ";"
+            variants = local.setdefault(match["name"], [])
+            if prototype not in variants:
+                variants.append(prototype)
     local_aliases = {**shared.typedefs, **shared.replacements, **redeclarations.aliases([text])}
     for name in local.keys() & shared.declarations_by_name.keys():
         if (name != source_path.stem or name in definitions) and any(
