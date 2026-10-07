@@ -17,13 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import cache
+from unbake import cache, inputs
 from unbake.config import Held, Host, Project
 from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 7
+SCHEMA = 8
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 
@@ -34,12 +34,17 @@ def input_key(project: Project) -> str:
     The solution is the types step's output, not its input key: a solve that changes nothing reruns nothing here."""
     from unbake.typemap import types_db
 
-    parts: list[str | bytes | Path] = ["headers", str(SCHEMA), project.root / "layout.toml"]
-    parts.append(types_db.solution(types_db.path(project)) or "no solution")
-    for include in project.include:
-        parts.extend(sorted(include.rglob("*.h")))
-    parts.extend(sorted(project.src.rglob("*.c")))
-    return cache.key(*parts)
+    paths = (
+        project.root / "layout.toml",
+        *(path for include in project.include for path in sorted(include.rglob("*.h"))),
+        *sorted(project.src.rglob("*.c")),
+    )
+    dependencies = inputs.DependencySet(
+        tuple(inputs.file_pin(path, root=project.root, root_id="project", reuse=cache.configured()) for path in paths),
+        {"solution": types_db.solution(types_db.path(project))},
+        {"header-inputs": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured())},
+    )
+    return cache.key("headers", str(SCHEMA), dependencies.digest)
 
 
 def declared(text: str) -> set[str]:

@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache
+from unbake import cache, inputs
 from unbake.config import Held, Host, Project
 
 MARKER = "/* Native resident constant storage; absolute access symbols retain their addresses. */"
@@ -21,11 +21,19 @@ _BRANCH = re.compile(r"#(?:elif|else)\b.*")
 _COMMENT = re.compile(r"/\*.*\*/|//.*")
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 3
+SCHEMA = 4
 
 
 def input_key(project: Project) -> str:
-    return cache.key("resident", str(SCHEMA), *sorted(project.src.glob("*.c")))
+    dependencies = inputs.DependencySet(
+        tuple(
+            inputs.file_pin(path, root=project.root, root_id="project", reuse=cache.configured())
+            for path in sorted(project.src.glob("*.c"))
+        ),
+        {},
+        {"resident-inputs": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured())},
+    )
+    return cache.key("resident", str(SCHEMA), dependencies.digest)
 
 
 def deleted(text: str, unit: str) -> str:

@@ -631,8 +631,16 @@ def findings(
         except (ValueError, TypeError) as error:
             raise Held("checks", f"check.findings: corrupt source-rule result {content_key}: {error}") from error
 
-    for path in sorted(set(paths)):
-        name = path.relative_to(project.root).as_posix()
+    requested = tuple(dict.fromkeys(paths))
+    external = {
+        path: index for index, path in enumerate(path for path in requested if not path.is_relative_to(project.root))
+    }
+    for path in sorted(requested):
+        name = (
+            path.relative_to(project.root).as_posix()
+            if path.is_relative_to(project.root)
+            else f"external-input-{external[path]}:{path.name}"
+        )
         pins[name] = (
             inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
         )

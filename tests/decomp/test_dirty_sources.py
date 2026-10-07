@@ -44,3 +44,23 @@ class DirtySourcesTests(TempCase):
         self.assertTrue(second.dependency_hashes)
         self.assertEqual(first.rows, second.rows)
         self.assertEqual(second.source_scans, 0)
+
+    def test_named_external_inputs_do_not_collide_or_expose_machine_paths(self):
+        root = self.root / "project"
+        root.mkdir()
+        project = SimpleNamespace(root=root)
+        sources = []
+        for directory, text in (("one", CLEAN), ("two", BROKEN)):
+            home = self.root / directory
+            home.mkdir()
+            path = home / "same.c"
+            path.write_text(text)
+            sources.append(path)
+        cache = Cache(root / "cache")
+        result = checks.findings(project, sources, cache)
+        self.assertEqual(result.source_scans, 2)
+        self.assertEqual({row.path for row in result.unmarked}, {"external-input-1:same.c"})
+        self.assertIn("external-input-0:same.c", result.dependency_hashes)
+        self.assertIn("external-input-1:same.c", result.dependency_hashes)
+        self.assertFalse(any(str(self.root) in name for name in result.dependency_hashes))
+        self.assertEqual(checks.findings(project, sources, cache).source_scans, 0)

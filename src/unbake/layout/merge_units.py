@@ -21,23 +21,30 @@ from dataclasses import replace
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache, runner, scratch
+from unbake import cache, inputs, runner, scratch
 from unbake.config import Held, Host, Project
 from unbake.layout import map as layout_map
 from unbake.layout import split
 from unbake.work import compare
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 2
+SCHEMA = 3
 
 _INCLUDE = re.compile(r"^[ \t]*#[ \t]*include[^\n]*\n?", re.M)
 
 
 def input_key(project: Project) -> str:
-    parts: list[str | bytes | Path] = ["merge-units", str(SCHEMA), project.root / "layout.toml"]
-    parts.extend(sorted(project.src.glob("*.c")))
-    parts.extend(project.version(version).split for version in project.versions)
-    return cache.key(*parts)
+    paths = (
+        project.root / "layout.toml",
+        *sorted(project.src.glob("*.c")),
+        *(project.version(version).split for version in project.versions),
+    )
+    dependencies = inputs.DependencySet(
+        tuple(inputs.file_pin(path, root=project.root, root_id="project", reuse=cache.configured()) for path in paths),
+        {"versions": list(project.versions)},
+        {"merge-inputs": inputs.digest(Path(__file__), algorithm="sha256", reuse=cache.configured())},
+    )
+    return cache.key("merge-units", str(SCHEMA), dependencies.digest)
 
 
 def runs(project: Project) -> list[tuple[layout_map.Group, tuple[str, ...]]]:
