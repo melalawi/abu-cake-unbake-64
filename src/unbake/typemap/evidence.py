@@ -243,10 +243,13 @@ def abi(
         }
         for name in facts["functions"]
     }
-    paired = {
+    secondary_reads = {
         name: any(call.get("return_register_use", {}).get("r3") for call in calls.get(name, []))
         for name in facts["functions"]
     }
+    # An undefined secondary register is a retained read fault, not evidence
+    # that the callee returns a pair or that its primary result was consumed.
+    paired = {name: used and {"r2", "r3"} <= available[name] for name, used in secondary_reads.items()}
     for name, reg in (declared_returns or {}).items():
         if name in consumed_by:
             consumed_by[name].add("r2" if reg == "r2:r3" else reg)
@@ -284,6 +287,10 @@ def abi(
                             if site is not None:
                                 site["return_register_use"][returned_reg] = True
                             if callee in consumed_by:
+                                if returned_reg == "r3":
+                                    secondary_reads[callee] = True
+                                    if not {"r2", "r3"} <= available[callee]:
+                                        continue
                                 primary = "r2" if returned_reg == "r3" else returned_reg
                                 if primary not in consumed_by[callee]:
                                     consumed_by[callee].add(primary)
@@ -338,6 +345,9 @@ def abi(
             return_regs.update(defined)
         used_returns = consumed_by[name]
         pair_known = {"r2", "r3"} <= available[name]
+        unproven_secondary = secondary_reads[name] and not pair_known
+        if unproven_secondary:
+            conflicts.append("callers read a secondary return register without a defined return pair at every exit")
         if paired[name] and not pair_known:
             conflicts.append("callers consume an integer return pair not defined at every callee exit")
         if used_returns - return_regs:
@@ -384,8 +394,10 @@ def abi(
             "void": not returned
             and not return_incomplete
             and not used_returns
+            and not secondary_reads[name]
             and any(body["returns"] for body in item["versions"].values()),
             "return_known": not return_incomplete
+            and not unproven_secondary
             and len(returned) <= 1
             and (not paired[name] or pair_known)
             and (not used_returns or bool(consumed))
@@ -443,7 +455,7 @@ def abi(
                 )
                 for caller in {call["function"] for call in calls.get(name, [])}
             },
-            "unproven_return_reads": sorted(used_returns - return_regs),
+            "unproven_return_reads": sorted((used_returns - return_regs) | ({"r3"} if unproven_secondary else set())),
             "argument_slots": sorted(set.intersection(*supplied)) if supplied else [],
             # Any caller's supplied argument: a declaration may not say (void) to a call that passes one.
             "caller_arguments": sorted(set().union(*supplied)),

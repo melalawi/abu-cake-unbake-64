@@ -150,6 +150,30 @@ def control(word: int, pc: int) -> tuple[str, int | None, bool] | None:
     return None
 
 
+def branch_taken(word: int, registers: list[Value]) -> bool | None:
+    """Integer branch feasibility before its slot; unknown operands preserve both edges."""
+    op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
+    left, right = registers[rs].constant, registers[rt].constant
+    if op in (4, 5, 20, 21):
+        if rs == rt:
+            equal = True
+        elif left is not None and right is not None:
+            equal = left == right
+        else:
+            return None
+        return equal if op in (4, 20) else not equal
+    if left is None:
+        return None
+    signed = (left & 0x7FFFFFFF) - (left & 0x80000000)
+    if op in (6, 22):
+        return signed <= 0
+    if op in (7, 23):
+        return signed > 0
+    if op == 1 and rt in (0, 1, 2, 3, 16, 17, 18, 19):
+        return signed >= 0 if rt & 1 else signed < 0
+    return None
+
+
 class Analysis:
     def __init__(
         self,
@@ -318,7 +342,9 @@ class Analysis:
                 if fn >= 0x30:
                     destination = None
         elif op in (1, 4, 5, 6, 7, 20, 21, 22, 23):
-            read = [rs, rt] if op in (4, 5, 20, 21) else [rs]
+            # A self-comparison's predicate does not depend on the register's
+            # value, so it cannot consume an entry argument or call result.
+            read = ([] if rs == rt else [rs, rt]) if op in (4, 5, 20, 21) else [rs]
         elif op not in (2, 3, 0x2F):
             if record:
                 self.unknown.add(f"instruction 0x{self.address + index * 4:X}: unsupported opcode 0x{op:X}")
@@ -383,10 +409,12 @@ class Analysis:
             rs = self.words[index] >> 21 & 31
             if target is None and kind in ("call", "jump"):
                 target = state.registers[rs].constant
+            taken = branch_taken(self.words[index], state.registers)
             self.step(state, index, record)
             unslotted = state.copy()
             if index + 1 < len(self.words):
-                self.step(state, index + 1, record)
+                if not likely or taken is not False:
+                    self.step(state, index + 1, record)
             elif record:
                 self.unknown.add(f"instruction 0x{pc:X}: missing delay slot")
             next_index = index + 2
@@ -405,6 +433,8 @@ class Analysis:
             callee = self.targets.get(target) if target is not None else None
             tail = kind == "jump" and callee is not None
             if kind == "call" or tail:
+                if taken is False:
+                    return [(next_index, state)] if next_index < len(self.words) else []
                 if record:
                     self.calls[index] = {
                         **self.provenance(index),
@@ -424,11 +454,14 @@ class Analysis:
                     }
                 if tail:
                     return []
+                uncalled = state.copy()
                 for r in (*range(1, 16), 24, 25, *range(32, 52)):
                     state.registers[r] = UNKNOWN
                 for r in RETURNS:
                     origin = f"return:{self.function}:{self.version}:{index}:{register(r)}"
                     state.registers[r] = Value(((origin, 0),), dependencies=(origin,))
+                if taken is None and self.words[index] >> 26 == 1:
+                    state = state.merge(unslotted if likely else uncalled)
                 return [(next_index, state)] if next_index < len(self.words) else []
             successors = []
             local_targets = self.jump_targets.get(pc, ()) if kind == "jump" and target is None else ()
@@ -436,11 +469,15 @@ class Analysis:
                 self.address <= at < self.address + len(self.words) * 4 and at % 4 == 0 for at in local_targets
             ):
                 return [((at - self.address) // 4, state.copy()) for at in dict.fromkeys(local_targets)]
-            if target is not None and self.address <= target < self.address + len(self.words) * 4:
+            if (
+                taken is not False
+                and target is not None
+                and self.address <= target < self.address + len(self.words) * 4
+            ):
                 successors.append(((target - self.address) // 4, state))
-            elif record:
+            elif record and taken is not False:
                 self.unknown.add(f"instruction 0x{pc:X}: unresolved control target {target}")
-            if kind == "branch" and next_index < len(self.words):
+            if kind == "branch" and taken is not True and next_index < len(self.words):
                 successors.append((next_index, unslotted if likely else state))
             return successors
         return []

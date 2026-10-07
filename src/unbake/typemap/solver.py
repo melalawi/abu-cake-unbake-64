@@ -24,7 +24,7 @@ from unbake.typemap.mapping import refresh_map
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
 SCHEMA = 17
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
-ABI_SCHEMA = 10
+ABI_SCHEMA = 11
 MACHINE_SCHEMA = 7
 
 

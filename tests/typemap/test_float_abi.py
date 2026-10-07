@@ -52,7 +52,8 @@ class FloatAbiTests(unittest.TestCase):
                 patch("unbake.typemap.types_db.entries", return_value={name: self.result["functions"][name]}),
                 patch("unbake.typemap.types_db.meta", return_value={}),
             ):
-                land._fuzzy_signature(SimpleNamespace(), name, "us", (FIXTURE / (name + ".c")).read_text())
+                project = SimpleNamespace(compiler_for=lambda function: SimpleNamespace(id="gcc-2.7.2-kmc"))
+                land._fuzzy_signature(project, name, "us", (FIXTURE / (name + ".c")).read_text())
 
     def test_slot_signature_is_known_without_guessing_aggregate_boundaries(self):
         for name in ("func_8010AA6C_us", "func_8010BC10_us"):

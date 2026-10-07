@@ -38,7 +38,8 @@ class PairAbiTests(unittest.TestCase):
             patch("unbake.typemap.types_db.entries", return_value={TIMER: record}),
             patch("unbake.typemap.types_db.meta", return_value={}),
         ):
-            land._fuzzy_signature(SimpleNamespace(), TIMER, "us", source)
+            project = SimpleNamespace(compiler_for=lambda function: SimpleNamespace(id="gcc-2.7.2-kmc"))
+            land._fuzzy_signature(project, TIMER, "us", source)
 
     def test_real_timer_carrier_preserves_both_words_and_semantic_uncertainty(self):
         record = infer(SimpleNamespace(), real_facts(), [])["functions"][TIMER]
