@@ -40,6 +40,8 @@ class Landed:
     versions: dict[str, list[str]] = field(default_factory=dict)
     post_commit_failure: dict[str, Any] | None = None
     fuzzy: dict[str, dict[str, Any]] = field(default_factory=dict)
+    interrupted: bool = False
+    ready: list[str] = field(default_factory=list)
 
     def document(self) -> dict[str, Any]:
         return {
@@ -49,6 +51,7 @@ class Landed:
             "versions": self.versions,
             **({"post_commit_failure": self.post_commit_failure} if self.post_commit_failure is not None else {}),
             **({"fuzzy": self.fuzzy} if self.fuzzy else {}),
+            **({"ready": self.ready, "retryable": True} if self.interrupted else {}),
         }
 
     def lines(self) -> list[str]:
@@ -954,6 +957,7 @@ def publish(
     required_versions: tuple[str, ...] | None = None,
     on_commit: Callable[[dict[str, Any]], None] | None = None,
     fuzzy: bool = False,
+    compare_first: bool = False,
 ) -> Landed:
     """`unbake publish FILE... [--original NAME...]`: land each draft file, then each original-asm function, in
     turn; one failure does not stop the others."""
@@ -965,13 +969,19 @@ def publish(
     if originals and required_versions is not None:
         raise Held("publish", "publish.versions: --original requires proof in every holding version")
 
+    committed_records: dict[str, dict[str, Any]] = {}
+
     def committed(record: dict[str, Any]) -> None:
+        committed_records[record["function"]] = {
+            "commit": record["commit"],
+            "proof": {"versions": record["proof"]["versions"]},
+        }
         if record.get("proof", {}).get("kind") == "fuzzy":
             result.fuzzy[record["function"]] = record["proof"]
         if on_commit is not None:
             on_commit(record)
 
-    callback = committed if fuzzy or on_commit is not None else None
+    callback = committed
 
     def draft(file: Path) -> Callable[[Project], str]:
         options = {"fuzzy": True} if fuzzy else {}
@@ -980,13 +990,25 @@ def publish(
         )
 
     def original(name: str) -> Callable[[Project], str]:
-        return lambda current: land_original(current, host, name, on_commit=on_commit)
+        return lambda current: land_original(current, host, name, on_commit=callback)
 
     work = [(file.stem, draft(file)) for file in files] + [(name, original(name)) for name in originals]
-    for name, action in work:
+    for position, (name, action) in enumerate(work):
+        committed_records.clear()
         current = config.load(project.root)
         try:
+            if compare_first and position < len(files):
+                compare.compare(current, host, files[position], required_versions=required_versions)
             commit = action(current)
+        except KeyboardInterrupt:
+            result.interrupted = True
+            record = committed_records.get(name)
+            if record is not None:
+                result.landed.append(name)
+                result.commits.append(record["commit"])
+                result.versions[name] = list(record["proof"]["versions"])
+            result.ready = [item for item, _ in work[position + (record is not None) :]]
+            break
         except Held as error:
             result.failed[name] = {"key": error.key, "reason": error.reason, "fault": process.fault(error)}
             continue
@@ -1005,6 +1027,10 @@ def publish(
         try:
             if not fuzzy:
                 steps.ensure(config.load(project.root), host, ["merge-units"])
+        except KeyboardInterrupt:
+            result.interrupted = True
+            result.ready = [item for item, _ in work[position + 1 :]]
+            break
         except Held as error:
             # The accepted commit and its immediate event are durable even
             # when subsequent tree maintenance refuses. Do not relabel it as

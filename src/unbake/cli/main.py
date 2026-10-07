@@ -125,7 +125,13 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
         unexpected = Held(verb.NAME, f"{verb.NAME}.unexpected: {_where(error)}", fault=fault(error))
         return Result.held(verb.NAME, unexpected, guidance.after(context, unexpected))
     except KeyboardInterrupt:
-        return Result.held(verb.NAME, Held(verb.NAME, "interrupted: stopped by the user"), None)
+        words = argv if argv is not None else sys.argv[1:]
+        following = (
+            context.cmd(verb.NAME, *words[words.index(verb.NAME) + 1 :])
+            if verb.NAME in words
+            else context.cmd(verb.NAME)
+        )
+        return Result.interrupted(verb.NAME, following)
 
 
 def _where(error: BaseException) -> str:
@@ -158,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
         measured["admission"] = dict(admission.receipt)
     result = replace(result, effort=measured)
     code = emit(result, stdout, tui.stderr())
-    return 130 if result.key == "interrupted" else code
+    return code
 
 
 if __name__ == "__main__":

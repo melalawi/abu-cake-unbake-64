@@ -87,6 +87,17 @@ def run(context: Context) -> Result:
         **({"fuzzy": True} if context.args.fuzzy else {}),
     )
     following = context.cmd("next")
+    if done.interrupted:
+        words = ["publish", *(str(path) for path in context.args.files if path.stem in done.ready)]
+        for name in context.args.original:
+            if name in done.ready:
+                words.extend(("--original", name))
+        for version in context.args.require_version or ():
+            words.extend(("--require-version", version))
+        if context.args.fuzzy:
+            words.append("--fuzzy")
+        retry = context.cmd(*words) if done.ready else context.cmd("recompute", "merge-units")
+        return Result.interrupted(NAME, retry, done.document())
     result = Result.ok(NAME, done.document(), done.lines(), following)
     failure = next(iter(done.failed.values())) if done.failed else done.post_commit_failure
     if failure is not None:

@@ -11,7 +11,7 @@ from typing import Any, TextIO
 from unbake import tui
 from unbake.config import Held
 
-EXIT = {"ok": 0, "held": 1}
+EXIT = {"ok": 0, "held": 1, "interrupted": 130}
 # A receipt already rendered for people (OK(setup): ..., HELD(check): ...); JSON keeps only the text after it.
 _RENDERED = re.compile(r"^[A-Z]+\([\w-]+\): ")
 
@@ -38,6 +38,11 @@ class Result:
         body = {"phase": error.phase, "reason": error.reason, "fault": fault(error), **error.data, **(data or {})}
         return cls(command, "held", error.key, body, next_)
 
+    @classmethod
+    def interrupted(cls, command: str, next_: str | None, data: dict[str, Any] | None = None) -> Result:
+        """An unfinished command has no refusal or final cause; its work remains retryable."""
+        return cls(command, "interrupted", None, {**(data or {}), "retryable": True}, next_)
+
     def document(self) -> dict[str, Any]:
         return {
             "v": 1,
@@ -53,9 +58,11 @@ class Result:
 
 def human(result: Result, stream: TextIO) -> None:
     """Receipts as OK(...) lines, the HELD line, then the Next line."""
-    label = {"ok": "OK", "held": "HELD"}[result.status]
+    label = {"ok": "OK", "held": "HELD", "interrupted": "INTERRUPTED"}[result.status]
     for line in result.receipts:
         print(line if _RENDERED.match(line) else f"{label}({result.command}): {line}", file=stream)
+    if result.status == "interrupted":
+        print(f"INTERRUPTED({result.command}): work remains ready to retry", file=stream)
     if result.status == "held":
         phase, reason = result.data.get("phase", result.command), result.data.get("reason", result.key)
         print(f"HELD({phase}): {reason}", file=stream)

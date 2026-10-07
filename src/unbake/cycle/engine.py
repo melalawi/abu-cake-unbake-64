@@ -37,6 +37,7 @@ STAGES = (
     "needs creative",
     "waiting for edit",
     "landing",
+    "ready",
     "landed",
     "held",
     "failed",
@@ -826,6 +827,9 @@ def run(
                     land_drained(resume=True)
         except KeyboardInterrupt:
             exit_code = 130
+            for function in ready:
+                if rows[function].stage == "landing":
+                    rows[function].stage = "ready"
         finally:
             watcher_stop.set()
             if exit_code != 130:
@@ -886,7 +890,7 @@ def run(
         for row in regressed
     )
     if exit_code == 130:
-        return Result.held("cycle", Held("cycle", "interrupted: stopped by the user"), following, data)
+        return Result.interrupted("cycle", following, data)
     if steps_error:
         return Result("cycle", "held", "cycle.steps", data, following, tuple(lines))
     if regressed:

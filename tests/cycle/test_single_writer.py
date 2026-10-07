@@ -38,6 +38,7 @@ class SingleWriterTests(TempCase):
         edit_beta: bool = False,
         compare_fault: bool = False,
         queue_beta_draft: bool = False,
+        interrupt_land: bool = False,
         search: Callable[[int, str, str], str | dict | None] | None = None,
     ) -> Run:
         """alpha is exact at its first compare; beta is 50% until alpha has landed.
@@ -157,6 +158,8 @@ class SingleWriterTests(TempCase):
             if busy():
                 raise AssertionError("a land ran while a task was in flight")
             log.append(f"{'fuzzy' if fuzzy else 'land'} {file.stem}")
+            if interrupt_land:
+                raise KeyboardInterrupt
             published[file.stem] = file.read_text()
             if on_commit is not None:
                 on_commit(
@@ -251,6 +254,18 @@ class SingleWriterTests(TempCase):
             run.log[:2], ["ensure " + ",".join(engine.PICK_STEPS), "ensure " + ",".join(engine.DRAFT_STEPS)]
         )
         self.assertEqual(run.log[2], "draft alpha")
+
+    def test_interrupted_land_leaves_the_exact_row_ready_without_a_final_cause(self) -> None:
+        run = self.cycle(land_steps=[], interrupt_land=True)
+        self.assertEqual((run.result.status, run.result.key), ("interrupted", None))
+        self.assertTrue(run.result.data["retryable"])
+        self.assertEqual(run.log.count("land alpha"), 1)
+        self.assertEqual(run.published, {})
+        self.assertEqual(run.names("fn.land_failed"), [])
+        self.assertEqual(run.names("fn.held"), [])
+        state = json.loads((self.root / "build/cycle/state.json").read_text())
+        alpha = next(row for row in state["rows"] if row["function"] == "alpha")
+        self.assertEqual((alpha["stage"], alpha["held"]), ("ready", False))
 
     def test_a_land_waits_for_every_task_in_flight(self) -> None:
         run = self.cycle(land_steps=["quit"])

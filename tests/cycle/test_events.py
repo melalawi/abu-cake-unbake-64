@@ -19,6 +19,7 @@ REQUIRED = {
     "fn.creative": "function best_percent methods trouble",
     "fn.exact": "function bytes sha256",
     "fn.landed": "function bytes versions seconds retried",
+    "fn.fuzzy_landed": "function bytes versions commit best_percent",
     "fn.land_failed": "function versions diagnostic returned_to_worker",
     "fn.committed": "function commit message",
     "cycle.committed": "commit message functions",
