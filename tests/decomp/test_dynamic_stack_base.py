@@ -130,14 +130,9 @@ class DynamicStackBaseTests(unittest.TestCase):
         self.assertEqual(raw_bases(output), 0)
         self.assertEqual(output.count("frame.storage.bytes + frame.storage.slot_sp20.sp20"), 1)
 
-    def test_full_real_body_retains_separate_scalar_and_void_failures(self):
-        output, _ = self.prepare(self.raw)
-        self.assertEqual(raw_bases(output), 0)
-        self.assertIn("*(arg1 + (frame.storage.slot_sp4C.sp4C * 2)) != 3", output)
-        self.assertIn("*arg3 = -1;", output)
-        self.assertIn("*arg5 = (s32) (*arg5 + 1);", output)
-        self.assertIn("*arg6 = 0;", output)
-        self.assertIn("void *arg3, u8 arg4, void *arg5, void *arg6", output)
+    def test_full_real_body_requires_its_own_memory_measurements(self):
+        with self.assertRaisesRegex(Held, "memory load lacks a unique measured view"):
+            self.prepare(self.raw)
 
     def test_rebinding_is_idempotent_and_preserves_literal_and_comment_tokens(self):
         source = self.loop.replace("    sp20 = 0;", '    use("sp sp24"); /* sp sp20 */\n    sp20 = 0;')

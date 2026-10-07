@@ -6,7 +6,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.cdecl import SOURCE_TOKEN, declaration_source
 from unbake.config import Held, Project
-from unbake.decomp import measured_access
+from unbake.decomp import measured_access, measured_memory
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
 
@@ -93,6 +93,7 @@ def _access_views(function: str, source: str, assembly: str, symbol: str, reads:
 
 def prepare(project: Project, function: str, source: str, assembly: str) -> tuple[str, Path | None]:
     """Use instruction widths and stack annotations without settling unknown types."""
+    source = measured_memory.lower(function, source, assembly)
     shared = None
     template = re.search(
         r"struct _m2c_stack_" + re.escape(function) + r"\s*\{(.*?)\};\s*/\* size = (0x[\da-fA-F]+) \*/", source, re.S
