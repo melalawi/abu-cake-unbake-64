@@ -255,6 +255,9 @@ def exact_attempt(
             "land", f"land.not_exact: {function}: native comparison is unavailable; compare after resolving its fault"
         )
     if attempt.exact:
+        broken = checks.unmarked(file)
+        if broken:
+            raise Held("land", f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken))
         return attempt
     version, row = min(attempt.versions.items(), key=lambda item: item[1]["percent"])
     if row["percent"] < 100:
@@ -579,6 +582,7 @@ def land(
     fuzzy: bool = False,
 ) -> str:
     """Land one draft; nothing is written until all required, already published and selected freebie versions prove."""
+    from unbake.decomp import checks
     from unbake.fold import apply as fold_apply
     from unbake.report import progress
 
@@ -590,8 +594,6 @@ def land(
     if previous_fuzzy is not None and file.resolve() == (project.src / f"{function}.c").resolve():
         text = attempts.unguarded(text)
     if fuzzy:
-        from unbake.decomp import checks
-
         if required_versions is not None:
             raise Held("land", "land.fuzzy_versions: fuzzy retention compiles every holding version")
         holding = split.holding_versions(project, function)
@@ -614,8 +616,10 @@ def land(
     ident = (attempt.compiler if attempt is not None else "") or project.compiler_reference(function)
     project = _with_compiler(project, function, ident)
     folded = fold_apply.fold(project, host, function, text, versions=selected)
-    if fuzzy and (broken := checks.run(folded.source)):
-        raise Held("land", f"land.fuzzy_rules: {function}: " + "; ".join(checks.plain(row) for row in broken))
+    broken = checks.run(folded.source) if fuzzy else checks.unmarked(folded.source)
+    if broken:
+        rule_key = "land.fuzzy_rules" if fuzzy else "land.rules"
+        raise Held("land", f"{rule_key}: {function}: " + "; ".join(checks.plain(row) for row in broken))
     if fuzzy and folded.split_edits:
         raise Held(
             "land", f"land.fuzzy_identity: {function}: resolve the proposed row ownership changes before retaining C"

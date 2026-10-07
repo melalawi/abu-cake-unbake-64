@@ -32,6 +32,8 @@ class ChecksTest(unittest.TestCase):
             ("version", 1, "#ifdef VERSION_US\nvoid f(void) {}\n#endif", "file-version-guard"),
             ("empty", 1, "void f(void) { do {} while (0); }", "empty-loop"),
             ("resident", 2, "const float unbake_rodata_80001000_4 = 0.5f;", "resident-storage"),
+            ("define", 1, "#define LOCAL_VALUE 2", "local-define"),
+            ("placeholder", 1, "int M2C_ERROR(void);", "decompiler-placeholder"),
         ]
         for function, line, content, rule in cases:
             with self.subTest(function=function, line=line):
@@ -98,6 +100,11 @@ class ChecksTest(unittest.TestCase):
             "p->first = 0x12345678; p->second = address;",
             "magic = 0xB8000000; p->unk0 = -1; p->unk4 = -2; p = &p->unk8;",
             "if (p->first == 0xBF000000) { p->second = 0; }",
+            "((struct State *)p)->first = -1; ((struct State *)p)->second = 0;",
+            "((struct State *)p)->first = (s32)(-2);",
+            "((struct State *)p)->first = ~0;",
+            "((struct State *)p)->first = 0x12345678;",
+            "if (((struct State *)p)->first == 0xBF000000) {}",
         ]
         for content in cases:
             with self.subTest(content=content):
@@ -109,6 +116,13 @@ class ChecksTest(unittest.TestCase):
             "p->words_w1 = address;",
             "p->w0 = runtime; p->w1 = address;",
             "Gfx *p; p->first = runtime; p->second = address;",
+            "Acmd *p; p->first = runtime; p->second = address;",
+            "((struct View *)(cursor + index))->value = 0xFA000000; next = cursor + 8;",
+            "((struct View *)p)->value = (s32)(0xE7 << 24);",
+            "((struct View *)p)->value = _SHIFTL(0xE7, 24, 8);",
+            "((Gfx *)p)->first = runtime;",
+            "((Acmd *)p)->first = runtime;",
+            "Gfx commands[] = {{{0xE7000000, 0}}};",
             "p->unk0 = (s32)(((n & 0xFF) << 0x10) | 0x01000040); p->unk4 = address;",
             "p->unk0 = 0xBF000000; p->unk4 = vertices;",
             "p->first = 0xFF100000; p->second = address;",

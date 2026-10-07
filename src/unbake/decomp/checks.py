@@ -16,7 +16,7 @@ from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
 from unbake.typemap import storage
 
-SOURCE_FINDINGS_SCHEMA = 2
+SOURCE_FINDINGS_SCHEMA = 3
 
 
 @dataclass(frozen=True)
@@ -370,7 +370,7 @@ def _gfx(source: str, code: str) -> list[GuardFinding]:
     # the first store, and packet-stride copies guarded by a command sentinel.
     from unbake.decomp.gbi import OP_NAMES
     from unbake.decomp.gbi_expr import Ambiguous, Word, integer, scalar, split
-    from unbake.decomp.gbi_source import packet_pointers
+    from unbake.decomp.gbi_source import initializer_pairs, packet_pointers
 
     opcodes = set(OP_NAMES) | {0x01, 0x05, 0x06, 0x08, 0xAF, 0xB6, 0xB7, 0xB8, 0xBF, 0xDD}
     pairs = re.finditer(
@@ -379,23 +379,52 @@ def _gfx(source: str, code: str) -> list[GuardFinding]:
         code,
     )
     packet_sentinel = any(int(m[0], 16) >> 24 in opcodes for m in re.finditer(r"0[xX][0-9A-Fa-f]{8}\b", code))
-    gfx_pointers = packet_pointers(code, "Gfx")
+    gfx_pointers = packet_pointers(code, "Gfx") | packet_pointers(code, "Acmd")
+
+    def command_opcode(value: str) -> int | None:
+        try:
+            # Signed sentinels do not become commands through sign extension.
+            constants = [integer(term) for term in split(scalar(value), "|")]
+            if all(number is None or 0 <= number <= 0xFFFFFFFF for number in constants):
+                return Word.parse(value).fixed(24, 8)
+        except Ambiguous:
+            pass
+        return None
+
+    # Field sharing can hide packet words behind ((struct View *)ptr)->value.
+    # Balance the pointer expression rather than relying on a type/field name
+    # or adjacent stores: scheduling often separates the two command words.
+    syntax = _Syntax(code)
+    openings = {end: start for start, end in syntax.pairs.items()}
+    for index, word in enumerate(syntax.words):
+        if word != "->" or index + 2 >= len(syntax.words) or syntax.words[index + 2] != "=":
+            continue
+        start = openings.get(index - 1)
+        if start is None:
+            continue
+        casts = [
+            (a, b)
+            for a, b in syntax.pairs.items()
+            if start <= a < b < index and syntax.words[a] == "(" and syntax.pointer_type(a, b)
+        ]
+        if not casts:
+            continue
+        end = index + 3
+        while end < len(syntax.words) and syntax.words[end] != ";":
+            end += 1
+        if end == len(syntax.words):
+            continue
+        value = code[syntax.tokens[index + 2].end() : syntax.tokens[end].start()]
+        packet_cast = any(name in syntax.words[a + 1 : b] for a, b in casts for name in ("Gfx", "Acmd"))
+        if packet_cast or command_opcode(value) in opcodes:
+            findings.append(_finding("raw-gfx", source, syntax.tokens[start]))
+    for start, _, _, _ in initializer_pairs(code):
+        line = source.count("\n", 0, start) + 1
+        findings.append(GuardFinding("raw-gfx", line, source.splitlines()[line - 1].strip(), None))
     for match in pairs:
         if match["first"] == match["second"]:
             continue
-        try:
-            # Word.parse normalizes constants modulo 2**32 for decoding. A
-            # signed scalar sentinel (-1, -2, ~0) is not an opcode word merely
-            # because sign extension happens to put a command tag in byte 3.
-            terms = split(scalar(match["value"]), "|")
-            constants = [integer(term) for term in terms]
-            opcode = (
-                Word.parse(match["value"]).fixed(24, 8)
-                if all(value is None or 0 <= value <= 0xFFFFFFFF for value in constants)
-                else None
-            )
-        except Ambiguous:
-            opcode = None
+        opcode = command_opcode(match["value"])
         stride_copy = (
             match["first"] == "unk0"
             and match["second"] == "unk4"
@@ -427,6 +456,30 @@ def _copies(source: str, code: str) -> list[GuardFinding]:
     )
 
 
+def _defines(source: str, code: str) -> list[GuardFinding]:
+    # Specialized GBI/alias diagnostics already cover those definitions.
+    return [
+        _finding("local-define", source, match)
+        for match in re.finditer(r"^[ \t]*#\s*define\s+(\w+)([^\n]*)", code, re.M)
+        if not re.fullmatch(r"_SHIFTL|_SHIFTR|g(?:s)?[DS]P\w+", match[1])
+        and not re.search(r"\b0[xX]8[0-9a-fA-F]{7}\b", match[2])
+    ]
+
+
+def _placeholders(source: str, code: str) -> list[GuardFinding]:
+    # A copied placeholder typedef already gets the local-type-copy diagnostic.
+    copies = [
+        (start, end)
+        for name, (start, end, _) in typedefs(code).items()
+        if re.fullmatch(r"M2C_UNK(?:8|16|32|64)?", name)
+    ]
+    return [
+        _finding("decompiler-placeholder", source, match)
+        for match in re.finditer(r"\bM2C_\w+\b", code)
+        if not any(start <= match.start() < end for start, end in copies)
+    ]
+
+
 RULES = [
     Rule("inline-asm", "code", _asm),
     Rule("volatile-storage", "code", _volatile),
@@ -438,6 +491,8 @@ RULES = [
     Rule("resident-storage", "code", _resident),
     Rule("raw-gfx", "code", _gfx),
     Rule("shared-declarations", "code", _copies),
+    Rule("local-define", "directives", _defines),
+    Rule("decompiler-placeholder", "code", _placeholders),
 ]
 
 
@@ -451,6 +506,8 @@ UNWAIVABLE = frozenset(
         "local-type-copy",
         "invented-struct",
         "resident-storage",
+        "local-define",
+        "decompiler-placeholder",
     }
 )
 
@@ -469,6 +526,8 @@ SENTENCE = {
     "local-type-copy": "a shared type is copied into the file",
     "invented-struct": "an invented struct name is used",
     "symbol-alias": "a symbol is aliased to a raw address",
+    "local-define": "a file-local macro belongs in a shared header",
+    "decompiler-placeholder": "an unresolved decompiler placeholder is left in the source",
 }
 
 
