@@ -45,7 +45,7 @@ class FuzzyCleanupTests(ProjectCase):
             "source_sha256": hashlib.sha256(self.committed.encode()).hexdigest(),
             "compiler": "ido-7.1",
             "score": score,
-            "versions": {v: score for v in self.versions},
+            "versions": dict.fromkeys(self.versions, score),
         }
         attempts.summary_path(self.project).write_bytes(
             attempts.encode({FUNCTION: attempts.Summary(12, {}, False, 0.0, 1, receipt)})

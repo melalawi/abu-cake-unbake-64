@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from unbake import cache as retention
 from unbake.cdecl import LayoutParser
 from unbake.fold import type_rewrite
 from unbake.layout.structs import layouts
@@ -12,6 +13,9 @@ from unbake.layout.structs_identity import identity
 
 
 class TypeRewriteTests(unittest.TestCase):
+    def setUp(self):
+        retention.configure(memory_bytes=16 * 1024 * 1024)
+
     def test_persistent_context_restores_shared_nodes_and_identical_edits(self):
         context = "typedef struct Canon {int value; struct Canon *next;} Canon, Alias; extern Canon *global;"
         source = "typedef struct Old {int old; struct Old *tail;} Old; int alpha(void) {return global->value;}"
@@ -22,14 +26,14 @@ class TypeRewriteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary)
             first = type_rewrite.edits(parser, context, resolution, cache_root=cache)
-            type_rewrite._context.cache_clear()
+            retention.forget(["fold.type_rewrite._context"])
             with patch.object(type_rewrite, "_parse_context", side_effect=AssertionError("context reparsed")):
                 second = type_rewrite.edits(parser, context, resolution, cache_root=cache)
             self.assertEqual(first, expected)
             self.assertEqual(second, expected)
             declarations, _ = type_rewrite._context(context.rstrip() + "\n", cache)
             self.assertIs(declarations[0].type.type, declarations[1].type.type)
-            type_rewrite._context.cache_clear()
+            retention.forget(["fold.type_rewrite._context"])
 
     def test_unchanged_layout_never_loads_typed_header_context(self):
         parser = LayoutParser("struct Canon {int value;}; int alpha(struct Canon *p) {return p->value;}")

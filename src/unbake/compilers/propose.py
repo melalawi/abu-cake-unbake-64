@@ -12,6 +12,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from unbake import cache as retention
+from unbake import inputs as input_pins
 from unbake.compilers import files as compiler_files
 from unbake.compilers import probe as compiler_probes
 from unbake.compilers import profiles as compiler_profiles
@@ -30,10 +32,6 @@ def encoded(value: object) -> bytes:
         raise TypeError(f"unsupported proposal input {type(item).__name__}")
 
     return (json.dumps(value, separators=(",", ":"), sort_keys=True, default=serialize) + "\n").encode()
-
-
-def digest(value: object) -> str:
-    return hashlib.sha256(encoded(value)).hexdigest()
 
 
 def proposal_path(project: PendingProject) -> Path:
@@ -57,28 +55,31 @@ def _inputs(
     except OSError as error:
         raise Held("setup", f"setup.compiler_proposal: {error}") from error
     inputs = {
-        "policy": digest(asdict(policy)),
+        "policy": input_pins.bytes_digest(encoded(asdict(policy)), algorithm="sha256"),
         "registry": hashlib.sha256(registry).hexdigest(),
-        "profiles": digest(toolchain._read(toolchain.REGISTRY_PATH).get("fingerprints", {})),
-        "choices": digest(choices),
-        "layout": layout_sha256 if layout_sha256 is not None else digest(layout),
+        "profiles": input_pins.bytes_digest(
+            encoded(toolchain._read(toolchain.REGISTRY_PATH).get("fingerprints", {})), algorithm="sha256"
+        ),
+        "choices": input_pins.bytes_digest(encoded(choices), algorithm="sha256"),
+        "layout": layout_sha256
+        if layout_sha256 is not None
+        else input_pins.bytes_digest(encoded(layout), algorithm="sha256"),
         "pending_config": hashlib.sha256(config).hexdigest(),
-        "evidence_engine": digest(
-            {
-                name: compiler_files.sha(Path(__file__).with_name(name))
-                for name in (
-                    "propose.py",
-                    "profiles.py",
-                    "probe.py",
-                    "fingerprint.py",
-                    "accept.py",
-                )
-            }
+        "evidence_engine": input_pins.bytes_digest(
+            encoded(
+                {
+                    name: input_pins.digest(
+                        Path(__file__).with_name(name), algorithm="sha256", reuse=retention.configured()
+                    )
+                    for name in ("propose.py", "profiles.py", "probe.py", "fingerprint.py", "accept.py")
+                }
+            ),
+            algorithm="sha256",
         ),
     }
     layout_file = project.build / "setup/layout.json"
     if layout_file.exists():
-        inputs["layout_file"] = compiler_files.sha(layout_file)
+        inputs["layout_file"] = input_pins.digest(layout_file, algorithm="sha256", reuse=retention.configured())
     return inputs
 
 
@@ -341,7 +342,7 @@ def propose_compilers(
         "schema": 1,
         "project_id": project.id,
         "rom_sha1": hashes,
-        "layout_sha256": digest(layout),
+        "layout_sha256": input_pins.bytes_digest(encoded(layout), algorithm="sha256"),
         "inputs_sha256": _inputs(project, layout, policy, selected),
         "default_compiler": default,
         "assignments": assignments,
@@ -425,7 +426,7 @@ def confirm_proposal(
         content != encoded(proposal)
         or proposal["inputs_sha256"] != current
         or proposal["rom_sha1"] != _verify_identity(project, census, layout)
-        or proposal["layout_sha256"] != digest(layout)
+        or proposal["layout_sha256"] != input_pins.bytes_digest(encoded(layout), algorithm="sha256")
     ):
         raise Held(
             "setup", "setup.proposal_stale: proposal bytes or ROM/policy/registry/profile/layout/choices changed"
@@ -470,7 +471,7 @@ def confirm_proposal(
 
 def confirmation_guard(project: PendingProject, proposal: CompilerProposal, policy: Host) -> Callable[[], None]:
     """Retain input pins, not measured bodies, while the staged cartridges build."""
-    token = compiler_files.sha(proposal_path(project))
+    token = input_pins.digest(proposal_path(project), algorithm="sha256", reuse=retention.configured())
     expected = dict(proposal["inputs_sha256"])
     layout_sha256 = proposal["layout_sha256"]
     choices = dict(proposal.get("choices", {}))
@@ -478,7 +479,7 @@ def confirmation_guard(project: PendingProject, proposal: CompilerProposal, poli
     def verify() -> None:
         try:
             current = _inputs(project, cast("LayoutManifest", {}), policy, choices, layout_sha256=layout_sha256)
-            actual = compiler_files.sha(proposal_path(project))
+            actual = input_pins.digest(proposal_path(project), algorithm="sha256", reuse=retention.configured())
         except OSError as error:
             raise Held("setup", f"setup.proposal_stale: confirmed input unavailable: {error}") from error
         if actual != token or current != expected:

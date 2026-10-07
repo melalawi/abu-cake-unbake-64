@@ -2,7 +2,7 @@
 
 import unittest
 
-from unbake import cdecl, prefixes
+from unbake import cache, cdecl, prefixes
 
 PREFIX = "".join(f"int a{i};\n" for i in range(700))
 
@@ -13,6 +13,7 @@ def places(tree) -> list[tuple[str, str, int]]:  # type: ignore[no-untyped-def]
 
 class ResumedParseTests(unittest.TestCase):
     def setUp(self) -> None:
+        cache.configure(memory_bytes=16 * 1024 * 1024)
         prefixes.forget()
         self.addCleanup(prefixes.forget)
 
@@ -30,7 +31,7 @@ class ResumedParseTests(unittest.TestCase):
                 cdecl.resumable_parse(first, {})
                 resumed = cdecl.resumable_parse(second, {})
                 self.assertEqual(places(resumed), places(cdecl.parser({}).parse(second)))
-                self.assertTrue(prefixes._stores, "the second parse must resume from the kept prefix")
+                self.assertTrue(cache.retained("prefixes"), "the second parse must resume from the kept prefix")
 
     def test_the_marker_names_the_last_file_and_the_resumed_line(self) -> None:
         text = '# 3 "a.h"\nint a;\nint b;\n'

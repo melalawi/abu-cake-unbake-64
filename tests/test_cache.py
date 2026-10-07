@@ -25,13 +25,17 @@ class KeyTests(TempCase):
         self.assertEqual(cache.key("a"), cache.key(b"a"))
         self.assertRegex(cache.key("a"), r"^[0-9a-f]{64}$")
 
-    def test_path_parts_hash_file_bytes_not_names(self) -> None:
+    def test_path_parts_are_refused_until_the_caller_names_their_content(self) -> None:
+        from unbake import inputs
+
         first = write(self.root / "one.bin", 3)
         second = write(self.root / "two.bin", 3)
-        self.assertEqual(cache.key(first), cache.key(second))
-        second.write_bytes(b"xxy")
-        self.assertNotEqual(cache.key(first), cache.key(second))
-        self.assertNotEqual(cache.key(first, "tail"), cache.key(first))
+        with self.assertRaises(Held):
+            cache.key(first)
+        self.assertEqual(
+            cache.key(inputs.digest(first, algorithm="sha256", reuse=True)),
+            cache.key(inputs.digest(second, algorithm="sha256", reuse=True)),
+        )
 
     def test_bad_parts_are_refused(self) -> None:
         for label, part in [("integer", 3), ("missing file", self.root / "absent")]:
@@ -117,10 +121,20 @@ class StoreTests(TempCase):
         self.assertEqual(results[0], results[1])
         self.assertEqual(results[0].read_bytes(), b"once")
 
-    def test_in_process_memo_reuses_by_content(self) -> None:
-        first = cache.memo("test-kind", ("same", 1), lambda: object())
-        self.assertIs(cache.memo("test-kind", ("same", 1), lambda: object()), first)
-        self.assertIsNot(cache.memo("test-kind", ("other", 2), lambda: object()), first)
+    def test_in_process_memo_reuses_by_content_without_shared_mutation(self) -> None:
+        import copy
+
+        made = []
+
+        def compute():
+            made.append(1)
+            return {"source": "real text"}
+
+        first = cache.memo("test-kind", ("same", 1), compute, size=cache.memory_size, copy_out=copy.deepcopy)
+        first["source"] = "mutated"
+        second = cache.memo("test-kind", ("same", 1), compute, size=cache.memory_size, copy_out=copy.deepcopy)
+        self.assertEqual(second["source"], "real text")
+        self.assertEqual(len(made), 1)
 
 
 class TrimTests(TempCase):

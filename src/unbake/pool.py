@@ -110,11 +110,16 @@ def _orphaned(descriptor: int | None, server: int) -> None:
         os.killpg(0, signal.SIGKILL)
 
 
-def _cap(memory_worker_bytes: int, directory: str) -> None:
+def _cap(memory_worker_bytes: int, directory: str, cache_memory_bytes: int | None) -> None:
     """Worker start: lead a new process group, die with the pool's owner, cap the data segment."""
+    from unbake import cache
+
+    if cache_memory_bytes is not None:
+        cache.configure(memory_bytes=cache_memory_bytes)
     os.setpgid(0, 0)
     if sys.platform == "linux":
         _die_with_owner()
+    signal.signal(signal.SIGUSR1, _release_finished_payload)
     resource.setrlimit(resource.RLIMIT_DATA, (memory_worker_bytes, memory_worker_bytes))
     # Python/native dependencies in a worker must also avoid inherited system temp.
     os.environ.update(temporary_environment(Path(directory)))
@@ -169,7 +174,11 @@ def _socket_directory(root: Path) -> str:
 
 
 def _executor(
-    size: int, memory_worker_bytes: int, work_per_job: int, scratch: Path | None = None
+    size: int,
+    memory_worker_bytes: int,
+    work_per_job: int,
+    scratch: Path | None = None,
+    cache_memory_bytes: int | None = None,
 ) -> ProcessPoolExecutor:
     if scratch is None:
         raise Held("pool", "pool.scratch: cache.machine_root is required for worker transport")
@@ -178,7 +187,7 @@ def _executor(
         max_workers=size,
         mp_context=multiprocessing.get_context("forkserver"),
         initializer=_cap,
-        initargs=(memory_worker_bytes, directory),
+        initargs=(memory_worker_bytes, directory, cache_memory_bytes),
         max_tasks_per_child=max(1, RECYCLE_AFTER // work_per_job),
     )
 
@@ -296,9 +305,25 @@ def _measured(
 _loaded: tuple[str, Any] | None = None
 
 
+def _release_payload(value: Any) -> None:
+    module = sys.modules.get("unbake.typemap.facts")
+    if module is not None:
+        module.release_payload(value)
+
+
+def _release_finished_payload(_number: int, _frame: FrameType | None) -> None:
+    """An owner completion signal releases only a payload whose private file has ended."""
+    global _loaded
+    if _loaded is not None and not Path(_loaded[0]).is_file():
+        _release_payload(_loaded[1])
+        _loaded = None
+
+
 def _shared_value(path: str) -> Any:
     global _loaded
     if _loaded is None or _loaded[0] != path:
+        if _loaded is not None:
+            _release_payload(_loaded[1])
         _loaded = (path, pickle.loads(Path(path).read_bytes()))
     return _loaded[1]
 
@@ -335,8 +360,11 @@ class Pool:
         memory_parent_bytes: int,
         memory_worker_bytes: int,
         scratch: Path | None = None,
+        *,
+        cache_memory_bytes: int | None = None,
     ):
         self.size = admitted(workers, memory_total_bytes, memory_parent_bytes, memory_worker_bytes)
+        self.cache_memory_bytes = cache_memory_bytes
         self.memory_worker_bytes = memory_worker_bytes
         # Where run() leaves a shared value for its workers (the host's machine cache root).
         self.scratch = scratch
@@ -354,10 +382,13 @@ class Pool:
             host.memory_parent_bytes,
             host.memory_worker_bytes,
             host.cache_machine_root,
+            cache_memory_bytes=host.cache_memory_bytes,
         )
 
     def __enter__(self) -> Pool:
-        self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job, self.scratch)
+        self._executor = _executor(
+            self.size, self.memory_worker_bytes, self._work_per_job, self.scratch, self.cache_memory_bytes
+        )
         if threading.current_thread() is threading.main_thread():
             self._handlers = {number: signal.signal(number, self._signalled) for number in SIGNALS}
         atexit.register(self.kill)
@@ -398,7 +429,9 @@ class Pool:
         if self._executor is not None:
             # Recycling after an allocation failure must retain queued siblings.
             self._executor.shutdown()
-        self._executor = _executor(self.size, self.memory_worker_bytes, self._work_per_job, self.scratch)
+        self._executor = _executor(
+            self.size, self.memory_worker_bytes, self._work_per_job, self.scratch, self.cache_memory_bytes
+        )
         return self._executor
 
     def _submit(self, fn: Callable[[T], R], item: T) -> Future[R]:
@@ -485,6 +518,12 @@ class Pool:
         finally:
             if path is not None:
                 path.unlink(missing_ok=True)
+                _release_finished_payload(0, None)
+                # Notify existing workers; no extra CPU task or worker is started for cleanup.
+                processes = None if self._executor is None else self._executor._processes
+                for pid in tuple(processes or {}):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGUSR1)
 
     def map(self, fn: Callable[[T], R], items: Sequence[T], *, charge: str | None = None) -> Iterator[R]:
         """Refill admitted work on completion; deliver results and failures in input order.

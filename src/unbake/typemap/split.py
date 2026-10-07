@@ -6,6 +6,7 @@ import hashlib
 import re
 from pathlib import Path
 
+from unbake import cache as retention
 from unbake.cache import memo
 from unbake.cdecl import declaration_source
 from unbake.config import Held
@@ -55,7 +56,13 @@ def statements(text: str) -> tuple[str, ...]:
     file scope remain individual units; conditional branches remain together.
     The result is shared by every caller of equal text, so it is a tuple.
     """
-    return memo("typemap-statements", hashlib.sha256(text.encode()).digest(), lambda: _split(text), keep=4096)
+    return memo(
+        "typemap-statements",
+        hashlib.sha256(text.encode()).digest(),
+        lambda: _split(text),
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
 
 def _split(text: str) -> tuple[str, ...]:

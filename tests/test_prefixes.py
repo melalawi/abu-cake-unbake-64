@@ -4,7 +4,7 @@ import unittest
 from collections.abc import Callable
 from typing import ClassVar
 
-from unbake import cdecl, prefixes
+from unbake import cache, cdecl, prefixes
 from unbake.typemap import declarations
 
 HEADER = "".join(
@@ -47,12 +47,14 @@ class ConcatenatedPassTests(unittest.TestCase):
     def test_resumed_pass_equals_the_whole_pass(self) -> None:
         for label, transform in self.PASSES.items():
             with self.subTest(label):
+                cache.configure(memory_bytes=32 * 1024 * 1024)
                 prefixes.forget()
                 for rest in (*self.RESTS, *reversed(self.RESTS)):
                     text = HEADER + rest
                     self.assertEqual(prefixes.concatenated(label, text, transform), transform(text))
 
     def test_a_shared_header_is_transformed_once(self) -> None:
+        cache.configure(memory_bytes=32 * 1024 * 1024)
         prefixes.forget()
         seen: list[int] = []
 
@@ -72,6 +74,7 @@ class ResumedParseTests(unittest.TestCase):
         from pycparser import c_generator  # type: ignore[import-untyped]
 
         generator = c_generator.CGenerator()
+        cache.configure(memory_bytes=32 * 1024 * 1024)
         prefixes.forget()
         for rest in ("T3 *f(T1 x);\n", "extern T299 last;\n", "void k(int T5);\nT5 *p;\n", "int a;\n"):
             text = HEADER + rest
@@ -80,6 +83,7 @@ class ResumedParseTests(unittest.TestCase):
             )
 
     def test_an_unparsable_unit_reports_the_whole_parse_error(self) -> None:
+        cache.configure(memory_bytes=32 * 1024 * 1024)
         prefixes.forget()
         cdecl.resumable_parse(HEADER + "int a;\n", {})
         bad = HEADER + "int b\n"

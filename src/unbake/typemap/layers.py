@@ -15,7 +15,6 @@ keeps the whole-unit extraction: its own layouts depend on header layouts.
 
 from __future__ import annotations
 
-import functools
 import os
 import re
 from collections.abc import Callable, Mapping
@@ -24,6 +23,7 @@ from typing import Any
 
 from pycparser import c_ast  # type: ignore[import-untyped]
 
+from unbake import cache as retention
 from unbake import cdecl
 from unbake.config import Held, Project
 from unbake.typemap import declarations
@@ -45,7 +45,7 @@ def spelling(project: Project, machine_root: Path, text: str) -> str:
     return _spell_in(project.root, machine_root, text)
 
 
-@functools.lru_cache(maxsize=1 << 17)
+@retention.memoized("typemap.layers._spell_in", size=retention.memory_size, copy_out=retention.clone)
 def _spell_in(project_root: Path, machine_root: Path, text: str) -> str:
     """The spelling of one path, kept: every source's keys name the same few thousand headers."""
     clean = os.path.normpath(text)

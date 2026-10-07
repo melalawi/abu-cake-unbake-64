@@ -102,7 +102,10 @@ class PublicationHeaderStateTests(ProjectCase):
         self.commit("Other generated output")
         self.assertEqual(generated_state.reconcile(self.project, "other"), [])
         self.assertEqual(steps.recorded(self.project, "other"), "other-key")
-        self.assertEqual(steps._read(self.project)["other"]["outputs"]["include/output.txt"], inputs.digest(target))
+        self.assertEqual(
+            steps._read(self.project)["other"]["outputs"]["include/output.txt"],
+            inputs.digest(target, algorithm="sha256", reuse=True),
+        )
 
     def test_without_readable_head_changes_still_refuse(self):
         shutil.rmtree(self.project.root / ".git")

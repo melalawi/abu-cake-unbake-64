@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unbake import atomic as atomic_files
-from unbake import tui
+from unbake import cache as retention
+from unbake import inputs, tui
 from unbake.compilers import files as compiler_files
 from unbake.config import Held
 
@@ -161,7 +162,13 @@ def registry() -> dict[str, CompilerSpec]:
     from unbake import inputs
     from unbake.cache import memo
 
-    return memo("compiler.registry", (REGISTRY_PATH, inputs.signature(REGISTRY_PATH)), _registry, keep=4)
+    return memo(
+        "compiler.registry",
+        (REGISTRY_PATH, inputs.signature(REGISTRY_PATH)),
+        _registry,
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
 
 def specification(ident: str) -> CompilerSpec:
@@ -192,7 +199,7 @@ def verify(directory: Path, spec: CompilerSpec) -> dict[str, str]:
     for name, expected in sorted(spec.pins.items()):
         path = directory / name
         try:
-            actual = compiler_files.sha(path)
+            actual = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
         except OSError as error:
             failures.append(f"{path}: {error}")
             continue
@@ -212,7 +219,7 @@ def _hashes(directory: Path, spec: CompilerSpec) -> dict[str, str]:
         if path.exists() or path.is_symlink():
             if not path.is_file():
                 raise Held("setup", f"{path}: expected regular compiler file")
-            result[name] = compiler_files.sha(path)
+            result[name] = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
     return result
 
 
@@ -370,7 +377,7 @@ def _ensure(project: Project, policy: Host | Host, override: Path | None) -> Pat
             if any(parent.is_symlink() for parent in target.parents):
                 raise Held("setup", f"{target}: compiler parent is a symlink")
             target.parent.mkdir(parents=True, exist_ok=True)
-            old = compiler_files.sha(target) if target.is_file() else None
+            old = inputs.digest(target, algorithm="sha256", reuse=retention.configured()) if target.is_file() else None
             if old != pin or target.is_symlink():
                 compiler_files.atomic_bytes(
                     target, (directory / name).read_bytes(), mode=(directory / name).stat().st_mode & 0o777

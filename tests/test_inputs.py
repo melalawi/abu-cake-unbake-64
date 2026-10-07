@@ -11,12 +11,12 @@ class DigestTests(TempCase):
     def test_digest_is_sha256_of_bytes(self) -> None:
         path = self.root / "a.c"
         path.write_bytes(b"int a;\n")
-        self.assertEqual(inputs.digest(path), hashlib.sha256(b"int a;\n").hexdigest())
+        self.assertEqual(inputs.digest(path, algorithm="sha256", reuse=True), hashlib.sha256(b"int a;\n").hexdigest())
 
     def test_digest_follows_rewrites(self) -> None:
         path = self.root / "a.c"
         path.write_bytes(b"one")
-        first = inputs.digest(path)
+        first = inputs.digest(path, algorithm="sha256", reuse=True)
         cases = [
             ("same size new bytes", b"two", True),
             ("same bytes rewritten", b"two", False),
@@ -28,7 +28,7 @@ class DigestTests(TempCase):
             with self.subTest(label):
                 path.write_bytes(data)
                 os.utime(path, ns=(10**18 + len(label), 10**18 + len(label)))
-                current = inputs.digest(path)
+                current = inputs.digest(path, algorithm="sha256", reuse=True)
                 self.assertEqual(current != previous, changes)
                 self.assertEqual(current, hashlib.sha256(data).hexdigest())
                 previous = current
@@ -37,4 +37,6 @@ class DigestTests(TempCase):
         first, second = self.root / "x", self.root / "y"
         first.write_bytes(b"same")
         second.write_bytes(b"same")
-        self.assertEqual(inputs.digest(first), inputs.digest(second))
+        self.assertEqual(
+            inputs.digest(first, algorithm="sha256", reuse=True), inputs.digest(second, algorithm="sha256", reuse=True)
+        )

@@ -19,12 +19,13 @@ import tempfile
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import inputs
 from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
 
 # Bump when the archive an extraction stores changes for the same inputs.
-EXTRACT_SCHEMA = 2
+EXTRACT_SCHEMA = 3
 
 _FINGERPRINT_PARTS = ("extract.py",)
 # A landed row (c, or hasm for original asm) goes back to asm for splat.
@@ -117,12 +118,12 @@ def _compiler_mode(project: Project) -> str:
 def _version_key(project: Project, host: Host, version: str) -> str:
     configured = project.version(version)
     return key(
-        Path(__file__),
+        inputs.digest(Path(__file__), algorithm="sha256", reuse=retention.configured()),
         f"extract-v{EXTRACT_SCHEMA}",
         configured.baserom_sha1,
         splat_rows(project, version),
-        configured.symbols,
-        inputs.digest(host.splat),
+        inputs.digest(configured.symbols, algorithm="sha256", reuse=retention.configured()),
+        inputs.digest(host.splat, algorithm="sha256", reuse=retention.configured()),
         _compiler_mode(project),
     )
 

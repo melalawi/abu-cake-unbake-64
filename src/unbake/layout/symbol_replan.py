@@ -15,6 +15,7 @@ from typing import Any, cast
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
+from unbake import inputs as input_pins
 from unbake import tui
 from unbake.config import Held, Host, Project, SymbolPolicy
 from unbake.layout import planner, port, split, symbol_identity
@@ -170,7 +171,10 @@ def plan(project: Project, policy: Host, *, retain_names: bool = False) -> tuple
             header_data_types(project),
         )
     layout["data_symbols"] = data
-    layout["inputs_sha256"]["symbol_replan"] = planner.digest([placements, layout["items"], data])
+    layout["inputs_sha256"]["symbol_replan"] = input_pins.bytes_digest(
+        json.dumps([placements, layout["items"], data], sort_keys=True, separators=(",", ":"), default=str).encode(),
+        algorithm="sha256",
+    )
     report = {
         "schema": 1,
         "data_symbols": data,
@@ -214,7 +218,9 @@ def rewrite_layout(text: str, replacements: dict[str, str]) -> str:
 def run(project: Project, policy: Host, confirm: str | None, *, retain_names: bool = False) -> list[str]:
     replacements, report = plan(project, policy, retain_names=retain_names)
     inputs = setup._inputs(project)
-    token = planner.digest([inputs, report])
+    token = input_pins.bytes_digest(
+        json.dumps([inputs, report], sort_keys=True, separators=(",", ":"), default=str).encode(), algorithm="sha256"
+    )
     directory = project.build / "setup"
     directory.mkdir(parents=True, exist_ok=True)
     atomic_files.text(

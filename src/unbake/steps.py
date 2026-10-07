@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import effort, tui
 from unbake.cache import key
 from unbake.config import Held, Host, Project
@@ -87,7 +88,9 @@ class Prepared:
             if name.startswith("recipe:"):
                 continue
             path = project.root / name
-            current = inputs.digest(path) if path.is_file() else "missing"
+            current = (
+                inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
+            )
             if current != digest:
                 raise Held("preflight", f"prepare.changed: {name}: changed since preparation")
 
@@ -150,7 +153,11 @@ def record(project: Project, step: str, content_key: str, outputs: dict[str, str
 def _digests(project: Project, paths: Iterable[Path]) -> dict[str, str]:
     from unbake import inputs
 
-    return {str(path.relative_to(project.root)): inputs.digest(path) for path in sorted(paths) if path.is_file()}
+    return {
+        str(path.relative_to(project.root)): inputs.digest(path, algorithm="sha256", reuse=retention.configured())
+        for path in sorted(paths)
+        if path.is_file()
+    }
 
 
 def acknowledge_outputs(project: Project, step: str, paths: Iterable[Path]) -> None:
@@ -169,7 +176,7 @@ def acknowledge_outputs(project: Project, step: str, paths: Iterable[Path]) -> N
     for path in paths:
         name = str(path.relative_to(project.root))
         if name in outputs and path.is_file():
-            outputs[name] = inputs.digest(path)
+            outputs[name] = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
     if outputs != entry.get("outputs", {}):
         entry["outputs"] = outputs
         atomic_files.text(_path(project), json.dumps(value, indent=1, sort_keys=True) + "\n")
@@ -183,7 +190,7 @@ def altered(project: Project, step: str) -> list[str]:
     changed = []
     for name, digest in sorted((entry or {}).get("outputs", {}).items()):
         path = project.root / name
-        if not path.is_file() or inputs.digest(path) != digest:
+        if not path.is_file() or inputs.digest(path, algorithm="sha256", reuse=retention.configured()) != digest:
             changed.append(name)
     return changed
 
@@ -347,7 +354,20 @@ def _progress_key(project: Project, host: Host) -> str:
     from unbake.report import progress
 
     sources = sorted([*project.src.glob("*.c"), *project.src.glob("*.s")])
-    return key("progress", str(progress.SCHEMA), project.root / "layout.toml", *sources)
+    from unbake import inputs
+
+    return key(
+        "progress",
+        str(progress.SCHEMA),
+        *(
+            part
+            for path in (project.root / "layout.toml", *sources)
+            for part in (
+                path.relative_to(project.root).as_posix(),
+                inputs.digest(path, algorithm="sha256", reuse=retention.configured()),
+            )
+        ),
+    )
 
 
 def _progress(project: Project, host: Host) -> None:

@@ -10,6 +10,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from unbake import cache as retention
 from unbake.config import Held
 
 if TYPE_CHECKING:
@@ -353,7 +354,6 @@ def _rows(project: Project, v: str) -> tuple[Function, ...]:
 
     The asm tree counts by its directories' stat signatures: the tool writes files there by rename, and the
     extract step, which overwrites splat output in place, forgets this memo when it ends."""
-    import os
 
     from unbake import inputs
     from unbake.cache import memo, parsed
@@ -363,7 +363,10 @@ def _rows(project: Project, v: str) -> tuple[Function, ...]:
     asm = getattr(project, "asm", None)
     root = None if asm is None else asm / v
     tree = (
-        tuple((top, inputs.signature(Path(top))) for top, _, _ in os.walk(root))
+        tuple(
+            (path.relative_to(root).as_posix(), inputs.digest(path, algorithm="sha256", reuse=retention.configured()))
+            for path in sorted(root.rglob("*.s"))
+        )
         if root is not None and root.is_dir()
         else ()
     )
@@ -383,10 +386,10 @@ def _rows(project: Project, v: str) -> tuple[Function, ...]:
                 if any(start < row.end and row.start < stop for start, stop in data):
                     continue
             output.append(row)
-        # The parsed rows ride along so their identity in the key stays theirs.
+        # The immutable parsed rows are the exact semantic inventory.
         return tuple(output), rows
 
-    return memo(ASM_ROWS, (v, id(rows), tree), filtered, keep=16)[0]
+    return memo(ASM_ROWS, (v, tuple(rows), tree), filtered, size=retention.memory_size, copy_out=retention.clone)[0]
 
 
 def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
@@ -402,8 +405,8 @@ def owners_by_alias(project: Project, v: str) -> dict[str, list[Function]]:
                 index.setdefault(alias, []).append(row)
         return index, rows
 
-    # Keyed by the shared rows object, never by hashing every row on each call.
-    return memo("split.aliases", (v, id(rows)), build, keep=16)[0]
+    # Keyed by the immutable row values, including every row on each call.
+    return memo("split.aliases", (v, tuple(rows)), build, size=retention.memory_size, copy_out=retention.clone)[0]
 
 
 def holding_versions(

@@ -31,9 +31,7 @@ class ImportTests(TestCase):
         }
         context = SimpleNamespace(texts={root / p: s for p, s in bodies.items()})
         project = SimpleNamespace(include=(root,), build=Path("/project/build"))
-        old_lookup = {
-            "headers": {name: "a" * 64 for name in ("shared/old/session.h", "shared/typemap.h", "shared/old.h")}
-        }
+        old_lookup = {"headers": dict.fromkeys(("shared/old/session.h", "shared/typemap.h", "shared/old.h"), "a" * 64)}
         mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
         mock_index.start()
         self.addCleanup(mock_index.stop)
@@ -113,9 +111,7 @@ class ImportTests(TestCase):
     def test_sdk_configuration_precedes_recovered_macros(self):
         root = Path("/project/include")
         project = SimpleNamespace(include=(root,), build=Path("/project/build"))
-        old_lookup = {
-            "headers": {name: "a" * 64 for name in ("shared/old/session.h", "shared/typemap.h", "shared/old.h")}
-        }
+        old_lookup = {"headers": dict.fromkeys(("shared/old/session.h", "shared/typemap.h", "shared/old.h"), "a" * 64)}
         mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
         mock_index.start()
         self.addCleanup(mock_index.stop)
@@ -133,9 +129,7 @@ class ImportTests(TestCase):
     def test_current_overlay_is_the_provider_and_cache_changes_with_edits(self):
         root = Path("/project/include")
         project = SimpleNamespace(include=(root,), build=Path("/project/build"))
-        old_lookup = {
-            "headers": {name: "a" * 64 for name in ("shared/old/session.h", "shared/typemap.h", "shared/old.h")}
-        }
+        old_lookup = {"headers": dict.fromkeys(("shared/old/session.h", "shared/typemap.h", "shared/old.h"), "a" * 64)}
         mock_index = patch("unbake.layout.index.load", return_value=old_lookup)
         mock_index.start()
         self.addCleanup(mock_index.stop)

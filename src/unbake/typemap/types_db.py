@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
+from unbake import cache as retention
 from unbake import effort, sqlite
 from unbake.config import Held, Project
 
@@ -36,8 +37,6 @@ SCHEMA = (
     " users TEXT NOT NULL, PRIMARY KEY (kind, name))",
     "CREATE TABLE redraft (function TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
-
-_full: dict[Path, tuple[tuple[int, int, int], dict[str, Any]]] = {}
 
 
 def path(project: Project) -> Path:
@@ -232,7 +231,6 @@ def stage(
 
 def install(destination: Path, staged: Path) -> None:
     os.replace(staged, destination)
-    _full.pop(destination, None)
 
 
 def meta(file: Path, key: str, *, default: Any = _MISSING) -> Any:
@@ -263,12 +261,16 @@ def entries(file: Path, kind: str, names: Iterable[str]) -> dict[str, Any]:
 
 
 def read(file: Path) -> dict[str, Any]:
+    from unbake import inputs
+
+    content = inputs.digest(file, algorithm="sha256", reuse=retention.configured())
+    return retention.memo(
+        "types-db", (str(file), content), lambda: _read(file), size=retention.memory_size, copy_out=retention.clone
+    )
+
+
+def _read(file: Path) -> dict[str, Any]:
     """The whole solution (the solver and the headers step); memoised by file identity."""
-    stat = file.stat()
-    stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
-    cached = _full.get(file)
-    if cached is not None and cached[0] == stamp:
-        return cached[1]
     with _connection(file) as connection:
         value: dict[str, Any] = {key: json.loads(row) for key, row in connection.execute("SELECT key, value FROM meta")}
         value.pop("content_sha256", None)
@@ -276,7 +278,6 @@ def read(file: Path) -> dict[str, Any]:
             value[kind] = {}
         for kind, name, row in connection.execute("SELECT kind, name, value FROM entries"):
             value[kind][name] = json.loads(row)
-    _full[file] = (stamp, value)
     return value
 
 

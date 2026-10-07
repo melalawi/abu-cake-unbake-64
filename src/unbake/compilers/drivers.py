@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake.compilers.families import Family
 from unbake.config import Compiler, Held, Host, Project
 
@@ -139,7 +140,13 @@ def _supported(selector: str, values: list[str]) -> None:
             for flag in flags
         )
 
-    supported = memo("compiler.supported-flags", (kind, REGISTRY_PATH, inputs.signature(REGISTRY_PATH)), read, keep=8)
+    supported = memo(
+        "compiler.supported-flags",
+        (kind, REGISTRY_PATH, inputs.signature(REGISTRY_PATH)),
+        read,
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
     for flag in values:
         if flag in supported or family.accepts_codegen(flag):
             continue

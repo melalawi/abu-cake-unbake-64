@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from unbake import atomic as atomic_files
-from unbake import config, tui
+from unbake import cache as retention
+from unbake import config, inputs, tui
 from unbake.compilers import files as compiler_files
 from unbake.compilers import registry as toolchain
 from unbake.config import Held, Host, PendingProject, Project
@@ -122,7 +123,9 @@ def _inputs(project: PendingProject | Project) -> dict[str, str]:
             path = parent / name
             if path.is_symlink():
                 raise Held("setup", f"setup.publication: input symlink {path.relative_to(project.root)}")
-            result[path.relative_to(project.root).as_posix()] = compiler_files.sha(path)
+            result[path.relative_to(project.root).as_posix()] = inputs.digest(
+                path, algorithm="sha256", reuse=retention.configured()
+            )
     return result
 
 
@@ -294,7 +297,10 @@ def _publish(
         ):
             continue
         target = project.root / relative
-        if not target.exists() or compiler_files.sha(target) != staged_inputs[relative]:
+        if (
+            not target.exists()
+            or inputs.digest(target, algorithm="sha256", reuse=retention.configured()) != staged_inputs[relative]
+        ):
             writes[target] = path
     config_path = project.root / "config.toml"
     if fresh:
@@ -383,7 +389,7 @@ def prepare_setup(
         tui.line(f"OK(setup): {line}")
     compilers.confirm_proposal(project, census, layout, proposal, policy, confirm=confirm)
     accepted_path = project.build / "setup/proposal.json"
-    accepted_sha256 = compiler_files.sha(accepted_path)
+    accepted_sha256 = inputs.digest(accepted_path, algorithm="sha256", reuse=retention.configured())
     guard = compiler_proposal.confirmation_guard(project, proposal, policy)
     if proposal["default_compiler"] is None:
         raise Held("setup", "setup.compiler_candidate: explicit default compiler required")
@@ -438,7 +444,10 @@ def prepare_setup(
             result = _prove_publish(project, tree, policy, fingerprint, fresh=True, supply=supply, before_publish=guard)
             # compiler.json and confirmation.json hold the published receipt.
             # Do not delete a proposal from an intervening planning command.
-            if accepted_path.is_file() and compiler_files.sha(accepted_path) == accepted_sha256:
+            if (
+                accepted_path.is_file()
+                and inputs.digest(accepted_path, algorithm="sha256", reuse=retention.configured()) == accepted_sha256
+            ):
                 accepted_path.unlink()
             return result
 

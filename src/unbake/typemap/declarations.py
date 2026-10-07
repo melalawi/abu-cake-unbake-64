@@ -15,7 +15,8 @@ from typing import Any
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import cdecl, pool, prefixes, tui
+from unbake import cache as retention
+from unbake import cdecl, inputs, pool, prefixes, tui
 from unbake.cache import memo
 from unbake.cdecl import attribute_source, declaration_source
 from unbake.cdecl import declarations as header_declarations
@@ -95,7 +96,8 @@ def _declaration_unit(source: str) -> str:
         "decl.unit",
         source,
         lambda: prefixes.concatenated("unit.blank", source, _unit_bodies_blanked),
-        keep=2 * UNIT_MEMO,
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )
 
 
@@ -151,7 +153,8 @@ def _unit_clean(stream: str, source: str, *, line_markers: bool) -> str:
         lambda: prefixes.concatenated(
             f"unit.clean.{stream}.{line_markers}", source, lambda text: clean(text, line_markers=line_markers)
         ),
-        keep=2 * UNIT_MEMO,
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )
 
 
@@ -250,7 +253,8 @@ def headers(
             "typemap.headers",
             selection,
             lambda: _headers(project, policy, version, contents, None, line_markers=line_markers),
-            keep=8,
+            size=retention.memory_size,
+            copy_out=retention.clone,
         )
     return _headers(project, policy, version, contents, extra, line_markers=line_markers)
 
@@ -510,7 +514,9 @@ def unknown(type_: str) -> bool:
 
 def _canonical_in(aliases: dict[str, str]) -> Callable[[str], str]:
     """canonical(type_, aliases), remembered per alias environment: a unit's extractions share one."""
-    known: dict[str, str] = memo("decl.canonical", tuple(aliases.items()), dict, keep=4)
+    known: dict[str, str] = memo(
+        "decl.canonical", tuple(aliases.items()), dict, size=retention.memory_size, copy_out=retention.clone
+    )
 
     def resolve(type_: str) -> str:
         found = known.get(type_)
@@ -548,7 +554,13 @@ def _registers(params: list[dict[str, Any]], resolve: Callable[[str], str]) -> l
 def _tree(source: str, scope: dict[str, bool]) -> Any:
     """A parse is pure in its text and seeded typedef scope; consumers copy before they change a node."""
     key = (source, tuple(sorted(scope.items())))
-    return memo("decl.tree", key, lambda: cdecl.resumable_parse(source, scope), keep=UNIT_MEMO)
+    return memo(
+        "decl.tree",
+        key,
+        lambda: cdecl.resumable_parse(source, scope),
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
 
 def extract(
@@ -731,7 +743,8 @@ def _layout_records(
         "decl.layouts",
         (layout_source, tuple(aliases.items())),
         lambda: unit_layouts.records(layout_source, aliases),
-        keep=UNIT_MEMO,
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )
     # Units whose rows are the same objects share one record dict, so its shared template is encoded once.
     identity = (json.dumps(provenance, sort_keys=True), tuple((name, id(row)) for name, row in rows.items()))
@@ -739,7 +752,8 @@ def _layout_records(
         "decl.records",
         identity,
         lambda: ({name: {**row, "provenance": provenance} for name, row in rows.items()}, rows),
-        keep=8,
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )
     return records, list(unknown)
 
@@ -799,7 +813,9 @@ def _prefix_seed(prefix: str, contracts: bool) -> tuple[dict[str, Any], dict[str
         return seed, parser._scope_stack[0].copy(), cleaned
 
     digest = hashlib.sha256(prefix.encode()).hexdigest()
-    seed, scope, cleaned = memo("decl.prefix", (digest, contracts), parse, keep=PREFIX_MEMO)
+    seed, scope, cleaned = memo(
+        "decl.prefix", (digest, contracts), parse, size=retention.memory_size, copy_out=retention.clone
+    )
     return seed, dict(scope), cleaned
 
 
@@ -977,7 +993,11 @@ def _collect(project: Project, policy: Host | None, store: Any, keys: list[str])
             from unbake import pool
 
             distinct = {
-                text: {"kind": "declared", "version": version, "sha256": storage.digest(rooted(project, text).encode())}
+                text: {
+                    "kind": "declared",
+                    "version": version,
+                    "sha256": inputs.bytes_digest(rooted(project, text).encode(), algorithm="sha256"),
+                }
                 for version, text in reversed(texts.items())
             }
             pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in distinct.items()])
@@ -986,7 +1006,11 @@ def _collect(project: Project, policy: Host | None, store: Any, keys: list[str])
             # Line markers name absolute include paths: the digest reads them relative to the tree root, so the same
             # tree at another path records the same provenance.
             relative = rooted(project, header_text)
-            provenance = {"kind": "declared", "version": version, "sha256": storage.digest(relative.encode())}
+            provenance = {
+                "kind": "declared",
+                "version": version,
+                "sha256": inputs.bytes_digest(relative.encode(), algorithm="sha256"),
+            }
             seed = declared.get(header_text)
             if seed is None:
                 seed = store.text(
@@ -1044,7 +1068,7 @@ def _collect(project: Project, policy: Host | None, store: Any, keys: list[str])
                     "kind": "declared",
                     "version": version,
                     "source": "declaration_evidence",
-                    "sha256": storage.digest(extra.read_bytes()),
+                    "sha256": inputs.bytes_digest(extra.read_bytes(), algorithm="sha256"),
                 }
 
             if policy is not None:

@@ -17,15 +17,17 @@ class PoolSignalTests(unittest.TestCase):
     def test_worker_start_leads_a_new_group(self) -> None:
         with (
             patch.object(pool.os, "setpgid") as setpgid,
+            patch.object(pool.signal, "signal") as configured,
             patch.object(pool, "_die_with_owner") as watch,
             patch.object(pool.resource, "setrlimit"),
             patch.object(pool, "temporary_environment", return_value={}),
             patch.object(pool.tempfile, "tempdir"),
             patch.object(pool.multiprocessing.connection, "arbitrary_address"),
         ):
-            pool._cap(1, "/configured-cache/pymp-fixture")
+            pool._cap(1, "/configured-cache/pymp-fixture", 100)
         setpgid.assert_called_once_with(0, 0)
         watch.assert_called_once_with()
+        configured.assert_called_once_with(pool.signal.SIGUSR1, pool._release_finished_payload)
 
     def test_owner_is_the_fork_server_parent(self) -> None:
         with patch.object(pool.Path, "read_text", return_value="77 (py (x)) S 4242 77 77 0"):

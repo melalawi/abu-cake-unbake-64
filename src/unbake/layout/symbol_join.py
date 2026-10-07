@@ -15,6 +15,7 @@ from typing import Any, cast
 
 from unbake import atomic as atomic_files
 from unbake import config
+from unbake import inputs as input_pins
 from unbake.config import Held, Host, Project
 from unbake.layout import planner, port, split, symbol_identity, symbol_replan
 from unbake.project import setup
@@ -120,7 +121,7 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
                 raise Held("split", f"split.join.authored_source: destination {name}.c already exists")
             sources = [authored[old] for old in sorted(source_names & authored.keys())]
             if len(sources) > 1:
-                proposed = {old: name for old in source_names}
+                proposed = dict.fromkeys(source_names, name)
                 if len({symbol_replan.rewrite(source.read_text(), proposed) for source in sources}) != 1:
                     raise Held(
                         "split",
@@ -271,7 +272,10 @@ def plan(project: Project, assertions: list[dict[str, Any]]) -> tuple[dict[str, 
         for record in item["placements"].values():
             record["evidence"]["holding_versions"] = item["versions"]
             record["evidence"]["name_source"] = item["versions"][0]
-    layout["inputs_sha256"]["symbol_join"] = planner.digest(layout["symbol_assertions"])
+    layout["inputs_sha256"]["symbol_join"] = input_pins.bytes_digest(
+        json.dumps(layout["symbol_assertions"], sort_keys=True, separators=(",", ":"), default=str).encode(),
+        algorithm="sha256",
+    )
     placements_changed = [
         {
             "version": v,

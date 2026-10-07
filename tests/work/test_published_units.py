@@ -19,8 +19,9 @@ class PublishedUnitTests(ProjectCase):
         self.publish("alpha", CLEAN)
         path = self.project.version("eu").split
         path.write_text(path.read_text().replace("c, alpha]", "asm, alpha]"))
-        with patch("unbake.pool.run", lambda host, fn, items: [fn(item) for item in items]), patch(
-            "unbake.pool.Pool.from_host", return_value=type("P", (), {"size": 2})()
+        with (
+            patch("unbake.pool.run", lambda host, fn, items: [fn(item) for item in items]),
+            patch("unbake.pool.Pool.from_host", return_value=type("P", (), {"size": 2})()),
         ):
             found = {row.function for row in plan.candidates(self.project, self.host)}
         self.assertIn("alpha", found)

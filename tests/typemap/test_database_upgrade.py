@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.typemap import test_solve_reuse
-from unbake import steps
+from unbake import cache, steps
 from unbake.config import Held
 from unbake.typemap import solver, types_db
 
@@ -23,7 +23,7 @@ class DatabaseUpgradeTests(test_solve_reuse.SolveReuseFixture):
                 with closing(sqlite3.connect(self.database)) as connection, connection:
                     connection.execute("PRAGMA user_version = 0")
                     connection.execute("DELETE FROM meta WHERE key LIKE 'inference_%'")
-                types_db._full.clear()
+                cache.forget(["types-db"])
                 if changed:
                     self.source.write_text("int alpha(void) { return 9; }\n")
                 calls = self.published.call_count

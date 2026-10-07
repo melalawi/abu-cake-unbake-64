@@ -101,7 +101,7 @@ def plan(project: Project, host: Host, function: str, headers: dict[str, str]) -
                             )
                         continue
                     selected.add(provider.name)
-                    resolution.update({name: (provider.name, provider) for name in (record.name, *record.aliases)})
+                    resolution.update(dict.fromkeys((record.name, *record.aliases), (provider.name, provider)))
                 if not resolution:
                     continue
                 planned = type_rewrite.edits(

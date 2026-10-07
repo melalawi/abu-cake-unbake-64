@@ -9,7 +9,6 @@ polls: the only timed wait is the stop condition's own deadline.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import queue
 import tempfile
@@ -22,7 +21,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from unbake import atomic as atomic_files
-from unbake import tui
+from unbake import cache as retention
+from unbake import inputs, tui
 from unbake.cli.output import Result
 from unbake.config import Held, Host, Project
 from unbake.cycle import ladder, rank
@@ -273,10 +273,6 @@ def narrate(record: dict[str, Any]) -> None:
 # ---- the run ----
 
 
-def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 BUSY = frozenset({"drafting", "comparing", "searching", "landing"})
 
 
@@ -503,7 +499,7 @@ def run(
                 submit(row.function, Task("draft", row.function, replace=True))
             elif file.is_file():
                 row.file = str(file)
-                row.sha256 = _sha(file)
+                row.sha256 = inputs.digest(file, algorithm="sha256", reuse=retention.configured())
                 row.stage = "comparing"
                 emitter.emit("fn.compare.start", function=row.function, sha256=row.sha256)
                 submit(row.function, Task("compare", str(file)))
@@ -516,7 +512,11 @@ def run(
             """A row whose last draft or compare read the tree before the steps changed it: an untouched draft is
             drafted again, an edited one compared again, a refused draft drafted again."""
             file = Path(row.file) if row.file else project.work / row.function / f"{row.function}.c"
-            if file.is_file() and row.drafted_sha and _sha(file) == row.drafted_sha:
+            if (
+                file.is_file()
+                and row.drafted_sha
+                and inputs.digest(file, algorithm="sha256", reuse=retention.configured()) == row.drafted_sha
+            ):
                 start(row, redraft=True)
             else:
                 start(row)
@@ -634,7 +634,7 @@ def run(
             """A method that gained nothing leaves the best text in the file."""
             file = Path(row.file)
             atomic_files.text(file, ladder.snapshot_path(file).read_text(), encoding="utf-8")
-            row.sha256 = _sha(file)
+            row.sha256 = inputs.digest(file, algorithm="sha256", reuse=retention.configured())
 
         def climb(row: Row, percent: float) -> None:
             """A compare that is not exact: score the method whose text it measured, else start the ladder."""
@@ -695,7 +695,7 @@ def run(
             # The method's best text is compared like any edit; the watcher's event for this write matches the
             # recorded digest and is ignored.
             atomic_files.copyfile(best, file)
-            row.sha256 = _sha(file)
+            row.sha256 = inputs.digest(file, algorithm="sha256", reuse=retention.configured())
             row.stage = "comparing"
             emitter.emit("fn.compare.start", function=row.function, sha256=row.sha256)
             submit(row.function, Task("compare", row.file))
@@ -785,7 +785,10 @@ def run(
                         elif (
                             function not in deferred
                             and rows[function].stage == "waiting for edit"
-                            and _sha(Path(rows[function].file)) == rows[function].sha256
+                            and inputs.digest(
+                                Path(rows[function].file), algorithm="sha256", reuse=retention.configured()
+                            )
+                            == rows[function].sha256
                         ):
                             row = rows[function]
                             if row.best_percent == 100:
@@ -802,7 +805,7 @@ def run(
                     if edited is None or edited.stage in ("landed", "landing") or edited.held or not path.is_file():
                         continue
                     row = edited
-                    sha = _sha(path)
+                    sha = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
                     if sha == row.sha256:
                         continue
                     row.file, row.sha256 = str(path), sha
@@ -916,7 +919,7 @@ def _drafted(
         )
         if written.is_file():
             # An unproven draft was written: compare it, then wait for edits like any other.
-            row.drafted_sha = _sha(written)
+            row.drafted_sha = inputs.digest(written, algorithm="sha256", reuse=retention.configured())
             stopper.note_activity()
             start(row)
             return
@@ -932,7 +935,7 @@ def _drafted(
         return
     emitter.emit("fn.draft.done", function=function, ok=True, file=result["file"], seconds=round(result["seconds"], 3))
     stopper.note_activity()
-    row.drafted_sha = _sha(Path(result["file"]))
+    row.drafted_sha = inputs.digest(Path(result["file"]), algorithm="sha256", reuse=retention.configured())
     start(row)
 
 

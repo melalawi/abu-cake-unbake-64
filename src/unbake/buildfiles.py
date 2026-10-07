@@ -15,14 +15,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import cache
+from unbake import cache, inputs
+from unbake import cache as retention
 from unbake.compilers import drivers
 from unbake.compilers import registry as compiler_registry
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 8
+SCHEMA = 9
 
 # CI pins: full commit SHAs and an image digest (tool data, never config).
 CHECKOUT = ("actions/checkout", "11d5960a326750d5838078e36cf38b85af677262", "v4.4.0")
@@ -532,7 +533,12 @@ def input_key(project: Project, host: Host) -> str:
     parts.append(manifest if manifest.is_file() else "no original asm")
     for include in project.include:
         parts.extend(sorted(include.rglob("*.h")))
-    return cache.key(*parts)
+    return cache.key(
+        *(
+            inputs.digest(part, algorithm="sha256", reuse=retention.configured()) if isinstance(part, Path) else part
+            for part in parts
+        )
+    )
 
 
 def drift(project: Project, host: Host) -> list[Path]:

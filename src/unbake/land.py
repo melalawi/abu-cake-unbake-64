@@ -25,6 +25,7 @@ import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
 from unbake import buildfiles, process, runner, scratch, steps
+from unbake import cache as retention
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -631,10 +632,17 @@ def _receipt(
     files.update(path for v in versions for path in (project.version(v).split, project.version(v).symbols))
     return {
         "versions": list(versions),
-        "files": {path.relative_to(project.root).as_posix(): inputs.digest(path) for path in sorted(files)},
+        "files": {
+            path.relative_to(project.root).as_posix(): inputs.digest(
+                path, algorithm="sha256", reuse=retention.configured()
+            )
+            for path in sorted(files)
+        },
         "configured_rom_sha1": {v: project.version(v).baserom_sha1 for v in versions},
         "compiler": project.compiler_reference(function),
-        "host_inputs": {str(path): inputs.digest(path) for path in host.sources},
+        "host_inputs": {
+            str(path): inputs.digest(path, algorithm="sha256", reuse=retention.configured()) for path in host.sources
+        },
         "host_values": host.values,
     }
 

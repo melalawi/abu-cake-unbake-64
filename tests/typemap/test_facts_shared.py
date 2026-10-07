@@ -20,17 +20,19 @@ class SharedValueTests(TempCase):
         aliases = {"s32": "int"}
         encoded = facts.Store(SimpleNamespace(root=self.root), Cache(self.root / "cache")).encode({"aliases": aliases})
         reads: list[str] = []
-        real = facts._load
+        real = cache.JsonCodec.decode
 
-        def counted(path):  # type: ignore[no-untyped-def]
-            reads.append(path.name)
-            return real(path)
+        def counted(codec, data):
+            reads.append("shared")
+            return real(codec, data)
 
-        with patch.object(facts, "_load", counted):
+        with patch.object(cache.JsonCodec, "decode", counted):
             first = facts.Store(SimpleNamespace(root=self.root), Cache(self.root / "cache")).decode(encoded)
             second = facts.Store(SimpleNamespace(root=self.root), Cache(self.root / "cache")).decode(encoded)
             self.assertEqual(first["aliases"], aliases)
-            self.assertIs(first["aliases"], second["aliases"])
+            self.assertIsNot(first["aliases"], second["aliases"])
+            first["aliases"]["s32"] = "poison"
+            self.assertEqual(second["aliases"]["s32"], "int")
             self.assertEqual(len(reads), 1)
             missing = {"aliases": {"$shared": "0" * 64}}
             for _ in range(2):  # a refusal is never remembered as a value

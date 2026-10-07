@@ -47,7 +47,7 @@ class PublishedInputConvergence(SolveReuseFixture):
             )
         summary = {
             "functions": {
-                name: {"semantic_sha256": storage.digest(storage.encoded(row)), "users": []}
+                name: {"semantic_sha256": inputs.bytes_digest(storage.encoded(row), algorithm="sha256"), "users": []}
                 for name, row in result["functions"].items()
             }
         }
@@ -67,7 +67,11 @@ class PublishedInputConvergence(SolveReuseFixture):
             patch.object(steps, "STEPS", {"types": step}),
             patch.object(solver, "refresh_map", return_value={}),
             patch("unbake.typemap.abi_facts.refine", return_value=mapped),
-            patch.object(facts, "published_keys", side_effect=lambda *args: [inputs.digest(self.source)]),
+            patch.object(
+                facts,
+                "published_keys",
+                side_effect=lambda *args: [inputs.digest(self.source, algorithm="sha256", reuse=True)],
+            ),
             patch.object(declarations, "collect", self.collect),
             patch.object(solver, "_evidence", self.evidence),
             patch.object(solver, "infer", self.infer),

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import tempfile
@@ -11,12 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import inputs
 from unbake.config import Held, Project
-
-
-def digest(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
 
 
 def encoded(value: object) -> bytes:
@@ -75,29 +71,28 @@ def map_inputs(project: Project) -> dict[str, str]:
     # Extracted assembly is a disposable rendering: make prunes obsolete C-unit
     # assembly and rewrites other extraction outputs without changing the ROM.
     paths.update(path for path in (project.build / "setup/layout.json",) if path.is_file())
-    result = {str(path.relative_to(project.root)): inputs.digest(path) for path in sorted(paths)}
+    result = {
+        str(path.relative_to(project.root)): inputs.digest(path, algorithm="sha256", reuse=retention.configured())
+        for path in sorted(paths)
+    }
     result.update(symbol_inputs)
     return result
-
-
-_symbol_digests: dict[Path, tuple[str, str]] = {}
 
 
 def symbol_digest(path: Path) -> str:
     """Pin exactly the extraction symbol facts consumed by map_program."""
     from unbake.extract import discovered_symbols, read_symbol_table
 
-    content = inputs.digest(path)
-    cached = _symbol_digests.get(path)
-    if cached is not None and cached[0] == content:
-        return cached[1]
-    try:
-        symbols = discovered_symbols(path, {}) if path.name == "splat_symbols.csv" else read_symbol_table(path)
-    except (OSError, ValueError, KeyError) as error:
-        raise Held("map", f"map.symbols: {path}: {error}") from error
-    result = digest(encoded(symbols))
-    _symbol_digests[path] = content, result
-    return result
+    content = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
+
+    def parse() -> str:
+        try:
+            symbols = discovered_symbols(path, {}) if path.name == "splat_symbols.csv" else read_symbol_table(path)
+        except (OSError, ValueError, KeyError) as error:
+            raise Held("map", f"map.symbols: {path}: {error}") from error
+        return inputs.bytes_digest(encoded(symbols), algorithm="sha256")
+
+    return retention.memo("symbol-digest", (path.name, content), parse, size=retention.memory_size, copy_out=str)
 
 
 def generated_view(project: Project) -> Callable[[Path], bool]:
@@ -161,7 +156,7 @@ class FactLog:
 
     def finish(self, root: Path) -> dict[str, Any]:
         self.stream.close()
-        digest_ = inputs.digest(self.temporary)
+        digest_ = inputs.digest(self.temporary, algorithm="sha256", reuse=retention.configured())
         path = self.temporary.parent / ("constraints-" + digest_ + ".jsonl")
         # The shard is re-derivable from the map; its loss costs a recompute, never a wrong answer.
         atomic_files.publish(self.temporary, path, durable=False)
@@ -174,20 +169,11 @@ class FactLog:
 
 def install(path: Path, staged: Path) -> None:
     atomic_files.publish(staged, path)
-    inputs._digests.pop(staged, None)
-
-
-_verified: dict[Path, tuple[tuple[int, int, int, int], str]] = {}
 
 
 def verify_file(path: Path, expected: str, key: str) -> None:
     try:
-        stat = path.stat()
-        stamp = (stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
-        if _verified.get(path) == (stamp, expected):
-            return
-        if inputs.digest(path) != expected:
+        if inputs.digest(path, algorithm="sha256", reuse=retention.configured()) != expected:
             raise Held("solve", f"{key}: content changed: {path}")
-        _verified[path] = stamp, expected
     except OSError as error:
         raise Held("solve", f"{key}: {path}: {error}") from error

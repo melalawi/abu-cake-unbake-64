@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import inputs as input_pins
 from unbake.config import Held, Host, PendingProject, SymbolPolicy
 from unbake.layout import boundary, boundary_signatures, rodata_owners, split, split_analysis, split_create
 from unbake.layout.rodata_references import collect, words
@@ -24,10 +25,6 @@ from unbake.process import temporary_environment
 from unbake.project.census import Census
 from unbake.project.flow import CrossVersionItem, FunctionRecord, LayoutManifest, ProviderRecord, Span, VersionLayout
 from unbake.project.rom import Rom
-
-
-def digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
 def body_identity(image: bytes, start: int, end: int) -> dict[str, str]:
@@ -39,7 +36,15 @@ def body_identity(image: bytes, start: int, end: int) -> dict[str, str]:
         code.pop()
     return {
         "body_sha256": hashlib.sha256(image[start:end]).hexdigest(),
-        "normalized_body_sha256": digest([(word & ~mask, mask) for word, mask in zip(code, _masks(code), strict=True)]),
+        "normalized_body_sha256": input_pins.bytes_digest(
+            json.dumps(
+                [(word & ~mask, mask) for word, mask in zip(code, _masks(code), strict=True)],
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode(),
+            algorithm="sha256",
+        ),
     }
 
 
@@ -340,7 +345,15 @@ def correspondence(
             while len(code) > 2 and code[-1] == 0 and code[-2] != 0x03E00008:
                 code.pop()
             masks = _masks(code)
-            signature = digest([(word & ~mask, mask) for word, mask in zip(code, masks, strict=True)])
+            signature = input_pins.bytes_digest(
+                json.dumps(
+                    [(word & ~mask, mask) for word, mask in zip(code, masks, strict=True)],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode(),
+                algorithm="sha256",
+            )
             index[signature].append(f)
             signatures[version, f.start] = signature
             functions[version, f.start] = f
@@ -774,8 +787,15 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
                 )
             )
         },
-        "policy": digest(asdict(policy)),
-        "signatures": digest([asdict(signature) for signature in signatures]),
+        "policy": input_pins.bytes_digest(
+            json.dumps(asdict(policy), sort_keys=True, separators=(",", ":"), default=str).encode(), algorithm="sha256"
+        ),
+        "signatures": input_pins.bytes_digest(
+            json.dumps(
+                [asdict(signature) for signature in signatures], sort_keys=True, separators=(",", ":"), default=str
+            ).encode(),
+            algorithm="sha256",
+        ),
         "roms": hashlib.sha256(census.manifest.read_bytes()).hexdigest(),
         "splat": hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
     }
@@ -815,7 +835,15 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
                 code_ranges=[(row.start, row.end, row.address - row.start) for row in ranges_by_version[version]],
             )
             cache = project.build / "setup" / f"measurement-{version}.json"
-            key = digest([cartridge.sha1, template, hashlib.sha256(Path(executable).read_bytes()).hexdigest()])
+            key = input_pins.bytes_digest(
+                json.dumps(
+                    [cartridge.sha1, template, hashlib.sha256(Path(executable).read_bytes()).hexdigest()],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode(),
+                algorithm="sha256",
+            )
             if cache.is_file() and (saved := json.loads(cache.read_text())).get("key") == key:
                 measured = split.ExtractedText(
                     [
@@ -887,7 +915,9 @@ def plan_layout(project: PendingProject, census: Census, policy: Host) -> Layout
         for _iteration in range(1, 5):
             constants = carve(image, ff, spans)
             providers = complete_providers(image, ff, constants, ranges, candidate_shapes)
-            current = digest(providers)
+            current = input_pins.bytes_digest(
+                json.dumps(providers, sort_keys=True, separators=(",", ":"), default=str).encode(), algorithm="sha256"
+            )
             if current == previous:
                 break
             previous = current

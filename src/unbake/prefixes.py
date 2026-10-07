@@ -13,6 +13,8 @@ from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from unbake import cache
+
 S = TypeVar("S")
 R = TypeVar("R")
 
@@ -74,11 +76,6 @@ class _Store:
 
     def keep(self, prefix: str, state: Any) -> None:
         self.states[prefix] = state
-        while len(self.states) > PREFIXES_KEPT:
-            self.states.popitem(last=False)
-
-
-_stores: dict[str, _Store] = {}
 
 
 def resumed(
@@ -92,7 +89,7 @@ def resumed(
     advance(state, text, start, end) continues a state from start to the checkpoint end; it returns
     None when the pass cannot stop there, and the prefix is then not kept.
     """
-    store = _stores.setdefault(kind, _Store())
+    store = cache.memo("prefixes", kind, _Store, size=cache.memory_size, copy_out=cache.clone)
     best = store.longest(text)
     state = store.states[best] if best else None
     common = common_length(text, store.previous, len(best) if store.previous.startswith(best) else 0)
@@ -103,7 +100,9 @@ def resumed(
         if longer is not None:
             best, state = text[:shared], longer
             store.keep(best, state)
-    return finish(state, text, len(best))
+    result = finish(state, text, len(best))
+    cache.remember("prefixes", kind, store, size=cache.memory_size, copy_out=cache.clone)
+    return result
 
 
 def concatenated(kind: str, text: str, transform: Callable[[str], str]) -> str:
@@ -119,13 +118,11 @@ def concatenated(kind: str, text: str, transform: Callable[[str], str]) -> str:
 
 
 def forget() -> None:
-    _stores.clear()
+    cache.forget(["prefixes"])
 
 
 def release_units() -> None:
     """Keep reusable checkpoint contracts, releasing each pass's full previous unit."""
-    parsers = [kind for kind in _stores if kind.startswith("cdecl.parse.")]
-    for kind in parsers[:-PREFIXES_KEPT]:
-        del _stores[kind]
-    for store in _stores.values():
+    for kind, store in cache.retained("prefixes"):
         store.previous = max(store.states, key=len, default="")
+        cache.remember("prefixes", kind, store, size=cache.memory_size, copy_out=cache.clone)

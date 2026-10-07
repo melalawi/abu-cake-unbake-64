@@ -106,4 +106,4 @@ class PhysicalRetirement(unittest.TestCase):
         child_jobs = executor.call_args.kwargs["max_tasks_per_child"]
         self.assertLessEqual(child_jobs * pool.ITEMS_PER_JOB, pool.RECYCLE_AFTER)
         self.assertGreaterEqual(child_jobs, 8)
-        self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000, "/configured-cache/pymp-fixture"))
+        self.assertEqual(executor.call_args.kwargs["initargs"], (512_000_000, "/configured-cache/pymp-fixture", None))

@@ -43,7 +43,11 @@ class SolveReuseTests(SolveReuseFixture):
         with (
             patch.object(solver, "refresh_map", return_value={}),
             patch("unbake.typemap.abi_facts.refine", return_value=mapped),
-            patch.object(facts, "published_keys", side_effect=lambda *args: [inputs.digest(self.source)]),
+            patch.object(
+                facts,
+                "published_keys",
+                side_effect=lambda *args: [inputs.digest(self.source, algorithm="sha256", reuse=True)],
+            ),
             patch.object(declarations, "collect", self.collect),
             patch.object(solver, "_evidence", self.evidence),
             patch.object(solver, "infer", self.infer),
@@ -100,7 +104,11 @@ class FactReuseTests(SolveReuseFixture):
         with (
             patch.object(solver, "refresh_map", return_value={}),
             patch("unbake.typemap.abi_facts.refine", return_value=mapped),
-            patch.object(facts, "published_keys", side_effect=lambda *args: [inputs.digest(self.source)]),
+            patch.object(
+                facts,
+                "published_keys",
+                side_effect=lambda *args: [inputs.digest(self.source, algorithm="sha256", reuse=True)],
+            ),
             patch.object(declarations, "collect", self.collect),
             patch.object(solver, "_evidence", self.evidence),
             patch.object(solver, "infer", self.infer),

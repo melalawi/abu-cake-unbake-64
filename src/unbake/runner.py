@@ -7,7 +7,6 @@ sources for the same unit/version cannot overwrite one another's link input.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 from collections.abc import Callable, Iterator
@@ -16,6 +15,7 @@ from pathlib import Path
 
 from unbake import atomic as atomic_files
 from unbake import cache, inputs, process, scratch
+from unbake import cache as retention
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.layout import split
@@ -30,7 +30,16 @@ def _compiler_pins(project: Project, unit: str) -> str:
     compiler = project.compiler_for(unit)
     root = project.tools / compiler.id
     files = sorted(path for path in root.rglob("*") if path.is_file())
-    return cache.key(*(part for path in files for part in (path.relative_to(root).as_posix(), inputs.digest(path))))
+    return cache.key(
+        *(
+            part
+            for path in files
+            for part in (
+                path.relative_to(root).as_posix(),
+                inputs.digest(path, algorithm="sha256", reuse=retention.configured()),
+            )
+        )
+    )
 
 
 @contextmanager
@@ -69,8 +78,12 @@ def compile_unit(
         "\0".join(compile_argv[1:]),
         "\0".join(commands.assemble[1:] if commands.assemble else ()),
         _compiler_pins(project, unit),
-        inputs.digest(Path(host.n64link)) if commands.assemble else "",
-        inputs.digest(Path(host.mips_as)) if commands.assemble else "",
+        inputs.digest(Path(host.n64link), algorithm="sha256", reuse=retention.configured())
+        if commands.assemble
+        else "",
+        inputs.digest(Path(host.mips_as), algorithm="sha256", reuse=retention.configured())
+        if commands.assemble
+        else "",
     )
     name = Path(unit).name
 
@@ -284,10 +297,6 @@ def build_unit(project: Project, host: Host, unit: str, version: str, *, source:
     if len(data) != row.end - row.start:
         raise Held("build", f"build.size: {unit} {version}: 0x{len(data):X} bytes for a 0x{row.end - row.start:X} row")
     return data
-
-
-def digest(data: bytes) -> str:
-    return hashlib.sha1(data).hexdigest()
 
 
 def preprocess(project: Project, host: Host, file: Path, version: str, *, unit: str) -> str:

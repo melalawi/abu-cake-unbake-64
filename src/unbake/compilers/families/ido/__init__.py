@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from unbake import cache as retention
 from unbake.compilers.families.types import Schedule
 from unbake.objects.elf import Object
 from unbake.objects.rodata import Pool
@@ -200,7 +201,8 @@ class Ido:
             "ido.analysis-environment",
             (compiler, inputs.signature(compiler), cpp, inputs.signature(Path(cpp)), native),
             observed,
-            keep=16,
+            size=retention.memory_size,
+            copy_out=retention.clone,
         )
         # Both pinned cfe versions evaluate high-bit character constants unsigned.
         return ("-undef", "-nostdinc", "-funsigned-char", *removed, *defines, *preprocess, *includes, *final)

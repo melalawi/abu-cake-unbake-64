@@ -13,6 +13,8 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
+from unbake import inputs
 from unbake.config import Held
 
 if TYPE_CHECKING:
@@ -32,11 +34,6 @@ def relative(name: str) -> str:
     return name
 
 
-def sha(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
 def atomic_bytes(path: Path, content: bytes, *, mode: int | None = None) -> None:
     if not path.is_symlink() and path.exists() and path.read_bytes() == content:
         return
@@ -53,7 +50,7 @@ def atomic_copy(path: Path, source: Path, *, mode: int) -> None:
 def download(entry: Download, cache: Path) -> Path:
     path = cache / "downloads" / entry.sha256
     if path.exists():
-        actual = sha(path)
+        actual = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
         if actual != entry.sha256:
             raise Held("setup", f"{path}: sha256 expected {entry.sha256}, found {actual}")
         return path
@@ -64,7 +61,7 @@ def download(entry: Download, cache: Path) -> Path:
             with urllib.request.urlopen(entry.url, timeout=60) as response:
                 shutil.copyfileobj(response, stream)
             stream.close()
-            actual = sha(temporary)
+            actual = inputs.digest(temporary, algorithm="sha256", reuse=retention.configured())
             if actual != entry.sha256:
                 raise Held("setup", f"{entry.url}: archive sha256 expected {entry.sha256}, found {actual}")
             atomic_files.publish(temporary, path)

@@ -8,6 +8,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.config import Held, Host, Project
 from unbake.typemap import shards, storage
@@ -39,10 +40,17 @@ def _refined(shared: Any, job: Any) -> bytes:
 
 def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) -> dict[str, Any]:
     """Keep the original map shard; pin a separate ABI evidence supplement."""
-    analyzer = inputs.digest(Path(__file__).with_name("mips.py"))
+    analyzer = inputs.digest(Path(__file__).with_name("mips.py"), algorithm="sha256", reuse=retention.configured())
     if facts.get("abi_analysis_sha256") == analyzer:
         return facts
-    key = storage.digest((facts["shard_sha256"] + analyzer + inputs.digest(Path(__file__))).encode())
+    key = inputs.bytes_digest(
+        (
+            facts["shard_sha256"]
+            + analyzer
+            + inputs.digest(Path(__file__), algorithm="sha256", reuse=retention.configured())
+        ).encode(),
+        algorithm="sha256",
+    )
     index = project.build / "map" / ("abi-index-" + key + ".json")
     functions = facts["functions"]
     metadata = {
@@ -110,13 +118,16 @@ def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) 
                     **storage.identity(project),
                     "map_shard_sha256": facts["shard_sha256"],
                     "path": path.name,
-                    "sha256": inputs.digest(path),
+                    "sha256": inputs.digest(path, algorithm="sha256", reuse=retention.configured()),
                 }
             ),
         )
     return {
         **facts,
-        "abi_supplement": {"path": path.name, "sha256": inputs.digest(path)},
+        "abi_supplement": {
+            "path": path.name,
+            "sha256": inputs.digest(path, algorithm="sha256", reuse=retention.configured()),
+        },
         "functions": Functions(functions, shards.Functions(path, metadata)),
     }
 

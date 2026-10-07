@@ -11,6 +11,7 @@ from typing import Any
 
 from unbake import atomic as atomic_files
 from unbake import cache as content_cache
+from unbake import cache as retention
 from unbake import inputs, tui
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
@@ -338,11 +339,15 @@ def infer(
             and not record.get("declaration_conflict")
         }
         map_parts = _map_parts(facts, inventory) if cache is not None else []
-    signatures = closure.cached(
-        cache,
-        "types-abi",
-        [str(ABI_SCHEMA), *map_parts, json.dumps(sorted(declared_returns.items()))],
-        lambda: evidence.abi(mapped, declared_returns, policy),
+    signatures = (
+        evidence.abi(mapped, declared_returns, policy)
+        if cache is None
+        else cache.value(
+            "types-abi",
+            retention.key("types-abi", str(ABI_SCHEMA), *map_parts, json.dumps(sorted(declared_returns.items()))),
+            retention.PICKLE,
+            lambda: evidence.abi(mapped, declared_returns, policy),
+        )
     )
     # A previously inferred/declarative signature cannot truncate register use
     # seen in other callers. Published C contracts remain authoritative and the
@@ -971,7 +976,7 @@ def _map_parts(facts: dict[str, Any], inventory: Any) -> list[str]:
     return [
         facts["shard_sha256"],
         json.dumps(facts.get("abi_supplement"), sort_keys=True),
-        storage.digest(
+        inputs.bytes_digest(
             storage.encoded(
                 {
                     name: {
@@ -983,9 +988,10 @@ def _map_parts(facts: dict[str, Any], inventory: Any) -> list[str]:
                     }
                     for name, item in inventory.items()
                 }
-            )
+            ),
+            algorithm="sha256",
         ),
-        storage.digest(storage.encoded(facts["globals"])),
+        inputs.bytes_digest(storage.encoded(facts["globals"]), algorithm="sha256"),
     ]
 
 
@@ -1012,7 +1018,11 @@ def _machine(
             cache.put("types-constraints", built.shard["sha256"], project.root / built.shard["path"])
         return built
 
-    machine: closure.Machine = closure.cached(cache, "types-machine", parts, build)
+    machine: closure.Machine = (
+        build()
+        if cache is None
+        else cache.value("types-machine", retention.key("types-machine", *parts), retention.PICKLE, build)
+    )
     if shard_dir is None:
         return machine, []
     if machine.shard is None or not _installed(project, cache, machine.shard):
@@ -1024,10 +1034,10 @@ def _machine(
 def _installed(project: Project, cache: Cache | None, row: dict[str, Any]) -> bool:
     """The constraints shard is in place, restored from the cache if it went missing."""
     path = project.root / row["path"]
-    if path.is_file() and inputs.digest(path) == row["sha256"]:
+    if path.is_file() and inputs.digest(path, algorithm="sha256", reuse=retention.configured()) == row["sha256"]:
         return True
     entry = None if cache is None else cache.get("types-constraints", row["sha256"])
-    if entry is None or inputs.digest(entry) != row["sha256"]:
+    if entry is None or inputs.digest(entry, algorithm="sha256", reuse=retention.configured()) != row["sha256"]:
         return False
     atomic_files.copyfile(entry, path, durable=False)
     return True
@@ -1053,7 +1063,7 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
         "types",
         str(SCHEMA),
         json.dumps(storage.identity(project), sort_keys=True),
-        inputs.digest(project.build / "map/facts.json"),
+        inputs.digest(project.build / "map/facts.json", algorithm="sha256", reuse=retention.configured()),
         facts["shard_sha256"],
         json.dumps(facts.get("abi_supplement")),
         json.dumps(
@@ -1070,7 +1080,9 @@ def _types_key(project: Project, policy: Host | None, facts: dict[str, Any], fac
     parts.extend(fact_keys)
     for path in files:
         parts.append(storage.relative(project, path))
-        parts.append(inputs.digest(path) if path.is_file() else "missing")
+        parts.append(
+            inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
+        )
     return content_cache.key(*parts)
 
 
@@ -1108,7 +1120,11 @@ def readiness(project: Project, host: Host | None) -> Readiness:
             None
             if host is None
             else tuple(
-                (field, str(getattr(host, field)), inputs.digest(Path(getattr(host, field))))
+                (
+                    field,
+                    str(getattr(host, field)),
+                    inputs.digest(Path(getattr(host, field)), algorithm="sha256", reuse=retention.configured()),
+                )
                 for field in ("cpp", "m2c")
             )
         )
@@ -1124,7 +1140,13 @@ def readiness(project: Project, host: Host | None) -> Readiness:
             source_keys = source_facts.published_keys(project, host)
             return Readiness(_types_key(project, host, facts, source_keys), facts, source_keys)
 
-        return content_cache.memo("types.readiness", (str(project.root), SCHEMA, snapshot), current, keep=2)
+        return content_cache.memo(
+            "types.readiness",
+            (str(project.root), SCHEMA, snapshot),
+            current,
+            size=retention.memory_size,
+            copy_out=retention.clone,
+        )
 
 
 def input_key(project: Project, host: Host | None) -> str:
@@ -1165,7 +1187,11 @@ def _publication_key(project: Project, evidence: Any) -> str:
     paths = [project.root / "config.toml", project.root / "layout.toml"]
     paths.extend(path for v in project.versions for path in (project.version(v).split, project.version(v).symbols))
     return content_cache.key(
-        storage.encoded(evidence), *(inputs.digest(p) if p.is_file() else "missing" for p in paths)
+        storage.encoded(evidence),
+        *(
+            inputs.digest(p, algorithm="sha256", reuse=retention.configured()) if p.is_file() else "missing"
+            for p in paths
+        ),
     )
 
 
@@ -1302,7 +1328,7 @@ def _solve(project: Project, policy: Host | None) -> dict[str, Any]:
     revision += 1
     result = {
         **storage.identity(project),
-        "map_sha256": inputs.digest(project.build / "map/facts.json"),
+        "map_sha256": inputs.digest(project.build / "map/facts.json", algorithm="sha256", reuse=retention.configured()),
         "map_shard": facts["shard"],
         "map_shard_sha256": facts["shard_sha256"],
         "abi_supplement": facts.get("abi_supplement"),

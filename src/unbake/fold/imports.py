@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from unbake import cache as retention
 from unbake.cache import memo
 from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held, Project
@@ -76,7 +77,13 @@ class Providers:
 def resolve(project: Project, headers: Headers, text: str, function: str = "", *, edits: tuple[Edit, ...] = ()) -> str:
     """Replace missing shared imports using live homes; preserve all non-include bytes."""
     contents = {**headers.texts, **{edit.path: edit.after for edit in edits}}
-    index = memo("imports.providers", tuple(sorted(contents.items())), lambda: Providers(contents), keep=2)
+    index = memo(
+        "imports.providers",
+        tuple(sorted(contents.items())),
+        lambda: Providers(contents),
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
     def find(name: str) -> Path | None:
         return next((root / name for root in project.include if root / name in contents), None)

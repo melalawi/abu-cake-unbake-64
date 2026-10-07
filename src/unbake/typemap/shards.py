@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import inputs, sqlite
 from unbake.config import Held
 
@@ -163,7 +164,9 @@ class Writer:
 
         self.connection.commit()
         self.connection.close()
-        path = self.temporary.parent / ("facts-" + inputs.digest(self.temporary) + ".sqlite")
+        path = self.temporary.parent / (
+            "facts-" + inputs.digest(self.temporary, algorithm="sha256", reuse=retention.configured()) + ".sqlite"
+        )
         atomic_files.publish(self.temporary, path)
         return path
 

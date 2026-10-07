@@ -17,7 +17,11 @@ class ReadinessMarkerTests(ProjectCase):
         with (
             patch.object(solver, "refresh_map", return_value=mapped),
             patch("unbake.typemap.abi_facts.refine", return_value=mapped),
-            patch.object(facts, "published_keys", side_effect=lambda *args: [inputs.digest(source)]) as keys,
+            patch.object(
+                facts,
+                "published_keys",
+                side_effect=lambda *args: [inputs.digest(source, algorithm="sha256", reuse=True)],
+            ) as keys,
         ):
             first = solver.readiness(self.project, None)
             marker = solver.marker(self.project)

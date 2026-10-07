@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 from bisect import bisect_right
@@ -9,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from unbake import cache as retention
 from unbake.cdecl import LayoutParser, declaration_source
 from unbake.config import Held
 from unbake.decomp.draft_context import ordered_headers
@@ -28,7 +30,11 @@ def context(
     from unbake.cache import memo
 
     ordered, parser, records = memo(
-        "headers.context", (root, tuple(sorted(contents.items()))), lambda: _context(contents, root=root)
+        "headers.context",
+        (root, tuple(sorted(contents.items()))),
+        lambda: _context(contents, root=root),
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )
     return dict(ordered), parser, records
 
@@ -290,22 +296,16 @@ class Headers:
         """A parser for text that sees every type declared by these headers."""
         parser = LayoutParser(text)
         local = set(re.findall(r"\b((?:struct|union)\s+\w+)\s*\{", text))
-        parser.types.update({name: value for name, value in self.types.items() if name not in local})
-        parser.cache.update(self.cache)
-        parser.defines = {**self.defines, **parser.defines}
+        types, layouts, defines = copy.deepcopy((self.types, self.cache, self.defines))
+        parser.types.update({name: value for name, value in types.items() if name not in local})
+        parser.cache.update(layouts)
+        parser.defines = {**defines, **parser.defines}
         return parser
 
     def parse(self, text: str) -> tuple[LayoutParser, list[Layout]]:
         """Parse text against these headers without growing shared alias lists."""
         parser = self.seeded(text)
-        try:
-            return parser, parser.parse()
-        finally:
-            # Every parse revisits the seeded typedefs and re-adds their aliases to
-            # the shared aggregates; keep each alias once.
-            for aggregate in self._aliased.values():
-                if len(aggregate.aliases) > 1:
-                    aggregate.aliases[:] = list(dict.fromkeys(aggregate.aliases))
+        return parser, parser.parse()
 
     def _aliases(self, types: dict[str, Any]) -> None:
         for value in types.values():

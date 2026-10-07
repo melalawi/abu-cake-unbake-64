@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
+from unbake import inputs
 from unbake.cache import Cache
 from unbake.config import Held
 from unbake.layout import apply, header_step, index
@@ -40,7 +41,7 @@ class OrphanHeaderTests(ProjectCase):
         name = header.relative_to(self.include).as_posix()
         lookup = {
             "schema": 1,
-            "headers": {name: storage.digest(header.read_bytes())},
+            "headers": {name: inputs.bytes_digest(header.read_bytes(), algorithm="sha256")},
             "symbols": {},
             "clusters": {},
             "type_headers": {"QueryResult": [name]},

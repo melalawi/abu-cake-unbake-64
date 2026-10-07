@@ -8,48 +8,101 @@ but its own make. So no lock cycle can form.
 
 from __future__ import annotations
 
+import copy
 import fcntl
+import functools
 import hashlib
 import json
 import os
+import pickle
 import re
 import stat
+import sys
 import tempfile
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Sequence
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, ParamSpec, Protocol, TypeVar, cast
 
 from unbake import atomic as atomic_files
 from unbake import effort
 from unbake.config import Held
 
 T = TypeVar("T")
-MEMO_ENTRIES_PER_KIND = 64
 
 
-def key(*parts: str | bytes | Path) -> str:
-    """SHA-256 over length-framed parts; a Path part contributes its file bytes."""
+def key(*parts: str | bytes) -> str:
+    """SHA-256 over length-framed explicit content parts; file identity belongs to inputs."""
     digest = hashlib.sha256()
     for index, part in enumerate(parts):
-        try:
-            if isinstance(part, Path):
-                with part.open("rb") as source:
-                    digest.update(os.fstat(source.fileno()).st_size.to_bytes(8, "big"))
-                    while block := source.read(1024 * 1024):
-                        digest.update(block)
-                continue
-            if isinstance(part, str):
-                part = part.encode("utf-8")
-            if not isinstance(part, bytes):
-                raise Held("cache", f"key part {index}: expected str, bytes or Path")
-            digest.update(len(part).to_bytes(8, "big"))
-            digest.update(part)
-        except OSError as error:
-            raise Held("cache", f"key part {index} {part!s}: {error}") from error
+        if isinstance(part, str):
+            part = part.encode("utf-8")
+        if not isinstance(part, bytes):
+            raise Held("cache", f"key part {index}: expected str or bytes")
+        digest.update(len(part).to_bytes(8, "big"))
+        digest.update(part)
     return digest.hexdigest()
+
+
+class Codec(Protocol[T]):
+    def encode(self, value: T) -> bytes: ...
+    def decode(self, data: bytes) -> T: ...
+    def copy(self, value: T) -> T: ...
+
+
+class JsonCodec:
+    def encode(self, value: Any) -> bytes:
+        return serialized(value)
+
+    def decode(self, data: bytes) -> Any:
+        return json.loads(data)
+
+    def copy(self, value: Any) -> Any:
+        return copy.deepcopy(value)
+
+
+class PickleCodec(JsonCodec):
+    def encode(self, value: Any) -> bytes:
+        return pickle.dumps(value, protocol=5)
+
+    def decode(self, data: bytes) -> Any:
+        return pickle.loads(data)
+
+
+JSON = JsonCodec()
+PICKLE = PickleCodec()
+
+
+def clone(value: T) -> T:
+    return copy.deepcopy(value)
+
+
+def memory_size(value: Any) -> int:
+    """Account each reachable retained Python object once, including container overhead."""
+    seen: set[int] = set()
+
+    def walk(item: Any) -> int:
+        if id(item) in seen:
+            return 0
+        seen.add(id(item))
+        total = sys.getsizeof(item)
+        if isinstance(item, dict):
+            total += sum(walk(k) + walk(v) for k, v in item.items())
+        elif isinstance(item, (tuple, list, set, frozenset)):
+            total += sum(map(walk, item))
+        elif not callable(item):
+            if hasattr(item, "__dict__"):
+                total += walk(vars(item))
+            for base in type(item).__mro__:
+                slots = getattr(base, "__slots__", ())
+                for slot in (slots,) if isinstance(slots, str) else slots:
+                    if slot not in ("__dict__", "__weakref__") and hasattr(item, slot):
+                        total += walk(getattr(item, slot))
+        return total
+
+    return walk(value)
 
 
 _inflight: dict[tuple[str, str], Future[Path]] = {}
@@ -123,6 +176,32 @@ class Cache:
             with _inflight_lock:
                 _inflight.pop(identity, None)
 
+    def value(self, kind: str, content_key: str, codec: Codec[T], compute: Callable[[], T]) -> T:
+        path = self.produce(kind, content_key, lambda target: atomic_files.fresh(target, codec.encode(compute())))
+        return self.decode(path, codec)
+
+    def decode(self, path: Path, codec: Codec[T]) -> T:
+        from unbake import inputs
+
+        content = inputs.digest(path, algorithm="sha256", reuse=configured())
+
+        def read() -> T:
+            try:
+                return codec.decode(path.read_bytes())
+            except (OSError, ValueError, TypeError, pickle.UnpicklingError, EOFError, AttributeError) as error:
+                raise Held("cache", f"cache.corrupt: {path}: {error}") from error
+
+        return memo(
+            "decode",
+            (type(codec).__module__, type(codec).__qualname__, content),
+            read,
+            size=memory_size,
+            copy_out=codec.copy,
+        )
+
+    def certificates(self, kind: str, environment_key: str) -> CertificateSet:
+        return CertificateSet(self, kind, environment_key)
+
     def _produce_locked(self, kind: str, content_key: str, make: Callable[[Path], None]) -> tuple[Path, bool]:
         """The entry and whether this call ran make."""
         path = self.path(kind, content_key)
@@ -153,11 +232,13 @@ def entries(root: Path) -> list[Path]:
     root = Path(root)
     if not root.is_dir():
         return []
-    return [
-        path
-        for path in root.glob("*/*/*")
-        if path.is_file() and path.name != ".lock" and not path.name.startswith(".pending-")
-    ]
+    result: list[Path] = []
+    for path in root.glob("*/*/*"):
+        if path.is_dir() and path.name.endswith(".certificates"):
+            result.extend(path.glob("*.json"))
+        elif path.is_file() and path.name != ".lock" and not path.name.startswith(".pending-"):
+            result.append(path)
+    return result
 
 
 def trim(root: Path, max_bytes: int, trim_to_bytes: int) -> list[Path]:
@@ -181,43 +262,176 @@ def trim(root: Path, max_bytes: int, trim_to_bytes: int) -> list[Path]:
     return removed
 
 
-_memo: dict[str, OrderedDict[Hashable, Any]] = {}
-# Extract runs one thread per version; lookups and evictions are one step each, compute runs unlocked.
+_memo: OrderedDict[tuple[str, Hashable], tuple[Any, int]] = OrderedDict()
 _memo_lock = threading.Lock()
+_memo_flights: dict[tuple[str, Hashable], Future[Any]] = {}
+_budget: int | None = None
+_resident = 0
 
 
-def memo(kind: str, content: Hashable, compute: Callable[[], T], *, keep: int = MEMO_ENTRIES_PER_KIND) -> T:
-    """In-process reuse of a value derived from content; each kind keeps its latest `keep` values."""
+def configure(*, memory_bytes: int) -> None:
+    global _budget
+    if type(memory_bytes) is not int or memory_bytes <= 0:
+        raise Held("cache", "cache.memory_bytes: required positive integer")
     with _memo_lock:
-        values = _memo.setdefault(kind, OrderedDict())
-        if content in values:
-            values.move_to_end(content)
-            return values[content]  # type: ignore[no-any-return]
-    value = compute()
+        _budget = memory_bytes
+        _evict()
+
+
+def configured() -> bool:
+    return _budget is not None
+
+
+def resident_bytes() -> int:
     with _memo_lock:
-        values[content] = value
-        while len(values) > keep:
-            values.popitem(last=False)
+        return _resident
+
+
+def _evict() -> None:
+    global _resident
+    while _memo and (_budget is None or _resident > _budget):
+        _, (_, weight) = _memo.popitem(last=False)
+        _resident -= weight
+
+
+def remember(
+    kind: str, content: Hashable, value: T, *, size: Callable[[Any], int], copy_out: Callable[[Any], Any]
+) -> T:
+    global _resident
+    identity = (kind, content)
+    value_bytes = size(value)
+    if type(value_bytes) is not int or value_bytes < 0:
+        raise Held("cache", "cache.size: required nonnegative integer bytes")
+    weight = value_bytes + memory_size(identity)
+    if weight < 0:
+        raise Held("cache", "cache.size: required nonnegative integer bytes")
+    with _memo_lock:
+        old = _memo.pop(identity, None)
+        if old is not None:
+            _resident -= old[1]
+        if _budget is not None and weight <= _budget:
+            _memo[identity] = (copy_out(value), weight)
+            _resident += weight
+        _evict()
     return value
 
 
+def memo(
+    kind: str,
+    content: Hashable,
+    compute: Callable[[], T],
+    *,
+    size: Callable[[Any], int],
+    copy_out: Callable[[Any], Any],
+) -> T:
+    """One producer per retained computation, one process budget, caller-owned output."""
+    identity = (kind, content)
+    with _memo_lock:
+        found = _memo.get(identity)
+        if found is not None:
+            _memo.move_to_end(identity)
+            return cast(T, copy_out(found[0]))
+        running = _memo_flights.get(identity)
+        owner = running is None
+        if owner:
+            running = Future()
+            _memo_flights[identity] = running
+    assert running is not None
+    if not owner:
+        return cast(T, copy_out(running.result()))
+    try:
+        value = compute()
+        result = remember(kind, content, value, size=size, copy_out=copy_out)
+        running.set_result(copy_out(value))
+        return result
+    except BaseException as error:
+        running.set_exception(error)
+        raise
+    finally:
+        with _memo_lock:
+            _memo_flights.pop(identity, None)
+
+
+P = ParamSpec("P")
+
+
+def memoized(
+    kind: str, *, size: Callable[[Any], int], copy_out: Callable[[Any], Any]
+) -> Callable[[Callable[P, T]], Callable[P, T]]:
+    def decorate(function: Callable[P, T]) -> Callable[P, T]:
+        @functools.wraps(function)
+        def call(*args: P.args, **kwargs: P.kwargs) -> T:
+            return memo(
+                kind,
+                (args, tuple(sorted(kwargs.items()))),
+                lambda: function(*args, **kwargs),
+                size=size,
+                copy_out=copy_out,
+            )
+
+        return call
+
+    return decorate
+
+
+def retained(kind: str) -> tuple[tuple[Hashable, Any], ...]:
+    with _memo_lock:
+        return tuple((content, copy.deepcopy(value)) for (name, content), (value, _) in _memo.items() if name == kind)
+
+
 def parsed(kind: str, paths: Path | Sequence[Path], parse: Callable[[], T], *, extra: Hashable = None) -> T:
-    """Parse project files once per process while their bytes are unchanged."""
     from unbake import inputs
 
     files = (Path(paths),) if isinstance(paths, (str, Path)) else tuple(Path(path) for path in paths)
     try:
-        digests = tuple(inputs.digest(path) for path in files)
+        pins = tuple((str(path), inputs.digest(path, algorithm="sha256", reuse=configured())) for path in files)
     except OSError:
         return parse()
-    return memo("parsed." + kind, (tuple(map(str, files)), digests, extra), parse)
+    return memo("parsed." + kind, (pins, extra), parse, size=memory_size, copy_out=clone)
 
 
 def forget(kinds: Sequence[str] | None = None) -> None:
-    """Drop in-process memo entries (all kinds when None)."""
+    global _resident
     with _memo_lock:
-        for kind in list(_memo) if kinds is None else kinds:
-            _memo.pop(kind, None)
+        for identity in list(_memo):
+            if kinds is None or identity[0] in kinds:
+                _resident -= _memo.pop(identity)[1]
+
+
+class CertificateSet:
+    """Immutable certificate batches use the same Cache, with no per-declaration writes."""
+
+    def __init__(self, cache: Cache, kind: str, environment_key: str) -> None:
+        self.cache = cache
+        self.directory = cache.path(kind, environment_key).with_suffix(".certificates")
+
+    def contains(self, keys: Iterable[str]) -> frozenset[str]:
+        from unbake import inputs
+
+        files = tuple(sorted(self.directory.glob("*.json")))
+        pins = tuple((str(path), inputs.digest(path, algorithm="sha256", reuse=configured())) for path in files)
+
+        def load() -> frozenset[str]:
+            known = set()
+            for path in files:
+                value = self.cache.decode(path, JSON)
+                if not isinstance(value, list) or any(
+                    not isinstance(k, str) or not re.fullmatch(r"[0-9a-f]{64}", k) for k in value
+                ):
+                    raise Held("cache", f"cache.certificates: corrupt batch {path}")
+                known.update(value)
+            return frozenset(known)
+
+        known = memo("certificates", pins, load, size=memory_size, copy_out=frozenset)
+        return frozenset(known.intersection(keys))
+
+    def add(self, keys: Iterable[str]) -> None:
+        wanted = sorted(set(keys))
+        if not wanted:
+            return
+        content = JSON.encode(wanted)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        atomic_files.write(self.directory / (key(content) + ".json"), content, durable=False)
 
 
 def serialized(value: Any) -> bytes:

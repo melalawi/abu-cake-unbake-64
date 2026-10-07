@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import re
 import tomllib
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from unbake import cache as retention
 from unbake.config import Held, Project
 
 
@@ -21,43 +21,53 @@ def load(project: Project) -> dict[str, Any]:
     if not target.is_file():
         return {"schema": 1, "symbols": {}, "clusters": {}, "headers": {}}
     try:
-        value = _decoded(target, (target.stat().st_ino, target.stat().st_mtime_ns, target.stat().st_size))
+        value = _decoded(target)
         return dict(json.loads(json.dumps(value)))
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise Held("layout", f"layout.index: {target}: {error}") from error
 
 
-@lru_cache(maxsize=32)
-def _decoded(target: Path, stamp: tuple[int, int, int]) -> dict[str, Any]:
-    try:
-        value = json.loads(target.read_bytes())
-        if not isinstance(value, dict) or set(value) not in (
-            {"schema", "symbols", "clusters", "headers"},
-            {"schema", "symbols", "clusters", "headers", "type_headers"},
-        ):
-            raise ValueError("invalid index keys")
-        if value["schema"] != 1 or any(not isinstance(value[k], dict) for k in ("symbols", "clusters", "headers")):
-            raise ValueError("invalid schema")
-        for name, digest in value["headers"].items():
-            safe(name)
-            if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-                raise ValueError("invalid header sha256")
-        for name in (*value["symbols"].values(), *value["clusters"].values()):
-            safe(name)
-            if name not in value["headers"]:
-                raise ValueError("unlisted declaration home")
-        if not isinstance(value.get("type_headers", {}), dict):
-            raise ValueError("invalid type catalogue")
-        for homes in value.get("type_headers", {}).values():
-            if not isinstance(homes, list):
-                raise ValueError("invalid type homes")
-            for home in homes:
-                safe(home)
-                if home not in value["headers"]:
-                    raise ValueError("unlisted type home")
-        return value
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Held("layout", f"layout.index: {target}: {error}") from error
+def _decoded(target: Path) -> dict[str, Any]:
+    def parse() -> dict[str, Any]:
+        try:
+            value = json.loads(target.read_bytes())
+            if not isinstance(value, dict) or set(value) not in (
+                {"schema", "symbols", "clusters", "headers"},
+                {"schema", "symbols", "clusters", "headers", "type_headers"},
+            ):
+                raise ValueError("invalid index keys")
+            if value["schema"] != 1 or any(not isinstance(value[k], dict) for k in ("symbols", "clusters", "headers")):
+                raise ValueError("invalid schema")
+            for name, digest in value["headers"].items():
+                safe(name)
+                if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                    raise ValueError("invalid header sha256")
+            for name in (*value["symbols"].values(), *value["clusters"].values()):
+                safe(name)
+                if name not in value["headers"]:
+                    raise ValueError("unlisted declaration home")
+            if not isinstance(value.get("type_headers", {}), dict):
+                raise ValueError("invalid type catalogue")
+            for homes in value.get("type_headers", {}).values():
+                if not isinstance(homes, list):
+                    raise ValueError("invalid type homes")
+                for home in homes:
+                    safe(home)
+                    if home not in value["headers"]:
+                        raise ValueError("unlisted type home")
+            return value
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise Held("layout", f"layout.index: {target}: {error}") from error
+
+    from unbake import inputs
+
+    return retention.memo(
+        "layout.index",
+        (str(target), inputs.digest(target, algorithm="sha256", reuse=retention.configured())),
+        parse,
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
 
 def safe(name: str) -> None:
@@ -122,7 +132,7 @@ def listed(project: Project) -> frozenset[Path]:
         stat = ownership.stat()
         return _unindexed_headers(project.include[0], ownership, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
     stat = target.stat()
-    names = tuple(_decoded(target, (stat.st_ino, stat.st_mtime_ns, stat.st_size))["headers"])
+    names = tuple(_decoded(target)["headers"])
     return _headers(project.include[0], names, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
 
 
@@ -157,7 +167,6 @@ def _unindexed_headers(root: Path, ownership: Path, stamp: tuple[int, int, int])
         raise Held("layout", f"layout.index: unindexed installed headers: {error}") from error
 
 
-@lru_cache(maxsize=32)
 def _headers(root: Path, names: tuple[str, ...], stamp: tuple[int, int, int]) -> frozenset[Path]:
     result = frozenset(root / name for name in names)
     if any(not p.resolve().is_relative_to(root.resolve()) for p in result):

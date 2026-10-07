@@ -12,17 +12,15 @@ from __future__ import annotations
 import json
 import pickle
 from collections import defaultdict
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from unbake import atomic as atomic_files
 from unbake import pool, tui
-from unbake.cache import Cache
-from unbake.config import Held, Host
+from unbake.config import Host
 from unbake.typemap import evidence, shards, storage
 
 RANKS = {"machine": 0, "declared": 1, "published": 2, "proven": 3}
@@ -792,31 +790,3 @@ class Closure:
             {"key": "types.conflict:" + self.groups[index][0], "nodes": list(self.groups[index]), **self.records[index]}
             for index in sorted(self.conflicting, key=lambda index: self.groups[index][0])
         ]
-
-
-def cached(cache: Cache | None, kind: str, parts: list[str], compute: Callable[[], Any]) -> Any:
-    """compute(), or the value an earlier solve stored for the same inputs."""
-    if cache is None:
-        return compute()
-    from unbake.cache import key
-
-    labels = {
-        "types-abi": "Loading function ABI facts",
-        "types-machine": "Loading the machine value graph",
-        "types-inferred": "Loading the inferred type graph",
-    }
-    with tui.task(labels.get(kind, "Loading cached type facts")):
-        content_key = key(kind, *parts)
-        path = cache.get(kind, content_key)
-        if path is not None:
-            return load(path)
-        value = compute()
-        cache.produce(kind, content_key, lambda target: atomic_files.fresh(target, pickle.dumps(value, protocol=5)))
-        return value
-
-
-def load(path: Path) -> Any:
-    try:
-        return pickle.loads(path.read_bytes())
-    except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ValueError) as error:
-        raise Held("solve", f"types.cache: unreadable entry {path}: {error}; delete it and rerun") from error

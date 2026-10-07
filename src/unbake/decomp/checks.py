@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake.cache import Cache, key
 from unbake.config import Held, Project
 from unbake.decomp.gbi_source import invocations, macros, typedefs
@@ -595,7 +594,10 @@ def recipe() -> str:
     from unbake import inputs
 
     modules = (Path(__file__), Path(__file__).with_name("gbi_source.py"), Path(__file__).with_name("needs.py"))
-    return key(str(SOURCE_FINDINGS_SCHEMA), *(inputs.digest(path) for path in modules))
+    return key(
+        str(SOURCE_FINDINGS_SCHEMA),
+        *(inputs.digest(path, algorithm="sha256", reuse=retention.configured()) for path in modules),
+    )
 
 
 def findings(
@@ -616,13 +618,13 @@ def findings(
     def read(text: str) -> tuple[GuardFinding, ...]:
         content_key = key(recipe_key, text)
 
-        def make(path: Path) -> None:
+        def compute() -> list[dict[str, object]]:
             nonlocal scans
             scans += 1
-            atomic_files.fresh(path, json.dumps([asdict(row) for row in run(text)]).encode())
+            return [asdict(row) for row in run(text)]
 
         try:
-            data = json.loads(cache.produce("source-findings", content_key, make).read_text())
+            data = cache.value("source-findings", content_key, retention.JSON, compute)
             if not isinstance(data, list):
                 raise ValueError("expected finding rows")
             return tuple(GuardFinding(**row) for row in data)
@@ -631,7 +633,9 @@ def findings(
 
     for path in sorted(set(paths)):
         name = path.relative_to(project.root).as_posix()
-        pins[name] = inputs.digest(path) if path.is_file() else "missing"
+        pins[name] = (
+            inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
+        )
         baseline = path.read_text() if path.is_file() else ""
         old = read(baseline)
         proposed_text = (proposed or {}).get(path, baseline)

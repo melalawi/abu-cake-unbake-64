@@ -11,6 +11,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.cache import Cache, key, memo
 from unbake.cdecl import LayoutParser, declaration_source, declarations
@@ -57,7 +58,13 @@ def units(contents: dict[Path, str]) -> tuple[Unit, ...]:
     return tuple(
         unit
         for path, text in sorted(contents.items())
-        for unit in memo("declaration.units", (path, text), partial(_units, path, text), keep=32768)
+        for unit in memo(
+            "declaration.units",
+            (path, text),
+            partial(_units, path, text),
+            size=retention.memory_size,
+            copy_out=retention.clone,
+        )
     )
 
 
@@ -120,7 +127,13 @@ def _units(path: Path, text: str) -> tuple[Unit, ...]:
 def catalogue(project: Project) -> tuple[Unit, ...]:
     paths = files(project)
     contents = {path: path.read_text() for path in paths}
-    return memo("declaration.evidence", tuple(sorted(contents.items())), lambda: units(contents), keep=2)
+    return memo(
+        "declaration.evidence",
+        tuple(sorted(contents.items())),
+        lambda: units(contents),
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
 
 def select(project: Project, headers: Headers, text: str, function: str) -> tuple[Unit, ...]:
@@ -129,7 +142,11 @@ def select(project: Project, headers: Headers, text: str, function: str) -> tupl
     if not rows:
         return ()
     live = memo(
-        "imports.providers", tuple(sorted(headers.texts.items())), lambda: imports.Providers(headers.texts), keep=2
+        "imports.providers",
+        tuple(sorted(headers.texts.items())),
+        lambda: imports.Providers(headers.texts),
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )
     source = imports._INCLUDE.sub("", imports._without_comments(text))
     local = declarations(source)
@@ -376,8 +393,8 @@ def validate_published(
     environment = key(
         "types-contract-v1",
         storage.encoded(mapping),
-        inputs.digest(Path(__file__)),
-        inputs.digest(Path(redeclarations.__file__)),
+        inputs.digest(Path(__file__), algorithm="sha256", reuse=retention.configured()),
+        inputs.digest(Path(redeclarations.__file__), algorithm="sha256", reuse=retention.configured()),
     )
     cache = None if policy is None else Cache(project.cache)
     jobs = []

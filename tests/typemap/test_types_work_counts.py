@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from tests.kit import TempCase
-from unbake import pool
+from unbake import cache, pool
 from unbake.cache import Cache
 from unbake.typemap import facts, inference_cache, layers
 
@@ -44,20 +44,20 @@ class InferenceReuseCounts(RealSlice):
         first = self.seeds(store)
         compute = MagicMock(side_effect=lambda: self.graph(first))
         walks = []
-        original = inference_cache.Receipts._transform
+        original = inference_cache.Receipts.freeze
 
         def spy(receipts, *args, **named):
             walks.append(1)
             return original(receipts, *args, **named)
 
-        with patch.object(inference_cache.Receipts, "_transform", spy):
+        with patch.object(inference_cache.Receipts, "freeze", spy):
             inference_cache.infer(self.project, self.cache, ["map"], first, compute, output=store)
             cold = len(walks)
             warm, _, _ = inference_cache.infer(
                 self.project, self.cache, ["map"], self.seeds(store, "x"), compute, output=store
             )
         self.assertEqual(compute.call_count, 1)
-        self.assertEqual((cold, len(walks) - cold), (0, 0))
+        self.assertEqual((cold, len(walks) - cold), (1, 0))
         self.assertTrue(all(row["sha256"].startswith("x") for row in self._receipts(warm)))
 
     def _receipts(self, graph):
@@ -76,11 +76,12 @@ class InferenceReuseCounts(RealSlice):
 class SpellingCounts(TempCase):
     def test_a_path_is_spelled_once_however_many_keys_name_it(self):
         project = SimpleNamespace(root=self.root)
-        layers._spell_in.cache_clear()
+        cache.forget(["typemap.layers._spell_in"])
         header = str(self.root / "include" / "types.h")
-        for _ in range(100):
-            layers.spelling(project, self.root / "machine", header)
-        self.assertEqual(layers._spell_in.cache_info().misses, 1)
+        with patch.object(layers.os.path, "normpath", wraps=layers.os.path.normpath) as normalized:
+            for _ in range(100):
+                layers.spelling(project, self.root / "machine", header)
+        self.assertEqual(normalized.call_count, 1)
 
 
 class PooledReceiptCounts(RealSlice):

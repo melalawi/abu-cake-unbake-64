@@ -9,7 +9,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TextIO
 
-from unbake import admission, config, process
+from unbake import admission, cache, config, process
 from unbake.cli import (
     boundary,
     check,
@@ -108,6 +108,7 @@ def _run(argv: list[str] | None, stdout: TextIO) -> Result:
         context.root = _root(verb, args)
         if config.NEEDS.get(verb.NAME):
             context.host = config.load_host(args.config, context.root, verb.NAME)
+            cache.configure(memory_bytes=context.host.cache_memory_bytes)
         writer = verb.PROJECT != "none" and not verb.READ_ONLY(args)
         from unbake import lock
 

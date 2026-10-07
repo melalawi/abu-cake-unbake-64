@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import scratch
 from unbake.config import Held, Host, Project
 from unbake.decomp import checks
@@ -429,7 +430,13 @@ def catalogue(project: Project, policy: Host, unit: Path, version: str, source: 
         from unbake.cache import memo
 
         definitions = run_tool(command, project.root, "gbi", temporary_root=project.build)
-        return memo("gbi.sdk.patterns", definitions, lambda: patterns(definitions))
+        return memo(
+            "gbi.sdk.patterns",
+            definitions,
+            lambda: patterns(definitions),
+            size=retention.memory_size,
+            copy_out=retention.clone,
+        )
 
 
 def proven(

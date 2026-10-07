@@ -52,15 +52,16 @@ def _placement(project: Project, item: split.Function, data: bytes, target: Shap
         "boundary.placements",
         (
             configured.baserom,
-            inputs.signature(configured.baserom),
+            inputs.digest(configured.baserom, algorithm="sha256", reuse=cache.configured()),
             configured.split,
-            inputs.signature(configured.split),
+            inputs.digest(configured.split, algorithm="sha256", reuse=cache.configured()),
             configured.symbols,
-            inputs.signature(configured.symbols),
+            inputs.digest(configured.symbols, algorithm="sha256", reuse=cache.configured()),
             project.resident_mappings.get(item.version, ()),
         ),
         load,
-        keep=len(project.versions),
+        size=cache.memory_size,
+        copy_out=cache.clone,
     )
     return boundary.evidence(
         {item.start + index * 4: word for index, word in enumerate(shape.words_of(data))},

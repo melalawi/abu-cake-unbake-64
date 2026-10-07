@@ -28,11 +28,11 @@ from tempfile import TemporaryDirectory
 from typing import Any, NamedTuple, cast
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import inputs, pool, tui
-from unbake.cache import Cache, key, memo
+from unbake.cache import Cache, key
 from unbake.config import Held, Host, Project
 from unbake.typemap import declarations, facts_decode, layers, storage
-from unbake.typemap.closure import load as closure_load
 
 FACTS = "facts"
 SHARED = "facts-shared"
@@ -40,9 +40,9 @@ SOURCE = "facts-source"
 HEADER = "facts-header"
 ASSEMBLED = "facts-assembled"
 # Bump a kind's number when the value it stores changes for the same inputs. Keys never digest the tool's code.
-FACTS_SCHEMA = 4
-SOURCE_SCHEMA = 6
-HEADER_SCHEMA = 5
+FACTS_SCHEMA = 5
+SOURCE_SCHEMA = 7
+HEADER_SCHEMA = 6
 ASSEMBLED_SCHEMA = 4
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"\n]+)[>"]', re.M)
 # Header parts of one version per job: headers in path order share their own include expansions.
@@ -56,16 +56,16 @@ _VERSION = "\x00version"
 Task = tuple[str, Path, str]
 
 
-@functools.cache
-def _includes(path: Path, stamp: tuple[int, int, int, int, int]) -> tuple[tuple[str, str], ...]:
-    return tuple((match[1], match[2]) for match in _INCLUDE.finditer(path.read_text(errors="replace")))
+@retention.memoized("typemap.facts._includes", size=retention.memory_size, copy_out=retention.clone)
+def _includes(text: str) -> tuple[tuple[str, str], ...]:
+    return tuple((match[1], match[2]) for match in _INCLUDE.finditer(text))
 
 
-@functools.cache
-def _topology(path: Path, stamp: tuple[int, int, int, int, int]) -> tuple[tuple[int, str], ...]:
+@retention.memoized("typemap.facts._topology", size=retention.memory_size, copy_out=retention.clone)
+def _topology(source: str) -> tuple[tuple[int, str], ...]:
     return tuple(
         (line, text.strip())
-        for line, text in enumerate(path.read_text().splitlines(), 1)
+        for line, text in enumerate(source.splitlines(), 1)
         if re.match(r"[ \t]*#[ \t]*(?:include|ifndef|define|endif)\b", text)
     )
 
@@ -87,7 +87,7 @@ class Snapshot:
         found = self._edges.get(identity)
         if found is None:
             resolved = []
-            for quote, name in _includes(path, inputs.signature(path)):
+            for quote, name in _includes(path.read_text(errors="replace")):
                 places = (*((path.parent, *quotes) if quote == '"' else ()), *includes)
                 target = next((place / name for place in places if (place / name).is_file()), None)
                 if target is not None:
@@ -114,7 +114,7 @@ class Snapshot:
     def digest(self, path: Path) -> str:
         found = self._digests.get(path)
         if found is None:
-            found = self._digests[path] = inputs.digest(path)
+            found = self._digests[path] = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
         return found
 
     def generated(self) -> frozenset[Path]:
@@ -313,8 +313,37 @@ def _forced(project: Project, command: list[str]) -> list[Path]:
 
 
 def _command(project: Project, policy: Host | None, version: str, source: Path, *, marked: bool = False) -> list[str]:
+    modules = (
+        "cdecl.py",
+        "prefixes.py",
+        "typemap/facts.py",
+        "typemap/facts_decode.py",
+        "typemap/declarations.py",
+        "typemap/layers.py",
+        "typemap/unit_layouts.py",
+        "typemap/declaration_evidence.py",
+        "typemap/header_names.py",
+        "typemap/storage.py",
+        "layout/structs.py",
+        "layout/structs_types.py",
+        "layout/structs_identity.py",
+        "layout/header_context.py",
+        "layout/redeclarations.py",
+        "decomp/draft_context.py",
+        "project/headers.py",
+        "compilers/drivers.py",
+        "compilers/families/__init__.py",
+        "compilers/families/gcc/__init__.py",
+        "compilers/families/ido/__init__.py",
+    )
+    parser_recipe = key(
+        *(
+            inputs.digest(Path(__file__).parents[1] / name, algorithm="sha256", reuse=retention.configured())
+            for name in modules
+        )
+    )
     if policy is None:
-        return ["in-memory", version, *project.version(version).macros]
+        return ["in-memory", version, *project.version(version).macros, "@parser-recipe=" + parser_recipe]
     from unbake.compilers import drivers
 
     command = (
@@ -327,8 +356,11 @@ def _command(project: Project, policy: Host | None, version: str, source: Path, 
     compiler = (
         project.compiler_for(source.stem) if source.suffix == ".c" else project.compilers[project.default_compiler]
     )
-    pins = ["@compiler=" + inputs.digest(compiler.sha256), "@preprocessor=" + inputs.digest(Path(command[0]))]
-    return [part.replace(str(project.root), ".") for part in command] + pins
+    pins = [
+        "@compiler=" + inputs.digest(compiler.sha256, algorithm="sha256", reuse=retention.configured()),
+        "@preprocessor=" + inputs.digest(Path(command[0]), algorithm="sha256", reuse=retention.configured()),
+    ]
+    return [part.replace(str(project.root), ".") for part in command] + pins + ["@parser-recipe=" + parser_recipe]
 
 
 def source_key(project: Project, policy: Host | None, task: Task, snapshot: Snapshot) -> str:
@@ -388,22 +420,12 @@ def _write(path: Path, *, data: bytes) -> None:
     atomic_files.fresh(path, data)
 
 
-def _load(path: Path) -> Any:
-    try:
-        return json.loads(path.read_bytes())
-    except (OSError, ValueError) as error:
-        raise Held("solve", f"facts.cache: unreadable entry {path}: {error}; delete it and rerun") from error
-
-
 class Store:
     """Encode and intern seeds in the shared cache."""
 
     def __init__(self, project: Project, cache: Cache | None) -> None:
         self.project = project
-        self.cache = cache
-        self.memory: dict[str, Any] = {}
-        self.documents: dict[tuple[str, str], Any] = {}
-        self.shared: dict[str, Any] = {}
+        self.cache = cache if cache is not None else Cache(project.root / "build/cache")
         self.written: dict[int, tuple[Any, str]] = {}
 
     def _put_shared(self, value: Any) -> str:
@@ -413,29 +435,17 @@ class Store:
         data = json.dumps(value, separators=(",", ":")).encode()
         digest = hashlib.sha256(data).hexdigest()
         self.written[id(value)] = value, digest
-        if digest not in self.shared:
-            self.shared[digest] = json.loads(data)
-            if self.cache is not None:
-                self.cache.produce(SHARED, digest, functools.partial(_write, data=data))
+        self.cache.produce(SHARED, digest, functools.partial(_write, data=data))
         return digest
 
     def _get_shared(self, digest: str) -> Any:
-        value = self.shared.get(digest)
-        if value is None:
-            value = self.shared[digest] = memo(
-                "facts.shared", digest, lambda: self._read_shared(digest), keep=SHARED_KEPT
-            )
-        # Encoding the decoded value again must not serialize it to find the digest it came from.
-        self.written[id(value)] = value, digest
-        return value
-
-    def _read_shared(self, digest: str) -> Any:
-        """A shared value by its content digest: read once per process, so a cycle's later solves (one after each
-        land) reuse every alias map and layout template an earlier solve read. Seeds only read them."""
-        if self.cache is None or (path := self.cache.get(SHARED, digest)) is None:
+        path = self.cache.get(SHARED, digest)
+        if path is None:
             raise Held("solve", f"facts.shared: missing {digest}")
         binary = self.cache.get("facts-shared-pickle", digest)
-        return closure_load(binary) if binary is not None else _load(path)
+        value = self.cache.decode(binary or path, retention.PICKLE if binary else retention.JSON)
+        self.written[id(value)] = value, digest
+        return value
 
     def encode(self, seed: dict[str, Any]) -> dict[str, Any]:
         result = {}
@@ -467,50 +477,29 @@ class Store:
         self.put_encoded(content_key, self.encoded(seeds))
 
     def put_encoded(self, content_key: str, data: bytes) -> None:
-        if self.cache is None:
-            self.memory[content_key] = json.loads(data)
-        else:
-            self.cache.produce(FACTS, content_key, functools.partial(_write, data=data))
+        self.cache.produce(FACTS, content_key, functools.partial(_write, data=data))
 
     def has(self, content_key: str) -> bool:
-        if self.cache is None:
-            return content_key in self.memory
         return self.cache.get(FACTS, content_key) is not None
 
     def get(self, content_key: str) -> list[dict[str, Any]] | None:
-        if self.cache is None:
-            rows = self.memory.get(content_key)
-        else:
-            path = self.cache.get(FACTS, content_key)
-            rows = None if path is None else _load(path)
+        path = self.cache.get(FACTS, content_key)
+        rows = None if path is None else self.cache.decode(path, retention.JSON)
         return None if rows is None else [self.decode(row) for row in rows]
 
     def raw(self, content_key: str) -> bytes | None:
-        """A whole-unit entry's encoded bytes."""
-        if self.cache is None:
-            rows = self.memory.get(content_key)
-            return None if rows is None else json.dumps(rows, separators=(",", ":")).encode()
         path = self.cache.get(FACTS, content_key)
         return None if path is None else path.read_bytes()
 
     def json_path(self, kind: str, content_key: str) -> Path | None:
-        if self.cache is None:
-            return Path(content_key) if (kind, content_key) in self.documents else None
         return self.cache.get(kind, content_key)
 
     def json(self, kind: str, content_key: str) -> Any:
-        """A layer part (KIND is SOURCE or HEADER), or None."""
-        if self.cache is None:
-            return self.documents.get((kind, content_key))
         path = self.cache.get(kind, content_key)
-        return None if path is None else _load(path)
+        return None if path is None else self.cache.decode(path, retention.JSON)
 
     def put_json(self, kind: str, content_key: str, value: Any) -> None:
-        if self.cache is None:
-            self.documents[(kind, content_key)] = value
-        else:
-            data = json.dumps(value, separators=(",", ":")).encode()
-            self.cache.produce(kind, content_key, functools.partial(_write, data=data))
+        self.cache.value(kind, content_key, retention.JSON, lambda: value)
 
     def text(
         self, text: str, provenance: dict[str, Any], authored: set[Path], compute: Callable[[], dict[str, Any]]
@@ -538,7 +527,7 @@ def _provenance(project: Project, function: str, version: str, source: Path) -> 
         "function": function,
         "version": version,
         "source": storage.relative(project, source),
-        "sha256": inputs.digest(source),
+        "sha256": inputs.digest(source, algorithm="sha256", reuse=retention.configured()),
     }
 
 
@@ -591,7 +580,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
         # Only identical actual expansion inputs can share preprocessing. Version names alone are not inputs.
         contract = key(
             json.dumps(command),
-            source,
+            storage.relative(project, source),
             *(
                 part
                 for path in snapshot.closure((source, *_forced(project, command)), command)
@@ -607,7 +596,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             compiler = project.compiler_for(source.stem)
             parse_contract = key(
                 json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]),
-                compiler.sha256,
+                inputs.digest(compiler.sha256, algorithm="sha256", reuse=retention.configured()),
             )
             identity = digest, parse_contract
             if identity not in units:
@@ -625,7 +614,8 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
             del text
         compiler = project.compiler_for(source.stem)
         parse_contract = key(
-            json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]), compiler.sha256
+            json.dumps([str(compiler.cc), compiler.cflags, project.unit_flags.get(source.stem, ())]),
+            inputs.digest(compiler.sha256, algorithm="sha256", reuse=retention.configured()),
         )
         consumed_data, owned = units[digest, parse_contract]
         result.append(_stamp(consumed_data[:-1] + b"," + owned[function][1:], function, version))
@@ -634,7 +624,7 @@ def source_facts(project: Project, policy: Host | None, output: Store, tasks: li
 
 def _include_order(source: Path) -> tuple[tuple[str, ...], str]:
     """Sources whose include lines match sit together, so their header expansions are shared."""
-    return tuple(name for _, name in _includes(source, inputs.signature(source))), str(source)
+    return tuple(name for _, name in _includes(source.read_text(errors="replace"))), str(source)
 
 
 def _headers(project: Project) -> list[Path]:
@@ -666,7 +656,7 @@ class _Parts(Mapping[str, dict[str, Any]]):
         if found is None:
             stored = self.output.json_path(HEADER, self.content[name])
             if stored is not None and stored.is_file():
-                found = inputs.digest(stored)
+                found = inputs.digest(stored, algorithm="sha256", reuse=retention.configured())
             else:
                 found = key(json.dumps(self[name], sort_keys=True))
             self.identities[name] = found
@@ -757,7 +747,7 @@ def _source_tasks(
     command = _command(project, host, version, source, marked=True)
     closure = snapshot.closure((source, *_forced(project, command)), command)
     topology = [
-        (storage.relative(project, path), _topology(path, inputs.signature(path)))
+        (storage.relative(project, path), _topology(path.read_text()))
         for path in closure
         if path in snapshot.generated()
     ]
@@ -852,6 +842,12 @@ Shared = tuple[Project, Host | None, dict[str, dict[str, str]], frozenset[str]]
 _session: tuple[Shared, Store, dict[str, _Parts], dict[str, layers.Context]] | None = None
 
 
+def release_payload(shared: Shared) -> None:
+    global _session
+    if _session is not None and _session[0] is shared:
+        _session = None
+
+
 def _unit_work(
     shared: Shared, versions: list[list[tuple[int, str, Task]]]
 ) -> tuple[list[tuple[int, bytes]], dict[str, int]]:
@@ -879,8 +875,6 @@ def _unit_work(
     if whole:
         result.extend(_whole_tasks(project, host, output, whole, counts))
     output.written.clear()
-    if output.cache is not None:
-        output.shared.clear()
     from unbake import cache, prefixes
 
     cache.forget(
@@ -907,7 +901,7 @@ def _unit_job(
         tuple(dict.fromkeys(task[0] for task in tasks)),
         tuple(dict.fromkeys(task[2] for task in tasks)),
         source.stat().st_size,
-        inputs.digest(source),
+        inputs.digest(source, algorithm="sha256", reuse=retention.configured()),
         tuple(content for group in versions for _, content, _ in group),
     )
     try:
@@ -1019,7 +1013,9 @@ def _shared_job(cache_root: Path, digests: list[str]) -> None:
         if source is None:
             raise Held("solve", f"facts.shared: missing {digest}")
         cache.produce(
-            "facts-shared-pickle", digest, functools.partial(_write, data=pickle.dumps(_load(source), protocol=5))
+            "facts-shared-pickle",
+            digest,
+            functools.partial(_write, data=pickle.dumps(cache.decode(source, retention.JSON), protocol=5)),
         )
 
 
@@ -1038,7 +1034,11 @@ def _decode_job(
     cache = Cache(cache_root)
     found: facts_decode.Batch = []
     for index, payload in rows:
-        content_key = inputs.digest(payload) if isinstance(payload, Path) else storage.digest(payload)
+        content_key = (
+            inputs.digest(payload, algorithm="sha256", reuse=retention.configured())
+            if isinstance(payload, Path)
+            else inputs.bytes_digest(payload, algorithm="sha256")
+        )
 
         def make(target: Path, index: int = index, payload: facts_decode.Payload = payload) -> None:
             [(_, decoded)] = facts_decode.decode([(index, payload)])
@@ -1113,10 +1113,10 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
             bundle = bundle_keys[position]
             cached = cache.get("facts-unit", bundle)
             if cached is not None:
-                rows = closure_load(cached)
-                if len(rows) != len(indices):
+                bundle_rows: list[bytes] = retention.Cache(cached.parent).decode(cached, retention.PICKLE)
+                if len(bundle_rows) != len(indices):
                     raise Held("solve", "facts.unit: cached task inventory disagrees with its key")
-                encoded.update(zip(indices, rows, strict=True))
+                encoded.update(zip(indices, bundle_rows, strict=True))
             else:
                 pending.append(versions_)
                 bundles.append((bundle, indices))
@@ -1146,7 +1146,9 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         pending_indices: list[int] = []
         for index in range(len(tasks)):
             decoded_path = (
-                None if output.cache is None else output.cache.get("facts-decoded-v1", storage.digest(encoded[index]))
+                None
+                if output.cache is None
+                else output.cache.get("facts-decoded-v1", inputs.bytes_digest(encoded[index], algorithm="sha256"))
             )
             if decoded_path is None:
                 pending_indices.append(index)

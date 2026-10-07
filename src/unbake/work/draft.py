@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import extract
 from unbake.config import Held, Host, Project, draft_view
 from unbake.decomp import exclusions, m2c, type_context
@@ -69,7 +70,7 @@ def check_existing(project: Project, function: str, *, replace: bool) -> str | N
         )
     from unbake import inputs
 
-    return inputs.digest(file) if file.is_file() else None
+    return inputs.digest(file, algorithm="sha256", reuse=retention.configured()) if file.is_file() else None
 
 
 def draft(project: Project, host: Host, function: str, *, replace: bool, expected_output: str | None) -> Drafted:

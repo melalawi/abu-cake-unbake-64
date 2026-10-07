@@ -19,6 +19,7 @@ from typing import Any, cast
 
 from pycparser import c_ast, c_parser  # type: ignore[import-untyped]
 
+from unbake import cache as retention
 from unbake.config import Held
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_types import QUALIFIERS, SCALARS, Aggregate, Declaration, Member, Operation
@@ -248,7 +249,9 @@ def declarations(source: str) -> Declarations:
     # A version fold reads the same installed declarations through several
     # private include trees. Text, rather than their temporary paths, identifies
     # this analysis. Keep caller-owned sets outside the shared cache.
-    parsed = memo("decl.names", source, lambda: NameParser(source).parse(), keep=32768)
+    parsed = memo(
+        "decl.names", source, lambda: NameParser(source).parse(), size=retention.memory_size, copy_out=retention.clone
+    )
     return Declarations(
         set(parsed.typedefs),
         set(parsed.uses),
@@ -780,4 +783,12 @@ def parse(text: str, *, typedefs: Iterable[str] | dict[str, bool] = ()) -> c_ast
 def records(text: str) -> list[Any]:
     from unbake.cache import memo
 
-    return list(memo("decl.records", text, lambda: LayoutParser(text).parse(), keep=32768))
+    return list(
+        memo(
+            "decl.records",
+            text,
+            lambda: LayoutParser(text).parse(),
+            size=retention.memory_size,
+            copy_out=retention.clone,
+        )
+    )

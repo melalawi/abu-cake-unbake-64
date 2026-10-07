@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-from functools import lru_cache
 from pathlib import Path
 
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
+from unbake import cache as retention
 from unbake import cdecl
 from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held
@@ -68,7 +68,7 @@ class _AliasTypes(dict[str, str]):
         self.aggregates: dict[str, str] = {}
 
 
-@lru_cache(maxsize=8192)
+@retention.memoized("layout.redeclarations._aliases", size=retention.memory_size, copy_out=retention.clone)
 def _aliases(text: str) -> _AliasTypes:
     rows = [text[start:end] for start, end in spans(text) if re.match(r"typedef\b", text[start:end])]
     names = {name for row in rows for name in declarations(row).typedefs}
@@ -112,7 +112,7 @@ def aliases(texts: list[str]) -> dict[str, str]:
     return result
 
 
-@lru_cache(maxsize=16384)
+@retention.memoized("layout.redeclarations._signature", size=retention.memory_size, copy_out=retention.clone)
 def _signature(text: str, items: tuple[tuple[str, str], ...], aggregate_items: tuple[tuple[str, str], ...]) -> object:
     mapping = dict(items)
     aggregates = {**dict(aggregate_items), **_aliases(text).aggregates}
@@ -221,7 +221,7 @@ def variants(text: str) -> tuple[str, ...]:
     raise Held("layout", "layout.redeclaration: unclosed declaration conditional")
 
 
-@lru_cache(maxsize=512)
+@retention.memoized("layout.redeclarations.catalog", size=retention.memory_size, copy_out=retention.clone)
 def catalog(header: str) -> dict[str, str]:
     result: dict[str, str] = {}
     mapping = aliases([header])
@@ -236,12 +236,12 @@ def catalog(header: str) -> dict[str, str]:
     return result
 
 
-@lru_cache(maxsize=8192)
+@retention.memoized("layout.redeclarations._tags", size=retention.memory_size, copy_out=retention.clone)
 def _tags(text: str) -> frozenset[str]:
     return frozenset(declarations(text).tags)
 
 
-@lru_cache(maxsize=8192)
+@retention.memoized("layout.redeclarations.tag_definitions", size=retention.memory_size, copy_out=retention.clone)
 def tag_definitions(text: str) -> dict[str, tuple[tuple[int, int], ...]]:
     """Read complete file-scope tags without parsing implementation bodies."""
     masked = declaration_source(text)

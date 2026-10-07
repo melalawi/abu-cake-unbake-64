@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 from typing import NoReturn
@@ -20,10 +19,6 @@ def read(path: Path) -> bytes:
         return path.read_bytes()
     except OSError as error:
         held(f"{path}: {error}")
-
-
-def sha(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
 
 
 def function(value: object) -> str:

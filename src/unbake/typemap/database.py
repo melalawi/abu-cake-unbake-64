@@ -13,7 +13,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from unbake import atomic as atomic_files
-from unbake import effort, inputs, pool, tui
+from unbake import cache as retention
+from unbake import effort, pool, tui
+from unbake import inputs as input_pins
 from unbake.config import Held, Host, Project
 from unbake.typemap import header_names, namespace, regeneration, storage, types_db
 
@@ -199,7 +201,7 @@ def _render(
         for statement in installed:
             names = redeclarations.local_tags(statement)
             if names & (needed - defined):
-                digest = storage.digest(statement.encode())
+                digest = input_pins.bytes_digest(statement.encode(), algorithm="sha256")
                 name = ".evidence_" + digest + ".h"
                 body = f"/* unbake declaration evidence: evidence_{digest} */\n" + statement
                 components[root / name] = body
@@ -671,7 +673,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
         header_step.validate(project, policy, native_outputs)
     with tui.task("Saving the type database"):
         value["rendered_sha256"] = {
-            storage.relative(project, path): storage.digest(content)
+            storage.relative(project, path): input_pins.bytes_digest(content, algorithm="sha256")
             for path, content in outputs.items()
             if isinstance(content, bytes)
         }
@@ -686,14 +688,16 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
 
             summary[kind] = {
                 name: {
-                    "semantic_sha256": storage.digest(storage.encoded(_semantic(row))),
+                    "semantic_sha256": input_pins.bytes_digest(storage.encoded(_semantic(row)), algorithm="sha256"),
                     "users": list(row.get("users", [])),
                 }
                 for name, row in after.items()
             }
             for name in set(before) | set(after):
                 old = before.get(name, {})
-                old_digest = old.get("semantic_sha256") or storage.digest(storage.encoded(_semantic(old)))
+                old_digest = old.get("semantic_sha256") or input_pins.bytes_digest(
+                    storage.encoded(_semantic(old)), algorithm="sha256"
+                )
                 new_digest = summary[kind].get(name, {}).get("semantic_sha256")
                 if old_digest != new_digest:
                     changed.add(f"{kind}:{name}")
@@ -736,14 +740,17 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
             lookup = json.loads(listing.read_bytes() if isinstance(listing, Path) else listing)
             for path in retained:
                 if path.is_file():
-                    lookup["headers"][path.relative_to(project.include[0]).as_posix()] = inputs.digest(path)
+                    lookup["headers"][path.relative_to(project.include[0]).as_posix()] = input_pins.digest(
+                        path, algorithm="sha256", reuse=retention.configured()
+                    )
             outputs[index.path(project)] = index.encoded(lookup)
         outputs = {
             path: content
             for path, content in outputs.items()
             if not path.is_file()
             or (
-                inputs.digest(path) != inputs.digest(content)
+                input_pins.digest(path, algorithm="sha256", reuse=retention.configured())
+                != input_pins.digest(content, algorithm="sha256", reuse=retention.configured())
                 if isinstance(content, Path)
                 else path.read_bytes() != content
             )
@@ -792,7 +799,13 @@ def validate_headers(
     from unbake.cache import Cache, key, memo
 
     def remembered_digest(data: bytes) -> str:
-        return memo("typemap-validation-digest", data, lambda: storage.digest(data), keep=32768)
+        return memo(
+            "typemap-validation-digest",
+            data,
+            lambda: input_pins.bytes_digest(data, algorithm="sha256"),
+            size=retention.memory_size,
+            copy_out=retention.clone,
+        )
 
     cache = Cache(project.cache)
     environment = session.environment if session is not None else regeneration.environment(project, policy)
@@ -829,7 +842,9 @@ def validate_headers(
     except Held as error:
         raise Held("solve", f"types.header_parse: {error.reason}") from error
     digests = {path: remembered_digest(data) for path, data in contents.items()}
-    certificates = session.certificates if session is not None else regeneration.Certificates(cache, environment)
+    certificates = (
+        session.certificates if session is not None else cache.certificates("typemap-certificates", environment)
+    )
     if validated is None:
         validated = set()
     rows: list[tuple[str, set[Path], str]] = []
@@ -840,7 +855,8 @@ def validate_headers(
             "typemap-validation-signature",
             (environment, name, tuple(pinned)),
             lambda: key(environment, name, *(part for pair in pinned for part in pair)),
-            keep=32768,
+            size=retention.memory_size,
+            copy_out=retention.clone,
         )
 
     for path, closure in closures.items():
@@ -859,7 +875,7 @@ def validate_headers(
         pending: dict[str, tuple[set[Path], str]] = {}
         for input_key, closure, text in rows:
             content_key = version + ":" + input_key
-            if content_key not in validated and not certificates.contains(content_key):
+            if content_key not in validated and not certificates.contains((content_key,)):
                 pending[content_key] = closure, text
         effort.count("validation.rows", len(pending), len(rows))
         if pending:

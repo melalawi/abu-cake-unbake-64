@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from unbake import cache as retention
 from unbake import pool, tui
 from unbake.cache import memo
 from unbake.cdecl import declaration_source, declarations
@@ -37,7 +38,13 @@ def _words(text: str) -> set[str]:
 
 
 def _names(text: str) -> frozenset[str]:
-    return memo("header-loss.names", text, lambda: frozenset(declared(text)), keep=32768)
+    return memo(
+        "header-loss.names",
+        text,
+        lambda: frozenset(declared(text)),
+        size=retention.memory_size,
+        copy_out=retention.clone,
+    )
 
 
 def _header(text: str) -> tuple[frozenset[str], dict[str, set[str]], tuple[str, ...]]:
@@ -50,7 +57,7 @@ def _header(text: str) -> tuple[frozenset[str], dict[str, set[str]], tuple[str, 
                 dependencies.setdefault(name, set()).update(_words(unit.text))
         return _names(text), dependencies, tuple(_INCLUDE.findall(text))
 
-    return memo("header-loss.header", text, compute, keep=32768)
+    return memo("header-loss.header", text, compute, size=retention.memory_size, copy_out=retention.clone)
 
 
 @pool.cpu
@@ -123,7 +130,7 @@ def _source(text: str) -> tuple[frozenset[str], frozenset[str]]:
         provided |= {f"{kind} {name}" for kind, name in _TAG.findall(declaration_source(text))}
         return frozenset(provided), frozenset(_words(text) - provided)
 
-    return memo("header-loss.source", text, compute, keep=32768)
+    return memo("header-loss.source", text, compute, size=retention.memory_size, copy_out=retention.clone)
 
 
 @pool.cpu

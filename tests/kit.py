@@ -105,6 +105,10 @@ class TempCase(unittest.TestCase):
     """A test case with a fresh resolved temporary directory in self.root."""
 
     def setUp(self) -> None:
+        from unbake import cache
+
+        cache.configure(memory_bytes=16 * 1024 * 1024)
+        cache.forget()
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name).resolve()

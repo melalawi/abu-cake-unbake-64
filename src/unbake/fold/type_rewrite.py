@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from pycparser import c_ast, c_lexer, c_parser  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import cdecl
+from unbake import cache as retention
+from unbake import cdecl, inputs
 from unbake.cache import Cache, key
 from unbake.cdecl import LayoutParser
-from unbake.fold.rewrite_view import View
+from unbake.compilers.families.types import View
 from unbake.layout.structs import Field, Layout, held
 
 
@@ -40,18 +40,18 @@ def _gnu_blank(view: str, blank: Any) -> str:
     return re.sub(r"\bgoto\s*\*", blank, view)
 
 
-@lru_cache(maxsize=8)
+@retention.memoized("fold.type_rewrite._context", size=retention.memory_size, copy_out=retention.clone)
 def _context(prefix: str, cache_root: Path | None = None) -> tuple[list[Any], dict[str, bool]]:
     """Parse the shared typed headers once; sources reuse their declarations and typedef scope."""
     if cache_root is None:
         return _parse_context(prefix)
     identity = key(
-        "rewrite-context-v1",
+        "rewrite-context-v2",
         prefix,
-        Path(__file__),
-        Path(c_parser.__file__),
-        Path(c_lexer.__file__),
-        Path(c_ast.__file__),
+        inputs.digest(Path(__file__), algorithm="sha256", reuse=retention.configured()),
+        inputs.digest(Path(c_parser.__file__), algorithm="sha256", reuse=retention.configured()),
+        inputs.digest(Path(c_lexer.__file__), algorithm="sha256", reuse=retention.configured()),
+        inputs.digest(Path(c_ast.__file__), algorithm="sha256", reuse=retention.configured()),
     )
     computed = None
 
@@ -225,7 +225,8 @@ def edits(
                 source_line_offset,
                 source_text,
             ),
-            keep=1,
+            size=retention.memory_size,
+            copy_out=retention.clone,
         )
     )
 
@@ -490,7 +491,9 @@ def _plan(
         Rewrite().visit(c_ast.FileAST(shared))
         return dict(aliases), dict(tags), dict(scopes[0])
 
-    initial_aliases, initial_tags, initial_scope = memo("rewrite.namespaces", prefix, seed, keep=8)
+    initial_aliases, initial_tags, initial_scope = memo(
+        "rewrite.namespaces", prefix, seed, size=retention.memory_size, copy_out=retention.clone
+    )
     aliases.update(initial_aliases)
     tags.update(initial_tags)
     scopes[0].update(initial_scope)

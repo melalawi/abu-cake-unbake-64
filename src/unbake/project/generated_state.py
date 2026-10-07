@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from unbake import cache as retention
 from unbake import inputs, process, steps
 from unbake.config import Held, Project
 
@@ -52,7 +53,7 @@ def reconcile(project: Project, step: str) -> list[str]:
             blob = b"blob " + str(len(data)).encode() + b"\0" + data
             digest = hashlib.sha256(blob) if len(ident) == 64 else hashlib.sha1(blob)
             if digest.hexdigest() == ident:
-                outputs[name] = inputs.digest(path)
+                outputs[name] = inputs.digest(path, algorithm="sha256", reuse=retention.configured())
                 continue
         elif not path.exists():
             # Legacy receipts have no HEAD anchor. A committed deletion proves

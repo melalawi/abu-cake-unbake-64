@@ -81,7 +81,7 @@ class SharedVersionsTests(TempCase):
         project = SimpleNamespace(
             root=self.root, include=(), build=self.root / "build", version=lambda v: SimpleNamespace(macros=())
         )
-        texts = {v: declarations.BOUNDARY + "\nint alpha;\n" for v in ("de", "eu", "us")}
+        texts = dict.fromkeys(("de", "eu", "us"), declarations.BOUNDARY + "\nint alpha;\n")
         texts["jp"] = declarations.BOUNDARY + "\nint alpha;\nint jp_only;\n"  # near miss: another unit text
         snapshot = facts.Snapshot(project)
         groups = [

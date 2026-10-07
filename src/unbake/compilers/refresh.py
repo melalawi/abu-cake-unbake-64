@@ -11,7 +11,8 @@ from typing import cast
 import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import config, tui
+from unbake import cache as retention
+from unbake import config, inputs, tui
 from unbake.compilers import files as compiler_files
 from unbake.compilers import propose as compiler_proposal
 from unbake.config import Held, Host, PendingProject
@@ -34,7 +35,10 @@ def run(pending: PendingProject, policy: Host, confirm: str | None) -> list[str]
     proposal["retained_assignments"] = {  # type: ignore[typeddict-unknown-key]
         "rule": "preserve published C and measured exception units on their proved compiler",
         "assignments": retained,
-        "sources": {str(p.relative_to(project.root)): compiler_files.sha(p) for p in project.src.rglob("*.c")},
+        "sources": {
+            str(p.relative_to(project.root)): inputs.digest(p, algorithm="sha256", reuse=retention.configured())
+            for p in project.src.rglob("*.c")
+        },
     }
     compiler_files.atomic_bytes(compiler_proposal.proposal_path(pending), compiler_proposal.encoded(proposal))
     for line in compiler_proposal.receipt(proposal):

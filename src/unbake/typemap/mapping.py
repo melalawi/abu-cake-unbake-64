@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from unbake import cache as retention
 from unbake import inputs, pool, tui
 from unbake.config import Held, Host, Project
 from unbake.decomp.indexed import indexed_references
@@ -86,7 +87,7 @@ def _mapped(shared: Any, job: Any) -> Any:
         "end": row.end,
         "address": row.address,
         "kind": row.kind,
-        "target_sha256": storage.digest(binary),
+        "target_sha256": inputs.bytes_digest(binary, algorithm="sha256"),
         "_refresh": {**dependencies, "accesses": accesses},
     }
     return metadata, None if retained and isinstance(old, shards.Functions) else shards.pack(
@@ -166,7 +167,7 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
                 raise Held("map", f"map.functions.{row.version}: duplicate runtime address 0x{row.address:X}")
             targets[row.version][row.address] = canonical
     old_functions: Mapping[str, dict[str, Any]] | None = None
-    analyzer = inputs.digest(Path(__file__).with_name("mips.py"))
+    analyzer = inputs.digest(Path(__file__).with_name("mips.py"), algorithm="sha256", reuse=retention.configured())
     old_rows: dict[tuple[str, int, int, int], tuple[str, str]] = {}
     old_symbols: dict[str, dict[int, list[str]]] = {v: {} for v in project.versions}
     old_targets: dict[str, dict[int, str]] = {v: {} for v in project.versions}
@@ -234,7 +235,7 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
             canonical = names[row.version, row.name]
             binary = bodies[row.version, row.name]
             prior = old_rows.get((row.version, row.start, row.end, row.address))
-            same = old_functions is not None and prior == (canonical, storage.digest(binary))
+            same = old_functions is not None and prior == (canonical, inputs.bytes_digest(binary, algorithm="sha256"))
             metadata = (
                 previous["functions"].get(canonical, {}).get("versions", {}).get(row.version, {}) if previous else {}
             )
@@ -310,7 +311,7 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
         "format": "sqlite-zlib-v1",
         "abi_analysis_sha256": analyzer,
         "shard": shard_path.name,
-        "shard_sha256": inputs.digest(shard_path),
+        "shard_sha256": inputs.digest(shard_path, algorithm="sha256", reuse=retention.configured()),
         "functions": functions,
         "symbols": symbols,
         "globals": globals_,
@@ -342,7 +343,9 @@ def _read_map(project: Project) -> dict[str, Any]:
     if not isinstance(shard, str) or Path(shard).name != shard:
         raise Held("solve", "map.shards: invalid shard name")
     shard_path = path.parent / shard
-    if not shard_path.is_file() or inputs.digest(shard_path) != result.get("shard_sha256"):
+    if not shard_path.is_file() or inputs.digest(
+        shard_path, algorithm="sha256", reuse=retention.configured()
+    ) != result.get("shard_sha256"):
         raise Held("solve", "map.shards: missing or changed facts; run unbake recompute rom-facts")
     storage.validate_identity(project, result, "map.facts")
     return result
@@ -388,7 +391,7 @@ def compiler_inputs(project: Project, config_content: bytes) -> tuple[Path, byte
     changed = {key for key in set(previous_inputs) | set(pinned) if previous_inputs.get(key) != pinned.get(key)}
     if changed - {"config.toml"}:
         raise Held("setup", "map.inputs_stale: compiler update requires unchanged ROM, layout and symbol inputs")
-    pinned["config.toml"] = storage.digest(config_content)
+    pinned["config.toml"] = inputs.bytes_digest(config_content, algorithm="sha256")
     result["inputs_sha256"] = pinned
     result["compiler_update"] = {"config_sha256": pinned["config.toml"], "instruction_shard_retained": True}
     return path, storage.encoded(result)

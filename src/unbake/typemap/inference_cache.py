@@ -11,10 +11,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from unbake import cache as retention
 from unbake import pool, tui
-from unbake.cache import Cache, key, memo, serialized
+from unbake.cache import Cache, key, serialized
 from unbake.config import Held, Host, Project
-from unbake.typemap import closure, facts
+from unbake.typemap import facts
 
 SCHEMA = 3
 
@@ -51,28 +52,6 @@ class Receipts:
         with tui.task("Saving inferred type receipts"):
             _Writer(buffer, self.indices).dump(value)
         return len(self.rows), buffer.getvalue()
-
-    def _transform(self, value: Any, objects: list[dict[str, Any]]) -> Any:
-        known: dict[int, Any] = {}
-
-        def visit(row: Any) -> Any:
-            if not isinstance(row, (dict, list, tuple)):
-                return row
-            found = known.get(id(row))
-            if found is not None:
-                return found
-            result: Any
-            if isinstance(row, dict):
-                if "sha256" in row and (index := self.indices.get(serialized(row))) is not None:
-                    result = objects[index]
-                else:
-                    result = {name: visit(item) for name, item in row.items()}
-            else:
-                result = [visit(item) for item in row]
-            known[id(row)] = result
-            return result
-
-        return visit(value)
 
     def thaw(self, frozen: tuple[int, bytes]) -> Any:
         """Load a fresh graph, binding only the receipt slots to this run's evidence."""
@@ -123,7 +102,11 @@ def _inputs_job(shared: Path, rows: list[tuple[int, str, dict[str, Any]]]) -> An
             receipts = Receipts()
             return serialized(receipts.inputs(seed)), receipts.rows
 
-        normalized = closure.cached(cache, "types-input", [content_key], compute)
+        normalized = (
+            compute()
+            if cache is None
+            else cache.value("types-input", retention.key("types-input", *[content_key]), retention.PICKLE, compute)
+        )
         found.append((index, normalized))
     return found
 
@@ -138,7 +121,7 @@ def _inputs(cache: Cache, seeds: list[dict[str, Any]], policy: Host) -> Any:
         if path is None:
             pending.append((index, content_key, seed))
         else:
-            result[index] = memo("types.input", (str(cache.root), content_key), partial(closure.load, path), keep=32768)
+            result[index] = cache.decode(path, retention.PICKLE)
     jobs = [pending[start : start + 128] for start in range(0, len(pending), 128)]
     for batch in pool.run(policy, _inputs_job, jobs, cache.root):
         result.update(batch)
@@ -195,5 +178,10 @@ def infer(
     """All input facts and their order count; only evidence hashes are rebound on a hit. OUTPUT is the store the
     seeds were decoded with, which knows their shared values' digests."""
     receipts, content_key, receipts_key = prepare(project, cache, parts, seeds, output=output, policy=policy)
-    frozen = closure.cached(cache, "types-inferred", [content_key], lambda: receipts.freeze(compute()))
+    frozen = cache.value(
+        "types-inferred",
+        retention.key("types-inferred", content_key),
+        retention.PICKLE,
+        lambda: receipts.freeze(compute()),
+    )
     return receipts.thaw(frozen), content_key, receipts_key

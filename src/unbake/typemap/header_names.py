@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
+from unbake import inputs
 from unbake.cdecl import NAME_TOKEN, NameParser, attribute_source, declaration_source
 from unbake.config import Held, Host, Project
 
@@ -145,7 +147,7 @@ def alias_types(source: str) -> dict[str, str]:
             raise Held("solve", f"types.header_parse: {error.reason}") from error
         return parser.alias_types
 
-    return dict(memo("headers.aliases", source, parse, keep=32768))
+    return dict(memo("headers.aliases", source, parse, size=retention.memory_size, copy_out=retention.clone))
 
 
 def type_identity(type_: str, aliases: dict[str, str], *, aggregates: dict[str, str] | None = None) -> object:
@@ -373,7 +375,7 @@ def _owned(item: tuple[Project, Host | None, Path, str]) -> tuple[list[str], lis
 
     project, policy, path, text = item
     cache = Cache(project.cache)
-    generator = key(Path(__file__))
+    generator = key(inputs.digest(Path(__file__), algorithm="sha256", reuse=retention.configured()))
     # Preserve the no-owned-type fast path, but still collect authored
     # header ownership for sources with no local typedefs or tags.
     views = {text} if re.search(r"\b(?:typedef|struct|union|enum)\b", declaration_source(text)) else set()

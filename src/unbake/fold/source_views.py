@@ -7,9 +7,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import scratch
 from unbake.cdecl import LayoutParser
 from unbake.config import Host, Project
@@ -92,12 +92,7 @@ def typed_context(
                 local, policy, version, extra=source, contents=authored_contents(project, headers, local)
             )
 
-    cached: dict[tuple[Any, ...], str] = headers.__dict__.setdefault("_typed_contexts", {})
-    if selection not in cached:
-        cached[selection] = memo("match.typed-context", selection, compute, keep=8)
-        if len(cached) > 8:
-            cached.pop(next(iter(cached)))
-    return cached[selection]
+    return memo("match.typed-context", selection, compute, size=retention.memory_size, copy_out=str)
 
 
 @contextmanager

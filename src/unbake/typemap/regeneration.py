@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from unbake import atomic as atomic_files
+from unbake import cache as retention
 from unbake import effort, inputs, pool, tui
 from unbake.cache import Cache, key, memo
 from unbake.config import Held, Host, Project
@@ -21,57 +22,43 @@ from unbake.layout import map as layout_map
 from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
-SOURCE_NAMES_SCHEMA = 6
-RENDER_SCHEMA = 7
-
-
-def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
-    def load() -> bytes:
-        def make(output: Path) -> None:
-            atomic_files.fresh(output, storage.encoded(compute()))
-
-        return cache.produce(kind, content_key, make).read_bytes()
-
-    # Retain immutable bytes, so mutations to a decoded result cannot poison reuse.
-    content = memo("typemap-artifact." + kind, (str(cache.root), content_key), load, keep=32768)
-    return json.loads(content)
-
-
-class Certificates:
-    """Immutable atomic batches replace one filesystem artifact per declaration.
-
-    Concurrent publishers add independent batches; neither can overwrite the
-    other's certificates. A failed validation never writes its pending batch.
-    """
-
-    def __init__(self, cache: Cache, environment: str) -> None:
-        self.cache = cache
-        self.directory = cache.root / "typemap-certificates" / environment
-        self.known: set[str] | None = None
-
-    def contains(self, content_key: str) -> bool:
-        if self.known is None:
-            self.known = set()
-            for path in sorted(self.directory.glob("*.json")):
-                self.known.update(json.loads(path.read_bytes()))
-        return content_key in self.known
-
-    def add(self, keys: set[str]) -> None:
-        if not keys:
-            return
-        self.contains("")
-        self.directory.mkdir(parents=True, exist_ok=True)
-        content = storage.encoded(sorted(keys))
-        storage.write(self.directory / (storage.digest(content) + ".json"), content, durable=False)
-        if self.known is None:
-            self.known = set()
-        self.known.update(keys)
+SOURCE_NAMES_SCHEMA = 7
+RENDER_SCHEMA = 8
 
 
 def environment(project: Project, policy: Host | None) -> str:
     """Pin generator code, configuration, version/compiler flags and actual tools."""
     code = Path(__file__).parents[1]
-    sources = sorted(code.rglob("*.py"))
+    modules = (
+        "cdecl.py",
+        "prefixes.py",
+        "typemap/regeneration.py",
+        "typemap/header_names.py",
+        "typemap/declarations.py",
+        "typemap/declaration_evidence.py",
+        "typemap/facts.py",
+        "typemap/facts_decode.py",
+        "typemap/layers.py",
+        "typemap/split.py",
+        "typemap/storage.py",
+        "layout/headers.py",
+        "layout/structs.py",
+        "layout/structs_types.py",
+        "layout/structs_identity.py",
+        "typemap/unit_layouts.py",
+        "fold/source_views.py",
+        "compilers/families/mips.py",
+        "compilers/families/types.py",
+        "layout/header_context.py",
+        "layout/redeclarations.py",
+        "project/headers.py",
+        "decomp/draft_context.py",
+        "compilers/drivers.py",
+        "compilers/families/__init__.py",
+        "compilers/families/gcc/__init__.py",
+        "compilers/families/ido/__init__.py",
+    )
+    sources = tuple(code / name for name in modules)
     tools: list[str | Path] = []
     if policy is not None:
         for field in ("cpp", "m2c"):
@@ -83,10 +70,13 @@ def environment(project: Project, policy: Host | None) -> str:
     configuration.pop("units", None)
     configuration.pop("unit_flags", None)
     return key(
-        "semantic-environment-v4",
-        *(path for path in sources),
+        "semantic-environment-v5",
+        *(inputs.digest(path, algorithm="sha256", reuse=retention.configured()) for path in sources),
         json.dumps(storage.relocatable(configuration, project.root), default=str, sort_keys=True),
-        *tools,
+        *(
+            inputs.digest(value, algorithm="sha256", reuse=retention.configured()) if isinstance(value, Path) else value
+            for value in tools
+        ),
     )
 
 
@@ -124,10 +114,10 @@ def _projection_job(shared: Any, jobs: Any) -> None:
     project, policy, exported = shared
     cache = Cache(project.cache)
     for content_key, path, text in jobs:
-        artifact(
-            cache,
+        cache.value(
             "typemap-source-names",
             content_key,
+            retention.JSON,
             partial(_projection, project, policy, path, text, exported),
         )
 
@@ -137,7 +127,7 @@ class Session:
         self.project, self.policy = project, policy
         self.cache = Cache(project.cache)
         self.environment = environment(project, policy)
-        self.certificates = Certificates(self.cache, self.environment)
+        self.certificates = self.cache.certificates("typemap-certificates", self.environment)
         generated = storage.generated_view(project)
         self.authored = {
             path: path.read_text()
@@ -192,10 +182,10 @@ class Session:
             with tui.task("Reading changed header consumers", len(pending)):
                 pool.run(policy, _projection_job, jobs, (project, policy, exported))
         for content_key, path, text in rows:
-            self.projections[path] = artifact(
-                self.cache,
+            self.projections[path] = self.cache.value(
                 "typemap-source-names",
                 content_key,
+                retention.JSON,
                 partial(_projection, project, policy, path, text, exported),
             )
         self.inputs = key(
@@ -238,7 +228,9 @@ class Session:
                 "tags": {storage.relative(self.project, p): sorted(v) for p, v in self.consumer_tags.items()},
             }
 
-        value = artifact(self.cache, "typemap-source-names", key(str(SOURCE_NAMES_SCHEMA), self.inputs), compute)
+        value = self.cache.value(
+            "typemap-source-names", key(str(SOURCE_NAMES_SCHEMA), self.inputs), retention.JSON, compute
+        )
         consumers.update({self.project.root / p: set(names) for p, names in value["consumers"].items()})
         self.consumer_tags.update({self.project.root / p: set(tags) for p, tags in value["tags"].items()})
         self.reserved = set(value["names"])
@@ -259,8 +251,11 @@ class Session:
             return text
         content_key = key(context[2], text)
         return str(
-            artifact(
-                self.cache, "typemap-rewrite", content_key, lambda: header_names.rewrite(text, replacements, blocked)
+            self.cache.value(
+                "typemap-rewrite",
+                content_key,
+                retention.JSON,
+                lambda: header_names.rewrite(text, replacements, blocked),
             )
         )
 
@@ -274,7 +269,8 @@ class Session:
             "typemap-guarded",
             (str(self.cache.root), content_key),
             lambda: self.cache.produce("typemap-header", content_key, make).read_bytes(),
-            keep=32768,
+            size=retention.memory_size,
+            copy_out=retention.clone,
         )
 
     def layout(
@@ -327,7 +323,11 @@ class Session:
         paths = {self.project.include[0] / name for name in names}
         if not names and (self.project.root / "layout.toml").is_file():
             paths.update(layout_index.headers(self.project))
-        return {storage.relative(self.project, path): inputs.digest(path) for path in sorted(paths) if path.is_file()}
+        return {
+            storage.relative(self.project, path): inputs.digest(path, algorithm="sha256", reuse=retention.configured())
+            for path in sorted(paths)
+            if path.is_file()
+        }
 
     def _content_key(
         self, value: dict[str, Any], *, installed: dict[str, str] | None = None
@@ -375,14 +375,17 @@ class Session:
                 return None
             for name, digest in lookup["headers"].items():
                 path = self.project.include[0] / name
-                if not path.is_file() or inputs.digest(path) != digest:
+                if (
+                    not path.is_file()
+                    or inputs.digest(path, algorithm="sha256", reuse=retention.configured()) != digest
+                ):
                     return None
             cached = self.cache.get("typemap-render", previous["content_key"])
             if cached is None:
                 return None
             result = json.loads(cached.read_bytes())
             cached_headers = {
-                name: storage.digest(text.encode())
+                name: inputs.bytes_digest(text.encode(), algorithm="sha256")
                 for name, text in result["outputs"].items()
                 if Path(name).suffix == ".h"
             }
@@ -415,7 +418,7 @@ class Session:
             }
 
         before_compute = effort.counted().get("render.compute", (0, 0))[0]
-        result = artifact(self.cache, "typemap-render", content_key, make)
+        result = self.cache.value("typemap-render", content_key, retention.JSON, make)
         computed = effort.counted().get("render.compute", (0, 0))[0] != before_compute
         effort.count("render.reused", int(not computed), 1)
         state_content = storage.encoded({"schema": RENDER_SCHEMA, "projection": projection, "content_key": content_key})
@@ -424,7 +427,9 @@ class Session:
         value.update({field: result[field] for field in ("declaration_headers", "shared_aliases", *self._CARRIED)})
         self.reserved = set(result["reserved"])
         rendered_headers = {
-            name: storage.digest(text.encode()) for name, text in result["outputs"].items() if Path(name).suffix == ".h"
+            name: inputs.bytes_digest(text.encode(), algorithm="sha256")
+            for name, text in result["outputs"].items()
+            if Path(name).suffix == ".h"
         }
         # Reuse the validated render after installation, including the types
         # step's temporary retention of old homes until imports are rewritten.
@@ -497,7 +502,9 @@ def validation_inputs(
                 return declarations(data.decode())
 
             try:
-                row = memo("typemap.validation-symbols", data, analyze, keep=32768)
+                row = memo(
+                    "typemap.validation-symbols", data, analyze, size=retention.memory_size, copy_out=retention.clone
+                )
             except Held as error:
                 raise Held("m2c", f"{path}: {error.reason}") from error
             for name in row.typedefs | row.exports | row.tags:
@@ -505,7 +512,9 @@ def validation_inputs(
                     providers.setdefault(name, set()).add(path)
         return closures, providers
 
-    closures, providers = memo("typemap.validation-graph", graph_key, graph, keep=4)
+    closures, providers = memo(
+        "typemap.validation-graph", graph_key, graph, size=retention.memory_size, copy_out=retention.clone
+    )
     abi = []
     for text in dict.fromkeys(line for line in abi_context.splitlines() if line.strip()):
         selected = {p for name in re.findall(r"\b[A-Za-z_]\w*\b", text) for p in providers.get(name, set())}

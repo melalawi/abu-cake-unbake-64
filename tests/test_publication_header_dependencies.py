@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import land, process
+from unbake import inputs, land, process
 from unbake.cache import Cache
 from unbake.cdecl import parse
 from unbake.config import Held
@@ -39,7 +39,9 @@ class PublicationHeaderDependenciesTests(ProjectCase):
         storage.write(index.path(self.project), index.encoded(self.lookup))
         self.missing = self.include / MISSING
         self.payload = (FIXTURE / "missing-owned.h").read_text()
-        self.assertEqual(storage.digest(self.payload.encode()), self.lookup["headers"][MISSING])
+        self.assertEqual(
+            inputs.bytes_digest(self.payload.encode(), algorithm="sha256"), self.lookup["headers"][MISSING]
+        )
         self.artifact = Cache(self.project.cache).path("typemap-render", RENDER)
         self.cache_payload(self.payload)
         self.built = []
@@ -186,7 +188,10 @@ class PublicationHeaderDependenciesTests(ProjectCase):
         body = self.payload.replace("#endif", '#include "nested.h"\n#endif')
         nested_body = '#ifndef NESTED_H\n#define NESTED_H\n#include "../span_1000/code_800F45C8.h"\n#endif\n'
         self.lookup["headers"].update(
-            {MISSING: storage.digest(body.encode()), nested: storage.digest(nested_body.encode())}
+            {
+                MISSING: inputs.bytes_digest(body.encode(), algorithm="sha256"),
+                nested: inputs.bytes_digest(nested_body.encode(), algorithm="sha256"),
+            }
         )
         storage.write(index.path(self.project), index.encoded(self.lookup))
         storage.write(
@@ -260,7 +265,7 @@ class PublicationHeaderDependenciesTests(ProjectCase):
         duplicate = "common/another.h"
         body = (self.include / INSTALLED).read_text()
         (self.include / duplicate).write_text(body)
-        self.lookup["headers"][duplicate] = storage.digest(body.encode())
+        self.lookup["headers"][duplicate] = inputs.bytes_digest(body.encode(), algorithm="sha256")
         storage.write(index.path(self.project), index.encoded(self.lookup))
         with self.assertRaisesRegex(Held, "land.header_home.*multiple installed homes"):
             self.proof()

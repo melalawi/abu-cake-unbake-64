@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from unbake import cache as retention
 from unbake.config import Held, Project
 
 
@@ -41,15 +42,16 @@ def bindings(project: Project, version: str) -> dict[str, int]:
         "compiler.runtime-bindings",
         (
             configured.baserom,
-            inputs.signature(configured.baserom),
+            inputs.digest(configured.baserom, algorithm="sha256", reuse=retention.configured()),
             configured.split,
-            inputs.signature(configured.split),
+            inputs.digest(configured.split, algorithm="sha256", reuse=retention.configured()),
             tuple(project.resident_mappings.get(version, ())),
             tuple(families),
             REGISTRY_PATH,
-            inputs.signature(REGISTRY_PATH),
-            tuple((p, inputs.signature(p)) for p in sources),
+            inputs.digest(REGISTRY_PATH, algorithm="sha256", reuse=retention.configured()),
+            tuple((p, inputs.digest(p, algorithm="sha256", reuse=retention.configured())) for p in sources),
         ),
         discover,
-        keep=len(project.versions),
+        size=retention.memory_size,
+        copy_out=retention.clone,
     )

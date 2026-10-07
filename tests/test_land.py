@@ -113,11 +113,11 @@ class LandTests(ProjectCase):
         header.write_text("int alpha(void);\n")
         other.write_text("int beta(void);\n")
         steps.record(self.project, "headers", "old-input-key", steps._digests(self.project, (header, other)))
-        original_other = inputs.digest(other)
+        original_other = inputs.digest(other, algorithm="sha256", reuse=True)
         self.assertEqual(self.run_land(["us", "eu"], {"main/alpha.h": "extern int alpha(void);\n"}), "c0ffee")
         self.assertEqual(steps.altered(self.project, "headers"), [])
         self.assertEqual(steps.recorded(self.project, "headers"), "old-input-key")
-        self.assertEqual(inputs.digest(other), original_other)
+        self.assertEqual(inputs.digest(other, algorithm="sha256", reuse=True), original_other)
 
 
 class ProveVersionsTests(unittest.TestCase):
