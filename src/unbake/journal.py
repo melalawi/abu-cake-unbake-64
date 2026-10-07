@@ -51,10 +51,57 @@ def image(path: Path) -> dict[str, str] | None:
     }
 
 
+def _prior_archive(directory: Path, document: dict[str, Any]) -> Path | None:
+    """An existing operation archive must describe the same outputs and a safe state transition."""
+    target: Path = directory.with_name(directory.name + ".archive") / document["operation_id"]
+    if not target.exists():
+        return None
+    if (
+        any(path.is_symlink() for path in (target, *target.parents))
+        or not target.is_dir()
+        or (target / INDEX).is_symlink()
+    ):
+        refuse("journal archive is not an owned directory")
+    previous = strict_json.read(target / INDEX)
+    if not isinstance(previous, dict) or {k: v for k, v in previous.items() if k != "state"} != {
+        k: v for k, v in document.items() if k != "state"
+    }:
+        refuse("journal archive identity/output inventory differs")
+    if previous.get("state") != document["state"] and not (
+        previous.get("state") == "installed"
+        and document["state"] == "committed"
+        and document.get("intent") is None
+        and document.get("git_commit") is None
+        and not document.get("tail_outputs")
+    ):
+        refuse("journal archive state transition is not proved")
+    for row in document["outputs"] + document.get("tail_outputs", []):
+        if row["backup"] is not None:
+            backup = target / row["backup"]
+            if (
+                backup.is_symlink()
+                or not backup.is_file()
+                or inputs.digest(backup, algorithm="sha256", reuse=False) != row["backup_sha256"]
+            ):
+                refuse("journal archive before-image unavailable")
+    return target
+
+
 def archive(directory: Path, document: dict[str, Any]) -> None:
+    import json
+
+    previous = _prior_archive(directory, document)
     target = directory.with_name(directory.name + ".archive")
     target.mkdir(parents=True, exist_ok=True)
-    os.replace(directory, target / document["operation_id"])
+    if previous is None:
+        os.replace(directory, target / document["operation_id"])
+    else:
+        # Keep both interrupted indexes and every before-image in the same operation archive.
+        snapshot = previous / uuid.uuid4().hex
+        prior = (previous / INDEX).read_bytes()
+        os.replace(directory, snapshot)
+        atomic_files.write(snapshot / "prior-index.json", prior)
+        atomic_files.write(previous / INDEX, json.dumps(document, sort_keys=True).encode())
     atomic_files.sync_directory(target)
     atomic_files.sync_directory(directory.parent)
 
@@ -147,9 +194,17 @@ def restore_rows(directory: Path, rows: list[dict[str, Any]]) -> list[Path]:
 
 def recover(directory: Path, *, root: Path) -> list[Path]:
     """Recover only declared outputs; committed before-images remain preserved."""
+    live = current()
+    if live is not None:
+        if live.root != root.resolve():
+            refuse("recovery cannot change the live owning root")
+        if live.directory.resolve() == directory.resolve():
+            return []
     index = directory / INDEX
     if not index.is_file():
         return []
+    if directory.is_symlink() or index.is_symlink():
+        refuse("journal recovery requires an owned directory/index")
     document = strict_json.read(index)
     if not isinstance(document, dict) or document.get("schema") != 2:
         refuse("journal schema2 required; preserve old journal and use offline migration recovery")
@@ -236,6 +291,10 @@ def recover(directory: Path, *, root: Path) -> list[Path]:
         refuse("invalid declared output before-image metadata")
     if len({row["path"] for row in rows}) != len(rows):
         refuse("duplicate declared output")
+    previous = _prior_archive(directory, document)
+    backups = directory
+    if previous is not None:
+        backups = previous
     for row in rows:
         path = Path(row["path"])
         if (not path.is_relative_to(root.resolve()) and str(path) != document.get("git_index")) or any(
@@ -244,15 +303,19 @@ def recover(directory: Path, *, root: Path) -> list[Path]:
             refuse("journal output escapes owning root")
         if row["backup"] is not None:
             backup = directory / row["backup"]
+            if backup.is_symlink():
+                refuse("journal before-image unavailable")
+            if not backup.exists() and previous is not None:
+                backup = previous / row["backup"]
             if (
-                backup.parent != directory
+                backup.parent not in {directory, previous}
                 or not backup.is_file()
                 or backup.is_symlink()
                 or inputs.digest(backup, algorithm="sha256", reuse=False) != row["backup_sha256"]
             ):
                 refuse("journal before-image unavailable")
     restored = restore_rows(
-        directory, document["outputs"] if document["state"] != "committed" else document.get("tail_outputs", [])
+        backups, document["outputs"] if document["state"] != "committed" else document.get("tail_outputs", [])
     )
     if document["state"] == "committed":
         # Persist acceptance before finalizing: a later refusal must never roll back real Git.
