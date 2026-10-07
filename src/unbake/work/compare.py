@@ -150,10 +150,10 @@ def published(project: Project, function: str) -> bool:
 
 
 def view_for(project: Project, file: Path, function: str) -> Project:
-    """A file under build/work/FUNC/ sees that draft's own headers first."""
+    """Keep an explicit header view; otherwise give a work file its draft headers."""
     from unbake.fold import apply as fold_apply
 
-    if not file.resolve().is_relative_to(project.work.resolve()):
+    if project.work_include or not file.resolve().is_relative_to(project.work.resolve()):
         return project
     fold_apply.link_private_includes(project, function)
     return draft_view(project, function)
