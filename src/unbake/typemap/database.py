@@ -883,6 +883,10 @@ def _validate_version(job: _Validation) -> str:
             entry_points = sorted(generated)
         covered = {dep for path in entry_points for dep in job.closures[path]}
         entry_points.extend(sorted(selected - covered))
+        # Native cpp follows include order verbatim. Order the entry points by
+        # the complete declarations supplied by their include closures, just
+        # as selected draft contexts do, before preprocessing the real tree.
+        entry_points = ordered_headers({path: contents[path].decode() for path in sorted(selected)}, roots=entry_points)
         atomic_files.text(
             source,
             durable=False,

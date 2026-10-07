@@ -1,0 +1,22 @@
+{
+  "types.h": {
+    "input_sha256": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e",
+    "bytes": 308,
+    "complete": true
+  },
+  "common/types_8a8189af7b05.h": {
+    "input_sha256": "be0feb5a5ff818546dd3b30ad822696ca928a0438fad2c16db20de00566f48a7",
+    "bytes": 44985,
+    "complete": true
+  },
+  "common/types_8fd754e1e915.h": {
+    "input_sha256": "1c4fe757fce4b5b798c1dfcc3c1318046579d70842ccbcbeacd90d2b6c1f6c49",
+    "bytes": 45429,
+    "complete": true
+  },
+  "placed.h": {
+    "input_sha256": "76695e4658e3acfdb5cade616b7e467d0896d52f842ca4a184fb6157a7a5e047",
+    "slice_sha256": "21ef2ce2e5e8938e4353249699e3740717ecfa70f47e9850fef92d0fac0ff175",
+    "selection": "Complete fourteen native aggregate declarations; module imports and function/global declarations excluded; canonical Vec3 import detached to reproduce proposal entry ordering."
+  }
+}
