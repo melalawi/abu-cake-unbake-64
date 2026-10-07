@@ -72,6 +72,59 @@ class FuzzyCleanupTests(ProjectCase):
             result = land.land(self.project, self.host, self.file, fuzzy=fuzzy)
         return result, commit.call_args
 
+    def test_real_pair_equal_score_cleanup_replaces_committed_source(self):
+        self.seed()
+        # Only the historical committed bytes can authorize cleanup; a local
+        # edit of src must not become the baseline.
+        self.source.write_text(attempts.guarded(CLEANED))
+        splits = {v: self.project.version(v).split.read_bytes() for v in self.versions}
+        result, commit = self.publish_source()
+        self.assertEqual(result, "c0ffee")
+        self.assertEqual(self.source.read_text(), attempts.guarded(CLEANED))
+        self.assertEqual(commit.args[3], f"Fuzzy {FUNCTION}")
+        receipt = attempts.fuzzy(self.project, FUNCTION)
+        self.assertEqual(receipt["score"], 20.0)
+        self.assertEqual(receipt["source_sha256"], hashlib.sha256(self.source.read_bytes()).hexdigest())
+        self.assertEqual({v: self.project.version(v).split.read_bytes() for v in self.versions}, splits)
+        self.assertEqual(build.source_findings(self.project), [])
+
+    def test_real_cleanup_lower_or_unknown_score_never_replaces(self):
+        self.seed()
+        summary = attempts.summary_path(self.project).read_bytes()
+        for score in (19.0, None):
+            with self.subTest(score=score), self.assertRaisesRegex(Held, "land.fuzzy_improvement"):
+                self.publish_source(score=score)
+            self.assertEqual(self.source.read_text(), COMMITTED)
+            self.assertEqual(attempts.summary_path(self.project).read_bytes(), summary)
+
+    def test_clean_baseline_needs_higher_score(self):
+        self.seed(CLEANED)
+        with self.assertRaisesRegex(Held, "land.fuzzy_improvement"):
+            self.publish_source()
+        self.publish_source(score=21.0)
+        self.assertEqual(attempts.fuzzy(self.project, FUNCTION)["score"], 21.0)
+
+    def test_unknown_baseline_requires_available_measurement(self):
+        self.seed(score=None)
+        with self.assertRaisesRegex(Held, "land.fuzzy_improvement"):
+            self.publish_source(score=None)
+        self.assertEqual(self.source.read_text(), COMMITTED)
+
+    def test_equal_cleanup_is_generic_across_source_rules(self):
+        violations = [
+            'void extra(void) { asm("nop"); }',
+            "int extra(void *p) { return *(int *)((char *)p + 4); }",
+            "volatile int extra;",
+            "int M2C_ERROR(void);",
+            "#define LOCAL_VALUE 1",
+            "#define gDPLocal(x) (x)",
+        ]
+        for violation in violations:
+            with self.subTest(violation=violation):
+                self.seed(violation + "\n" + SIMPLE)
+                self.publish_source(SIMPLE)
+                self.assertEqual(checks.run(self.source), [])
+
     def test_cleanup_cannot_introduce_any_new_violation(self):
         for score in (20.0, 21.0):
             for violation in ("#define LOCAL_VALUE 1", "int M2C_ERROR(void);", "volatile int extra;"):
@@ -109,6 +162,12 @@ class FuzzyCleanupTests(ProjectCase):
                 land.exact_attempt(self.project, FUNCTION, self.file)
             with self.assertRaisesRegex(Held, "land.rules.*raw display list"):
                 land.exact_attempt(self.project, FUNCTION, self.file, required_versions=self.versions)
+
+    def test_committed_hash_must_agree_with_receipt(self):
+        self.seed()
+        self.committed = attempts.guarded(CLEANED)
+        with self.assertRaisesRegex(Held, "land.fuzzy_history"):
+            self.publish_source()
 
     def test_shared_check_sees_real_raw_source_but_accepts_cleaned_pair(self):
         self.assertTrue(checks.unmarked(COMMITTED))

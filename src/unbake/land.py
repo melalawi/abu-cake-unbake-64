@@ -656,9 +656,14 @@ def land(
                     )
                     assert baseline.scores is not None
                     old_score = _fuzzy_score(project, function, baseline.scores)
-                if score is None or old_score is None or score <= old_score:
+                # Admission above requires a clean candidate. A tie may remove
+                # violations from the committed bytes, never from a local edit.
+                cleanup = score is not None and score == old_score and bool(checks.run(attempts.unguarded(before)))
+                if score is None or old_score is None or score < old_score or (score == old_score and not cleanup):
                     raise Held(
-                        "land", f"land.fuzzy_improvement: {function}: a strictly higher measured score is required"
+                        "land",
+                        f"land.fuzzy_improvement: {function}: a strictly higher measured score or an equal measured "
+                        "score with source-rule cleanup is required",
                     )
             fuzzy_receipt = {
                 "source_sha256": hashlib.sha256(source.encode()).hexdigest(),

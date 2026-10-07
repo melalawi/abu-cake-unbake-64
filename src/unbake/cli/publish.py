@@ -36,8 +36,9 @@ invocation when dispatching each immutable commit to a separate publisher.
 --fuzzy retains source that passes source/ABI checks and compiles in every holding
 version, without a minimum matching percentage. Its body is guarded by NON_MATCHING;
 the default ROM build keeps the original assembly rows and exact progress does not
-increase. A later fuzzy source must have a strictly higher measured, size-weighted
-score. An unavailable comparison stays explicit and never authorizes replacement.
+increase. A later fuzzy source must have a higher measured, size-weighted score, or
+an equal score while removing committed source-rule violations and adding none.
+An unavailable comparison stays explicit and never authorizes replacement.
 """
 PROJECT = "ready"
 
