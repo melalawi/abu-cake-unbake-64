@@ -558,7 +558,9 @@ def subject(project: Project, function: str) -> str:
 def _refuse_edited_headers(project: Project) -> None:
     """Publish places declarations in the shared headers; a hand-edited generated header is dropped by the next
     regeneration, so it is refused before any work."""
-    if edited := steps.altered(project, "headers"):
+    from unbake.project import generated_state
+
+    if edited := generated_state.reconcile(project, "headers"):
         raise Held(
             "land",
             f"land.generated_edit: generated headers were edited by hand: {', '.join(edited)}. Put the declarations "
