@@ -34,10 +34,12 @@ def environment(project: Project, policy: Host | None) -> str:
     code = Path(__file__).parents[1]
     modules = (
         "cdecl.py",
+        "fold/self_prototype.py",
         "fold/provider_reuse.py",
         "fold/provider_identity.py",
         "prefixes.py",
         "typemap/regeneration.py",
+        "typemap/database.py",
         "typemap/header_names.py",
         "typemap/declarations.py",
         "typemap/declaration_evidence.py",
@@ -364,7 +366,23 @@ class Session:
             for kind, keys in self._PROJECTED.items()
         }
         for name, row in value["functions"].items():
-            projection["functions"][name]["caller_arguments"] = (row.get("abi") or {}).get("caller_arguments", [])
+            abi = row.get("abi") or {}
+            for field in ("caller_arguments", "used_returns", "return_width", "caller_return_uses"):
+                projection["functions"][name][field] = abi.get(field)
+        from unbake.typemap.database import _owning_sources
+
+        sources = getattr(self, "sources", {})
+        owners, fuzzy = _owning_sources(self.project, sources) if sources else ({}, set())
+        projection["owning_sources"] = {
+            storage.relative(self.project, path): {
+                "names": sorted(names),
+                "registered": path in fuzzy,
+                "source_sha256": inputs.bytes_digest(sources[path].encode(), algorithm="sha256")
+                if path in fuzzy
+                else None,
+            }
+            for path, names in owners.items()
+        }
         projection.update((field, value.get(field, {})) for field in self._CARRIED)
         names = set().union(*(set(value[kind]) for kind in self._PROJECTED), set(value.get("typedefs", {})))
         projection["source_dependencies"] = {

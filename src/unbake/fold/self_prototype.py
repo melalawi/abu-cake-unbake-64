@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -236,6 +237,24 @@ def owned(
     return replace_owned_contract(contents, generated, function, previous, proposed, aliases, versions)
 
 
+def definition_prototypes(text: str, aliases: dict[str, str]) -> dict[str, str]:
+    """The existing exact-fold definition reader, shared with regeneration."""
+    unit = _declaration_unit(cdecl.declaration_source(text))
+    names = cdecl.declarations(unit)
+    try:
+        tree = cdecl.parse(unit, typedefs=names.uses | names.typedefs | aliases.keys())
+    except Exception:
+        return {}
+    definitions = [node.decl for node in tree.ext if isinstance(node, c_ast.FuncDef)]
+    counts = Counter(row.name for row in definitions)
+    generator = c_generator.CGenerator()
+    return {
+        row.name: generator.visit(row) + ";"
+        for row in definitions
+        if "static" not in row.storage and counts[row.name] == 1
+    }
+
+
 def exact(
     contents: dict[Path, str],
     generated: frozenset[Path],
@@ -278,16 +297,9 @@ def exact(
     abi = record.get("abi") or {}
     if abi.get("missing") or abi.get("conflicts") or abi.get("unproven_return_reads"):
         return []
-    unit = _declaration_unit(cdecl.declaration_source(text))
-    names = cdecl.declarations(unit)
-    try:
-        tree = cdecl.parse(unit, typedefs=names.uses | names.typedefs | aliases.keys())
-    except Exception:
+    prototype = definition_prototypes(text, aliases).get(function)
+    if prototype is None:
         return []
-    definitions = [node.decl for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function]
-    if len(definitions) != 1 or "static" in definitions[0].storage:
-        return []
-    prototype = c_generator.CGenerator().visit(definitions[0]) + ";"
     right = _signature(prototype, aliases)
 
     def scalar(signature: dict[str, Any] | None) -> bool:
@@ -377,16 +389,9 @@ def inferred(
     abi = record.get("abi") or {}
     if not abi.get("arity_known") or abi.get("missing") or abi.get("conflicts"):
         return []
-    unit = _declaration_unit(cdecl.declaration_source(text))
-    names = cdecl.declarations(unit)
-    try:
-        tree = cdecl.parse(unit, typedefs=names.uses | names.typedefs | aliases.keys())
-    except Exception:
+    prototype = definition_prototypes(text, aliases).get(function)
+    if prototype is None:
         return []
-    definitions = [node.decl for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function]
-    if len(definitions) != 1 or "static" in definitions[0].storage:
-        return []
-    prototype = c_generator.CGenerator().visit(definitions[0]) + ";"
     right = _signature(prototype, aliases)
     if right is None or not right["arity_known"] or right["variadic"]:
         return []

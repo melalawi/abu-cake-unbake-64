@@ -456,9 +456,74 @@ def _render(
             declarations_by_name[name] = (
                 prototype if prototype.startswith(("extern ", "static ")) else "extern " + prototype
             )
+    # Published definitions own their entry contract even when the default
+    # build omits a registered NON_MATCHING body. Reuse the fold reader and the
+    # session's source payloads; this is declaration authority, not native proof.
+    from unbake.fold import self_prototype
+    from unbake.fold.callee_contracts import _signature
+    from unbake.typemap.declarations import canonical, source_definition_units
+    from unbake.work import attempts
+
+    owning_sources, fuzzy_paths = _owning_sources(project, session.sources)
+    own_prototypes: dict[Path, dict[str, str]] = {}
+    own_aliases = {**value.get("typedefs", {}), **replacements, **redeclarations.aliases(list(components.values()))}
+    for path, names in owning_sources.items():
+        if path not in session.sources:
+            continue
+        text = attempts.unguarded(session.sources[path]) if path in fuzzy_paths else session.sources[path]
+        source_aliases = {**own_aliases, **redeclarations.aliases([text])}
+        variants: dict[str, set[str]] = defaultdict(set)
+        for unit in source_definition_units(path, text, project, policy):
+            for name, prototype in self_prototype.definition_prototypes(unit, source_aliases).items():
+                if name in names:
+                    variants[name].add(prototype)
+        if missing := names - variants.keys():
+            raise Held(
+                cause_named(
+                    "types.own_contract",
+                    f"types.own_contract: {path}: published owning definitions unavailable: {sorted(missing)}",
+                    owner="typemap.database",
+                    stage="types",
+                )
+            )
+        own_prototypes[path] = {}
+        for name, prototypes in variants.items():
+            if len(prototypes) != 1:
+                raise Held(
+                    cause_named(
+                        "types.own_contract",
+                        f"types.own_contract: {name}: published definitions disagree: {sorted(prototypes)}",
+                        owner="typemap.database",
+                        stage="types",
+                    )
+                )
+            prototype = next(iter(prototypes))
+            signature = _signature(prototype, source_aliases)
+            abi = (value["functions"].get(name) or {}).get("abi") or {}
+            returned = canonical(signature["return"], source_aliases) if signature else None
+            register = None if returned == "void" else "f0" if returned in ("float", "double") else "r2"
+            used = set(abi.get("used_returns", []))
+            pair = returned in ("long long", "unsigned long long", "double")
+            if signature and (
+                any(reg != register for reg in used) or (used and abi.get("return_width") == 8 and not pair)
+            ):
+                raise Held(
+                    cause_named(
+                        "types.own_contract",
+                        f"types.own_contract: {name}: published {prototype} contradicts native return consumption "
+                        f"{sorted(used)} by {abi.get('caller_return_uses', {})}",
+                        owner="typemap.database",
+                        stage="types",
+                        evidence={"prototype": prototype, "abi": abi},
+                    )
+                )
+            own_prototypes[path][name] = prototype
+            rewritten = session.rewrite(prototype, replacements, reserved)
+            declarations_by_name[name] = rewritten if rewritten.startswith("extern ") else "extern " + rewritten
     # A (void) prototype refuses the arguments mapped callers pass (K&R calls): any header spelling of such a
     # function, rendered or carried, declares no parameter list instead.
-    passed = unprototyped_calls(value["functions"])
+    own_names = frozenset(name for rows in own_prototypes.values() for name in rows)
+    passed = unprototyped_calls(value["functions"]) - own_names
     void_pattern = void_calls(passed)
     for name in passed & declarations_by_name.keys():
         declarations_by_name[name] = without_void(declarations_by_name[name], void_pattern)
@@ -495,6 +560,8 @@ def _render(
         replacements,
         project,
         policy,
+        own_prototypes,
+        own_names,
     )
     items = list(session.sources.items())
     decisions = (
@@ -549,6 +616,27 @@ _SIGNATURE = re.compile(
 )
 
 
+def _owning_sources(project: Project, sources: dict[Path, str]) -> tuple[dict[Path, set[str]], set[Path]]:
+    """Published C and content-pinned registered bodies, using the existing inventories."""
+    from unbake.typemap.declarations import published_sources
+    from unbake.work import attempts
+
+    owners: dict[Path, set[str]] = defaultdict(set)
+    for name, path, _version in published_sources(project):
+        if path in sources:
+            owners[path].add(name)
+    fuzzy: set[Path] = set()
+    for name, receipt in attempts.ledger(project).fuzzy_sources().items():
+        path = project.src / (name + ".c")
+        text = sources.get(path)
+        if text is not None and input_pins.bytes_digest(text.encode(), algorithm="sha256") == receipt.get(
+            "source_sha256"
+        ):
+            owners[path].add(name)
+            fuzzy.add(path)
+    return dict(owners), fuzzy
+
+
 @dataclass(frozen=True)
 class _Drops:
     """What every source is checked against: the rendered declarations and the contracts other headers retain."""
@@ -562,6 +650,8 @@ class _Drops:
     replacements: dict[str, str]
     project: Project | None = None
     policy: Host | None = None
+    own_prototypes: dict[Path, dict[str, str]] | None = None
+    own_names: frozenset[str] = frozenset()
 
 
 def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set[str], set[Path]]:
@@ -585,7 +675,11 @@ def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set
     # A version-selected call can look like a signature after directives are
     # blanked. Read only file-scope signatures, using the same body scan as
     # declaration extraction, before deciding which contracts a source owns.
-    for unit in source_definition_units(source_path, text, shared.project, shared.policy):
+    owned = (shared.own_prototypes or {}).get(source_path)
+    for name, prototype in (owned or {}).items():
+        definitions.add(name)
+        local.setdefault(name, []).append(prototype)
+    for unit in () if owned is not None else source_definition_units(source_path, text, shared.project, shared.policy):
         for match in _SIGNATURE.finditer(unit):
             definitions.add(match["name"])
             prototype = match["prototype"].strip() + ";"
@@ -594,9 +688,13 @@ def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set
                 variants.append(prototype)
     local_aliases = {**shared.typedefs, **shared.replacements, **redeclarations.aliases([text])}
     for name in local.keys() & shared.declarations_by_name.keys():
-        if (name != source_path.stem or name in definitions) and any(
-            not redeclarations.equivalent(variant, shared.declarations_by_name[name], local_aliases)
-            for variant in local[name]
+        if (
+            name not in shared.own_names
+            and (name != source_path.stem or name in definitions)
+            and any(
+                not redeclarations.equivalent(variant, shared.declarations_by_name[name], local_aliases)
+                for variant in local[name]
+            )
         ):
             drop_names.add(name)
     # Installed generated declarations are dependencies, not owners of a source-local or defined contract.
@@ -606,6 +704,7 @@ def _source_drops(shared: _Drops, item: tuple[Path, str]) -> tuple[set[str], set
         if path in shared.components and any(
             not redeclarations.equivalent(variant, shared.components[path], local_aliases)
             for name in local.keys() & shared.retained_contracts[path]
+            if name not in shared.own_names or name in definitions
             if path not in shared.published_homes or name in definitions
             for variant in local[name]
         ):
