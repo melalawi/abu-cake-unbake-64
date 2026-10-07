@@ -12,9 +12,11 @@ from __future__ import annotations
 import json
 import pickle
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from unbake import atomic as atomic_files
@@ -336,15 +338,15 @@ def _plain(nested: dict[Any, Any]) -> dict[Any, Any]:
     return {key: _plain(value) if isinstance(value, dict) else value for key, value in nested.items()}
 
 
-def _function_ops(
+def _function_rows(
     shared: tuple[Mapping[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, set[str]], dict[str, Any]],
     names: list[str],
-) -> list[tuple[Any, ...]]:
-    """Pool worker: for each of NAMES, the writes its bodies make to the graph (as operations), the fields, memory
-    sources, forwarded values and neighbours they add, and their indexed-array candidates."""
+) -> Iterator[tuple[Any, ...]]:
+    """The graph writes, fields, memory sources, forwarded values, neighbours and indexed-array candidates of
+    each function in NAMES, retaining only a bounded input batch and the current function's output."""
     functions, signatures, used, addresses = shared
-    found = []
-    for function, item in shards.bodies(functions, names).items():
+    # Keep input expansion bounded independently of the number of functions in a pool piece.
+    for function, item in _bodies(functions, names):
         graph = Recorder()
         fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
         forwarded: dict[str, set[str]] = defaultdict(set)
@@ -353,18 +355,59 @@ def _function_ops(
         _function_body(
             graph, function, item, signatures, used, addresses, neighbour_edges, fields, forwarded, memory_sources
         )
-        found.append(
-            (
-                function,
-                graph.ops,
-                _plain(fields),
-                memory_sources,
-                dict(forwarded),
-                neighbour_edges,
-                _array_function(function, item, addresses),
-            )
+        yield (
+            function,
+            graph.ops,
+            _plain(fields),
+            memory_sources,
+            dict(forwarded),
+            neighbour_edges,
+            _array_function(function, item, addresses),
         )
-    return found
+
+
+# This bounds decoded input, not worker admission or task boundaries. A piece still visits every name once.
+BODY_BATCH = 4
+
+
+def _bodies(functions: Mapping[str, dict[str, Any]], names: list[str]) -> Iterator[tuple[str, dict[str, Any]]]:
+    for start in range(0, len(names), BODY_BATCH):
+        yield from shards.bodies(functions, names[start : start + BODY_BATCH]).items()
+
+
+def _function_ops(shared: Any, job: tuple[list[str], Path]) -> Path:
+    """Stream one function's operations and side tables at a time; the pool sends back only the private path.
+
+    Separate picklers bound the memo to one function while preserving all sharing inside its result. A retry
+    overwrites its own incomplete file; the caller owns the directory until every result has been replayed.
+    """
+    names, path = job
+    with path.open("wb") as output:
+        for row in _function_rows(shared, names):
+            pickle.dump(row, output, protocol=5)
+        pickle.dump(None, output, protocol=5)
+    return path
+
+
+def _read_ops(path: Path) -> Iterator[tuple[Any, ...]]:
+    with path.open("rb") as source:
+        while (row := pickle.load(source)) is not None:
+            yield row
+    # EOF before the terminator is an error, including an interrupted write at a function boundary.
+
+
+@contextmanager
+def _operations(shared: Any, pieces: list[list[str]], host: Host | None) -> Iterator[Any]:
+    if host is None:
+        yield (_function_rows(shared, piece) for piece in pieces)
+        return
+    root = host.cache_machine_root
+    root.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix="unbake-closure-", dir=root) as directory:
+        jobs = [(names, Path(directory) / f"{index}.pickle") for index, names in enumerate(pieces)]
+        with tui.task("Following values between functions", sum(map(len, pieces))):
+            done = pool.run(host, _function_ops, jobs, shared)
+        yield (_read_ops(path) for path in done)
 
 
 def _function_body(
@@ -471,14 +514,8 @@ def build(
     candidates: dict[str, dict[str, Any]] = {}
     names = list(functions)
     shared = (functions, signatures, used, addresses)
-    with tui.task("Following values between functions", len(names)):
-        pieces = shards.chunks(names, pool.workers(host) if host is not None else 1)
-        done = (
-            pool.run(host, _function_ops, pieces, shared)
-            if host is not None
-            else [_function_ops(shared, piece) for piece in pieces]
-        )
-    with tui.task("Joining machine value flow"):
+    pieces = shards.chunks(names, pool.workers(host) if host is not None else 1)
+    with _operations(shared, pieces, host) as done, tui.task("Joining machine value flow"):
         for piece in done:
             for function, ops, local_fields, local_sources, local_forwarded, local_neighbours, arrays in piece:
                 for operation, arguments in ops:

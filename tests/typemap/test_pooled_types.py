@@ -123,7 +123,7 @@ class PooledSolveTests(TempCase):
                 {**facts(PROGRAMS), "shard_sha256": "a" * 64},
                 seeds,
                 shard_dir=shards,
-                policy=SimpleNamespace() if pooled else None,
+                policy=SimpleNamespace(cache_machine_root=self.root / "machine") if pooled else None,
             )
 
     def test_abi_and_machine_built_in_pieces_equal_the_serial_ones(self) -> None:
