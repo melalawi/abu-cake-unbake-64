@@ -11,6 +11,7 @@ from pathlib import Path
 
 from unbake import scratch
 from unbake.cdecl import LayoutParser
+from unbake.compilers.families.types import View
 from unbake.config import Held, Host, Project
 from unbake.decomp import gbi_recover, needs
 from unbake.fold import imports, pool_literals, rewrite_view, self_prototype, source_views, type_rewrite
@@ -298,12 +299,46 @@ def fold_source(
         authored=authored,
         versions=versions,
     )
+    from unbake.layout import index as layout_index
+    from unbake.typemap import types_db
+
+    staged_contents = {**headers.texts, **{edit.path: edit.after for edit in edits}}
+    database = types_db.path(project)
+    if database.is_file():
+        manifest = set(layout_index.load(project)["headers"])
+        generated = frozenset(
+            path
+            for path in staged_contents
+            if any(
+                path.is_relative_to(root) and path.relative_to(root).as_posix() in manifest for root in project.include
+            )
+        )
+        record = types_db.entries(database, "functions", [function]).get(function, {})
+        parser = context.seeded("")
+        aliases = {}
+        for name in set(re.findall(r"\b[A-Za-z_]\w*\b", final)) & parser.types.keys():
+            try:
+                aliases[name] = parser.type_name(name, ())
+            except Held:
+                continue
+        inferred_edits = self_prototype.inferred(staged_contents, generated, final, function, record, aliases, versions)
+    else:
+        inferred_edits = []
+    own_contents = {**staged_contents, **{edit.path: edit.after for edit in inferred_edits}}
     by_path = {edit.path: edit for edit in edits}
-    for edit in self_prototype.unqualify(
-        {**headers.texts, **{edit.path: edit.after for edit in edits}}, final, function, versions
-    ):
+    for edit in [*inferred_edits, *self_prototype.unqualify(own_contents, final, function, versions)]:
         previous = by_path.get(edit.path)
         by_path[edit.path] = replace(edit, before=previous.before) if previous is not None else edit
+    if inferred_edits:
+        own_context = Headers(
+            {**headers.texts, **{path: edit.after for path, edit in by_path.items()}}, root=headers.root
+        )
+        for edit in inferred_edits:
+            current = by_path[edit.path]
+            by_path[edit.path] = replace(
+                current,
+                after=imports.resolve(project, own_context, current.after, edits=tuple(by_path.values())),
+            )
     edits = list(by_path.values())
     removed: dict[str, tuple[str, ...]] = {}
     for version in versions:
@@ -397,7 +432,7 @@ def _layout_names(
                 project, policy, headers, version, function, context_project=effective_project()
             )
 
-        def expanded_context(parser: LayoutParser, version: str) -> rewrite_view.View:
+        def expanded_context(parser: LayoutParser, version: str) -> View:
             return rewrite_view.prepare(
                 effective_project(),
                 policy,

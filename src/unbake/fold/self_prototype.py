@@ -3,13 +3,111 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import cdecl
 from unbake.layout import redeclarations
 from unbake.layout.split import Edit
+from unbake.typemap import declarations, evidence, o32
 from unbake.typemap.declarations import _declaration_unit
+
+
+def inferred(
+    contents: dict[Path, str],
+    generated: frozenset[Path],
+    text: str,
+    function: str,
+    record: dict[str, Any],
+    aliases: dict[str, str],
+    versions: tuple[str, ...],
+) -> list[Edit]:
+    """Stage the definition's own entry spelling against an inferred prototype.
+
+    This is not a callee or caller contract override. Publication still compiles
+    the complete source and proves every holding version against its ROM.
+    """
+    from unbake.fold.callee_contracts import _signature
+
+    provenance = record.get("provenance", [])
+    if isinstance(provenance, dict):
+        provenance = [provenance]
+    if any(row.get("kind") in ("proven", "published") for row in provenance):
+        return []
+    abi = record.get("abi") or {}
+    if not abi.get("arity_known") or abi.get("missing") or abi.get("conflicts"):
+        return []
+    unit = _declaration_unit(cdecl.declaration_source(text))
+    names = cdecl.declarations(unit)
+    try:
+        tree = cdecl.parse(unit, typedefs=names.uses | names.typedefs | aliases.keys())
+    except Exception:
+        return []
+    definitions = [node.decl for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function]
+    if len(definitions) != 1 or "static" in definitions[0].storage:
+        return []
+    prototype = c_generator.CGenerator().visit(definitions[0]) + ";"
+    right = _signature(prototype, aliases)
+    if right is None or not right["arity_known"] or right["variadic"]:
+        return []
+    types = {param["register"]: param.get("type") for param in record.get("params", [])}
+    if right["registers"] != evidence.parameters(abi.get("registers", []), types):
+        return []
+    edits = []
+    for path in sorted(generated & contents.keys()):
+        before = contents[path]
+        after = before
+        for start, end in reversed(redeclarations.spans(before)):
+            old = before[start:end]
+            if cdecl.declarations(old).declared != {function}:
+                continue
+            left = _signature(old, aliases)
+            if left is None or not left["arity_known"] or left["variadic"]:
+                continue
+            if len(left["params"]) != len(right["params"]):
+                continue
+            pairs = [(a["type"], b["type"]) for a, b in zip(left["params"], right["params"], strict=True)]
+            if any(
+                declarations.canonical(a, aliases) != declarations.canonical(b, aliases)
+                and not (
+                    declarations.canonical(a, aliases).endswith(" *")
+                    and declarations.canonical(b, aliases).endswith(" *")
+                )
+                for a, b in pairs
+            ):
+                continue
+            returned = declarations.canonical(right["return"], aliases)
+            previous_return = declarations.canonical(left["return"], aliases)
+            transport = prototype
+            if returned == "void" and previous_return != "void":
+                if (
+                    previous_return not in ("int", "unsigned int", "long", "unsigned long")
+                    or abi.get("used_returns")
+                    or abi.get("unproven_return_reads")
+                ):
+                    continue
+                transport = (
+                    declarations.declarator(
+                        previous_return,
+                        function
+                        + "("
+                        + ", ".join(declarations.declarator(p["type"], p["name"]) for p in right["params"])
+                        + ")",
+                    )
+                    + ";"
+                )
+                if not right["params"]:
+                    transport = declarations.declarator(previous_return, function + "(void)") + ";"
+            elif previous_return != returned:
+                continue
+            if not o32.compatible_prototypes(old, transport, aliases):
+                continue
+            if not redeclarations.equivalent(old, prototype, aliases):
+                after = after[:start] + prototype + after[end:]
+        if after != before:
+            edits.append(Edit(path, before, after, versions))
+    return edits
 
 
 def unqualify(contents: dict[Path, str], text: str, function: str, versions: tuple[str, ...] = ()) -> list[Edit]:
