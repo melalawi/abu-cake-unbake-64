@@ -4,9 +4,90 @@ import re
 from pathlib import Path
 
 from unbake import atomic as atomic_files
+from unbake.cdecl import SOURCE_TOKEN, declaration_source
 from unbake.config import Held, Project
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
+
+
+def _access_views(function: str, source: str, assembly: str, symbol: str, reads: set[str], writes: set[str]) -> str:
+    """Measure reads and lvalues independently; never infer a shared pointee type.
+
+    Instruction order is not C expression order. Mixed signed loads can only be
+    lowered when an explicit narrow conversion makes their value unambiguous.
+    A same-width store transports the bits without extending the loaded value.
+    """
+    clean = declaration_source(source)
+    tokens = [m for m in SOURCE_TOKEN.finditer(clean) if not m[0].startswith(('"', "'"))]
+    declarations = {
+        m[2]: m[1]
+        for m in re.finditer(r"\b(s8|u8|s16|u16|signed char|unsigned char|short|unsigned short)\s+(\w+)\s*;", clean)
+    }
+    aliases = {"s8": "signed char", "u8": "unsigned char", "s16": "short", "u16": "unsigned short"}
+    edits: list[tuple[int, int, str, int]] = []
+    for index, token in enumerate(tokens):
+        if [m[0] for m in tokens[index : index + 5]] != ["*", "(", "&", symbol, "+"]:
+            continue
+        level = 1
+        tail = index + 5
+        while tail < len(tokens):
+            level += (tokens[tail][0] == "(") - (tokens[tail][0] == ")")
+            if not level:
+                break
+            tail += 1
+        if level:
+            raise Held("m2c", f"{function}.{symbol}: unclosed data access")
+        end = tokens[tail].end()
+        after = clean[end:].lstrip()
+        before = clean[: token.start()]
+        assignment = re.match(r"=(?!=)", after)
+        compound = re.match(r"(?:[+*/%&|^-]|<<|>>)=|\+\+|--", after) or re.search(r"(?:\+\+|--)\s*$", before)
+        unaligned = re.search(r"\bM2C_UNALIGNED32\(\s*$", before)
+        if unaligned and not assignment and not compound:
+            continue
+        address = source[tokens[index + 5].start() : tokens[tail].start()].strip()
+        byte_address = f"((unsigned char *)&{symbol} + {address})"
+        if after.startswith("(") and re.search(r"\bjalr\b", assembly):
+            if reads != {"int"}:
+                raise Held("m2c", f"{function}.{symbol}: indirect call lacks a measured word")
+            value = f"((void (**)()){byte_address})[0]"
+        else:
+            choices = writes if assignment else reads
+            widths = {SCALARS[spelling][0] for spelling in choices}
+            if len(widths) != 1:
+                kind = "store" if assignment else "load"
+                raise Held("m2c", f"{function}.{symbol}: data {kind} lacks a measured width")
+            width = next(iter(widths))
+            if compound and {SCALARS[spelling][0] for spelling in writes} != {width}:
+                raise Held("m2c", f"{function}.{symbol}: read/modify/write lacks a measured width")
+            if len(choices) == 1:
+                spelling = next(iter(choices))
+            else:
+                # A narrow assignment or cast occurs before promotion. Both
+                # machine extensions produce the same bits after that conversion.
+                cast = re.search(r"\((s8|u8|s16|u16|signed char|unsigned char|short|unsigned short)\)\s*$", before)
+                destination = re.search(r"\b(\w+)\s*=\s*$", before)
+                spelling = aliases.get(cast[1], cast[1]) if cast else ""
+                if not spelling and destination and re.match(r"\s*;", after):
+                    spelling = declarations.get(destination[1], "")
+                    spelling = aliases.get(spelling, spelling)
+                # The RHS of a measured same-width store only transports bits.
+                transport = any(
+                    stop <= token.start()
+                    and re.fullmatch(r"\s*=\s*", clean[stop : token.start()])
+                    and view_width == width
+                    and re.match(r"\s*;", after)
+                    for _, stop, _, view_width in edits
+                )
+                if transport:
+                    spelling = {1: "unsigned char", 2: "unsigned short", 4: "int"}[width]
+                if compound or not spelling or SCALARS[spelling][0] != width:
+                    raise Held("m2c", f"{function}.{symbol}: data load lacks a measured signed view")
+            value = f"*(({spelling} *){byte_address})"
+        edits.append((token.start(), end, value, 4 if after.startswith("(") else width))
+    for start, end, value, _ in reversed(edits):
+        source = source[:start] + value + source[end:]
+    return source
 
 
 def prepare(project: Project, function: str, source: str, assembly: str) -> tuple[str, Path | None]:
@@ -81,40 +162,27 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
         source = re.sub(r"\bM2C_UNK\s*\*\s*(\w+)\s*;", r"unsigned char *\1;", source)
         source = re.sub(r"(\b\w+\s*=\s*)&(frame\.storage\.slot_\w+\.\w+);", r"\1(unsigned char *)&\2;", source)
 
-    # Unknown data names are address transports only. Read widths below come
+    # Unknown data names are address transports only. Access widths below come
     # from machine accesses, independently of their semantic target layout.
     opaque = set(re.findall(r"extern M2C_UNK (\w+);", source))
     for name in sorted(opaque):
-        widths = set()
-        for match in re.finditer(r"\b(lh|lhu|lw|lb|lbu)\s+[^\n]*%lo\(" + re.escape(name) + r"\)", assembly):
-            widths.add(
-                {"lh": "short", "lhu": "unsigned short", "lw": "int", "lb": "signed char", "lbu": "unsigned char"}[
-                    match[1]
-                ]
-            )
-        load = re.compile(r"\*\(&" + re.escape(name) + r"\s*\+\s*(\w+)\)")
-        if re.search(r"\bjalr\b", assembly) and re.search(load.pattern + r"(?=\s*\()", source):
-
-            def function_word(match: re.Match[str], symbol: str = name) -> str:
-                return f"((void (**)())(&{symbol} + {match[1]}))[0]"
-
-            def address_word(match: re.Match[str], symbol: str = name) -> str:
-                return f"*((unsigned int *)(&{symbol} + {match[1]}))"
-
-            source = re.sub(load.pattern + r"(?=\s*\()", function_word, source)
-            source = load.sub(address_word, source)
-        elif len(widths) == 1:
-            type_ = next(iter(widths))
-
-            def scalar_load(match: re.Match[str], symbol: str = name, spelling: str = type_) -> str:
-                return f"*(({spelling} *)(&{symbol} + {match[1]}))"
-
-            source = load.sub(scalar_load, source)
-        elif load.search(source):
-            unaligned_load = re.compile(r"M2C_UNALIGNED32\(\s*" + load.pattern + r"\s*\)")
-            remaining = unaligned_load.sub("", source)
-            if load.search(remaining):
-                raise Held("m2c", f"{function}.{name}: data load lacks a measured width")
+        reads: set[str] = set()
+        writes: set[str] = set()
+        views = {
+            "lh": "short",
+            "lhu": "unsigned short",
+            "lw": "int",
+            "lb": "signed char",
+            "lbu": "unsigned char",
+            "sh": "unsigned short",
+            "sw": "int",
+            "sb": "unsigned char",
+        }
+        for match in re.finditer(
+            r"(?m)^\s*(lh|lhu|lw|lb|lbu|sh|sw|sb)\s+[^\n]*%lo\(" + re.escape(name) + r"\)", assembly
+        ):
+            (writes if match[1].startswith("s") else reads).add(views[match[1]])
+        source = _access_views(function, source, assembly, name, reads, writes)
         uses = re.sub(r"extern M2C_UNK " + re.escape(name) + r";", "", source)
         if any(
             not uses[: m.start()].rstrip().endswith("&") for m in re.finditer(r"\b" + re.escape(name) + r"\b", uses)

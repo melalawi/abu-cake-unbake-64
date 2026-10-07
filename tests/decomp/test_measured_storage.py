@@ -89,7 +89,7 @@ class MeasuredStorageTests(unittest.TestCase):
             self.project, "alpha", source, "lw $v0, %lo(table)($at)\njalr $v0\n lh $v1, %lo(data)($at)\n"
         )
         self.assertIn("void (**)()", output)
-        self.assertIn("short *)(&data", output)
+        self.assertIn("short *)((unsigned char *)&data", output)
         c_parser.CParser().parse("void use(int);\n" + clean(output))
 
     def test_unaligned_field_width_refuses_instead_of_guessing_padding(self):

@@ -1,0 +1,33 @@
+[
+  {
+    "function": "func_800D6274_us",
+    "symbol": "D_803282D8",
+    "assembly_accesses": [
+      "sw         $a2, %lo(D_803282D8)($at)"
+    ],
+    "minimal_draft": "extern M2C_UNK D_803282D8; void func_800D6274_us(int offset) { *(&D_803282D8 + offset) = 1; }",
+    "reproduction": "func_800D6274_us.D_803282D8: data load lacks a measured width"
+  },
+  {
+    "function": "func_80107170_us",
+    "symbol": "D_803B824A",
+    "assembly_accesses": [
+      "lhu        $v1, %lo(D_803B824A)($at)",
+      "sh         $v1, %lo(D_803B824A)($at)",
+      "lh         $a0, %lo(D_803B824A)($at)",
+      "lh         $v1, %lo(D_803B824A)($at)",
+      "sh         $v1, %lo(D_803B824A)($at)"
+    ],
+    "minimal_draft": "extern M2C_UNK D_803B824A; void func_80107170_us(int offset) { *(&D_803B824A + offset) = 1; }",
+    "reproduction": "func_80107170_us.D_803B824A: data load lacks a measured width"
+  },
+  {
+    "function": "func_800E4DF8_us",
+    "symbol": "D_8033A9D0",
+    "assembly_accesses": [
+      "sb         $s6, %lo(D_8033A9D0)($at)"
+    ],
+    "minimal_draft": "extern M2C_UNK D_8033A9D0; void func_800E4DF8_us(int offset) { *(&D_8033A9D0 + offset) = 1; }",
+    "reproduction": "func_800E4DF8_us.D_8033A9D0: data load lacks a measured width"
+  }
+]
