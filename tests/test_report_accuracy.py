@@ -1,17 +1,23 @@
 """Current-source report semantics on small real split/source/receipt payloads."""
 
 import hashlib
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 from unittest import skipUnless
 from unittest.mock import patch
 
+import toml
+
+from tests.kit import host_values
 from tests.project_fixture import ProjectCase
 from unbake import buildfiles, config
 from unbake.config import Held
@@ -348,6 +354,112 @@ class ReportAccuracyTests(ProjectCase):
             progress.write(self.project, None, source_only=True)
         private_rom.assert_not_called()
         verify.validate(self.project)
+
+    def public_progress_fixture(self):
+        from unbake.cli.main import main
+
+        values = toml.loads((self.project.root / "config.toml").read_text())
+        for version, cartridge in (("us", "NUS-NRWP-0"), ("eu", "NUS-NRWE-0")):
+            values["version"][version].update(cartridge_id=cartridge, region=version, description="Owner release.")
+        (self.project.root / "config.toml").write_text(toml.dumps(values))
+        self.project = config.load(self.project.root)
+        values = host_values(self.root)
+        values["resources"].update(
+            domain="standalone", memory_total_bytes=1 << 30, memory_parent_bytes=1 << 29, memory_worker_bytes=1 << 28
+        )
+        host = self.root / "report-host.toml"
+        host.write_text(toml.dumps(values))
+        self.exact()
+        self.retained(score=17)
+        self.retained("gamma", score=None)
+        # Begin with the same canonical committed summary that a prior publication writes.
+        attempts.write_summary(self.project, {"alpha", "beta", "gamma"})
+        buildfiles.write_progress(self.project, publish_branch="main")
+        out, err = io.StringIO(), io.StringIO()
+        from unbake import cdecl
+        from unbake.report import state
+
+        with (
+            redirect_stdout(out),
+            redirect_stderr(err),
+            patch.object(state, "inventory", wraps=state.inventory) as inventories,
+            patch.object(split, "functions", wraps=split.functions) as scans,
+            patch.object(cdecl, "declarations", wraps=cdecl.declarations) as parses,
+            patch.object(progress, "render", wraps=progress.render) as renders,
+        ):
+            code = main(["--project", str(self.project.root), "--config", str(host), "recompute", "progress"])
+        self.assertEqual(code, 0, err.getvalue())
+        result = json.loads(out.getvalue())
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual([(row["step"], row["ran"]) for row in result["data"]["steps"]], [("progress", True)])
+        self.assertEqual(
+            (inventories.call_count, scans.call_count, parses.call_count, renders.call_count), (1, 2, 3, 1)
+        )
+        for version in self.versions:
+            report = json.loads((self.project.root / "versions" / version / "report.json").read_text())
+            self.assertEqual((report["measures"]["matched_code"], report["measures"]["total_code"]), (12, 36))
+            self.assertEqual(sum(len(row["functions"]) for row in report["units"]), 3)
+            self.assertEqual(report["units"][1]["functions"][0]["fuzzy_match_percent"], 17)
+            self.assertNotIn("fuzzy_match_percent", report["units"][2]["functions"][0])
+
+    def test_public_progress_cartridge_order_passes_independent_bundled_verifier(self):
+        from unbake.report import verify
+
+        self.public_progress_fixture()
+        readme = (self.project.root / "README.md").read_text()
+        self.assertEqual(re.findall(r"^\| ([\w-]+) \(", readme, re.M), ["eu", "us"])
+        for version in self.versions:
+            self.project.version(version).baserom.unlink()
+        directory = self.root / "independent-verifier"
+        with zipfile.ZipFile(self.project.root / verify.BUNDLE) as archive:
+            archive.extractall(directory)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-m",
+                "unbake.report.verify",
+                "--project",
+                str(self.project.root),
+                "--artifacts",
+                str(self.project.root / "out"),
+            ],
+            cwd=self.project.root,
+            env={**os.environ, "PYTHONPATH": str(directory), "GITHUB_SHA": "3" * 40},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(list((self.project.root / "out").glob("*.manifest.json"))), 2)
+
+    def test_source_only_regeneration_retains_owner_order_and_labels(self):
+        from unbake.report import verify
+
+        self.public_progress_fixture()
+        readme = self.project.root / "README.md"
+        original = readme.read_text().replace("Owner release.", "Reviewed owner label.")
+        readme.write_text(original)
+        for version in self.versions:
+            self.project.version(version).baserom.unlink()
+        with (
+            patch.object(progress, "readme_descriptions") as rom_labels,
+            patch.object(progress, "render", wraps=progress.render) as renders,
+        ):
+            progress.write(self.project, None, source_only=True)
+        rom_labels.assert_not_called()
+        self.assertEqual(renders.call_count, 1)
+        self.assertEqual(readme.read_text(), original)
+        verify.validate(self.project)
+
+    def test_owner_descriptions_require_unique_configured_progress_tables(self):
+        from unbake.report import readme_layout
+
+        self.public_progress_fixture()
+        readme = (self.project.root / "README.md").read_text()
+        before, block, after = readme_layout.section(readme)
+        for extra in ("eu", "obsolete"):
+            with self.subTest(extra), self.assertRaisesRegex(Held, "unexpected or duplicated owner label"):
+                progress.owner_descriptions(self.project, before + block + f"\n| {extra} (extra) |\n" + after)
 
     def test_version_active_bodies_are_required_in_each_declared_holding(self):
         self.exact()

@@ -212,6 +212,9 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
     if not reports:
         raise Held("report", "reports: missing VERSION values")
     if descriptions is not None:
+        if set(descriptions) != set(reports):
+            raise Held("report", "readme.descriptions: expected every report VERSION exactly once")
+        reports = {version: reports[version] for version in descriptions}
         newline = "\r\n" if before.endswith("\r\n") else "\n"
         generated_body = _retain_spacing(block, progress(reports, descriptions))
         return before + generated_body.replace("\n", newline) + newline + after
@@ -497,13 +500,17 @@ def input_key(project: Project) -> str:
 
 
 def owner_descriptions(project: Project, template: str) -> dict[str, str]:
-    """Preserve the existing owning release and ROM identity labels for source-only regeneration."""
+    """Retain the owner table order and release/ROM labels without requiring ROMs."""
+    _, block, _ = readme_layout.section(template)
     descriptions = {}
-    for version in project.versions:
-        match = re.search(r"^\| (" + re.escape(version) + r" \([^\n|]+) \|$", template, re.M)
-        if match is None:
-            raise Held("report", f"readme.descriptions.{version}: owner label required for source-only regeneration")
+    for match in re.finditer(r"^\| (([\w-]+) \([^\n|]+) \|\r?$", block, re.M):
+        version = match[2]
+        if version not in project.versions or version in descriptions:
+            raise Held("report", f"readme.descriptions.{version}: unexpected or duplicated owner label")
         descriptions[version] = match[1]
+    for version in project.versions:
+        if version not in descriptions:
+            raise Held("report", f"readme.descriptions.{version}: owner label required for source-only regeneration")
     return descriptions
 
 
