@@ -37,7 +37,7 @@ class CommitIncludeTests(TempCase):
         self.git("init", "-q")
         self.git("add", ".")
         self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base")
-        self.project = SimpleNamespace(root=root, include=[root / "include"])
+        self.project = SimpleNamespace(root=root, build=root / "build", include=[root / "include"])
         self.host = SimpleNamespace(publish_author_name="t", publish_author_email="t@t")
 
     def write(self, relative: str, text: str) -> None:

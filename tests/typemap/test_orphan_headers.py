@@ -65,6 +65,20 @@ class OrphanHeaderTests(ProjectCase):
         self.assertTrue(self.hand.exists())
         self.assertEqual(apply.install(self.project, self.outputs), 0)
 
+    def test_reversed_current_manifest_preserves_the_now_tracked_header(self):
+        # Later BattleTanx main tracks the old-named header instead. Ownership
+        # follows the manifest, independent of which snapshot supplied a name.
+        lookup = self.manifest(self.old)
+        self.source.write_text(self.source.read_text().replace(CURRENT, OLD))
+        headers = Headers.read(self.project)
+        self.assertEqual(headers.homes["struct QueryResult"], self.old)
+        self.assertNotIn(self.current, headers.texts)
+        outputs = {self.old: self.old.read_bytes(), index.path(self.project): index.encoded(lookup)}
+        self.assertEqual(apply.install(self.project, outputs), 1)
+        self.assertTrue(self.old.exists())
+        self.assertFalse(self.current.exists())
+        self.assertTrue(self.hand.exists())
+
     def test_declaration_catalogue_uses_current_manifest_and_hand_headers(self):
         headers = Headers.read(self.project)
         self.assertNotIn(self.old, headers.texts)
