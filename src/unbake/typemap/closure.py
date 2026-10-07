@@ -42,6 +42,7 @@ class Constraints:
         self.facts: list[dict[str, Any]] = []
         # Call-site edges (caller-side node, callee interface node, evidence), applied by `instantiate`.
         self.links: list[tuple[str, str, dict[str, Any]]] = []
+        self.stores: list[tuple[str, str, dict[str, Any]]] = []
         # The keys of each (node, type) seed list: thousands of units seed one global, and a list scan per seed
         # was quadratic in them.
         self._seen: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -65,28 +66,81 @@ class Constraints:
         self.use(interface)
         self.links.append((site, interface, evidence))
 
-    def instantiate(self) -> None:
-        """Join each callee interface to its call sites unless doing so would merge incompatible evidence.
+    def store(self, value: str, cell: str, evidence: dict[str, Any]) -> None:
+        """Defer a field store until all uses of that field and its stored values are known."""
+        self.use(value)
+        self.use(cell)
+        self.stores.append((value, cell, evidence))
 
-        An interface whose call sites (with the callee's own side) carry two or more different kept types is
-        polymorphic: it hands different pointees to different callers, or only passes values through. Each call
-        site then keeps its own instance, so the callers' types stay apart and conflicts they would cause vanish.
-        """
+    def _kinds(self) -> dict[str, set[str]]:
         kinds: dict[str, set[str]] = defaultdict(set)
         for node, types in self.seeds.items():
             kinds[self.root(node)].update(
                 type_ for type_, rows in types.items() if any(not row.get("word_transport") for row in rows)
             )
-        sites: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+        return kinds
+
+    def instantiate_fields(self) -> None:
+        """A shared pointer slot proves its storage type, not equality of all objects stored in it.
+
+        This includes recursive links and reusable command words: merging every stored pointer with the field
+        would join otherwise independent users of the aggregate. Keep their value components separate and
+        retain the stored type evidence on the field itself. Ordinary scalar and single-source fields still flow.
+        """
+        cells: dict[str, list[tuple[str, str, dict[str, Any]]]] = defaultdict(list)
+        for value, cell, proof in self.stores:
+            cells[self.root(cell)].append((value, cell, proof))
+        # Settle fields with one source first: a later reusable slot may store a value loaded from one of them.
+        for cell, rows in cells.items():
+            root = self.root(cell)
+            if len({self.root(value) for value, _, _ in rows} - {root}) <= 1:
+                for value, target, proof in rows:
+                    self.connect(value, target, proof)
+        kinds = self._kinds()
+        pending = list(cells.values())
+        cells.clear()
+        for rows in pending:
+            for value, cell, proof in rows:
+                cells[self.root(cell)].append((value, cell, proof))
+        for cell, rows in cells.items():
+            field_root = self.root(cell)
+            roots = {field_root, *(self.root(value) for value, _, _ in rows)}
+            types = set().union(*(kinds.get(root, ()) for root in roots))
+            if len(roots - {field_root}) > 1 and any(type_.endswith(" *") for type_ in types):
+                for value, target, proof in rows:
+                    for type_ in kinds.get(self.root(value), ()):
+                        self.seed(target, type_, {"kind": "machine", **proof})
+                continue
+            for value, target, proof in rows:
+                merged = kinds.get(self.root(value), set()) | kinds.get(self.root(target), set())
+                self.connect(value, target, proof)
+                kinds[self.root(target)] = merged
+        self.stores.clear()
+
+    def instantiate(self) -> None:
+        """Instantiate generic interfaces together across all aliases of the callee's value.
+
+        Different parameter/result names may describe one value inside a helper. Decide polymorphism for that
+        whole component before joining any caller. An untyped or void-pointer helper with independent actuals
+        supplies no common pointee contract; each actual retains its own context, even before layouts are named.
+        """
+        kinds = self._kinds()
+        sites: dict[str, list[tuple[str, str, dict[str, Any]]]] = defaultdict(list)
         for site, interface, proof in self.links:
-            sites[interface].append((site, proof))
+            sites[self.root(interface)].append((site, interface, proof))
         for interface, rows in sites.items():
             callee = self.root(interface)
-            roots = {callee, *(self.root(site) for site, _ in rows)}
-            if len(roots) > 1 and len(set().union(*(kept_types(kinds.get(root, ())) for root in roots))) > 1:
+            roots = {callee, *(self.root(site) for site, _, _ in rows)}
+            own = kept_types(kinds.get(callee, ()))
+            # Retain each component's kept constraints: an untyped pointer in a caller does not erase a
+            # concrete scalar constraint from the callee (or another caller).
+            types = set().union(*(kept_types(kinds.get(root, ())) for root in roots))
+            if len(roots) > 1 and (len(types) > 1 or (len(roots - {callee}) > 1 and own <= {"void *"})):
                 continue
-            for site, proof in rows:
-                self.connect(site, interface, proof)
+            for site, formal, proof in rows:
+                merged = kinds.get(self.root(site), set()) | kinds.get(self.root(formal), set())
+                self.connect(site, formal, proof)
+                kinds[self.root(formal)] = merged
         self.links.clear()
 
     def connect(self, left: str, right: str, evidence: dict[str, Any]) -> None:
@@ -268,6 +322,10 @@ class Recorder:
     def link(self, site: str, interface: str, evidence: dict[str, Any]) -> None:
         kept = {key: evidence[key] for key in ("function", "version", "instruction", "rom_offset") if key in evidence}
         self.ops.append(("link", (site, interface, kept)))
+
+    def store(self, value: str, cell: str, evidence: dict[str, Any]) -> None:
+        kept = {key: evidence[key] for key in ("function", "version", "instruction", "rom_offset") if key in evidence}
+        self.ops.append(("store", (value, cell, kept)))
 
     def record(self, fact: dict[str, Any]) -> None:
         self.ops.append(("record", (fact,)))
@@ -467,6 +525,7 @@ def build(
                 shared_fields[root][offset].extend(accesses)
                 if root != origin:
                     graph.connect(f"field:{origin}:{offset}", f"field:{root}:{offset}", accesses[0])
+        graph.instantiate_fields()
         graph.instantiate()
         groups = graph.groups()
         seeds = {node: dict(types) for node, types in graph.seeds.items()}
@@ -555,7 +614,10 @@ def _access(
     else:
         node = origin_node(memory["value"], addresses[version])
         if node is not None:
-            graph.connect(cell, node, memory)
+            if cell.startswith("field:"):
+                graph.store(node, cell, memory)
+            else:
+                graph.connect(cell, node, memory)
     graph.record(
         {
             "kind": "access",
