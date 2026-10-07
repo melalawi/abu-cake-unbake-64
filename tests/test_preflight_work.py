@@ -79,10 +79,10 @@ class PreflightWorkTests(ProjectCase):
         repeated, _, counts = self.boundary()
         self.assertEqual(counts, (0, 0, 0, 0))
         self.assertTrue(repeated["data"]["reused"])
-        unrelated = self.project.src / "independent.c"
+        unrelated = self.project.src / "aaa_independent.c"
         unrelated.write_text("int independent(void) { return 3; }\n")
         changed, _, counts = self.boundary()
-        # An unrelated source does not unlock the recorded macro refusal.
+        # Even an earlier new source does not unlock the cached macro refusal.
         self.assertEqual(counts, (0, 0, 0, 0))
         self.assertEqual(changed["key"], "check.source_rules")
         source.write_text("int value(void) { return 0; }\n")
@@ -133,3 +133,17 @@ class PreflightWorkTests(ProjectCase):
         with self.assertRaises(Held) as held:
             steps.prepare(self.project, self.host, request)
         self.assertEqual(held.exception.data["findings"][0]["path"], "src/" + other.name)
+
+    def test_complete_findings_preserve_all_rows_and_order_across_cache_reuse(self):
+        from unbake.cache import Cache
+
+        later = self.source("later", text="#define LATER 2")
+        store = Cache(self.project.build / "cache")
+        checks.findings(self.project, (later,), store)
+        earlier = self.source("earlier", text="#define EARLIER 1")
+        first = checks.findings(self.project, (earlier, later), store)
+        repeated = checks.findings(self.project, (later, earlier), store)
+        self.assertEqual(first.rows, repeated.rows)
+        self.assertEqual([row.path for row in first.rows], ["src/earlier.c", "src/later.c"])
+        self.assertEqual((first.source_scans, repeated.source_scans), (1, 0))
+        self.assertEqual(first.dependency_hashes, repeated.dependency_hashes)

@@ -1,14 +1,14 @@
 #!/bin/sh
 set -eu
 
-# Inputs: TMPDIR and UNBAKE_POLICY. No personal policy or temp path is selected.
-if [ "$#" -ne 0 ]; then echo 'usage: ci/check (set TMPDIR and UNBAKE_POLICY)' >&2; exit 1; fi
+# Inputs: current host config and caller-owned scratch; this check never installs tools.
+if [ "$#" -ne 0 ]; then echo 'usage: ci/check (set TMPDIR and UNBAKE_CONFIG)' >&2; exit 1; fi
 for tool in python3 bash dirname rg git make cc cpp mips-linux-gnu-as mips-linux-gnu-ld mips-linux-gnu-objcopy mips-linux-gnu-objdump mips-linux-gnu-readelf; do
     command -v "$tool" >/dev/null 2>&1 || { echo "missing tool: $tool" >&2; exit 1; }
 done
 cd "$(dirname "$0")/.."
 export PYTHONPATH=src
-python3 - <<'PY'
+.venv/bin/python - <<'PY'
 import importlib.util
 import os
 import sys
@@ -16,27 +16,21 @@ from pathlib import Path
 
 if sys.version_info < (3, 11):
     sys.exit("missing tool: Python 3.11 or later")
-for module in ("ruff", "mypy", "pycparser", "toml", "abumasn64"):
+for module in ("ruff", "mypy", "pycparser", "toml"):
     if importlib.util.find_spec(module) is None:
         sys.exit(f"missing tool: {module}")
-for variable in ("TMPDIR", "UNBAKE_POLICY"):
+for variable in ("TMPDIR", "UNBAKE_CONFIG"):
     value = os.environ.get(variable)
     if not value or not Path(value).is_absolute():
         sys.exit(f"missing input: {variable} (an absolute path is required)")
 if not Path(os.environ["TMPDIR"]).is_dir() or not os.access(os.environ["TMPDIR"], os.W_OK):
     sys.exit("missing input: TMPDIR (an existing writable directory is required)")
-from unbake.project.config import Held, load_policy
+from unbake.config import Held, load_host
 
 try:
-    policy = load_policy(Path(os.environ["UNBAKE_POLICY"]))
+    host = load_host(Path(os.environ["UNBAKE_CONFIG"]), None, "check")
 except (Held, OSError) as error:
     sys.exit(str(error))
-for field in ("objdiff_cli", "m2c", "splat", "mips_as", "mips_ld", "mips_objcopy", "mips_objdump", "mips_readelf", "cpp"):
-    path = getattr(policy, field)
-    if not path.is_file() or not os.access(path, os.X_OK):
-        sys.exit(f"missing tool: {field} ({path})")
-if not policy.permuter_archive.is_file():
-    sys.exit(f"missing tool: permuter_archive ({policy.permuter_archive})")
 PY
 status=0
 bin/test || status=1

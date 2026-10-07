@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -606,6 +606,17 @@ class Findings:
     dependency_hashes: dict[str, str]
     source_scans: int
 
+    @classmethod
+    def collect(cls, parts: Iterable[Findings]) -> Findings:
+        rows: list[SourceFinding] = []
+        pins: dict[str, str] = {}
+        scans = 0
+        for part in parts:
+            rows.extend(part.rows)
+            pins.update(part.dependency_hashes)
+            scans += part.source_scans
+        return cls(tuple(sorted(rows, key=lambda row: (row.path, row.finding.line, row.finding.rule))), pins, scans)
+
     @property
     def unmarked(self) -> tuple[SourceFinding, ...]:
         return tuple(row for row in self.rows if row.finding.fakematch is None)
@@ -622,20 +633,19 @@ def recipe() -> str:
     )
 
 
-def findings(
+def iter_findings(
     project: Project,
     paths: Iterable[Path],
     cache: Cache,
     *,
     proposed: Mapping[Path, str] | None = None,
-) -> Findings:
-    """Complete rule rows per source content; policy and project-relative names remain caller-owned."""
+) -> Iterator[Findings]:
+    """Yield each source result, reusing known content before scanning new sources."""
     from unbake import inputs
 
     recipe_key = recipe()
     pins = {"recipe:source-rules": recipe_key}
     scans = 0
-    rows: list[SourceFinding] = []
 
     def read(text: str) -> tuple[GuardFinding, ...]:
         content_key = key(recipe_key, text)
@@ -667,23 +677,50 @@ def findings(
     external = {
         path: index for index, path in enumerate(path for path in requested if not path.is_relative_to(project.root))
     }
-    for path in sorted(requested):
+    digests = {
+        path: inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
+        for path in requested
+    }
+    content_keys = {
+        path: key(recipe_key, (proposed or {}).get(path, path.read_text() if path.is_file() else ""))
+        for path in requested
+    }
+    ordered = sorted(
+        requested,
+        key=lambda path: (
+            cache.get("source-findings", content_keys[path]) is None,
+            path,
+        ),
+    )
+    for path in ordered:
+        previous_scans = scans
         name = (
             path.relative_to(project.root).as_posix()
             if path.is_relative_to(project.root)
             else f"external-input-{external[path]}:{path.name}"
         )
-        pins[name] = (
-            inputs.digest(path, algorithm="sha256", reuse=retention.configured()) if path.is_file() else "missing"
-        )
+        pins[name] = digests[path]
         baseline = path.read_text() if path.is_file() else ""
         old = read(baseline)
         proposed_text = (proposed or {}).get(path, baseline)
         # Line movement does not erase the provenance of an existing offending token sequence.
         identities = {(row.rule, " ".join(row.text.split())) for row in old}
         current = old if proposed_text == baseline else read(proposed_text)
-        rows.extend(SourceFinding(name, row, (row.rule, " ".join(row.text.split())) in identities) for row in current)
-    return Findings(tuple(rows), pins, scans)
+        rows = tuple(SourceFinding(name, row, (row.rule, " ".join(row.text.split())) in identities) for row in current)
+        yield Findings(rows, {"recipe:source-rules": recipe_key, name: pins[name]}, scans - previous_scans)
+    if not requested:
+        yield Findings((), pins, scans)
+
+
+def findings(
+    project: Project,
+    paths: Iterable[Path],
+    cache: Cache,
+    *,
+    proposed: Mapping[Path, str] | None = None,
+) -> Findings:
+    """Complete rule rows; policy and project-relative names remain caller-owned."""
+    return Findings.collect(iter_findings(project, paths, cache, proposed=proposed))
 
 
 def message(finding: GuardFinding) -> str:

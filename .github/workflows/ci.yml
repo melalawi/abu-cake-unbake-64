@@ -14,8 +14,8 @@ jobs:
         with:
           python-version: '3.11'
       - run: sudo apt-get update && sudo apt-get install -y binutils-mips-linux-gnu build-essential ripgrep
-      - run: ci/setup "$RUNNER_TEMP/unbake-ci" "$(uname -m)"
+      - run: ci/setup "$RUNNER_TEMP/unbake-ci"
       - run: ci/check
         env:
           TMPDIR: ${{ runner.temp }}/unbake-ci/tmp
-          UNBAKE_POLICY: ${{ runner.temp }}/unbake-ci/policy.toml
+          UNBAKE_CONFIG: ${{ runner.temp }}/unbake-ci/unbake.toml

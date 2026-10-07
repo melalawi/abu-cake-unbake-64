@@ -146,7 +146,7 @@ def prepare(project: Project, host: Host, request: PrepareRequest) -> Prepared:
                 )
             )
     from unbake import inputs
-    from unbake.work.attempts import RetryScope
+    from unbake.process import cause_scope
 
     dependencies = inputs.DependencySet(
         tuple(
@@ -161,23 +161,16 @@ def prepare(project: Project, host: Host, request: PrepareRequest) -> Prepared:
         },
         {"source-rules": checks.recipe()},
     )
-    with RetryScope(
-        project,
-        "prepare",
-        request.operation,
-        {"sources": [str(p.relative_to(project.root)) for p in request.sources], "rules": request.rules},
-        dependencies,
-    ) as scope:
-        result = Prepared(
-            request,
-            checks.findings(project, paths, Cache(project.build / "cache"), proposed=request.proposed),
-            inventory,
-        )
-        result.refuse()
+    with cause_scope(request.operation, dependencies, complete=True):
+        parts = []
+        for findings in checks.iter_findings(project, paths, Cache(project.build / "cache"), proposed=request.proposed):
+            result = Prepared(request, findings, inventory)
+            result.refuse()
+            parts.append(findings)
+        result = Prepared(request, checks.Findings.collect(parts), inventory)
         result.assert_current(project)
         if request.required_steps:
             ensure(project, host, request.required_steps)
-        scope.value = result.document()
         return result
 
 

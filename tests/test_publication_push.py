@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import config, land
+from unbake import build, config, land
 from unbake.cli import publish
 from unbake.cli.args import Context
 from unbake.cli.main import make_parser
@@ -183,6 +183,13 @@ class PublicationPushTests(ProjectCase):
             boundaries[1],
             boundaries[2],
             patch.object(flow, "_git", side_effect=git),
+            patch.object(
+                build,
+                "check",
+                side_effect=lambda *args, **kwargs: (
+                    calls.append(("check", f"files_only={kwargs['files_only']}")) or build.Outcome(True, True)
+                ),
+            ),
             patch.object(flow, "snapshot", wraps=flow.snapshot) as snapshots,
             patch.object(
                 flow.pool, "run", side_effect=lambda h, action, jobs: [action(job) for job in jobs]
@@ -202,9 +209,28 @@ class PublicationPushTests(ProjectCase):
     def test_concurrent_rebase_reconciles_before_one_push_with_two_snapshots(self):
         result, calls, snapshots, workers, native = self.run_push()
         self.assertEqual((snapshots, workers, native), (2, 1, 4))
-        self.assertEqual(len(calls), 10)
+        checked = calls.index(("check", "files_only=False"))
+        pushed = calls.index(("push", "--", "origin", "rebased:refs/heads/main"))
+        self.assertLess(calls.index(("rebase", "FETCH_HEAD")), checked)
+        self.assertEqual(calls.count(("check", "files_only=False")), 1)
+        self.assertEqual(
+            calls[checked - 3 : checked],
+            [
+                ("rev-parse", "HEAD"),
+                ("status", "--porcelain", "--untracked-files=no"),
+                ("ls-files", "--others", "--exclude-standard", "-z"),
+            ],
+        )
+        self.assertEqual(
+            calls[checked + 1 : pushed],
+            [
+                ("rev-parse", "HEAD"),
+                ("status", "--porcelain", "--untracked-files=no"),
+                ("ls-files", "--others", "--exclude-standard", "-z"),
+            ],
+        )
         self.assertEqual(calls.count(("rebase", "FETCH_HEAD")), 1)
-        self.assertEqual(calls.count(("push", "--", "origin", "HEAD:refs/heads/main")), 1)
+        self.assertEqual(calls.count(("push", "--", "origin", "rebased:refs/heads/main")), 1)
         self.assertEqual(result["head"], "rebased")
         self.assertEqual(len(result["reconciled"]), 4)
         self.assertTrue(all("force" not in word for call in calls for word in call))

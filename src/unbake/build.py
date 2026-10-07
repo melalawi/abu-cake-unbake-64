@@ -90,6 +90,7 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
             False,
             [error.reason],
             seconds=time.monotonic() - started,
+            fault=error.fault.document(),
             preflight={**error.data, "key": error.key, "action": error.fault.cause.action},
         )
     findings = hygiene.tracked_findings(project, host)

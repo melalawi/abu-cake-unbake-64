@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from unbake import atomic, config, journal, pool, process, runner, scratch, strict_json
+from unbake import atomic, build, config, journal, pool, process, runner, scratch, strict_json
 from unbake.cache import Cache
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
@@ -317,6 +317,8 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
     before: dict[ProofKey, str] | None = None
     reconciled = []
     original = _git(project, "rev-parse", "HEAD")
+    validated = None
+    checked: dict[str, Any] = {}
     for _ in range(attempts_limit):
         _git(project, "fetch", "--", remote, branch)
         tip = _git(project, "rev-parse", "FETCH_HEAD")
@@ -365,9 +367,51 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                 _git(project, "reset", "--keep", prior)
                 raise
             reconciled.extend(proved)
-        attempts.ledger(config.load(project.root)).assert_portable()
+        current = config.load(project.root)
+        attempts.ledger(current).assert_portable()
+        head = _git(project, "rev-parse", "HEAD")
+        if _git(project, "status", "--porcelain", "--untracked-files=no"):
+            raise Held(
+                cause_named(
+                    "publish.push_dirty",
+                    "commit tracked edits before the final check",
+                    owner="project.publication_push",
+                    stage="publish",
+                )
+            )
+        if validated != head:
+            untracked = _git(project, "ls-files", "--others", "--exclude-standard", "-z")
+            outcome = build.check(current, host, files_only=False)
+            checked = outcome.document()
+            if outcome.ok is not True or outcome.built is not True:
+                fault = (
+                    process.Fault.read(outcome.fault)
+                    if outcome.fault is not None
+                    else process.Fault(
+                        cause_named("check.failed", "basic check failed; nothing pushed", owner="build", stage="check")
+                    )
+                )
+                raise Held(
+                    fault.framed("project.publication_push", "publish", "final commit check failed"),
+                    data={"check": checked, "head": head},
+                )
+            if (
+                _git(project, "rev-parse", "HEAD") != head
+                or _git(project, "status", "--porcelain", "--untracked-files=no")
+                or _git(project, "ls-files", "--others", "--exclude-standard", "-z") != untracked
+            ):
+                raise Held(
+                    cause_named(
+                        "publish.check_changed",
+                        "HEAD or owned files changed during the final check; nothing pushed",
+                        owner="project.publication_push",
+                        stage="publish",
+                    ),
+                    data={"check": checked, "head": head},
+                )
+            validated = head
         try:
-            _git(project, "push", "--", remote, "HEAD:refs/heads/" + branch)
+            _git(project, "push", "--", remote, head + ":refs/heads/" + branch)
         except Held as error:
             # A transport/authentication refusal is not a concurrent publication.
             # Only a newly fetched remote tip authorizes another reconciliation.
@@ -389,7 +433,8 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
             "remote": remote,
             "branch": branch,
             "before": original,
-            "head": _git(project, "rev-parse", "HEAD"),
+            "head": head,
+            "check": checked,
             "reconciled": reconciled,
         }
     raise Held(
