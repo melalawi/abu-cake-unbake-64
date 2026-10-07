@@ -6,6 +6,7 @@ from pathlib import Path
 from unbake import atomic as atomic_files
 from unbake.cdecl import SOURCE_TOKEN, declaration_source
 from unbake.config import Held, Project
+from unbake.decomp import measured_access
 from unbake.decomp.draft_macros import calls
 from unbake.layout.structs_types import SCALARS
 
@@ -165,23 +166,9 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
     # Unknown data names are address transports only. Access widths below come
     # from machine accesses, independently of their semantic target layout.
     opaque = set(re.findall(r"extern M2C_UNK (\w+);", source))
+    accesses = measured_access.views(assembly) if opaque else {}
     for name in sorted(opaque):
-        reads: set[str] = set()
-        writes: set[str] = set()
-        views = {
-            "lh": "short",
-            "lhu": "unsigned short",
-            "lw": "int",
-            "lb": "signed char",
-            "lbu": "unsigned char",
-            "sh": "unsigned short",
-            "sw": "int",
-            "sb": "unsigned char",
-        }
-        for match in re.finditer(
-            r"(?m)^\s*(lh|lhu|lw|lb|lbu|sh|sw|sb)\s+[^\n]*%lo\(" + re.escape(name) + r"\)", assembly
-        ):
-            (writes if match[1].startswith("s") else reads).add(views[match[1]])
+        reads, writes = accesses.get(name, (set(), set()))
         source = _access_views(function, source, assembly, name, reads, writes)
         uses = re.sub(r"extern M2C_UNK " + re.escape(name) + r";", "", source)
         if any(

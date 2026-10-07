@@ -1,0 +1,2 @@
+vram_start,given_name,name,type,given_size,size,rom,defined,user_declared,referenced,extract,segment,subsegment,subsegment_type
+80145DE0,None,D_80145DE0,None,None,4,0xD5DE0,True,False,True,True,span_1000,rodata/unresolved/80145DE0,data

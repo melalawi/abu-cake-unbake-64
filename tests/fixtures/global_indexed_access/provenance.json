@@ -1,0 +1,30 @@
+{
+  "main_red": "31df86dc357d2045ee5e93eb4142eeabe1302c26",
+  "bt": {
+    "function": "func_80112E70_us",
+    "symbol": "D_80145DE0",
+    "raw_sha256": "872b0c01079f3030106e100545187a944798dad565a7fa3ab1e3e19766077dcf",
+    "asm_sha256": "55bd38a492e6abf66697c873bac7769a73ccc9423d0d7264a5c81f2d8dd021ed",
+    "instructions": 12,
+    "reads": [
+      "int"
+    ],
+    "writes": [
+      "int"
+    ]
+  },
+  "rw": {
+    "function": "func_80219688_de",
+    "symbol": "D_80142208_de",
+    "extraction": "097f17afd4b0320949b0801cb0ce0afc222e630284fc6c45ec725a181466b273.d",
+    "files_considered_limit": 12,
+    "raw_sha256": "b3f144ecafa89369a6d29e30a02a52f6dbce7845cd13912ce3a82e2068708a0e",
+    "asm_sha256": "b5abdf7ce305bda4c4d97401749d22d68e2edd45c97e0e78a2875a08ab3493c7",
+    "instructions": 5,
+    "reads": [
+      "unsigned char"
+    ],
+    "writes": []
+  },
+  "latest_public_main_red": "23139d9ccc8bbe461de66385ea277f84ac5d3579"
+}
