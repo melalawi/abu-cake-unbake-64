@@ -24,7 +24,7 @@ def fake_source(project, text, member, outputs, *, ownership, lookup, previous, 
 
 class RenderChunkTests(unittest.TestCase):
     def render(self, texts: list[str], workers: int, collect: bool) -> tuple[dict, dict | None]:
-        project = SimpleNamespace(build=ROOT / "build", src=ROOT / "src", include=(ROOT / "include",))
+        project = SimpleNamespace(root=ROOT, build=ROOT / "build", src=ROOT / "src", include=(ROOT / "include",))
         sources = {ROOT / "src" / f"s{i:02}.c": text for i, text in enumerate(texts)}
         session = SimpleNamespace(sources=sources, ownership="map", render=lambda value, compute: compute())
         index_path = ROOT / "build/layout/index.json"
@@ -75,7 +75,7 @@ class RenderChunkTests(unittest.TestCase):
             value["shared_aliases"] = {}
             return {ROOT / "build/layout/index.json": b"{}"}
 
-        project = SimpleNamespace(build=ROOT / "build", src=ROOT / "src", include=(ROOT / "include",))
+        project = SimpleNamespace(root=ROOT, build=ROOT / "build", src=ROOT / "src", include=(ROOT / "include",))
         with (
             patch.object(apply.map, "load"),
             patch.object(database, "load", return_value=loaded),

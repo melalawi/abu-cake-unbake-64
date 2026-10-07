@@ -103,7 +103,9 @@ def generated(project: Project, path: Path) -> bool:
     from unbake.layout import index
 
     # One stat of PATH, not of every listed header: callers ask once per header, which was quadratic.
-    return path in index.listed(project) and path.is_file()
+    return path.is_file() and (
+        path in index.listed(project) or any(index.marked(path, root) for root in project.include)
+    )
 
 
 def relocatable(value: Any, root: Path) -> Any:

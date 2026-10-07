@@ -1,0 +1,37 @@
+{
+  "content_key": "e881cdab12eb320403b3a38cedaacc3ffb5a336440ebb69df02eac46c297499b",
+  "projection": {
+    "arrays": {},
+    "declaration_evidence": {},
+    "functions": {},
+    "globals": {},
+    "published_declarations": {
+      ".published_60778d2a829571a8ff1f9275.h": "/* unbake published declaration: published_60778d2a829571a8ff1f9275 */\nstruct QueryResult { int unused[2]; int kind; };\n"
+    },
+    "published_homes": {
+      ".published_60778d2a829571a8ff1f9275.h": [
+        "common/types_d507c48987bb.h",
+        "common/types_f8bfabebf96f.h"
+      ]
+    },
+    "source_dependencies": {},
+    "structs": {
+      "QueryResult": {
+        "aliases": [],
+        "declaration": "struct QueryResult { int unused[2]; int kind; };",
+        "generated": true,
+        "provenance": {
+          "function": "func_8011DC98",
+          "kind": "proven",
+          "sha256": "5744405b6e030428bc2b01bea6374fb6cf7079bba5620951cd302b90bb345a82",
+          "source": "src/func_8011DC98.c",
+          "version": "us"
+        },
+        "state": "known",
+        "type": "struct QueryResult",
+        "typedefs": {}
+      }
+    },
+    "typedefs": {}
+  }
+}

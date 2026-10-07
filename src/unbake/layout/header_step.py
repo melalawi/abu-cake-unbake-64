@@ -23,7 +23,7 @@ from unbake.journal import Journal
 from unbake.layout import apply, index, split
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 6
+SCHEMA = 7
 
 _INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*[<"]([^>"\n]+)[>"]', re.M)
 
@@ -73,7 +73,7 @@ def plan(project: Project, outputs: dict[Path, bytes]) -> dict[Path, bytes]:
     changed = {path: data for path, data in outputs.items() if not path.is_file() or path.read_bytes() != data}
     from unbake.layout import header_loss
 
-    header_loss.check(project, outputs, obsolete=index.headers(project) - outputs.keys())
+    header_loss.check(project, outputs, obsolete=index.owned(project) - outputs.keys())
     return changed
 
 
@@ -117,6 +117,7 @@ def validate(
     *,
     prove_all: bool = False,
     preproved: frozenset[str] = frozenset(),
+    obsolete: frozenset[Path] = frozenset(),
 ) -> list[str]:
     """Compile every unit the change reaches against staged copies, on all cores; return the units compiled.
 
@@ -129,9 +130,9 @@ def validate(
     shutil.rmtree(stage, ignore_errors=True)
     staged_headers = stage / "include"
     staged_sources = stage / "src"
-    headers = {path.resolve() for path in changed if path.suffix == ".h"}
+    headers = {path.resolve() for path in changed if path.suffix == ".h"} | {path.resolve() for path in obsolete}
     roots: set[Path] = set()
-    for path, data in changed.items():
+    for path, data in {**changed, **dict.fromkeys(obsolete, b"")}.items():
         if path.suffix == ".h":
             root = next((r for r in project.include if path.is_relative_to(r)), None)
             if root is None:
@@ -240,13 +241,14 @@ def run(project: Project, host: Host) -> list[Path]:
         disagreements: dict[Path, dict[str, tuple[str, str]]] = {}
         outputs = apply.render(project, host, disagreements)
         changed = plan(project, outputs)
-        if not changed:
+        obsolete = index.owned(project) - outputs.keys()
+        if not changed and not obsolete:
             return []
-        validate(project, host, changed, disagreements)
+        validate(project, host, changed, disagreements, obsolete=frozenset(obsolete))
         # install needs every output: a generated header missing from them is deleted as obsolete.
-        changes.save([*changed, *(index.headers(project) - outputs.keys())])
+        changes.save([*changed, *obsolete])
         apply.install(project, dict(outputs))
-        return sorted(changed)
+        return sorted(set(changed) | obsolete)
 
 
 def missing(project: Project) -> list[str]:

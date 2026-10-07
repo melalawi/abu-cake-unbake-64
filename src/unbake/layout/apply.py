@@ -1,4 +1,4 @@
-"""Render declaration views, rewrite imports and remove only index-listed outputs."""
+"""Render declaration views, rewrite imports and remove obsolete generated outputs."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def source(
                 for symbol in row.typedefs | row.declared | row.exports:
                     lookup["symbols"][symbol] = name
     ownership = ownership or map.load(project)
-    previous = set(index.load(project)["headers"]) if previous is None else previous
+    previous = previous_names(project) if previous is None else previous
     path = project.src / f"{member}.c"
     rewritten = rewrite(path, text, member, ownership, lookup, previous=previous)
     bodies = imported(rewritten, project.include[0], outputs)
@@ -170,6 +170,13 @@ def _rewrite(job: _Rewrite, item: tuple[Path, str]) -> tuple[bytes, dict[str, tu
     return data, found
 
 
+def previous_names(project: Project) -> set[str]:
+    """Rewrite imports of marked orphans as well as manifest-listed headers."""
+    return set(index.load(project)["headers"]) | {
+        path.relative_to(project.include[0]).as_posix() for path in index.owned(project)
+    }
+
+
 def render(
     project: Project, policy: Host, disagreements: dict[Path, dict[str, tuple[str, str]]] | None = None
 ) -> dict[Path, bytes]:
@@ -196,7 +203,7 @@ def render(
         for path, data in session.render(value, lambda: database._render(project, value, policy, session)).items()
     }
     lookup = json.loads(outputs[index.path(project)])
-    previous = set(index.load(project)["headers"])
+    previous = previous_names(project)
     # Each source is rewritten on its own: its imports read only include/ (generated outputs or files), never
     # another source. The sources go to the worker pool; the shared views are loaded once per worker.
     headers = {path: data for path, data in outputs.items() if path.suffix != ".c"}
@@ -227,10 +234,10 @@ def units(project: Project, *, dry_run: bool = False) -> int:
 
 
 def install(project: Project, outputs: dict[Path, bytes | Path], *, dry_run: bool = False) -> int:
-    """Validate all content before the first write; stale paths come from the old index."""
+    """Validate all content before writing, then delete obsolete owned headers."""
     from unbake.layout import header_loss
 
-    obsolete = index.headers(project) - outputs.keys()
+    obsolete = index.owned(project) - outputs.keys()
     header_loss.check(project, outputs, obsolete=obsolete)
     changed = {
         p: data

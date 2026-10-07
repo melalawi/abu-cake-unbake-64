@@ -21,7 +21,7 @@ from unbake.typemap import header_names, split, storage
 
 # Bump when the value an artifact kind stores changes for the same inputs.
 SOURCE_NAMES_SCHEMA = 5
-RENDER_SCHEMA = 6
+RENDER_SCHEMA = 7
 
 
 def artifact(cache: Cache, kind: str, content_key: str, compute: Callable[[], Any]) -> Any:
@@ -284,7 +284,17 @@ class Session:
     }
     _CARRIED = ("typedefs", "declaration_evidence", "published_declarations", "published_homes")
 
-    def _content_key(self, value: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    def _installed_headers(self) -> dict[str, str]:
+        """Pin installed generated paths and actual bytes, including manual repairs."""
+        names = layout_index.load(self.project)["headers"]
+        paths = {self.project.include[0] / name for name in names}
+        if not names and (self.project.root / "layout.toml").is_file():
+            paths.update(layout_index.headers(self.project))
+        return {storage.relative(self.project, path): inputs.digest(path) for path in sorted(paths) if path.is_file()}
+
+    def _content_key(
+        self, value: dict[str, Any], *, installed: dict[str, str] | None = None
+    ) -> tuple[str, dict[str, Any]]:
         """The render key: the session's inputs and the fields of the solution the render reads."""
         projection: dict[str, Any] = {
             kind: {name: {k: row[k] for k in keys if k in row} for name, row in value[kind].items()}
@@ -297,7 +307,12 @@ class Session:
         projection["source_dependencies"] = {
             storage.relative(self.project, path): sorted(words & names) for path, words in self.source_words.items()
         }
-        return key(str(RENDER_SCHEMA), self.inputs, storage.encoded(projection)), projection
+        return key(
+            str(RENDER_SCHEMA),
+            self.inputs,
+            storage.encoded(projection),
+            storage.encoded(self._installed_headers() if installed is None else installed),
+        ), projection
 
     def render(
         self, value: dict[str, Any], compute: Callable[[], dict[Path, bytes | Path]]
@@ -308,7 +323,8 @@ class Session:
         therefore kept under the stored solution's key too: the headers step, which renders the stored solution
         with the same inputs, gets the exact headers the types step validated and installed. A second render could
         differ from the first and change every generated header the source facts are keyed on."""
-        content_key, projection = self._content_key(value)
+        installed = self._installed_headers()
+        content_key, projection = self._content_key(value, installed=installed)
         state = self.cache.path("typemap-render-state", self.inputs)
 
         def delta() -> Any:
@@ -318,14 +334,24 @@ class Session:
             if not state.is_file() or not lookup["headers"]:
                 return None
             previous = json.loads(state.read_bytes())
-            if previous["projection"] != projection:
+            if previous.get("schema") != RENDER_SCHEMA or previous["projection"] != projection:
                 return None
             for name, digest in lookup["headers"].items():
                 path = self.project.include[0] / name
                 if not path.is_file() or inputs.digest(path) != digest:
                     return None
             cached = self.cache.get("typemap-render", previous["content_key"])
-            return json.loads(cached.read_bytes()) if cached is not None else None
+            if cached is None:
+                return None
+            result = json.loads(cached.read_bytes())
+            cached_headers = {
+                name: storage.digest(text.encode())
+                for name, text in result["outputs"].items()
+                if Path(name).suffix == ".h"
+            }
+            # Validating the current index alone says nothing about cached
+            # filenames: a repaired tree must not resurrect a previous home.
+            return result if cached_headers == installed else None
 
         def make() -> Any:
             result = delta()
@@ -355,19 +381,26 @@ class Session:
         result = artifact(self.cache, "typemap-render", content_key, make)
         computed = effort.counted().get("render.compute", (0, 0))[0] != before_compute
         effort.count("render.reused", int(not computed), 1)
-        state_content = storage.encoded({"projection": projection, "content_key": content_key})
+        state_content = storage.encoded({"schema": RENDER_SCHEMA, "projection": projection, "content_key": content_key})
         if not state.is_file() or state.read_bytes() != state_content:
             storage.write(state, state_content, durable=False)
         value.update({field: result[field] for field in ("declaration_headers", "shared_aliases", *self._CARRIED)})
         self.reserved = set(result["reserved"])
-        stored_key, _ = self._content_key(value)
-        if stored_key != content_key:
-            rendered = self.cache.path("typemap-render", content_key)
+        rendered_headers = {
+            name: storage.digest(text.encode()) for name, text in result["outputs"].items() if Path(name).suffix == ".h"
+        }
+        # Reuse the validated render after installation, including the types
+        # step's temporary retention of old homes until imports are rewritten.
+        views = (installed, rendered_headers, {**installed, **rendered_headers})
+        rendered = self.cache.path("typemap-render", content_key)
 
-            def same(output: Path) -> None:
-                atomic_files.copyfile(rendered, output, durable=False)
+        def same(output: Path) -> None:
+            atomic_files.copyfile(rendered, output, durable=False)
 
-            self.cache.produce("typemap-render", stored_key, same)
+        for view in views:
+            stored_key, _ = self._content_key(value, installed=view)
+            if stored_key != content_key:
+                self.cache.produce("typemap-render", stored_key, same)
         outputs = {self.project.root / p: data.encode() for p, data in result["outputs"].items()}
         effort.count(
             "render.unchanged_headers",

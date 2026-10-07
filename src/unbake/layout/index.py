@@ -1,4 +1,4 @@
-"""The single generated declaration lookup, with safe index-listed paths."""
+"""The current declaration lookup and ownership of marked generated headers."""
 
 from __future__ import annotations
 
@@ -74,6 +74,40 @@ def headers(project: Project) -> frozenset[Path]:
     return frozenset(path for path in listed(project) if path.is_file())
 
 
+def marked(path: Path, root: Path) -> bool:
+    """Recognize the generator's guard, never a filename pattern alone."""
+    if not path.is_relative_to(root) or not path.is_file():
+        return False
+    name = path.relative_to(root).as_posix()
+    guard = "UNBAKE_" + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+    text = path.read_text()
+    # Generated layout homes are beneath a segment/common directory. Root
+    # SDK/scalar headers such as types.h can share the UNBAKE guard prefix;
+    # they remain authored unless they carry an explicit declaration marker.
+    if len(Path(name).parts) < 2 and not any(
+        marker in text for marker in ("/* unbake published declaration:", "/* unbake declaration evidence:")
+    ):
+        return False
+    return bool(re.match(r"\s*#\s*ifndef\s+" + guard + r"\s*\n\s*#\s*define\s+" + guard + r"\b", text))
+
+
+def owned(project: Project) -> frozenset[Path]:
+    """Manifest homes plus marked orphans, including files absent from the index.
+
+    Ownership survives a renamed content-addressed header or a discarded index.
+    Authored headers with similar names remain outside this set.
+    """
+    found = set(headers(project))
+    if project.include:
+        root = project.include[0]
+        for path in root.rglob("*.h"):
+            if marked(path, root):
+                if not path.resolve().is_relative_to(root.resolve()):
+                    raise Held("layout", "layout.index: header symlink escapes include root")
+                found.add(path)
+    return frozenset(found)
+
+
 def listed(project: Project) -> frozenset[Path]:
     if not project.include:
         return frozenset()
@@ -92,7 +126,6 @@ def listed(project: Project) -> frozenset[Path]:
     return _headers(project.include[0], names, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
 
 
-@lru_cache(maxsize=32)
 def _unindexed_headers(root: Path, ownership: Path, stamp: tuple[int, int, int]) -> frozenset[Path]:
     try:
         groups = tomllib.loads(ownership.read_text()).get("group", [])

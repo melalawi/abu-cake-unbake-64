@@ -263,7 +263,20 @@ class Headers:
 
     @classmethod
     def read(cls, project: Any) -> Headers:
-        texts = {path: path.read_text() for path, _ in include_headers(project)}
+        from unbake.layout import index
+
+        # A present manifest identifies the current generated view. Marked
+        # orphans are owned for cleanup, but are not declaration providers.
+        current = (
+            set(index.load(project)["headers"]) if hasattr(project, "build") and index.path(project).is_file() else None
+        )
+        texts = {
+            path: path.read_text()
+            for path, relative in include_headers(project)
+            if current is None
+            or relative in current
+            or not any(index.marked(path, root.resolve()) for root in project.include)
+        }
         return cls(texts, root=getattr(project, "root", None))
 
     def seeded(self, text: str) -> LayoutParser:
