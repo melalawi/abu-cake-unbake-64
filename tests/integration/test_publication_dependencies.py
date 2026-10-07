@@ -96,10 +96,17 @@ class PublicationDependencyTests(ProjectCase):
 
     def test_failed_commit_preserves_the_previous_index_bytes(self):
         index = self.project.root / ".git" / "index"
-        index.parent.mkdir()
-        index.write_bytes(b"previous staged user state")
+        process.subprocess.run(["git", "init", "-q", str(self.project.root)], check=True, capture_output=True)
         owned = self.project.root / "owned.h"
         owned.write_text("owned\n")
+        process.subprocess.run(["git", "add", "owned.h"], cwd=self.project.root, check=True, capture_output=True)
+        process.subprocess.run(
+            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base"],
+            cwd=self.project.root,
+            check=True,
+            capture_output=True,
+        )
+        index.write_bytes(b"previous staged user state")
 
         def git(project, *args, env=None):
             if args[:2] == ("rev-parse", "--git-path"):

@@ -113,6 +113,37 @@ class ProviderReuseTests(ProjectCase):
                 ("us",),
             )
 
+    def test_unrelated_conditional_macro_does_not_block_unconditional_provider_reuse(self):
+        from unbake.fold import provider_reuse
+
+        copy = self.project.include[-1] / "copy.h"
+        owner = self.project.include[-1] / "owner.h"
+        declaration = "struct Box { int value; };"
+        unrelated = "#if VERSION\n#define LABEL(x) (x)\n#else\n#define LABEL(x) 0\n#endif\n"
+        texts = {
+            copy: "#ifndef COPY_H\n#define COPY_H\n" + unrelated + declaration + "\n#endif\n",
+            owner: "#ifndef OWNER_H\n#define OWNER_H\n" + declaration + "\n#endif\n",
+        }
+        edits = provider_reuse.plan(self.project, texts, ("us",), changed=frozenset({copy}))
+        self.assertEqual([edit.path for edit in edits], [copy])
+        self.assertIn(unrelated, edits[0].after)
+        self.assertNotIn("struct Box {", edits[0].after)
+        for body in (
+            "#if VERSION\n" + declaration + "\n#endif\n",
+            "#define SIZE 1\nstruct Box { int value[SIZE]; };",
+            "#if VERSION\ntypedef int Scalar;\n#endif\nstruct Box { Scalar value; };",
+        ):
+            with self.subTest(body=body), self.assertRaises(Held):
+                provider_reuse.plan(
+                    self.project,
+                    {
+                        copy: "#ifndef COPY_H\n#define COPY_H\n" + body + "\n#endif\n",
+                        owner: texts[owner],
+                    },
+                    ("us",),
+                    changed=frozenset({copy}),
+                )
+
     def test_complete_typedef_body_removal_does_not_leave_duplicate_alias(self):
         from unbake.fold import provider_reuse
 

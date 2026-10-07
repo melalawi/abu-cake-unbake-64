@@ -23,12 +23,6 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixture"
 SRC = Path(__file__).resolve().parents[2] / "src"
 REPO = Path(__file__).resolve().parents[2]
 
-CPP = """#!/bin/sh
-out=""; prev=""
-for a in "$@"; do [ "$prev" = "-MF" ] && : > "$a"; prev="$a"; done
-for a in "$@"; do last="$a"; done
-case "$last" in -) cat ;; -*) cat ;; *) cat "$last" ;; esac
-"""
 COPY = """#!/bin/sh
 # copy: the last two plain arguments are input and output
 set -- $(for a in "$@"; do case "$a" in -*|asn64) ;; *) printf '%s ' "$a" ;; esac; done)
@@ -39,6 +33,13 @@ N64LINK = (
     f"#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s' '{N64LINK_RELEASE}'; exit 0; fi\n" + COPY.split("\n", 1)[1]
 )
 CC = """#!/bin/sh
+for arg in "$@"; do last="$arg"; done
+for arg in "$@"; do
+    if [ "$arg" = "-show" ]; then
+        printf '/usr/lib/cfe -D__sgi -I/usr/include %s -E -D_LANGUAGE_C -std\\n' "$last" >&2
+        exit 0
+    fi
+done
 # emit `li v0, N; jr ra; nop` for the first `return N;` in the input
 while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) in="$1"; shift ;; esac; done
 n=$(sed -n 's/.*return \\([0-9]*\\);.*/\\1/p' "$in" | head -1)

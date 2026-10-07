@@ -44,6 +44,9 @@ class ProjectFlowTests(FixtureCase):
 
     def test_publish_lands_one_function_with_a_local_commit(self) -> None:
         path = self.work("alpha", EXACT.format(name="alpha", value=1))
+        code, lines, stderr = self.unbake("compare", str(path))
+        self.assertEqual(code, 0, stderr)
+        self.assertTrue(lines[-1]["data"]["exact"])
         code, lines, stderr = self.unbake("publish", str(path))
         self.assertEqual((code, lines[-1]["status"]), (0, "ok"), stderr)
         data = lines[-1]["data"]

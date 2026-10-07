@@ -27,6 +27,10 @@ class Catalog:
     tags: dict[str, tuple[str, int, int, tuple[str, ...]]]
     typedefs: dict[str, tuple[int, int, tuple[str, ...]]]
     guard: str | None
+    unproved: frozenset[tuple[str, str]]
+
+    def proved(self, namespace: str, name: str) -> bool:
+        return self.guard is not None and (namespace, name) not in self.unproved
 
 
 def _catalog(text: str) -> Catalog:
@@ -46,19 +50,55 @@ def _catalog(text: str) -> Catalog:
             tokens = tuple(NAME_TOKEN.findall(row))
             for name in declarations(row).typedefs:
                 typedefs[name] = (start, end, tokens)
-    # Other conditionals and local macro definitions require version-specific
-    # proof. Keep that refusal instead of treating a raw catalogue as evidence.
-    uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
-    directives = re.findall(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", uncommented, re.M)
-    significant = [(kind, arg.strip()) for kind, arg in directives if kind != "include"]
-    guarded = (
-        len(significant) == 3
-        and significant[0][0] == "ifndef"
-        and significant[1] == ("define", significant[0][1])
-        and significant[2][0] == "endif"
-        and re.fullmatch(r"[A-Za-z_]\w*", significant[0][1]) is not None
+    # Context belongs to each declaration. An unrelated conditional macro
+    # elsewhere in a guarded header does not change an unconditional layout.
+    uncommented = re.sub(r"/\*.*?\*/|//[^\n]*", lambda m: re.sub(r"[^\n]", " ", m[0]), text, flags=re.S)
+    directives = list(re.finditer(r"^[ \t]*#[ \t]*(\w+)([^\n]*)", uncommented, re.M))
+    significant = [m for m in directives if m[1] != "include"]
+    guard = (
+        significant[0][2].strip()
+        if len(significant) >= 3
+        and significant[0][1] == "ifndef"
+        and significant[1][1] == "define"
+        and significant[1][2].strip() == significant[0][2].strip()
+        and significant[-1][1] == "endif"
+        and re.fullmatch(r"[A-Za-z_]\w*", significant[0][2].strip())
+        else None
     )
-    return Catalog(tags, typedefs, significant[0][1] if guarded else None)
+    stack: list[int] = []
+    conditional: list[tuple[int, int]] = []
+    macros: set[str] = set()
+    unknown = False
+    for directive in significant:
+        directive_kind, argument = directive[1], directive[2].strip()
+        if directive_kind in {"if", "ifdef", "ifndef"}:
+            if not stack and directive is not significant[0]:
+                guard = None
+            stack.append(directive.start())
+        elif directive_kind == "endif":
+            if not stack:
+                guard = None
+            else:
+                start = stack.pop()
+                if stack:
+                    conditional.append((start, directive.end()))
+                elif directive is not significant[-1]:
+                    guard = None
+        elif directive_kind in {"define", "undef"}:
+            if match := re.match(r"\w+", argument):
+                macros.add(match[0])
+        elif directive_kind not in {"else", "elif"}:
+            unknown = True
+    if stack:
+        guard = None
+    macros.discard(guard or "")
+    unproved = set()
+    for namespace, records in (("tag", tags), ("alias", typedefs)):
+        for name, record in records.items():
+            start, end, tokens = record[-3:]
+            if unknown or set(tokens) & macros or any(start < last and end > first for first, last in conditional):
+                unproved.add((namespace, name))
+    return Catalog(tags, typedefs, guard, frozenset(unproved))
 
 
 def _refuse(project: Project, contents: dict[Path, str], name: str, paths: list[Path], detail: str) -> None:
@@ -140,11 +180,15 @@ def plan(
                 continue
             home = candidates[0]
             other_kind, _, _, other_tokens = catalogs[home].tags[name]
-            if catalog.guard is not None and catalog.guard == catalogs[home].guard:
+            if (
+                catalog.proved("tag", name)
+                and catalogs[home].proved("tag", name)
+                and catalog.guard == catalogs[home].guard
+            ):
                 continue  # Already one provider under native include-guard semantics.
             if (kind, tokens) != (other_kind, other_tokens) and not identity.equal("tag", name, path, home):
                 _refuse(project, contents, name, [path, home], "conflicting complete declaration")
-            if not catalog.guard or not catalogs[home].guard:
+            if not catalog.proved("tag", name) or not catalogs[home].proved("tag", name):
                 _refuse(project, contents, name, [path, home], "conditional or macro context is not proved")
             homes.add(home)
             required.update(tokens)
@@ -156,11 +200,19 @@ def plan(
         # identical repeated typedef as well.
         for name, (_start, _end, tokens) in catalog.typedefs.items():
             home = alias_homes[name]
-            if len(typedefs[name]) < 2 or home == path or catalog.guard == catalogs[home].guard:
+            if (
+                len(typedefs[name]) < 2
+                or home == path
+                or (
+                    catalog.proved("alias", name)
+                    and catalogs[home].proved("alias", name)
+                    and catalog.guard == catalogs[home].guard
+                )
+            ):
                 continue
             if tokens != catalogs[home].typedefs[name][2] and not identity.equal("alias", name, path, home):
                 _refuse(project, contents, name, [path, home], "conflicting typedef dependency")
-            if not catalog.guard or not catalogs[home].guard:
+            if not catalog.proved("alias", name) or not catalogs[home].proved("alias", name):
                 _refuse(project, contents, name, [path, home], "conditional or macro context is not proved")
             homes.add(home)
             required.update(tokens)
@@ -176,6 +228,14 @@ def plan(
             for name in sorted(pending):
                 rows = typedefs[name]
                 checked.add(name)
+                if any(not catalogs[home].proved("alias", name) for home, _ in rows):
+                    _refuse(
+                        project,
+                        contents,
+                        name,
+                        [home for home, _ in rows],
+                        "conditional or macro context is not proved",
+                    )
                 if len({tokens for _, tokens in rows}) != 1 and not all(
                     tokens == rows[0][1] or identity.equal("alias", name, rows[0][0], home) for home, tokens in rows[1:]
                 ):

@@ -128,7 +128,12 @@ class SharedConsumerTests(ProjectCase):
         self.mismatch = None
         self.git = []
 
+        run_native = process.run_native
+
         def native_git(argv, cwd, phase, **kwargs):
+            if Path(argv[0]).name != "git":
+                return run_native(argv, cwd, phase, **kwargs)
+
             def result(stdout):
                 return process.NativeResult(
                     tuple(argv),

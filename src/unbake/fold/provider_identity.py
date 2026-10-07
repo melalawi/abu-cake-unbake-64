@@ -48,7 +48,7 @@ class Identity:
             return name in (catalog.typedefs if namespace == "alias" else catalog.tags)
 
         homes = [path] if has(path) else [home for home in self.scope(path) if has(home)]
-        if any(not self.catalogs[home].guard for home in homes):
+        if any(not self.catalogs[home].proved(namespace, name) for home in homes):
             raise Unproved
         return homes
 
