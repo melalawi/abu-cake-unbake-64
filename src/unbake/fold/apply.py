@@ -20,6 +20,7 @@ from unbake.fold import declarations, notes
 from unbake.layout import map as layout_map
 from unbake.layout import split
 from unbake.layout.split import Edit
+from unbake.work.attempts import Attempt
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,15 @@ def relative_header(project: Project, path: Path) -> str | None:
     return None
 
 
-def fold(project: Project, host: Host, function: str, text: str, *, versions: tuple[str, ...] | None = None) -> Folded:
+def fold(
+    project: Project,
+    host: Host,
+    function: str,
+    text: str,
+    *,
+    versions: tuple[str, ...] | None = None,
+    exact_entry: Attempt | None = None,
+) -> Folded:
     """Lower GBI, fold shared types and plan the publication edits, without writing project files."""
     drafted = view(project, function)
     versions = split.holding_versions(project, function) if versions is None else versions
@@ -99,7 +108,9 @@ def fold(project: Project, host: Host, function: str, text: str, *, versions: tu
     if "abi" in lowered.headers:
         source = gbi.install_audio(drafted) + source
     with notes.collect() as learned:
-        edits = declarations.folded_edits(drafted, host, function, source, versions, prove_headers=False)
+        edits = declarations.folded_edits(
+            drafted, host, function, source, versions, prove_headers=False, exact_entry=exact_entry
+        )
     headers: dict[str, str] = {}
     split_edits = []
     folded = None

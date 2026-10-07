@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,124 @@ from unbake.layout import redeclarations
 from unbake.layout.split import Edit
 from unbake.typemap import declarations, evidence, o32
 from unbake.typemap.declarations import _declaration_unit
+from unbake.work.attempts import Attempt
+
+
+def exact(
+    contents: dict[Path, str],
+    generated: frozenset[Path],
+    text: str,
+    authored: str,
+    function: str,
+    record: dict[str, Any],
+    aliases: dict[str, str],
+    versions: tuple[str, ...],
+    attempt: Attempt | None,
+) -> list[Edit]:
+    """A matched own definition replaces an unowned inferred entry, provisionally.
+
+    Unlike inference, this authority is the actual complete C implementation,
+    matched in every holding version. The publication must reprove its folded
+    body AND all published consumers of the changed headers before writing.
+    Authored declaration evidence and unsupported aggregate/variadic transport
+    remain outside this reconciliation.
+    """
+    from unbake.fold.callee_contracts import _signature
+    from unbake.layout.structs_types import SCALARS
+
+    if (
+        attempt is None
+        or attempt.function != function
+        or attempt.sha256 != hashlib.sha256(authored.encode()).hexdigest()
+        or not versions
+        or set(attempt.versions) != set(versions)
+        or any(row.get("exact") is not True or row.get("fault") for row in attempt.versions.values())
+    ):
+        return []
+    provenance = record.get("provenance", [])
+    if isinstance(provenance, dict):
+        provenance = [provenance]
+    if any(
+        row.get("kind") in ("proven", "published", "declared") and row.get("function") in (None, function)
+        for row in provenance
+    ):
+        return []
+    abi = record.get("abi") or {}
+    if abi.get("missing") or abi.get("conflicts") or abi.get("unproven_return_reads"):
+        return []
+    unit = _declaration_unit(cdecl.declaration_source(text))
+    names = cdecl.declarations(unit)
+    try:
+        tree = cdecl.parse(unit, typedefs=names.uses | names.typedefs | aliases.keys())
+    except Exception:
+        return []
+    definitions = [node.decl for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function]
+    if len(definitions) != 1 or "static" in definitions[0].storage:
+        return []
+    prototype = c_generator.CGenerator().visit(definitions[0]) + ";"
+    right = _signature(prototype, aliases)
+
+    def scalar(signature: dict[str, Any] | None) -> bool:
+        if signature is None or signature["variadic"]:
+            return False
+        types = [signature["return"], *(p["type"] for p in signature["params"])]
+        return all(
+            (value := declarations.canonical(type_, aliases)) in SCALARS or value == "void" or value.endswith(" *")
+            for type_ in types
+        )
+
+    if not scalar(right) or right is None or not right["arity_known"]:
+        return []
+    words = o32.argument_words(right, aliases)
+    if abi.get("inputs") and (
+        set(abi["inputs"]) != set(versions) or any(not set(row) <= words for row in abi["inputs"].values())
+    ):
+        return []
+    returned = declarations.canonical(right["return"], aliases)
+    result_register = "f0" if returned in ("float", "double") else "r2" if returned != "void" else None
+    if abi and (
+        (returned != "void" and not abi.get("return_known"))
+        or any(reg != result_register for reg in abi.get("used_returns", []))
+        or (abi.get("return_width") == 8 and returned not in ("double", "long long", "unsigned long long"))
+    ):
+        return []
+    # A generated home can contain independently authored declarations. Their
+    # evidence marker belongs to the declaration, not to the entire header.
+    edits = []
+    for path, before in sorted(contents.items()):
+        after = before
+        for start, end in reversed(redeclarations.spans(before)):
+            old = before[start:end]
+            if cdecl.declarations(old).declared != {function}:
+                continue
+            if redeclarations.equivalent(old, prototype, aliases):
+                continue
+            marked = re.search(
+                r"/\* unbake (?:published declaration|declaration evidence):[^*]*\*/\s*$", before[:start]
+            )
+            if path not in generated or marked:
+                return []
+            left = _signature(old, aliases)
+            if not scalar(left) or left is None:
+                return []
+            if left["arity_known"] and not words <= o32.argument_words(left, aliases):
+                return []
+            # This unit's scalar-word spelling changes and unused word formals
+            # do not establish a new FP prefix or 64-bit/aggregate grouping.
+            strict = {"float", "double", "long long", "unsigned long long"}
+            for index, param in enumerate(left["params"]):
+                previous = declarations.canonical(param["type"], aliases)
+                current = (
+                    declarations.canonical(right["params"][index]["type"], aliases)
+                    if index < len(right["params"])
+                    else None
+                )
+                if (previous in strict or current in strict) and previous != current:
+                    return []
+            after = after[:start] + prototype + after[end:]
+        if after != before:
+            edits.append(Edit(path, before, after, versions))
+    return edits
 
 
 def inferred(
@@ -61,6 +181,8 @@ def inferred(
         for start, end in reversed(redeclarations.spans(before)):
             old = before[start:end]
             if cdecl.declarations(old).declared != {function}:
+                continue
+            if re.search(r"/\* unbake (?:published declaration|declaration evidence):[^*]*\*/\s*$", before[:start]):
                 continue
             left = _signature(old, aliases)
             if left is None or not left["arity_known"] or left["variadic"]:

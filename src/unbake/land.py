@@ -571,11 +571,29 @@ def prove(
             raise Held("land", f"land.consumer: {edit.path}: source changed since fold")
         changed[edit.path] = edit.after.encode()
     if changed:
+        from unbake.layout import redeclarations
+
+        # An inferred own entry can be replaced by the exact implementation.
+        # A compile-only check cannot detect changed argument extension or a
+        # consumer's incompatible result register. Reprove affected published
+        # native bodies whenever a header's function contract changes.
+        entry_changed = any(
+            redeclarations.catalog(data.decode()).get(function)
+            != redeclarations.catalog(path.read_text() if path.is_file() else "").get(function)
+            for path, data in changed.items()
+            if path.suffix == ".h"
+        )
         # A published unit's own source is validated as its new text, the one this land writes.
         if fuzzy or source_edits:
             header_step.validate(project, host, changed, prove_all=True, preproved=frozenset({function}))
         else:
-            header_step.validate(project, host, {**changed, project.src / f"{function}.c": source.encode()})
+            header_step.validate(
+                project,
+                host,
+                {**changed, project.src / f"{function}.c": source.encode()},
+                prove_all=entry_changed,
+                preproved=frozenset({function}) if entry_changed else frozenset(),
+            )
     return Proof(list(versions), publish_inputs, scores, dependency_headers, source)
 
 
@@ -701,7 +719,7 @@ def land(
     # The writer admits new measured split rows before fold's strict ownership read.
     # Admission checks above still refuse invalid requests without changing the map.
     layout_map.ensure(project)
-    folded = fold_apply.fold(project, host, function, text, versions=selected)
+    folded = fold_apply.fold(project, host, function, text, versions=selected, exact_entry=None if fuzzy else attempt)
     result = checks.findings(project, (file,), Cache(project.cache), proposed={file: folded.source})
     broken = [row.finding for row in (result.rows if fuzzy else result.unmarked)]
     if broken:

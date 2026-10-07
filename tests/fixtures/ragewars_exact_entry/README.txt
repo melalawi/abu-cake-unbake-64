@@ -1,0 +1,1 @@
+Eight complete Rage Wars candidates and their current generated own declarations. Native compares matched all holding versions before public fold; inferred entries conflict in the staged public context. Receipts retain source hashes and every holder; no fabricated C body or signature.

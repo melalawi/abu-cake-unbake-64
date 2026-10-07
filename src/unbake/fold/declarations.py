@@ -23,6 +23,7 @@ from unbake.layout.split import Edit
 from unbake.layout.structs_fold import _scalar_include, fold, scalar_edits
 from unbake.layout.structs_types import Aggregate
 from unbake.typemap.header_names import alias_types, callback_renames, type_identity
+from unbake.work.attempts import Attempt
 
 
 def preflight(project: Project, policy: Host, pending: list[needs.Need]) -> list[Edit]:
@@ -217,6 +218,7 @@ def fold_source(
     *,
     prove_headers: bool = True,
     source_path: Path | None = None,
+    exact_entry: Attempt | None = None,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
     from unbake.fold import callee_contracts
@@ -317,26 +319,40 @@ def fold_source(
 
     staged_contents = {**headers.texts, **{edit.path: edit.after for edit in edits}}
     database = types_db.path(project)
-    if database.is_file():
-        manifest = set(layout_index.load(project)["headers"])
-        generated = frozenset(
-            path
-            for path in staged_contents
-            if any(
-                path.is_relative_to(root) and path.relative_to(root).as_posix() in manifest for root in project.include
+    manifest = set(layout_index.load(project)["headers"])
+    generated = frozenset(
+        path
+        for path, body in staged_contents.items()
+        if any(
+            path.is_relative_to(root)
+            and (
+                path.relative_to(root).as_posix() in manifest
+                or (
+                    len(path.relative_to(root).parts) > 1
+                    and re.match(
+                        r"\s*#\s*ifndef\s+(UNBAKE_"
+                        + re.sub(r"[^A-Za-z0-9]", "_", path.relative_to(root).as_posix()).upper()
+                        + r")\s*\n\s*#\s*define\s+\1\b",
+                        body,
+                    )
+                )
             )
+            for root in project.include
         )
-        record = types_db.entries(database, "functions", [function]).get(function, {})
-        parser = context.seeded("")
-        aliases = {}
-        for name in set(re.findall(r"\b[A-Za-z_]\w*\b", final)) & parser.types.keys():
-            try:
-                aliases[name] = parser.type_name(name, ())
-            except Held:
-                continue
+    )
+    record = types_db.entries(database, "functions", [function]).get(function, {}) if database.is_file() else {}
+    parser = context.seeded("")
+    aliases = {}
+    for name in set(re.findall(r"\b[A-Za-z_]\w*\b", final)) & parser.types.keys():
+        try:
+            aliases[name] = parser.type_name(name, ())
+        except Held:
+            continue
+    inferred_edits = self_prototype.exact(
+        staged_contents, generated, final, authored, function, record, aliases, versions, exact_entry
+    )
+    if not inferred_edits and database.is_file():
         inferred_edits = self_prototype.inferred(staged_contents, generated, final, function, record, aliases, versions)
-    else:
-        inferred_edits = []
     own_contents = {**staged_contents, **{edit.path: edit.after for edit in inferred_edits}}
     by_path = {edit.path: edit for edit in edits}
     for edit in [*inferred_edits, *self_prototype.unqualify(own_contents, final, function, versions)]:
@@ -378,7 +394,14 @@ def fold_source(
 
 
 def folded_edits(
-    project: Project, policy: Host, function: str, text: str, versions: tuple[str, ...], *, prove_headers: bool = True
+    project: Project,
+    policy: Host,
+    function: str,
+    text: str,
+    versions: tuple[str, ...],
+    *,
+    prove_headers: bool = True,
+    exact_entry: Attempt | None = None,
 ) -> list[Edit]:
     """The folded source, the header edits and the split rows the fold absorbed (land converts F's own row)."""
     from unbake.fold import provider_reuse
@@ -387,7 +410,9 @@ def folded_edits(
     catalogs: dict[str, provider_reuse.Catalog] = {}
     reused = provider_reuse.plan(project, contents, versions, cache=catalogs)
     context = Headers({**contents, **{edit.path: edit.after for edit in reused}}, root=project.root)
-    folded = fold_source(project, policy, context, function, text, versions, prove_headers=False)
+    folded = fold_source(
+        project, policy, context, function, text, versions, prove_headers=False, exact_entry=exact_entry
+    )
     # A later fold edit can extend a reconciled private header. Publication must
     # still compare against its original bytes, and write each provider once.
     by_path = {edit.path: edit for edit in reused}
