@@ -114,12 +114,14 @@ def shared_includes(project: Project, headers: Headers, policy: Host) -> Iterato
 def authored_contents(project: Project, headers: Headers, local: Project) -> dict[Path, str]:
     from unbake.typemap import storage
 
+    generated = (
+        storage.generated_view(project) if isinstance(getattr(project, "build", None), Path) else lambda path: False
+    )
     return {
         staged / path.relative_to(root): text
         for root, staged in zip(project.include, local.work_include, strict=True)
         for path, text in headers.texts.items()
-        if path.is_relative_to(root)
-        and not (isinstance(getattr(project, "build", None), Path) and storage.generated(project, path))
+        if path.is_relative_to(root) and not generated(path)
     }
 
 

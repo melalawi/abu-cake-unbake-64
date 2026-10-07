@@ -138,11 +138,12 @@ class Session:
         self.cache = Cache(project.cache)
         self.environment = environment(project, policy)
         self.certificates = Certificates(self.cache, self.environment)
+        generated = storage.generated_view(project)
         self.authored = {
             path: path.read_text()
             for root in project.include
             for path in sorted(root.rglob("*.h"))
-            if not storage.generated(project, path)
+            if not generated(path)
         }
         self.sources = {path: path.read_text() for path in sorted(project.src.rglob("*.c"))}
         from unbake.typemap.declaration_evidence import published_snapshot

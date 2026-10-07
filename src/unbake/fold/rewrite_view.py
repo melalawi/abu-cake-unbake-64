@@ -122,7 +122,7 @@ def prepare(
     if contents is None:
         contents = {
             path: path.read_text()
-            for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
+            for path, _ in include_headers(project, exclude=storage.generated_view(project))
             if not storage.generated(project, path)
         }
     prelude = "".join(f"#include {json.dumps(str(path))}\n" for path in ordered_headers(contents))

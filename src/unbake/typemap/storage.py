@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -99,13 +100,21 @@ def symbol_digest(path: Path) -> str:
     return result
 
 
-def generated(project: Project, path: Path) -> bool:
+def generated_view(project: Project) -> Callable[[Path], bool]:
+    """One ownership catalogue per read operation, including a missing-index recovery scan."""
     from unbake.layout import index
 
-    # One stat of PATH, not of every listed header: callers ask once per header, which was quadratic.
-    return path.is_file() and (
-        path in index.listed(project) or any(index.marked(path, root) for root in project.include)
-    )
+    listed = index.listed(project)
+
+    def contains(path: Path) -> bool:
+        return path.is_file() and (path in listed or any(index.marked(path, root) for root in project.include))
+
+    return contains
+
+
+def generated(project: Project, path: Path) -> bool:
+    """Classify one path; loops use generated_view so recovery is not repeated per file."""
+    return generated_view(project)(path)
 
 
 def relocatable(value: Any, root: Path) -> Any:

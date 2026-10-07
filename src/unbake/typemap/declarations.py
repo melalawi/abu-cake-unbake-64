@@ -15,7 +15,7 @@ from typing import Any
 from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
-from unbake import cdecl, pool, prefixes
+from unbake import cdecl, pool, prefixes, tui
 from unbake.cache import memo
 from unbake.cdecl import attribute_source, declaration_source
 from unbake.cdecl import declarations as header_declarations
@@ -970,128 +970,129 @@ def _collect(project: Project, policy: Host | None, store: Any, keys: list[str])
 
     seeds = []
     declared: dict[str, dict[str, Any]] = {}
-    contents = {
-        path: path.read_text()
-        for path, _ in include_headers(project, exclude=lambda path: storage.generated(project, path))
-        if not storage.generated(project, path)
-    }
-    ordered = ordered_headers(contents)
-    authored = {
-        path.resolve() for root in project.include for path in root.rglob("*.h") if not storage.generated(project, path)
-    }
-    texts = _version_texts(project, policy, contents, None, ordered)
-    if policy is not None:
-        # Each distinct version's declared headers are extracted in the worker pool into the shared store; the
-        # loop below reads them back.
-        from unbake import pool
-
-        distinct = {
-            text: {"kind": "declared", "version": version, "sha256": storage.digest(rooted(project, text).encode())}
-            for version, text in reversed(texts.items())
+    with tui.task("Finding authored header inputs"):
+        generated = storage.generated_view(project)
+        contents = {
+            path: path.read_text() for path, _ in include_headers(project, exclude=generated) if not generated(path)
         }
-        pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in distinct.items()])
-    for version in project.versions:
-        header_text = texts[version]
-        # Line markers name absolute include paths: the digest reads them relative to the tree root, so the same
-        # tree at another path records the same provenance.
-        relative = rooted(project, header_text)
-        provenance = {"kind": "declared", "version": version, "sha256": storage.digest(relative.encode())}
-        seed = declared.get(header_text)
-        if seed is None:
-            seed = store.text(
-                header_text,
-                provenance,
-                authored,
-                lambda text=header_text, row=provenance: extract(text, row, authored_headers=authored),
-            )
-            declared[header_text] = seed
-        else:
-            seed = {**seed}
-            for kind in ("functions", "globals", "structs", "arrays"):
-                seed[kind] = {name: {**row, "provenance": provenance} for name, row in seed[kind].items()}
-        seeds.append(seed)
-    from unbake.typemap import declaration_evidence
-
-    components = declaration_evidence.feedback_components(project)
-    if components:
-        exports = set().union(*(header_declarations(text).declared for text in components.values()))
-        # Generated layouts are part of the prefix, while extern evidence is
-        # retained at declared confidence (never promoted to an exact C proof).
-        extra = project.build / "types" / "declaration_evidence.c"
-        from unbake.layout import redeclarations
-        from unbake.typemap import split
-        from unbake.typemap.declaration_evidence import _body
-
-        provided_layouts = {}
-        for path in _generated_context(project):
-            for statement in split.statements(_body(path.read_text())):
-                for name in re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(statement)):
-                    provided_layouts[name] = statement
-        supplemental = []
-        for body in components.values():
-            for statement in split.statements(body):
-                definitions = set(re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(statement)))
-                duplicates = definitions & provided_layouts.keys()
-                for name in duplicates:
-                    if redeclarations.normalized(statement) != redeclarations.normalized(provided_layouts[name]):
-                        raise Held(
-                            "types",
-                            f"declaration_evidence.{name}: local:\n{statement}\nshared:\n{provided_layouts[name]}",
-                        )
-                if not duplicates:
-                    supplemental.append(statement)
-        extra.parent.mkdir(parents=True, exist_ok=True)
-        content = "\n".join(supplemental)
-        if not extra.is_file() or extra.read_text() != content:
-            atomic_files.text(extra, content)
-        evidence: dict[str, dict[str, Any]] = {}
-        evidence_texts = _version_texts(project, policy, contents, extra, ordered)
-
-        def evidence_row(version: str) -> dict[str, Any]:
-            return {
-                "kind": "declared",
-                "version": version,
-                "source": "declaration_evidence",
-                "sha256": storage.digest(extra.read_bytes()),
-            }
-
+        ordered = ordered_headers(contents)
+        authored = {path.resolve() for root in project.include for path in root.rglob("*.h") if not generated(path)}
+    with tui.task("Preprocessing authored headers", len(project.versions)):
+        texts = _version_texts(project, policy, contents, None, ordered)
+    with tui.task("Reading authored header declarations", len(project.versions)):
         if policy is not None:
-            # Each distinct evidence text is extracted in the pool (under its first version's provenance, which the
-            # loop below asks for), never one after another in this process.
+            # Each distinct version's declared headers are extracted in the worker pool into the shared store; the
+            # loop below reads them back.
             from unbake import pool
 
-            first = {text: evidence_row(version) for version, text in reversed(evidence_texts.items())}
-            pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in first.items()])
+            distinct = {
+                text: {"kind": "declared", "version": version, "sha256": storage.digest(rooted(project, text).encode())}
+                for version, text in reversed(texts.items())
+            }
+            pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in distinct.items()])
         for version in project.versions:
-            provenance = evidence_row(version)
-            # Evidence imports the generated context too. Preserve definition
-            # homes so a canonical layout reused after a rename remains a
-            # generated provider, with its split dependencies intact.
-            text = evidence_texts[version]
-            template = evidence.get(text)
-            if template is None:
-                template = store.text(
-                    text,
+            header_text = texts[version]
+            # Line markers name absolute include paths: the digest reads them relative to the tree root, so the same
+            # tree at another path records the same provenance.
+            relative = rooted(project, header_text)
+            provenance = {"kind": "declared", "version": version, "sha256": storage.digest(relative.encode())}
+            seed = declared.get(header_text)
+            if seed is None:
+                seed = store.text(
+                    header_text,
                     provenance,
                     authored,
-                    lambda text=text, row=provenance: extract(text, row, authored_headers=authored),
+                    lambda text=header_text, row=provenance: extract(text, row, authored_headers=authored),
                 )
-                evidence[text] = template
-            seed = _receipt_seed(template, provenance, compact=False)
-            if "authored_structs" in template:
-                seed["authored_structs"] = template["authored_structs"]
-            for kind in ("functions", "globals", "arrays"):
-                seed[kind] = {name: row for name, row in seed[kind].items() if name in exports}
-            # Explicit declaration evidence retains complete layouts even when
-            # no mapped instruction currently uses them. Their output homes
-            # are generated, but their confidence remains authored/declared.
-            declared_layouts = {
-                name
-                for text in components.values()
-                for name in re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(text))
-            }
-            seed["authored_structs"] = sorted(set(seed["authored_structs"]) | declared_layouts)
+                declared[header_text] = seed
+            else:
+                seed = {**seed}
+                for kind in ("functions", "globals", "structs", "arrays"):
+                    seed[kind] = {name: {**row, "provenance": provenance} for name, row in seed[kind].items()}
             seeds.append(seed)
+    from unbake.typemap import declaration_evidence
+
+    with tui.task("Loading retained declaration evidence"):
+        components = declaration_evidence.feedback_components(project)
+        if components:
+            exports = set().union(*(header_declarations(text).declared for text in components.values()))
+            # Generated layouts are part of the prefix, while extern evidence is
+            # retained at declared confidence (never promoted to an exact C proof).
+            extra = project.build / "types" / "declaration_evidence.c"
+            from unbake.layout import redeclarations
+            from unbake.typemap import split
+            from unbake.typemap.declaration_evidence import _body
+
+            provided_layouts = {}
+            for path in _generated_context(project):
+                for statement in split.statements(_body(path.read_text())):
+                    for name in re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(statement)):
+                        provided_layouts[name] = statement
+            supplemental = []
+            for body in components.values():
+                for statement in split.statements(body):
+                    definitions = set(re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(statement)))
+                    duplicates = definitions & provided_layouts.keys()
+                    for name in duplicates:
+                        if redeclarations.normalized(statement) != redeclarations.normalized(provided_layouts[name]):
+                            raise Held(
+                                "types",
+                                f"declaration_evidence.{name}: local:\n{statement}\nshared:\n{provided_layouts[name]}",
+                            )
+                    if not duplicates:
+                        supplemental.append(statement)
+            extra.parent.mkdir(parents=True, exist_ok=True)
+            content = "\n".join(supplemental)
+            if not extra.is_file() or extra.read_text() != content:
+                atomic_files.text(extra, content)
+            evidence: dict[str, dict[str, Any]] = {}
+            evidence_texts = _version_texts(project, policy, contents, extra, ordered)
+
+            def evidence_row(version: str) -> dict[str, Any]:
+                return {
+                    "kind": "declared",
+                    "version": version,
+                    "source": "declaration_evidence",
+                    "sha256": storage.digest(extra.read_bytes()),
+                }
+
+            if policy is not None:
+                # Each distinct evidence text is extracted in the pool (under its first version's provenance, which the
+                # loop below asks for), never one after another in this process.
+                from unbake import pool
+
+                first = {text: evidence_row(version) for version, text in reversed(evidence_texts.items())}
+                pool.run(policy, _declared_job, [(project, policy, text, row, authored) for text, row in first.items()])
+            for version in project.versions:
+                provenance = evidence_row(version)
+                # Evidence imports the generated context too. Preserve definition
+                # homes so a canonical layout reused after a rename remains a
+                # generated provider, with its split dependencies intact.
+                text = evidence_texts[version]
+                template = evidence.get(text)
+                if template is None:
+                    template = store.text(
+                        text,
+                        provenance,
+                        authored,
+                        lambda text=text, row=provenance: extract(text, row, authored_headers=authored),
+                    )
+                    evidence[text] = template
+                seed = _receipt_seed(template, provenance, compact=False)
+                if "authored_structs" in template:
+                    seed["authored_structs"] = template["authored_structs"]
+                for kind in ("functions", "globals", "arrays"):
+                    seed[kind] = {name: row for name, row in seed[kind].items() if name in exports}
+                # Explicit declaration evidence retains complete layouts even when
+                # no mapped instruction currently uses them. Their output homes
+                # are generated, but their confidence remains authored/declared.
+                declared_layouts = {
+                    name
+                    for text in components.values()
+                    for name in re.findall(r"\b(?:struct|union)\s+(\w+)\s*\{", declaration_source(text))
+                }
+                seed["authored_structs"] = sorted(set(seed["authored_structs"]) | declared_layouts)
+                seeds.append(seed)
     # Published sources contribute their consumed contracts and owned definitions,
     # read from the facts cache and extracted only when their inputs changed.
     seeds.extend(facts.published(project, policy, store, keys))
