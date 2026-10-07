@@ -575,7 +575,7 @@ def publish(project: Project, value: dict[str, Any], previous: dict[str, Any], *
 
     # Types retains obsolete headers until layout rewrites their source imports.
     with tui.task("Checking retained header declarations"):
-        header_loss.check(project, outputs)
+        header_loss.check(project, outputs, policy=policy)
     replacements = value["shared_aliases"]
     reserved = session.reserved
     abi_context = "\n".join(
