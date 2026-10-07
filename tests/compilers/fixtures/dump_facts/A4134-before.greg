@@ -1,0 +1,161 @@
+
+;; Function func_802A4134_de
+
+;; 7 regs to allocate: 88 95 85 113 137 82 80
+;; 80 conflicts: 80 82 85 88 137 2 3 5 6 29 32
+;; 82 conflicts: 80 82 85 88 137 2 3 5 29
+;; 85 conflicts: 80 82 85 88 95 113 137 2 3 29 32
+;; 88 conflicts: 80 82 85 88 113 2 29
+;; 88 preferences: 3
+;; 95 conflicts: 85 95 2 29
+;; 95 preferences: 3 6
+;; 113 conflicts: 85 88 113 2 29
+;; 113 preferences: 3 6
+;; 137 conflicts: 80 82 85 137 2 29
+
+;; Need 1 reg of class GR_REGS (for insn 18).
+;; Need 1 reg of class FP_REGS (for insn 18).
+;; Need 1 reg of class HI_REG (for insn 84).
+;; Need 1 reg of class LO_REG (for insn 84).
+;; Need 1 reg of class HILO_REG (for insn 84).
+;; Need 2 regs of class MD_REGS (for insn 84).
+;; Need 3 regs of class ALL_REGS (for insn 84).
+Spilling reg 7.
+Spilling reg 33.
+Spilling reg 64.
+Spilling reg 65.
+Spilling reg 66.
+;; Need 1 reg of class GR_REGS (for insn 18).
+;; Need 1 reg of class FP_REGS (for insn 18).
+;; Need 1 reg of class HI_REG (for insn 84).
+;; Need 1 reg of class LO_REG (for insn 84).
+;; Need 1 reg of class HILO_REG (for insn 84).
+;; Need 2 regs of class MD_REGS (for insn 84).
+;; Need 3 regs of class ALL_REGS (for insn 84).
+Spilling reg 7.
+Spilling reg 33.
+Spilling reg 64.
+Spilling reg 65.
+Spilling reg 66.
+;; Register dispositions:
+80 in 18  82 in 17  84 in 32  85 in 16  88 in 3  89 in 3  
+90 in 2  91 in 2  92 in 32  94 in 2  95 in 3  96 in 2  
+98 in 2  100 in 2  103 in 3  104 in 3  105 in 2  106 in 2  
+108 in 2  110 in 2  112 in 2  113 in 6  114 in 2  118 in 2  
+119 in 2  124 in 3  125 in 3  126 in 2  127 in 3  128 in 2  
+133 in 3  134 in 3  135 in 2  136 in 2  137 in 3  138 in 2  
+141 in 2  143 in 2  
+
+;; Hard regs used:  2 3 4 5 6 7 16 17 18 31 32 33 64 65 66
+
+(note 1 0 2 ("source.i") 24)
+
+(note 11 15 14 ("source.i") 25)
+
+(note 237 18 8 ("source.i") 24)
+
+(note 22 8 203 ("source.i") 28)
+
+(note 19 203 21 ("source.i") 26)
+
+(note 238 21 205 ("source.i") 28)
+
+(note 23 221 24 ("source.i") 29)
+
+(note 26 25 28 ("source.i") 30)
+
+(note 31 28 33 ("source.i") 31)
+
+(note 239 33 30 ("source.i") 30)
+
+(note 240 30 35 ("source.i") 31)
+
+(note 37 36 38 ("source.i") 32)
+
+(note 41 40 44 ("source.i") 33)
+
+(note 49 46 50 ("source.i") 35)
+
+(note 53 52 55 ("source.i") 37)
+
+(note 61 60 62 ("source.i") 38)
+
+(note 71 68 72 ("source.i") 40)
+
+(note 75 74 77 ("source.i") 42)
+
+(note 87 86 88 ("source.i") 43)
+
+(note 91 90 93 ("source.i") 45)
+
+(note 99 98 101 ("source.i") 46)
+
+(note 102 101 103 ("source.i") 47)
+
+(note 109 108 110 ("source.i") 48)
+
+(note 113 112 114 ("source.i") 49)
+
+(note 117 116 118 ("source.i") 50)
+
+(note 119 118 121 ("source.i") 51)
+
+(note 122 121 124 ("source.i") 52)
+
+(note 128 127 129 ("source.i") 53)
+
+(note 137 146 139 ("source.i") 54)
+
+(insn 139 137 241 (set (reg/v:SI 3 v1)
+        (plus:SI (reg/v:SI 3 v1)
+            (const_int 2))) 3 {addsi3_internal} (nil)
+    (nil))
+
+(note 241 139 134 ("source.i") 53)
+
+(insn 134 241 140 (set (reg:SI 2 v0)
+        (ashift:SI (reg:SI 6 a2)
+            (const_int 1))) 205 {ashlsi3} (nil)
+    (expr_list:REG_DEAD (reg:SI 6 a2)
+        (expr_list:REG_EQUAL (mult:SI (reg:SI 6 a2)
+                (const_int 2))
+            (nil))))
+
+(note 140 134 142 ("source.i") 55)
+
+(insn 142 140 144 (set (reg:SI 2 v0)
+        (minus:SI (reg:SI 2 v0)
+            (reg/v:SI 3 v1))) 16 {subsi3_internal} (insn_list 134 (insn_list 139 (nil)))
+    (expr_list:REG_EQUIV (mem:SI (reg/v:SI 16 s0))
+        (expr_list:REG_DEAD (reg:SI 2 v0)
+            (expr_list:REG_DEAD (reg/v:SI 3 v1)
+                (nil)))))
+
+(insn 144 142 148 (set (mem:SI (reg/v:SI 16 s0))
+        (reg:SI 2 v0)) 172 {movsi_internal2} (insn_list 142 (nil))
+    (expr_list:REG_DEAD (reg:SI 2 v0)
+        (nil)))
+
+(note 148 144 149 ("source.i") 57)
+
+(jump_insn 149 148 150 (set (pc)
+        (label_ref 222)) 317 {jump} (insn_list:REG_DEP_ANTI 144 (nil))
+    (nil))
+
+(note 152 151 156 ("source.i") 59)
+
+(note 166 165 167 ("source.i") 60)
+
+(note 170 169 172 ("source.i") 62)
+
+(note 176 175 177 ("source.i") 63)
+
+(note 191 190 192 ("source.i") 64)
+
+(note 193 192 195 ("source.i") 65)
+
+(note 201 198 222 ("source.i") 67)
+
+(note 223 222 225 ("source.i") 68)
+
+(note 231 236 232 ("source.i") 69)

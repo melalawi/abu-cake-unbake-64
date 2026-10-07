@@ -19,6 +19,10 @@ function. Prints the match percent per version. When every version is exact, the
 --require-version VERSION (repeatable) chooses compilers for that required scope,
 including every already published C version. Every holding version is still measured;
 optional version faults remain explicit. Global exact remains an all-version claim.
+
+--explain-schedule reruns only the chosen recipe for versions with register/order
+differences and attaches bounded compiler decisions to those regions. Missing
+fields and ambiguous mappings are explicit; normal compare collects no dumps.
 """
 PROJECT = "ready"
 
@@ -29,6 +33,11 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("file", type=Path, metavar="FILE", help="build/work/FUNC/FUNC.c, FUNC.best.c or src/FUNC.c")
+    parser.add_argument(
+        "--explain-schedule",
+        action="store_true",
+        help="Collect compiler scheduler/allocator facts for register/order regions.",
+    )
     parser.add_argument(
         "--require-version",
         action="append",
@@ -42,7 +51,13 @@ def run(context: Context) -> Result:
 
     project, host = context.ready("buildfiles")
     required = tuple(context.args.require_version) if context.args.require_version is not None else None
-    measured = compare.compare(project, host, context.args.file.resolve(), required_versions=required)
+    measured = compare.compare(
+        project,
+        host,
+        context.args.file.resolve(),
+        required_versions=required,
+        explain_schedule=context.args.explain_schedule,
+    )
     data = measured.document()
     following = (
         context.cmd("publish", context.args.file, *(word for v in required or () for word in ("--require-version", v)))

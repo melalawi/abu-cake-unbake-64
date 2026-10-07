@@ -136,7 +136,7 @@ def facts(result: Measurement, pc: int, names: dict[int, list[str]]) -> dict[str
     remaining = 64
     for index, (a, b) in enumerate(spans):
         rr = grouped[index]
-        correspondence = [mapping.get(i, diagnostic.get(i)) for i in range(a, b)]
+        correspondence = [mapping.get(i, diagnostic.get(i, different.get(i))) for i in range(a, b)]
         mapped = [j for j in correspondence if j is not None]
         lo, hi = (min(mapped), max(mapped) + 1) if mapped else (0, 0)
         calls = []
@@ -202,6 +202,12 @@ def facts(result: Measurement, pc: int, names: dict[int, list[str]]) -> dict[str
             "raw_correspondence": 1,
             "diagnostic_correspondence": int(bool(masks and different)),
             "per_region_alignments": 0,
+            "dump_compiles": 0,
+            "dump_preprocesses": 0,
+            "dump_assembles": 0,
+            "dump_files_read": 0,
+            "dump_bytes_read": 0,
+            "dump_parses": 0,
         },
     }
 
@@ -238,4 +244,14 @@ def lines(version: str, data: dict[str, Any]) -> list[str]:
                 f"+{row['target_offset']:04X}: {row['target_op']} {row['target_word']} / "
                 f"{row['candidate_op']} {row['candidate_word']} {row.get('bucket', 'raw-equal neighborhood')}"
             )
+        compiler = region.get("compiler_facts")
+        if compiler:
+            output.append(f"region {region['id']} compiler facts: {compiler['family']}; {compiler['reason']}")
+            for field in ("registers", "schedule"):
+                value = compiler[field]
+                if isinstance(value, list):
+                    output.extend(f"  {field}: {row}" for row in value)
+                else:
+                    output.append(f"  {field}: {value}")
+            output.extend(f"  explicit search: {option}" for option in compiler["search_options"])
     return output

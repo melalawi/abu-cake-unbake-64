@@ -1,0 +1,27 @@
+
+;; Function func_8010A8A8_us
+
+;; 10 regs to allocate: 83 136 72 73 129 77 84 87 75 82
+;; 72 conflicts: 72 73 75 77 2 3 4 5 6 29 32 34 36 52 54
+;; 73 conflicts: 72 73 75 77 2 3 4 5 6 29 32 34 36 52 54
+;; 75 conflicts: 72 73 75 77 82 83 84 87 129 136 2 3 4 5 6 29 32 34 36 52 54
+;; 77 conflicts: 72 73 75 77 82 87 129 3 4 6 29 32 34 36 52 54
+;; 82 conflicts: 75 77 82 83 87 129 136 29 32
+;; 83 conflicts: 75 82 83 84 87 2 29 32
+;; 84 conflicts: 75 83 84 2 29
+;; 84 preferences: 32
+;; 87 conflicts: 75 77 82 83 87 129 136 29 32
+;; 129 conflicts: 75 77 82 87 129 29 32
+;; 136 conflicts: 75 82 87 136 29
+
+;; Register dispositions:
+72 in 16  73 in 17  75 in 18  77 in 56  78 in 52  79 in 32  
+80 in 54  82 in 38  83 in 34  84 in 32  85 in 2  86 in 3  
+87 in 36  92 in 3  95 in 6  97 in 3  99 in 2  102 in 5  
+104 in 2  109 in 34  110 in 36  111 in 34  113 in 32  114 in 52  
+115 in 32  117 in 2  118 in 3  119 in 2  120 in 2  121 in 2  
+122 in 2  123 in 2  129 in 2  131 in 32  136 in 2  138 in 32  
+142 in 32  
+
+;; Hard regs used:  2 3 4 5 6 16 17 18 31 32 34 36 38 52 54 56
+

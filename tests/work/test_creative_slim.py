@@ -102,6 +102,8 @@ class CapturedHandlers(TempCase):
             yield
 
     def context(self, command, project, host, file, **args):
+        if command == "compare":
+            args.setdefault("explain_schedule", False)
         return Context(command, argparse.Namespace(file=file, **args), project.root, None, io.StringIO(), host)
 
     def public_compare(self, function, label="baseline", *, alternate=False):
@@ -159,7 +161,23 @@ class CapturedHandlers(TempCase):
                     sum(f["work_counts"]["diagnostic_correspondence"] for f in result.data["facts"].values()),
                 )
         for version, data in captured.items():
-            self.assertEqual(result.data["versions"][version], data["score"])
+            old = data["score"]
+            self.assertEqual(
+                result.data["versions"][version],
+                {
+                    "version": version,
+                    "available": True,
+                    "identical_words": old["identical"],
+                    "target_words": old["of"],
+                    "candidate_words": len(data["candidate"]),
+                    "target_words_different": old["of"] - old["identical"],
+                    "inserted_words": old["typed"]["inserted"],
+                    "percent": old["percent"],
+                    "exact": old["exact"],
+                    "typed": old["typed"],
+                    "fault": None,
+                },
+            )
         recorded = attempts.ledger(project).history(function)
         self.assertEqual(len(recorded), 1)
         self.assertEqual(recorded[0].versions, result.data["versions"])

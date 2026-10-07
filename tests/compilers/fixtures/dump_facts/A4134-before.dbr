@@ -1,0 +1,110 @@
+;; Function func_802A4134_de
+
+(note 1 0 2 ("source.i") 24)
+
+(note 11 243 14 ("source.i") 25)
+
+(note 237 14 8 ("source.i") 24)
+
+(note 268 8 18 ("source.i") 25)
+
+(note 22 18 203 ("source.i") 28)
+
+(note 19 203 238 ("source.i") 26)
+
+(note 238 19 205 ("source.i") 28)
+
+(note 23 221 24 ("source.i") 29)
+
+(note 26 25 28 ("source.i") 30)
+
+(note 31 28 33 ("source.i") 31)
+
+(note 239 33 30 ("source.i") 30)
+
+(note 240 30 35 ("source.i") 31)
+
+(note 37 36 38 ("source.i") 32)
+
+(note 41 40 44 ("source.i") 33)
+
+(note 49 44 274 ("source.i") 35)
+
+(note 53 52 55 ("source.i") 37)
+
+(note 61 292 62 ("source.i") 38)
+
+(note 71 62 297 ("source.i") 40)
+
+(note 75 74 77 ("source.i") 42)
+
+(note 87 77 88 ("source.i") 43)
+
+(note 91 90 93 ("source.i") 45)
+
+(note 99 98 294 ("source.i") 46)
+
+(note 102 294 103 ("source.i") 47)
+
+(note 109 108 280 ("source.i") 48)
+
+(note 113 112 114 ("source.i") 49)
+
+(note 117 114 119 ("source.i") 50)
+
+(note 119 117 121 ("source.i") 51)
+
+(note 122 121 279 ("source.i") 52)
+
+(insn 139 127 128 (set (reg/v:SI 3 v1)
+                    (plus:SI (reg/v:SI 3 v1)
+                        (const_int 2))) 3 {addsi3_internal} (nil)
+                (nil))
+
+(note 128 296 129 ("source.i") 53)
+
+(note 137 146 241 ("source.i") 54)
+
+(note 241 137 134 ("source.i") 53)
+
+(insn 134 241 140 (set (reg:SI 2 v0)
+        (ashift:SI (reg:SI 6 a2)
+            (const_int 1))) 205 {ashlsi3} (nil)
+    (expr_list:REG_DEAD (reg:SI 6 a2)
+        (expr_list:REG_EQUAL (mult:SI (reg:SI 6 a2)
+                (const_int 2))
+            (nil))))
+
+(note 140 134 148 ("source.i") 55)
+
+(note 148 140 283 ("source.i") 57)
+
+(jump_insn 149 148 142 (set (pc)
+                    (label_ref 269)) 317 {jump} (insn_list:REG_DEP_ANTI 144 (nil))
+                (nil))
+
+(insn 142 149 284 (set (reg:SI 2 v0)
+                    (minus:SI (reg:SI 2 v0)
+                        (reg/v:SI 3 v1))) 16 {subsi3_internal} (insn_list 134 (insn_list 139 (nil)))
+                (expr_list:REG_EQUIV (mem:SI (reg/v:SI 16 s0))
+                    (expr_list:REG_DEAD (const_int 0)
+                        (expr_list:REG_DEAD (const_int 0)
+                            (nil)))))
+
+(note 152 151 156 ("source.i") 59)
+
+(note 166 163 286 ("source.i") 60)
+
+(note 170 169 172 ("source.i") 62)
+
+(note 176 175 177 ("source.i") 63)
+
+(note 191 190 192 ("source.i") 64)
+
+(note 193 192 195 ("source.i") 65)
+
+(note 201 198 222 ("source.i") 67)
+
+(note 223 222 225 ("source.i") 68)
+
+(note 231 227 267 ("source.i") 69)

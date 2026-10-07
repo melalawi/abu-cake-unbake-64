@@ -29,6 +29,26 @@ if TYPE_CHECKING:
 
 
 class Ido:
+    def compare_dump_flags(self) -> tuple[str, ...]:
+        return ()
+
+    def compare_dump_suffixes(self) -> tuple[str, ...]:
+        return ()
+
+    def hard_register_changes(self, target: int, candidate: int) -> tuple[tuple[int, int], ...]:
+        from unbake.compilers.families.mips import hard_register_changes
+
+        return hard_register_changes(target, candidate)
+
+    def compiler_facts(
+        self, dumps: Mapping[str, str], candidate: tuple[int, ...], expanded: str, function: str = ""
+    ) -> dict[str, Any]:
+        return {
+            "available": False,
+            "family": "ido",
+            "reason": "unsupported: IDO scheduler and allocator decision dumps",
+        }
+
     def preprocessed(self, result: NativeResult) -> str:
         from unbake.compilers.families.ido.directives import preprocessed
 

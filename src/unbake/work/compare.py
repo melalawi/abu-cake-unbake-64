@@ -231,6 +231,7 @@ def _compare(
     file: Path,
     *,
     required_versions: tuple[str, ...] | None = None,
+    explain_schedule: bool = False,
 ) -> Compared:
     """Measure every holding version (trying the other configured compilers when not exact) and record it."""
     from unbake.compilers import candidates
@@ -270,6 +271,10 @@ def _compare(
     from unbake.work.compare_facts import attach
 
     attach(project, measured)
+    if explain_schedule:
+        from unbake.work.compare_dump import collect
+
+        collect(project, host, measured)
     return measured
 
 
@@ -280,7 +285,19 @@ def operation_dependencies(project: Project, host: Host, file: Path) -> Dependen
     graph = Graph.capture(project)
     closure = graph.closure((file,))
     dependencies = closure.dependency_set
-    modules = ("work/compare.py", "runner.py", "process.py", "compilers/drivers.py", "compilers/candidates.py")
+    modules = (
+        "work/compare.py",
+        "work/compare_facts.py",
+        "work/compare_dump.py",
+        "runner.py",
+        "process.py",
+        "compilers/drivers.py",
+        "compilers/candidates.py",
+        "compilers/families/gcc/dump_facts.py",
+        "compilers/families/gcc/__init__.py",
+        "compilers/families/ido/__init__.py",
+        "compilers/families/mips.py",
+    )
     tool = Path(__file__).parents[1]
     recipe = cache.key(*(inputs.digest(tool / name, algorithm="sha256", reuse=cache.configured()) for name in modules))
     native = {
@@ -331,9 +348,16 @@ def operation_dependencies(project: Project, host: Host, file: Path) -> Dependen
     )
 
 
-def compare(project: Project, host: Host, file: Path, *, required_versions: tuple[str, ...] | None = None) -> Compared:
+def compare(
+    project: Project,
+    host: Host,
+    file: Path,
+    *,
+    required_versions: tuple[str, ...] | None = None,
+    explain_schedule: bool = False,
+) -> Compared:
     if attempts.producer_operation() is not None:
-        return _compare(project, host, file, required_versions=required_versions)
+        return _compare(project, host, file, required_versions=required_versions, explain_schedule=explain_schedule)
     function = function_of(file)
     from unbake.work.attempts import RetryScope, command_ledger
 
@@ -346,11 +370,12 @@ def compare(project: Project, host: Host, file: Path, *, required_versions: tupl
             {
                 "path": str(file.relative_to(project.root)) if file.is_relative_to(project.root) else file.name,
                 "required_versions": list(required_versions) if required_versions is not None else None,
+                "explain_schedule": explain_schedule,
             },
             operation_dependencies(project, host, file),
         ) as scope,
     ):
-        result = _compare(project, host, file, required_versions=required_versions)
+        result = _compare(project, host, file, required_versions=required_versions, explain_schedule=explain_schedule)
         first = row_of(project, result.function, next(iter(result.compares)))
         observed = attempts.Attempt(
             attempts.now(),

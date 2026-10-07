@@ -1,0 +1,297 @@
+
+;; Function func_802A4134_de
+
+146 registers.
+
+Register 80 used 6 times across 54 insns; dies in 2 places; crosses 1 call; GR_REGS or none; pointer.
+
+Register 82 used 9 times across 74 insns; dies in 6 places; crosses 2 calls; GR_REGS or none; pointer.
+
+Register 84 used 2 times across 4 insns in block 0; FP_REGS or none.
+
+Register 85 used 13 times across 60 insns; crosses 2 calls; GR_REGS or none; pointer.
+
+Register 88 used 14 times across 17 insns; dies in 2 places; GR_REGS or none.
+
+Register 89 used 2 times across 6 insns in block 3; GR_REGS or none.
+
+Register 90 used 2 times across 6 insns in block 3; GR_REGS or none.
+
+Register 91 used 2 times across 2 insns in block 3; GR_REGS or none.
+
+Register 92 used 2 times across 2 insns in block 4; FP_REGS or none.
+
+Register 94 used 2 times across 6 insns in block 5; GR_REGS or none.
+
+Register 95 used 3 times across 4 insns; GR_REGS or none.
+
+Register 96 used 2 times across 2 insns in block 5; GR_REGS or none.
+
+Register 98 used 2 times across 2 insns in block 6; GR_REGS or none.
+
+Register 100 used 3 times across 6 insns in block 7; GR_REGS or none.
+
+Register 103 used 2 times across 2 insns in block 7; GR_REGS or none.
+
+Register 104 used 3 times across 2 insns in block 7; GR_REGS or none.
+
+Register 105 used 1 times across 1 insns in block 7; GR_REGS or none.
+
+Register 106 used 2 times across 4 insns in block 8; GR_REGS or none.
+
+Register 108 used 2 times across 2 insns in block 8; GR_REGS or none.
+
+Register 110 used 3 times across 4 insns in block 9; GR_REGS or none.
+
+Register 112 used 1 times across 1 insns in block 9; GR_REGS or none.
+
+Register 113 used 3 times across 5 insns; GR_REGS or none.
+
+Register 114 used 2 times across 2 insns in block 11; GR_REGS or none.
+
+Register 118 used 2 times across 2 insns in block 12; GR_REGS or none.
+
+Register 119 used 2 times across 2 insns in block 12; GR_REGS or none.
+
+Register 124 used 2 times across 2 insns in block 13; GR_REGS or none.
+
+Register 125 used 3 times across 2 insns in block 13; GR_REGS or none.
+
+Register 126 used 1 times across 1 insns in block 13; GR_REGS or none.
+
+Register 127 used 2 times across 6 insns in block 14; GR_REGS or none.
+
+Register 128 used 2 times across 4 insns in block 14; GR_REGS or none.
+
+Register 133 used 2 times across 2 insns in block 15; GR_REGS or none.
+
+Register 134 used 3 times across 2 insns in block 15; GR_REGS or none.
+
+Register 135 used 1 times across 1 insns in block 15; GR_REGS or none.
+
+Register 136 used 2 times across 2 insns in block 16; GR_REGS or none.
+
+Register 137 used 3 times across 5 insns; GR_REGS or none.
+
+Register 138 used 2 times across 2 insns in block 0; GR_REGS or none.
+
+Register 141 used 2 times across 2 insns in block 1; GR_REGS or none.
+
+Register 143 used 2 times across 2 insns in block 1; GR_REGS or none.
+
+18 basic blocks.
+
+Basic block 0: first insn 4, last 206.
+
+Registers live at start: 4 5 6 29 30
+
+Basic block 1: first insn 208, last 217.
+
+Registers live at start: 29 30 80 82 85 137
+
+Basic block 2: first insn 219, last 220.
+
+Registers live at start: 29 30 80 82 85
+
+Basic block 3: first insn 25, last 36.
+
+Registers live at start: 29 30 80 82 85
+
+Basic block 4: first insn 43, last 50.
+
+Registers live at start: 29 30 80 82 85 88
+
+Basic block 5: first insn 52, last 60.
+
+Registers live at start: 29 30 82 85
+
+Basic block 6: first insn 66, last 72.
+
+Registers live at start: 29 30 85 95
+
+Basic block 7: first insn 74, last 88.
+
+Registers live at start: 29 30 82 85
+
+Basic block 8: first insn 90, last 101.
+
+Registers live at start: 29 30 82 85
+
+Basic block 9: first insn 106, last 110.
+
+Registers live at start: 29 30 82 85 88
+
+Basic block 10: first insn 112, last 116.
+
+Registers live at start: 29 30 82 85
+
+Basic block 11: first insn 118, last 127.
+
+Registers live at start: 29 30 82 85 88
+
+Basic block 12: first insn 146, last 149.
+
+Registers live at start: 29 30 85 88 113
+
+Basic block 13: first insn 151, last 167.
+
+Registers live at start: 29 30 82 85
+
+Basic block 14: first insn 169, last 175.
+
+Registers live at start: 29 30 80 82 85
+
+Basic block 15: first insn 181, last 190.
+
+Registers live at start: 29 30 80 82 85
+
+Basic block 16: first insn 192, last 197.
+
+Registers live at start: 29 30 80 85
+
+Basic block 17: first insn 222, last 228.
+
+Registers live at start: 29 30 85
+
+;; Register 84 in 32.
+;; Register 89 in 3.
+;; Register 90 in 2.
+;; Register 91 in 2.
+;; Register 92 in 32.
+;; Register 94 in 2.
+;; Register 96 in 2.
+;; Register 98 in 2.
+;; Register 100 in 2.
+;; Register 103 in 3.
+;; Register 104 in 3.
+;; Register 105 in 2.
+;; Register 106 in 2.
+;; Register 108 in 2.
+;; Register 110 in 2.
+;; Register 112 in 2.
+;; Register 114 in 2.
+;; Register 118 in 2.
+;; Register 119 in 2.
+;; Register 124 in 3.
+;; Register 125 in 3.
+;; Register 126 in 2.
+;; Register 127 in 3.
+;; Register 128 in 2.
+;; Register 133 in 3.
+;; Register 134 in 3.
+;; Register 135 in 2.
+;; Register 136 in 2.
+;; Register 138 in 2.
+;; Register 141 in 2.
+;; Register 143 in 2.
+(note 1 0 2 ("source.i") 24)
+
+(note 11 15 14 ("source.i") 25)
+
+(note 237 18 8 ("source.i") 24)
+
+(note 22 8 203 ("source.i") 28)
+
+(note 19 203 21 ("source.i") 26)
+
+(note 238 21 205 ("source.i") 28)
+
+(note 23 221 24 ("source.i") 29)
+
+(note 26 25 28 ("source.i") 30)
+
+(note 31 28 33 ("source.i") 31)
+
+(note 239 33 30 ("source.i") 30)
+
+(note 240 30 35 ("source.i") 31)
+
+(note 37 36 38 ("source.i") 32)
+
+(note 41 40 44 ("source.i") 33)
+
+(note 49 46 50 ("source.i") 35)
+
+(note 53 52 55 ("source.i") 37)
+
+(note 61 60 62 ("source.i") 38)
+
+(note 71 68 72 ("source.i") 40)
+
+(note 75 74 77 ("source.i") 42)
+
+(note 87 86 88 ("source.i") 43)
+
+(note 91 90 93 ("source.i") 45)
+
+(note 99 98 101 ("source.i") 46)
+
+(note 102 101 103 ("source.i") 47)
+
+(note 109 108 110 ("source.i") 48)
+
+(note 113 112 114 ("source.i") 49)
+
+(note 117 116 118 ("source.i") 50)
+
+(note 119 118 121 ("source.i") 51)
+
+(note 122 121 124 ("source.i") 52)
+
+(note 128 127 129 ("source.i") 53)
+
+(note 137 146 139 ("source.i") 54)
+
+(insn 139 137 241 (set (reg/v:SI 88)
+        (plus:SI (reg/v:SI 88)
+            (const_int 2))) 3 {addsi3_internal} (nil)
+    (nil))
+
+(note 241 139 134 ("source.i") 53)
+
+(insn 134 241 140 (set (reg:SI 118)
+        (ashift:SI (reg:SI 113)
+            (const_int 1))) 205 {ashlsi3} (nil)
+    (expr_list:REG_DEAD (reg:SI 113)
+        (expr_list:REG_EQUAL (mult:SI (reg:SI 113)
+                (const_int 2))
+            (nil))))
+
+(note 140 134 142 ("source.i") 55)
+
+(insn 142 140 144 (set (reg:SI 119)
+        (minus:SI (reg:SI 118)
+            (reg/v:SI 88))) 16 {subsi3_internal} (insn_list 134 (insn_list 139 (nil)))
+    (expr_list:REG_EQUIV (mem:SI (reg/v:SI 85))
+        (expr_list:REG_DEAD (reg:SI 118)
+            (expr_list:REG_DEAD (reg/v:SI 88)
+                (nil)))))
+
+(insn 144 142 148 (set (mem:SI (reg/v:SI 85))
+        (reg:SI 119)) 172 {movsi_internal2} (insn_list 142 (nil))
+    (expr_list:REG_DEAD (reg:SI 119)
+        (nil)))
+
+(note 148 144 149 ("source.i") 57)
+
+(jump_insn 149 148 150 (set (pc)
+        (label_ref 222)) 317 {jump} (insn_list:REG_DEP_ANTI 144 (nil))
+    (nil))
+
+(note 152 151 156 ("source.i") 59)
+
+(note 166 165 167 ("source.i") 60)
+
+(note 170 169 172 ("source.i") 62)
+
+(note 176 175 177 ("source.i") 63)
+
+(note 191 190 192 ("source.i") 64)
+
+(note 193 192 195 ("source.i") 65)
+
+(note 201 198 222 ("source.i") 67)
+
+(note 223 222 225 ("source.i") 68)
+
+(note 231 236 232 ("source.i") 69)

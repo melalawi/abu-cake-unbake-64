@@ -15,6 +15,9 @@ Try many small rewrites of a draft (statement order, register pressure, the perm
 best one. The best variant is written next to FILE as FILE.best.c.
 
   unbake search-variants build/work/F/F.c --method order --seconds 120
+
+--method scheduler-birth explicitly tries the mapped GCC integer birth-priority
+experiment. Safety gates can produce no variant; whole-function bytes decide.
 """
 PROJECT = "ready"
 
@@ -25,7 +28,7 @@ def READ_ONLY(args: argparse.Namespace) -> bool:
 
 def register(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("file", type=Path, metavar="FILE")
-    parser.add_argument("--method", required=True, choices=("order", "registers", "permute"))
+    parser.add_argument("--method", required=True, choices=("order", "registers", "permute", "scheduler-birth"))
     parser.add_argument("--seconds", required=True, type=positive, metavar="N", help="Wall-clock budget.")
 
 

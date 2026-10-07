@@ -10,6 +10,31 @@ from unbake.config import Held
 from unbake.process import named as cause_named
 
 
+def hard_register_changes(target: int, candidate: int) -> tuple[tuple[int, int], ...]:
+    """Machine fields to GCC/IDO O32 hard numbers, including COP1 fd/fs/ft."""
+    op = candidate >> 26
+    fields = [(21, 0), (16, 0), (11, 0)]
+    if op in (49, 53, 57, 61):
+        fields = [(21, 0), (16, 32)]
+    elif op == 17:
+        fmt, function = (candidate >> 21) & 31, candidate & 63
+        if fmt >= 16:
+            fields = [(11, 32)]
+            if function < 4 or function >= 48:
+                fields.append((16, 32))
+            if function < 48:
+                fields.append((6, 32))
+        elif fmt in (0, 1, 4, 5):
+            fields = [(16, 0), (11, 32)]
+        else:
+            fields = []
+    return tuple(
+        ((target >> shift & 31) + base, (candidate >> shift & 31) + base)
+        for shift, base in fields
+        if (target >> shift & 31) != (candidate >> shift & 31)
+    )
+
+
 @dataclass(frozen=True)
 class Relocation:
     offset: int

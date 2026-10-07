@@ -11,7 +11,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from unbake import atomic as atomic_files
 from unbake import tui
@@ -44,6 +44,7 @@ class Context:
     allocation: Allocation
     focus_lines: tuple[int, ...]
     deadline: float
+    compiler_facts: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -184,9 +185,22 @@ def run(
     mutation_seconds = 0.0
     prepared: dict[tuple[str, str], tuple[str, Allocation, tuple[int, ...]] | None] = {}
     skips: list[dict[str, str]] = []
+    dump_prepared: set[str] = set()
 
     def prepare(parent: _Candidate, generator: Generator, version: str, limit: float) -> None:
         key = parent.trial.source_sha256, version
+        if getattr(generator, "needs_compiler_facts", False) and key[0] not in dump_prepared:
+            from unbake.work.compare_dump import collect
+            from unbake.work.compare_facts import attach
+
+            attach(project, parent.trial)
+            collect(project, policy, parent.trial)
+            dump_prepared.add(key[0])
+        if getattr(generator, "needs_compiler_facts", False):
+            if key not in prepared:
+                expanded = preprocess(project, policy, parent.path, version, limit)
+                prepared[key] = expanded, Allocation((), (), (), ()), ()
+            return
         if key in prepared:
             return
         expanded = preprocess(project, policy, parent.path, version, limit)
@@ -327,7 +341,16 @@ def run(
                 if preparation is None:
                     continue
                 expanded, allocation, focus_lines = preparation
-                context = Context(project, policy, out, parent.path, allocation, focus_lines, generator_deadline)
+                context = Context(
+                    project,
+                    policy,
+                    out,
+                    parent.path,
+                    allocation,
+                    focus_lines,
+                    generator_deadline,
+                    parent.trial.facts.get(version) if getattr(generator, "needs_compiler_facts", False) else None,
+                )
                 method = getattr(generator, "name", type(generator).__name__)
                 proposals = iter(generator.propose(expanded, parent.trial, context))
                 while time.monotonic() < deadline - mutation_seconds:

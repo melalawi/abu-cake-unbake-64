@@ -26,7 +26,7 @@ class BestCandidateContract(ProjectCase):
         source.write_text("int alpha(void) { return 9; }\n")
         best = source.with_name("alpha.best.c")
         best.write_text("int alpha(void) { return 1; }\n")
-        found = search.Searched("alpha", best, 100.0, True, source.with_suffix(".steps.jsonl"), 1, 0, 0.01)
+        found = search.Searched("alpha", best, 100.0, True, source.with_suffix(".steps.jsonl"), 1, {}, 0.01)
         context = Context(
             "search-variants",
             argparse.Namespace(file=source, method="permute", seconds=1),
@@ -58,7 +58,7 @@ class BestCandidateContract(ProjectCase):
 
         context = Context(
             "compare",
-            argparse.Namespace(file=candidate, require_version=None),
+            argparse.Namespace(file=candidate, require_version=None, explain_schedule=False),
             self.project.root,
             None,
             io.StringIO(),

@@ -8,7 +8,7 @@ from unbake.process import named as cause_named
 from unbake.search.core import Generator
 
 METHODS: dict[str, Generator] = {}
-BUILTINS = ("types", "registers", "order", "permute")
+BUILTINS = ("types", "registers", "order", "permute", "scheduler-birth")
 
 
 def available() -> tuple[str, ...]:
@@ -51,7 +51,7 @@ def methods(names: str) -> list[Generator]:
                         stage="search",
                     )
                 )
-            module = import_module(f"unbake.search.{name}")
+            module = import_module(f"unbake.search.{name.replace('-', '_')}")
             if not callable(getattr(module, "propose", None)):
                 raise Held(
                     cause_named(

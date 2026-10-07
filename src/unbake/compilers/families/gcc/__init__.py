@@ -145,6 +145,26 @@ class Gcc:
     def schedule_available(self) -> bool:
         return True
 
+    def compare_dump_flags(self) -> tuple[str, ...]:
+        return ("-ds", "-dS", "-dR", "-dl", "-dg", "-g")
+
+    def compare_dump_suffixes(self) -> tuple[str, ...]:
+        return ("sched", "sched2", "dbr", "lreg", "greg", "lalloc", "galloc")
+
+    def hard_register_changes(self, target: int, candidate: int) -> tuple[tuple[int, int], ...]:
+        from unbake.compilers.families.mips import hard_register_changes
+
+        return hard_register_changes(target, candidate)
+
+    def compiler_facts(
+        self, dumps: Mapping[str, str], candidate: tuple[int, ...], expanded: str, function: str = ""
+    ) -> dict[str, Any]:
+        from unbake.compilers.families.gcc.diagnostics import function_dump
+        from unbake.compilers.families.gcc.dump_facts import decisions
+
+        selected = {name: function_dump(text, function) for name, text in dumps.items()} if function else dumps
+        return decisions(selected, candidate, expanded)
+
     def collect_allocation(self, project: Project, policy: Host, source: Path, version: str, work: Path) -> Allocation:
         from unbake.compilers.families.gcc.diagnostics import collect_allocation
 
