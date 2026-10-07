@@ -125,7 +125,7 @@ class PublishedContractsTests(unittest.TestCase):
             {
                 "caller1": (0x80001000, [0x24040001, 0x24050002, 0x0C000C00, 0x24060020, 0x03E00008, 0]),
                 "caller2": (0x80002000, [0x24040003, 0x24050004, 0x0C000C00, 0x24060020, 0x03E00008, 0]),
-                "allocate": (0x80003000, [0x00851021, 0x03E00008, 0]),
+                "allocate": (0x80003000, [0x00851021, 0x00461021, 0x03E00008, 0]),  # reads a0, a1 and a2
             }
         )
         seed = declarations.extract("int allocate(int a, int b);", {"kind": "declared"})

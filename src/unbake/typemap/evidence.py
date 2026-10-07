@@ -265,8 +265,8 @@ def abi(
         observed = [inputs[name, version] for version in item["versions"]]
         regs = set.union(*observed) if observed else set()
         conflicts = []
-        # Read every mapped caller, including setup of unused ABI parameters.
-        # An untouched entry register is not evidence of a supplied argument.
+        # A callee's arity is its own entry-register reads. A register a caller happens to hold at the call
+        # (a leftover from earlier work) is not an argument: it is recorded as caller evidence only.
         caller_regs = {
             reg
             for call in calls.get(name, [])
@@ -275,8 +275,6 @@ def abi(
             and value.get("defined", False)
             and value.get("origins") != [{"id": f"param:{call['function']}:{reg}", "offset": 0}]
         }
-        if not any(reg.startswith("f") for reg in regs | caller_regs):
-            regs.update(caller_regs)
         if any(row != set.union(*observed) for row in observed):
             conflicts.append("callee input registers differ across versions")
         missing = []

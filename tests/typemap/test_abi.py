@@ -44,6 +44,23 @@ class AbiTests(unittest.TestCase):
         self.assertTrue(result["arity_known"])
         self.assertFalse(result["missing"])
 
+    def test_leftover_caller_registers_are_not_callee_arguments(self):
+        # A BattleTanx menu renderer sets a0-a3 for its own use before calling a two-word libgcc conversion
+        # (reads a0/a1 only) and an argument-less OS time routine (reads none).
+        setup = [0x24040001, 0x24050002, 0x24060003, 0x24070004]
+        mapped = facts(
+            {
+                "caller": (0x80001000, [*setup, 0x0C000800, 0, 0x0C000C00, 0, 0x03E00008, 0]),
+                "floatdisf": (0x80002000, [0x00851021, 0x03E00008, 0]),
+                "getTime": (0x80003000, [0x24020000, 0x03E00008, 0]),
+            }
+        )
+        result = abi(mapped["functions"])
+        self.assertEqual(result["floatdisf"]["registers"], ["r4", "r5"])
+        self.assertEqual(result["getTime"]["registers"], [])
+        self.assertTrue(result["floatdisf"]["arity_known"] and result["getTime"]["arity_known"])
+        self.assertEqual(result["floatdisf"]["caller_arguments"], ["r4", "r5", "r6", "r7"])
+
     def test_semantic_conflict_emits_an_abi_carrier_without_claiming_a_known_type(self):
         result = solve({"leaf": (0x80001000, [0x8C820000, 0x03E00008, 0])}, "")
         record = result["functions"]["leaf"]
