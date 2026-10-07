@@ -1,0 +1,14 @@
+{
+  "route": "TOOL-ROUTE-23-181FC-HEADER.json",
+  "source_sha256": "28b9e9f489fa7c735764706174e67ef98fe5a80e3846bf6f304c1622666a5c7b",
+  "owner_sha256": "88717be4c47c00474ad6f980c25eee9f94f949474f1a4209b146e28f1e098970",
+  "consumer_whole_sha256": "854c293d6514671101538c4b5ea61e5535a160cab650339b9d7fe216671da52c",
+  "reduction": "Owner guard/scalar include and real Slot/Menu/S1/S2 typedef+body slices in actual order, Menu ordinary alias kept late; consumer first complete original function with only unrelated common imports removed; new declaration exact authored source slice",
+  "files": {
+    "func_80217388_de.c": "018ac4dbf363df5f2f3571d78b24c2b7ba67a98961a1efd97c3688e1c09129ac",
+    "func_802181FC_de.c": "28b9e9f489fa7c735764706174e67ef98fe5a80e3846bf6f304c1622666a5c7b",
+    "WeaponMenuSetup.h": "dcd6aa5965b47e913a05b78922c3a86e5e8597f9f21a2e3ce50d4742d4f3d33e",
+    "include/types.h": "1d8918b28b3228c8ddd7ca1fe44e7166231b6d8277087a7070cbca1418554c4e",
+    "include/span_1000/code_80217388.h": "15e137c20a1b75aa658c395c644002ee873609f7bbea369a1926c2b2aafa1364"
+  }
+}

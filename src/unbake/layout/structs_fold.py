@@ -20,6 +20,7 @@ from unbake.layout.split import Edit
 from unbake.layout.structs import Field, Layout, held
 from unbake.layout.structs_types import SCALARS, Aggregate
 from unbake.process import named as cause_named
+from unbake.project.headers import Graph
 
 
 def _leaves(fields: tuple[Field, ...], offset: int = 0, prefix: str = "") -> Iterator[tuple[str, Field, int]]:
@@ -228,61 +229,74 @@ def _order_header(text: str, headers: Headers, before: str = "") -> str:
         base = declaration.base
         if isinstance(base, Aggregate) and base.name in records and declaration.start <= base.start < declaration.end:
             spans[base.name] = (declaration.start, declaration.end)
-    pending = {name: _dependencies(records[name].fields) & spans.keys() for name in spans}
-    # Existing definitions retain their order and every surrounding declaration.
-    # Only newly added definitions may move to satisfy a by-value dependency.
-    existing = {record.name for record in headers.parse(before)[1]}
-    protected = sorted((span[0], name) for name, span in spans.items() if name in existing)
-    for (_, previous), (_, following) in pairwise(protected):
+    # A complete tag does not supply its ordinary typedef name. Include both
+    # kinds of providers in the ordering, keeping their original declaration
+    # spans distinct even when the tag and typedef have the same spelling.
+    typedefs = {
+        (declaration.start, declaration.end): text[declaration.start : declaration.end]
+        for declaration in parser.declarations
+        if text[declaration.start : declaration.end].lstrip().startswith("typedef ")
+    }
+    pieces = dict.fromkeys([*spans.values(), *typedefs])
+    paths = {span: Path(f"declaration-{number}.h") for number, span in enumerate(pieces)}
+    graph = Graph.contents({paths[span]: text[slice(*span)] for span in pieces}, ())
+    rows = {span: graph.projection(paths[span]) for span in pieces}
+    providers: dict[str, set[tuple[int, int]]] = {}
+    for span, row in rows.items():
+        if row.parse_error:
+            held(str(paths[span]), row.parse_error)
+        for name in row.typedefs:
+            providers.setdefault(name, set()).add(span)
+    pending = {
+        span: set().union(*(providers.get(name, set()) for name in row.declarations.uses - row.typedefs)) - {span}
+        for span, row in rows.items()
+    }
+    for name, span in spans.items():
+        pending[span].update(spans[dependency] for dependency in _dependencies(records[name].fields) & spans.keys())
+    for span, row in rows.items():
+        pending[span].update(spans[name] for name in row.declarations.complete_uses & spans.keys())
+    # Existing definitions and typedefs retain their order and surrounding
+    # bytes. A late provider can delay an addition, but cannot move an existing
+    # declaration or conceal an impossible dependency on that addition.
+    before_parser, before_records = headers.parse(before)
+    existing = {record.name for record in before_records}
+    before_typedefs = {
+        before[declaration.start : declaration.end].strip()
+        for declaration in before_parser.declarations
+        if before[declaration.start : declaration.end].lstrip().startswith("typedef ")
+    }
+    protected = {span for name, span in spans.items() if name in existing}
+    protected.update(span for span, value in typedefs.items() if value.strip() in before_typedefs)
+    for previous, following in pairwise(sorted(protected)):
         pending[following].add(previous)
     ordered = []
     while pending:
-        ready = sorted(name for name, dependencies in pending.items() if not dependencies)
+        ready = sorted(span for span, dependencies in pending.items() if not dependencies)
         if not ready:
-            held(", ".join(sorted(pending)), "cyclic shared-header dependency")
-        for name in ready:
-            ordered.append(name)
-            del pending[name]
+            names = {name for span in pending for name in rows[span].typedefs | rows[span].tags}
+            held(", ".join(sorted(names)), "cyclic shared-header dependency")
+        for span in ready:
+            ordered.append(span)
+            del pending[span]
         for dependencies in pending.values():
             dependencies.difference_update(ready)
-    replacements = [(start, end, "") for name, (start, end) in spans.items() if name not in existing]
+    replacements = [(start, end, "") for start, end in pieces if (start, end) not in protected]
     additions: list[str] = []
-    for name in ordered:
-        if name in existing:
+    for span in ordered:
+        if span in protected:
             if additions:
-                position = spans[name][0]
+                position = span[0]
                 replacements.append((position, position, "\n".join(additions) + "\n"))
                 additions = []
         else:
-            additions.append(text[slice(*spans[name])])
+            additions.append(text[slice(*span)])
     if additions:
         position = text.rfind("#endif")
         if position < 0:
             position = len(text)
         replacements.append((position, position, "\n".join(additions) + "\n"))
-    # Standalone aggregate typedefs belong before the ordered definitions.
-    # Leaving them in their former slots can hide a pointer alias or name an
-    # incomplete by-value dependency after its consumer.
-    aliases = []
-    for declaration in parser.declarations:
-        start, end = declaration.start, declaration.end
-        value = text[start:end]
-        if (
-            start >= 0
-            and isinstance(declaration.base, Aggregate)
-            and declaration.base.name in spans
-            and declaration.base.name not in existing
-            and not declaration.operations
-            and value.lstrip().startswith("typedef ")
-            and "{" not in value
-        ):
-            aliases.append(value)
-            replacements.append((start, end, ""))
-    position = min((start for start, _, _ in replacements), default=0)
     for start, end, value in sorted(replacements, reverse=True):
         text = text[:start] + value + text[end:]
-    if aliases:
-        text = text[:position] + "\n".join(aliases) + "\n" + text[position:]
     return text
 
 
