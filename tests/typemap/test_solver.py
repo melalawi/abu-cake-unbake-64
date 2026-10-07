@@ -47,9 +47,10 @@ class SolverTests(unittest.TestCase):
         expected = infer(SimpleNamespace(), machine, seeds)
         actual = infer(SimpleNamespace(), {**machine, "functions": Reads(machine["functions"])}, seeds)
         self.assertEqual(actual, expected)
-        # One body read each for the ABI, the machine graph and caller inference; the main process never
-        # decodes every body at once.
-        self.assertEqual(counts, {"caller": 3, "leaf": 3})
+        # One metadata scan for category identity, then one body read each for ABI,
+        # machine graph and caller inference. Sharded maps use their inventory for
+        # identity without an additional body read (covered by the namespace tests).
+        self.assertEqual(counts, {"caller": 4, "leaf": 4})
 
     def test_array_and_pointer_declarators_are_valid_c(self) -> None:
         self.assertEqual(declarator("unsigned char[4]", "arg0"), "unsigned char arg0[4]")

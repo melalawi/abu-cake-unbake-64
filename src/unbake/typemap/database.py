@@ -14,7 +14,7 @@ from typing import Any
 from unbake import atomic as atomic_files
 from unbake import effort, inputs, pool, tui
 from unbake.config import Held, Host, Project
-from unbake.typemap import header_names, regeneration, storage, types_db
+from unbake.typemap import header_names, namespace, regeneration, storage, types_db
 
 
 def load(project: Project, *, required: bool = True, allow_stale: bool = False) -> dict[str, Any] | None:
@@ -163,6 +163,7 @@ def _render(
     components = dict(session.authored)
     components.update({root / path: text for path, text in value.get("declaration_evidence", {}).items()})
     components.update({root / path: text for path, text in value.get("published_declarations", {}).items()})
+    namespace.check(value, components)
     # Keep a complete installed layout required by an authored by-value member
     # when current machine inference no longer reconstructs that aggregate.
     # Retain it as declared context, never as a matched-function proof.

@@ -14,12 +14,12 @@ from unbake import cache as content_cache
 from unbake import inputs, tui
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
-from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, shards, storage
+from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, namespace, shards, storage
 from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 12
+SCHEMA = 13
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 8
 MACHINE_SCHEMA = 6
@@ -237,10 +237,12 @@ def _by_address() -> dict[int, list[str]]:
     return defaultdict(list)
 
 
-def _addresses(facts: dict[str, Any]) -> dict[str, dict[int, list[str]]]:
+def _addresses(facts: dict[str, Any], functions: set[str]) -> dict[str, dict[int, list[str]]]:
     """Global names by version and address; a picklable mapping, because the pool ships it to its workers."""
     addresses: dict[str, dict[int, list[str]]] = defaultdict(_by_address)
     for name, record in facts["globals"].items():
+        if name in functions:
+            continue
         for version, placement in record["versions"].items():
             addresses[version][placement["address"]].append(name)
     return addresses
@@ -275,7 +277,8 @@ def infer(
         globals_ = _merge_records(seeds, "globals", declared)
         structs = _merge_records(seeds, "structs", declared)
         arrays = _merge_records(seeds, "arrays", declared)
-        addresses = _addresses(facts)
+        function_names = namespace.reconcile(inventory, facts, functions, globals_, arrays, declared.facts)
+        addresses = _addresses(facts, function_names)
         # canonical() under the one solve-wide alias map, once per spelling: thousands of seeds repeat each type.
         resolve = _Canonical().bound(aliases)
         for seed in seeds:
@@ -295,6 +298,8 @@ def infer(
                 if type_ != "void" and not declarations.unknown(signature["return"]):
                     declared.seed(f"result:{name}:{register}", type_, signature["provenance"])
             for name, record in seed["globals"].items():
+                if name in function_names:
+                    continue
                 type_ = resolve(record["type"])
                 declared.use("global:" + name)
                 if not declarations.unknown(record["type"]):
@@ -771,7 +776,7 @@ def infer(
                     else None
                 ),
             }
-            for name in sorted(set(facts["globals"]) | set(globals_))
+            for name in sorted((set(facts["globals"]) | set(globals_)) - function_names)
         }
         # A flow component can merge a published cell with a published pointer or
         # array view of its address. That disagreement belongs to the constraints;
@@ -846,7 +851,7 @@ def infer(
             for name, row in arrays.items()
         }
         for key, candidate in machine.arrays.items():
-            if key not in arrays:
+            if key not in arrays and key not in function_names:
                 output_arrays[key] = candidate
         for name, candidate in output_arrays.items():
             if name in arrays:
@@ -889,6 +894,7 @@ def infer(
         )
         dependencies = {name: sorted(neighbours.get(name, ())) for name in inventory}
         return {
+            "function_symbols": sorted(function_names),
             "typedefs": _typedefs(seeds, aliases),
             "functions": output_functions,
             "globals": output_globals,

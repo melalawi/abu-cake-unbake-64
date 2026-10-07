@@ -319,7 +319,7 @@ class Session:
         "globals": ("state", "declaration", "provenance"),
         "arrays": ("state", "partial", "type", "provenance"),
     }
-    _CARRIED = ("typedefs", "declaration_evidence", "published_declarations", "published_homes")
+    _CARRIED = ("typedefs", "function_symbols", "declaration_evidence", "published_declarations", "published_homes")
 
     def _installed_headers(self) -> dict[str, str]:
         """Pin installed generated paths and actual bytes, including manual repairs."""
