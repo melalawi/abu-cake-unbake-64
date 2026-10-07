@@ -661,6 +661,7 @@ def land(
     """Land one draft; nothing is written until all required, already published and selected freebie versions prove."""
     from unbake.decomp import checks
     from unbake.fold import apply as fold_apply
+    from unbake.layout import map as layout_map
     from unbake.report import progress
 
     _refuse_edited_headers(project)
@@ -694,6 +695,9 @@ def land(
     config_path = project.root / "config.toml"
     config_before = config_path.read_bytes()
     project = _with_compiler(project, function, ident)
+    # The writer admits new measured split rows before fold's strict ownership read.
+    # Admission checks above still refuse invalid requests without changing the map.
+    layout_map.ensure(project)
     folded = fold_apply.fold(project, host, function, text, versions=selected)
     result = checks.findings(project, (file,), Cache(project.cache), proposed={file: folded.source})
     broken = [row.finding for row in (result.rows if fuzzy else result.unmarked)]
