@@ -244,7 +244,7 @@ def regenerated(
         effective[edit.path] = edit.after
         proposed[edit.path] = edit.after
         normalized[edit.path] = edit.after.encode()
-    needed = include_closure(effective, tuple(project.include), set(proposed))
+    needed = set(Graph.contents(effective, project.include).closure(proposed).paths)
     retained = needed & installed.keys() - proposed.keys()
     for path in retained:
         normalized[path] = effective[path].encode()
