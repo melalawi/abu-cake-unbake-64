@@ -121,3 +121,73 @@ class MinimalPublicationTests(ProjectCase):
 
     def test_pfs_changed_native_bytes_and_source_hygiene(self):
         self.case("rw-clean2-sol-20261007")
+
+    def generated_rebase(self, *, residual=False):
+        from unbake.report import progress
+
+        packet = json.loads((Path(__file__).parent / "fixtures/b4_generated_rebase.json").read_text())
+        self.assertFalse(packet["sources_conflicted"])
+        template = packet["owner_readme"]
+        (self.project.root / "README.md").write_text(template)
+        for name in packet["conflicts"]:
+            path = self.project.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if name != "README.md":
+                path.write_text("{}")
+        stage = 0
+        calls = []
+
+        def external(argv, cwd, phase, **kwargs):
+            nonlocal stage
+            self.assertEqual(argv[0], "git")
+            args = tuple(argv[1:])
+            calls.append(args)
+            if args == ("rebase", "FETCH_HEAD"):
+                raise Held(
+                    process.named(
+                        "publish.git", "Rebasing (1/10): could not apply eb806a5e", owner="process", stage="publish"
+                    )
+                )
+            if args == ("-c", "core.editor=true", "rebase", "--continue"):
+                stage += 1
+                if stage == 1:
+                    raise Held(
+                        process.named(
+                            "publish.git",
+                            "Rebasing (2/10): current changed commit conflict",
+                            owner="process",
+                            stage="publish",
+                        )
+                    )
+                return ""
+            if args[:3] == ("diff", "--name-only", "--diff-filter=U"):
+                paths = ["src/alpha.c"] if residual and stage else packet["conflicts"]
+                return "\0".join(paths) + "\0"
+            if args[0] == "show":
+                name = args[1].split(":", 2)[2]
+                return template if name == "README.md" else "{}"
+            return ""
+
+        with patch.object(process, "run_tool", side_effect=external):
+            if residual:
+                with self.assertRaises(Held) as held:
+                    publication_push.rebase(self.project, self.host)
+                self.assertIn("Rebasing (2/10)", held.exception.reason)
+                self.assertNotIn("Rebasing (1/10)", held.exception.reason)
+                self.assertEqual(held.exception.data["conflicts"], ["src/alpha.c"])
+                self.assertEqual(held.exception.fault.chain[-1].evidence["conflicts"], ["src/alpha.c"])
+            else:
+                publication_push.rebase(self.project, self.host)
+        self.assertEqual(stage, 1 if residual else 2)
+        self.assertTrue(any(call[0] == "add" for call in calls))
+        self.assertFalse(any(call[0] == "push" for call in calls))
+        self.assertEqual(
+            progress.owner_descriptions(self.project, template),
+            progress.owner_descriptions(self.project, (self.project.root / "README.md").read_text()),
+        )
+
+    def test_actual_b4_generated_metadata_rebase_continues_each_commit(self):
+        self.generated_rebase()
+
+    def test_rebase_refusal_preserves_current_failure_and_residual_paths(self):
+        self.generated_rebase(residual=True)

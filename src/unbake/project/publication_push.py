@@ -179,15 +179,25 @@ def rebase(project: Project, host: Host) -> None:
         _git(project, "rebase", "FETCH_HEAD")
         return
     except Held as error:
-        original = error
+        current = error
     while resolve_conflicts(project, host):
         try:
             _git(project, "-c", "core.editor=true", "rebase", "--continue")
             return
-        except Held:
+        except Held as error:
+            current = error
             if not _git(project, "diff", "--name-only", "--diff-filter=U", "-z"):
                 raise
-    raise original
+    conflicts = tuple(p for p in _git(project, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p)
+    raise Held(
+        current.fault.framed(
+            "project.publication_push",
+            "publish",
+            "publication rebase stopped with unresolved conflicts",
+            {"conflicts": list(conflicts)},
+        ),
+        data={**current.data, "conflicts": list(conflicts)},
+    ) from current
 
 
 def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) -> dict[str, Any]:
@@ -242,7 +252,8 @@ def push(project: Project, host: Host, remote: str, *, attempts_limit: int = 5) 
                             owner="project.publication_push",
                             stage="publish",
                         ),
-                    )
+                    ),
+                    data=error.data,
                 ) from error
         current = config.load(project.root)
         head = _git(project, "rev-parse", "HEAD")
