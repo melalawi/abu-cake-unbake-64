@@ -74,3 +74,70 @@ def admits(source: str, signature: dict[str, Any], machine: dict[str, Any], alia
         return equivalent(source, signature, machine, aliases)
     except Held:
         return False
+
+
+def compatible_prototypes(left: str, right: str, aliases: dict[str, str]) -> bool:
+    """Compare proven scalar/pointer entry transport, independent of pointee inference.
+
+    Unknown or by-value aggregate transport needs a separate layout proof.
+    Width, aligned argument slots, leading FP registers, return registers and
+    variadic calling convention must all agree.
+    """
+    from pycparser import c_ast  # type: ignore[import-untyped]
+
+    from unbake.layout.structs_types import SCALARS
+    from unbake.typemap.header_names import type_identity
+
+    def transport(prototype: str) -> object:
+        tree = cdecl.parse(cdecl.declaration_source(prototype), typedefs=aliases)
+        node = tree.ext[0]
+        if len(tree.ext) != 1 or not isinstance(node, c_ast.Decl) or not isinstance(node.type, c_ast.FuncDecl):
+            raise ValueError("not a single function prototype")
+        if node.type.args is None:
+            raise ValueError("unknown argument list")
+        shape = type_identity(declarations.node_type(node.type), aliases)
+        if not isinstance(shape, tuple) or shape[0] != "function":
+            raise ValueError("not a function type")
+
+        def value(type_: Any) -> tuple[int, bool]:
+            if type_[0] == "qualified":
+                return value(type_[2])
+            if type_[0] == "pointer":
+                return 4, False
+            if type_[0] == "scalar":
+                if type_[1] == "void":
+                    return 0, False
+                if type_[1] in SCALARS:
+                    return SCALARS[type_[1]][0], type_[1] in ("float", "double", "f32", "f64")
+            raise ValueError("unresolved value transport")
+
+        variadic = bool(shape[2] and shape[2][-1] == ("variadic",))
+        parameters = shape[2][:-1] if variadic else shape[2]
+        slot = 0
+        floating_prefix = not variadic
+        slots = []
+        for i, parameter in enumerate(parameters):
+            width, floating = value(parameter)
+            if not width:
+                raise ValueError("void parameter")
+            words = (width + 3) // 4
+            if words == 2:
+                slot += slot % 2
+            register = (
+                ("f12" if i == 0 else "f14")
+                if floating and floating_prefix and i < 2
+                else f"r{4 + slot}"
+                if slot < 4
+                else f"stack{slot * 4}"
+            )
+            slots.append((register, width))
+            slot += words
+            floating_prefix &= floating
+        width, floating = value(shape[1])
+        returned = ("f0" if floating else "r2" if width else None, width)
+        return tuple(slots), returned, variadic
+
+    try:
+        return transport(left) == transport(right)
+    except (Held, ValueError, cdecl.ParseError):
+        return False

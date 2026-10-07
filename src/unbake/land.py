@@ -341,7 +341,10 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     if not expected or re.search(r"\b" + re.escape(function) + r"\s*\(\s*\)", expected):
         raise Held("land", f"land.fuzzy_abi: {function}: canonical entry signature is unresolved")
     expected = header_names.rewrite(expected, types_db.meta(database, "shared_aliases"), set())
-    if own is None or not redeclarations.equivalent(own["prototype"], expected, aliases):
+    if own is None or not (
+        redeclarations.equivalent(own["prototype"], expected, aliases)
+        or o32.compatible_prototypes(own["prototype"], expected, aliases)
+    ):
         raise Held(
             "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"
         )
