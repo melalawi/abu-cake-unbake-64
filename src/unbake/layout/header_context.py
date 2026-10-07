@@ -15,7 +15,7 @@ from unbake.decomp.draft_context import ordered_headers
 from unbake.layout.structs import Field, Layout
 from unbake.layout.structs_identity import Index
 from unbake.layout.structs_types import Aggregate
-from unbake.project.headers import include_headers
+from unbake.project.headers import include_closure, include_headers
 
 
 def context(
@@ -265,19 +265,26 @@ class Headers:
     def read(cls, project: Any) -> Headers:
         from unbake.layout import index
 
-        # A present manifest identifies the current generated view. Marked
-        # orphans are owned for cleanup, but are not declaration providers.
+        # A present manifest identifies the current generated view. A retained
+        # header's explicit includes remain declaration providers even when the
+        # disposable manifest no longer lists their installed homes. Unreferenced
+        # marked orphans are owned for cleanup, but are not providers.
         current = (
             set(index.load(project)["headers"]) if hasattr(project, "build") and index.path(project).is_file() else None
         )
-        texts = {
-            path: path.read_text()
-            for path, relative in include_headers(project)
+        headers = include_headers(project)
+        texts = {path: path.read_text() for path, _ in headers}
+        selected = {
+            path
+            for path, relative in headers
             if current is None
             or relative in current
             or not any(index.marked(path, root.resolve()) for root in project.include)
         }
-        return cls(texts, root=getattr(project, "root", None))
+        selected = include_closure(texts, tuple(project.include), selected)
+        return cls(
+            {path: text for path, text in texts.items() if path in selected}, root=getattr(project, "root", None)
+        )
 
     def seeded(self, text: str) -> LayoutParser:
         """A parser for text that sees every type declared by these headers."""
