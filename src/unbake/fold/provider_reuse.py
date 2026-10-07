@@ -105,6 +105,20 @@ def plan(
             providers.setdefault(name, []).append(path)
         for name, (_, _, tokens) in catalog.typedefs.items():
             typedefs.setdefault(name, []).append((path, tokens))
+
+    # Prefer the tagged declaration owner over an anonymous definition when
+    # both providers are private overlays. A copied owner header can be
+    # shadowing its installed home; choosing the anonymous consumer instead
+    # creates reciprocal imports and removes prerequisites from both views.
+    def alias_rank(home: Path, name: str) -> tuple[bool, bool, bool, str]:
+        tokens = catalogs[home].typedefs[name][2]
+        forward = len(tokens) == 5 and tokens[:2] in (("typedef", "struct"), ("typedef", "union"))
+        return home in private, home in changed, not forward, home.as_posix()
+
+    alias_homes = {
+        name: min((home for home, _ in rows), key=lambda home: alias_rank(home, name))
+        for name, rows in typedefs.items()
+    }
     from unbake.fold.provider_identity import Identity
 
     identity = Identity(contents, catalogs, tuple(project.include))
@@ -135,12 +149,8 @@ def plan(
         # contains no aggregate definition. Older native compilers reject an
         # identical repeated typedef as well.
         for name, (_start, _end, tokens) in catalog.typedefs.items():
-            candidates = sorted(
-                (home for home, _ in typedefs[name]),
-                key=lambda home: (home in private, home in changed, home.as_posix()),
-            )
-            home = candidates[0]
-            if len(candidates) < 2 or home == path or catalog.guard == catalogs[home].guard:
+            home = alias_homes[name]
+            if len(typedefs[name]) < 2 or home == path or catalog.guard == catalogs[home].guard:
                 continue
             if tokens != catalogs[home].typedefs[name][2] and not identity.equal("alias", name, path, home):
                 _refuse(project, contents, name, [path, home], "conflicting typedef dependency")
@@ -166,9 +176,13 @@ def plan(
                     _refuse(project, contents, name, [home for home, _ in rows], "conflicting typedef dependency")
                 required.update(rows[0][1])
         for name, (start, end, tokens) in catalog.typedefs.items():
-            shared = [home for home in imported if name in catalogs[home].typedefs]
-            if not shared:
+            # Only the chosen owner can replace this spelling. A transitive
+            # duplicate may itself be removed later in this plan; it is not a
+            # certificate that the final include context still provides it.
+            home = alias_homes[name]
+            if home == path or home not in imported:
                 continue
+            shared = [home]
             if any(
                 tokens != catalogs[home].typedefs[name][2] and not identity.equal("alias", name, path, home)
                 for home in shared
