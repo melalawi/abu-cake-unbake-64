@@ -96,6 +96,9 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
         # unknown function signature in the DB; this is only a call carrier.
         returned = "void"
         reasons.append("types.abi.unused_return: no mapped direct caller consumes a result; semantic return unknown")
+    elif abi.get("discardable_return"):
+        returned = "void"
+        reasons.append("types.abi.discarded_return: only partial incidental result writes; no caller consumes a result")
     elif abi["void"]:
         returned = "void"
     elif (abi["return_register"] in (None, "r2")) and (

@@ -359,6 +359,28 @@ def abi(
             "call_sites": len(calls.get(name, [])),
             "used_returns": sorted(consumed),
             "defined_returns": [reg for reg in ("r2", "f0") if reg in available[name]],
+            # Partial writes that leave the incoming result register alive
+            # cannot promise a value. An explicitly void definition may
+            # discard them when no caller or declaration demands a result.
+            # Forwarded/unresolved call results and fully written ambiguous
+            # integer/FP results do not provide this proof.
+            "discardable_return": not returned
+            and not used_returns
+            and not available[name]
+            and any(reg in body["register_outputs"] for body in item["versions"].values() for reg in ("r2", "f0"))
+            and all(
+                body["returns"]
+                and not any(call.get("tail") for call in body["calls"])
+                and all(
+                    not exit_["values"][reg].get("defined", False)
+                    and {"id": f"param:{name}:{reg}", "offset": 0} in exit_["values"][reg].get("origins", [])
+                    and not exit_["values"][reg].get("dependencies")
+                    for reg in ("r2", "f0")
+                    if reg in body["register_outputs"]
+                    for exit_ in body["returns"]
+                )
+                for body in item["versions"].values()
+            ),
             "word_return_written": bool(item["versions"])
             and all(
                 body["returns"]

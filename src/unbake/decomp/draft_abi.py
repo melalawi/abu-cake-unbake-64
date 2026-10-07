@@ -48,7 +48,6 @@ def declarations(
         # this draft-local transport signature does not settle semantic types.
         if (
             abi.get("arity_known")
-            and registers
             and registers == words
             and not abi.get("missing")
             and not abi.get("conflicts")
@@ -56,10 +55,10 @@ def declarations(
         ):
             declaration = re.sub(
                 r"(\b" + re.escape(name) + r"\s*)\(\s*\)",
-                r"\g<1>(" + ", ".join("int" for _ in words) + ")",
+                r"\g<1>(" + (", ".join("int" for _ in words) or "void") + ")",
                 declaration,
             )
-            reasons.append("types.abi.draft_words: complete O32 argument slots, including caller stack operands")
+            reasons.append("types.abi.draft_words: complete callee entry reads, including consumed stack operands")
         reason = "; ".join(reasons).replace("*/", "* /")
         if not declaration.startswith(("extern ", "static ")):
             declaration = "extern " + declaration

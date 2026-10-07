@@ -1,0 +1,77 @@
+{
+  "abi": {
+    "argument_slots": [],
+    "arity_known": true,
+    "call_sites": 14,
+    "caller_arguments": [
+      "r4",
+      "r5",
+      "r6",
+      "r7",
+      "stack100",
+      "stack104",
+      "stack16",
+      "stack20",
+      "stack24",
+      "stack28",
+      "stack600",
+      "stack604",
+      "stack608",
+      "stack612",
+      "stack616",
+      "stack620",
+      "stack624",
+      "stack628",
+      "stack632",
+      "stack636",
+      "stack80",
+      "stack84",
+      "stack88",
+      "stack92",
+      "stack96"
+    ],
+    "caller_registers": [
+      "r4",
+      "r5",
+      "r6",
+      "r7"
+    ],
+    "caller_return_uses": {
+      "func_8007B9E4_us": [],
+      "func_8007BD24_us": [],
+      "func_8007C344_us": [],
+      "func_800AB9FC_us": [],
+      "func_800B850C_us": [],
+      "func_800BC214_us": [],
+      "func_800BFDB4_us": [],
+      "func_800C3534_us": [],
+      "func_800C4AE0_us": [],
+      "func_800D0940_us": []
+    },
+    "conflicts": [],
+    "defined_returns": [],
+    "inputs": {
+      "us": []
+    },
+    "machine_arity_known": true,
+    "machine_return_known": false,
+    "missing": [],
+    "registers": [],
+    "return_known": false,
+    "return_register": null,
+    "unproven_return_reads": [],
+    "used_returns": [],
+    "void": false,
+    "word_return_written": false
+  },
+  "abi_declaration": {
+    "parameters_known": false,
+    "prototype": "void func_80079064_us();",
+    "reasons": [
+      "types.abi.caller_arguments: callers pass arguments the callee never reads; list unspecified",
+      "types.abi.unused_return: no mapped direct caller consumes a result; semantic return unknown"
+    ]
+  },
+  "state": "unknown",
+  "prototype": null
+}

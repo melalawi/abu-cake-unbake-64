@@ -141,3 +141,54 @@ def compatible_prototypes(left: str, right: str, aliases: dict[str, str]) -> boo
         return transport(left) == transport(right)
     except (Held, ValueError, cdecl.ParseError):
         return False
+
+
+def compatible_definition(
+    source: str, function: str, signature: dict[str, Any], expected: str, aliases: dict[str, str]
+) -> bool:
+    """Unused trailing word formals add no executable claim to an inferred ABI.
+
+    Call only with complete measured transport and no authoritative C
+    contract. Never remove a used formal, FP prefix, aligned pair, aggregate,
+    or variadic parameter to make a definition fit.
+    """
+    from pycparser import c_ast
+
+    from unbake.layout.structs_types import SCALARS
+
+    if not signature.get("arity_known") or signature.get("variadic"):
+        return False
+    try:
+        tree = cdecl.parse(cdecl.declaration_source(source), typedefs=aliases)
+        definition = next(node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function)
+    except (Held, cdecl.ParseError, StopIteration):
+        return False
+    used: set[str] = set()
+
+    class Uses(c_ast.NodeVisitor):  # type: ignore[misc]
+        def visit_ID(self, node: Any) -> None:
+            used.add(node.name)
+
+    Uses().visit(definition.body)
+    params = list(signature["params"])
+    while params:
+        last = params[-1]
+        type_ = declarations.canonical(last["type"], aliases)
+        if last["name"] in used or not (
+            type_.endswith(" *") or (type_ not in ("float", "double") and SCALARS.get(type_, (0,))[0] == 4)
+        ):
+            return False
+        params.pop()
+        candidate = (
+            declarations.declarator(
+                signature["return"],
+                function
+                + "("
+                + (", ".join(declarations.declarator(p["type"], p["name"]) for p in params) or "void")
+                + ")",
+            )
+            + ";"
+        )
+        if compatible_prototypes(candidate, expected, aliases):
+            return True
+    return False

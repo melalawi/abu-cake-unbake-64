@@ -324,9 +324,8 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     expected = record.get("prototype") if record.get("state") == "known" else None
     if (
         expected is None
-        and record.get("state") != "conflict"
         and abi.get("arity_known")
-        and abi.get("return_known")
+        and (abi.get("return_known") or abi.get("discardable_return"))
         and not abi.get("conflicts")
         and not abi.get("missing")
     ):
@@ -347,6 +346,14 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
     if own is None or not (
         redeclarations.equivalent(own["prototype"], expected, aliases)
         or o32.compatible_prototypes(own["prototype"], expected, aliases)
+        or (
+            record.get("state") != "known"
+            and abi.get("arity_known")
+            and (abi.get("return_known") or abi.get("discardable_return"))
+            and not abi.get("conflicts")
+            and not abi.get("missing")
+            and o32.compatible_definition(source, function, own, expected, aliases)
+        )
     ):
         raise Held(
             "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"

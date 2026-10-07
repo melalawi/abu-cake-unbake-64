@@ -219,8 +219,10 @@ class Analysis:
                     value = state.stack.get((slot, width), UNKNOWN)
                     if value == UNKNOWN and slot >= 16:
                         value = Value(((f"param:{self.function}:stack{slot}", 0),))
-                        if record:
-                            self.inputs.add(f"stack{slot}")
+                        # A speculative/dead load does not consume a formal.
+                        # Its provenance becomes an input when the loaded
+                        # value is read, forwarded to a consuming callee, or
+                        # reaches a possible result register below.
                 elif base.constant is not None and len(self.symbols.get(base.constant, [])) == 1:
                     value = Value((("global:" + self.symbols[base.constant][0], 0),))
                 else:
@@ -379,6 +381,10 @@ class Analysis:
             next_index = index + 2
             if kind == "return":
                 if record:
+                    for r in RETURNS:
+                        for origin, _ in state.registers[r].origins:
+                            if origin.startswith(f"param:{self.function}:stack"):
+                                self.inputs.add(origin.rsplit(":", 1)[1])
                     self.returns[index] = {
                         **self.provenance(index),
                         "values": {register(r): state.registers[r].data() for r in RETURNS},
