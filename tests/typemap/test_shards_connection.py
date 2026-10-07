@@ -12,7 +12,7 @@ class ConnectionTests(TempCase):
         writer = shards.Writer(self.root)
         for name in ("a", "b"):
             writer.add(name, "us", {"memory": [name]})
-        path = writer.finish()
+        path = writer.finish([(name, "us") for name in ("a", "b")])
         functions = shards.Functions(path, {name: {"versions": {"us": {"address": 1}}} for name in ("a", "b")})
         real, opened = shards.sqlite.connect, []
 

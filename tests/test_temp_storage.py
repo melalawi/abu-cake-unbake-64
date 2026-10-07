@@ -83,7 +83,7 @@ class TempStorageTests(TempCase):
             try:
                 self.assertEqual(writer.connection.execute("PRAGMA temp_store").fetchone(), (2,))
                 writer.add("unit", "us", {"payload": PAYLOAD})
-                path = writer.finish()
+                path = writer.finish([("unit", "us")])
             finally:
                 writer.close()
             functions = shards.Functions(path, {"unit": {"aliases": [], "versions": {"us": {}}}})

@@ -6,7 +6,7 @@ import json
 import sqlite3
 import threading
 import zlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,37 @@ READ_BATCH = 500
 
 def pack(value: object) -> bytes:
     return zlib.compress(json.dumps(value, separators=(",", ":")).encode(), 1)
+
+
+def validate_inventory(path: Path, inventory: Mapping[str, Any]) -> None:
+    """Verify containing-version identity without decompressing a single body."""
+    expected = tuple(sorted((name, version) for name, item in inventory.items() for version in item["versions"]))
+
+    def verify() -> None:
+        try:
+            with closing(sqlite.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+                actual = tuple(connection.execute("SELECT name,version FROM functions ORDER BY name,version"))
+            if actual != expected:
+                missing = sorted(set(expected) - set(actual))
+                extra = sorted(set(actual) - set(expected))
+                example = (missing or extra)[:3]
+                raise Held(
+                    "map",
+                    f"map.shards.inventory: expected {len(expected)} rows, found {len(actual)}; "
+                    f"missing {len(missing)}, extra {len(extra)}; examples {example}; "
+                    "run unbake recompute rom-facts --rom-facts-only",
+                    data={
+                        "expected_rows": len(expected),
+                        "actual_rows": len(actual),
+                        "missing_rows": len(missing),
+                        "extra_rows": len(extra),
+                        "recovery": "recompute rom-facts --rom-facts-only",
+                    },
+                )
+        except (OSError, sqlite3.Error) as error:
+            raise Held("map", f"map.shards.inventory: {path}: {error}; run unbake recompute rom-facts") from error
+
+    retention.parsed("shard-inventory", path, verify, extra=expected)
 
 
 class Functions(Mapping[str, dict[str, Any]]):
@@ -160,8 +191,15 @@ class Writer:
             "FROM prior.functions f JOIN owners o USING(name,version)"
         )
 
-    def finish(self) -> Path:
-
+    def finish(self, expected: Iterable[tuple[str, str]]) -> Path:
+        owners = tuple(sorted(set(expected)))
+        actual = tuple(self.connection.execute("SELECT name,version FROM functions ORDER BY name,version"))
+        if actual != owners:
+            raise Held(
+                "map",
+                f"map.shards.inventory: producer expected {len(owners)} rows, wrote {len(actual)}; "
+                "incomplete facts were not published",
+            )
         self.connection.commit()
         self.connection.close()
         path = self.temporary.parent / (

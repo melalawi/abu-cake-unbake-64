@@ -134,7 +134,7 @@ def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) 
                 )
             for (name, version, _), body in zip(jobs, rows, strict=True):
                 writer.add_packed(name, version, body)
-            path = writer.finish()
+            path = writer.finish((name, version) for name, version, _ in jobs)
         finally:
             writer.close()
         storage.write(
@@ -148,6 +148,7 @@ def refine(project: Project, facts: dict[str, Any], policy: Host | None = None) 
                 }
             ),
         )
+    shards.validate_inventory(path, metadata)
     return {
         **facts,
         "abi_analysis_sha256": analyzer,

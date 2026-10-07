@@ -20,7 +20,7 @@ from unbake.typemap.mips import Analysis, control
 from unbake.work import inventory as plan
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 5
+SCHEMA = 6
 
 
 def _analysis(
@@ -171,7 +171,7 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
     old_rows: dict[tuple[str, int, int, int], tuple[str, str]] = {}
     old_symbols: dict[str, dict[int, list[str]]] = {v: {} for v in project.versions}
     old_targets: dict[str, dict[int, str]] = {v: {} for v in project.versions}
-    if previous is not None:
+    if previous is not None and previous.get("abi_analysis_sha256") == analyzer:
         from unbake.typemap.abi_facts import refine
 
         source = shards.Functions(project.build / "map" / previous["shard"], previous["functions"])
@@ -294,9 +294,12 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
                     )
                 for canonical, version, body in packed:
                     writer.add_packed(canonical, version, body)
-                shard_path = writer.finish()
+                shard_path = writer.finish(
+                    (name, version) for name, item in functions.items() for version in item["versions"]
+                )
             finally:
                 writer.close()
+    shards.validate_inventory(shard_path, functions)
     pools = {}
     for path in (project.build / "setup/layout.json",):
         if path.is_file():
@@ -348,6 +351,9 @@ def _read_map(project: Project) -> dict[str, Any]:
     ) != result.get("shard_sha256"):
         raise Held("solve", "map.shards: missing or changed facts; run unbake recompute rom-facts")
     storage.validate_identity(project, result, "map.facts")
+    shards.validate_inventory(shard_path, result["functions"])
+    if result.get("map_schema") != SCHEMA:
+        raise Held("map", f"map.schema: expected {SCHEMA}; run unbake recompute rom-facts")
     return result
 
 
@@ -362,7 +368,12 @@ def load_map(project: Project, *, allow_stale: bool = False) -> dict[str, Any]:
 
 def refresh_map(project: Project, host: Host | None) -> dict[str, Any]:
     """Refresh symbol and boundary dependencies, retaining unaffected instruction facts."""
-    result = _read_map(project)
+    try:
+        result = _read_map(project)
+    except Held as error:
+        if error.key not in {"map.shards.inventory", "map.schema"} or host is None:
+            raise
+        return map_program(project, host)
     pinned = storage.map_inputs(project)
     old_inputs = result["inputs_sha256"]
     for version in project.versions:
@@ -370,7 +381,8 @@ def refresh_map(project: Project, host: Host | None) -> dict[str, Any]:
         if pinned.get(relative) != old_inputs.get(relative):
             raise Held("solve", f"map.rom_sha1.{version}: ROM changed; bootstrap map required")
     # A map an older schema wrote is rebuilt; its unchanged instruction facts are reused by interval.
-    if pinned == old_inputs and result.get("map_schema") == SCHEMA:
+    analyzer = inputs.digest(Path(__file__).with_name("mips.py"), algorithm="sha256", reuse=retention.configured())
+    if pinned == old_inputs and result.get("abi_analysis_sha256") == analyzer:
         result["functions"] = shards.Functions(project.build / "map" / result["shard"], result["functions"])
         return result
     if host is None:
