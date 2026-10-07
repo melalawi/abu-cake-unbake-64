@@ -218,9 +218,11 @@ def fold_source(
     source_path: Path | None = None,
 ) -> Folded:
     """Plan aggregate promotion against a shared header context; the context is not changed."""
+    from unbake.fold import callee_contracts
     from unbake.typemap import declaration_evidence
 
     authored = text
+    headers, contract_edits = callee_contracts.reconcile(project, headers, text, function, versions)
     text = gbi_recover.import_aliases(
         project, text, headers.texts, sdk_aliases=False, rules=frozenset({"volatile-storage"})
     )
@@ -271,6 +273,12 @@ def fold_source(
         # Blank moved typedefs without changing the aggregate edit offsets.
         for start, end in sorted(moved_spans, reverse=True):
             text = text[:start] + "".join("\n" if char == "\n" else " " for char in text[start:end]) + text[end:]
+    if contract_edits:
+        by_path = {edit.path: edit for edit in edits}
+        for edit in contract_edits:
+            current = by_path.get(edit.path)
+            by_path[edit.path] = replace(current, before=edit.before) if current is not None else edit
+        edits = list(by_path.values())
     final = final_source(project, text, parsers, edits, context, destination)
     if promoted:
         include = destination.relative_to(project.include[0]).as_posix()
