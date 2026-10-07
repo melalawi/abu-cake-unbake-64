@@ -12,7 +12,7 @@ from unittest.mock import patch
 from tests.project_fixture import ProjectCase
 from unbake import process
 from unbake.config import Compiler
-from unbake.decomp.draft_context import ordered_headers
+from unbake.decomp.draft_context import ordered_headers, required_headers
 from unbake.fold import imports
 from unbake.layout.headers import Layout
 from unbake.layout.map import Group, Map
@@ -154,3 +154,27 @@ class ProviderOrderTests(ProjectCase):
         self.assertFalse(list((project.build / "types").glob("held-header-context-*.c")))
         _, compiled = self.native('#include "shared/placed.h"\n')
         self.assertEqual(compiled.returncode, 0, compiled.stderr)
+
+    def test_selected_real_placed_context_retains_the_separate_complete_vec3_provider(self):
+        scalar, alias, definition, consumer = (
+            self.include / path for path in ("types.h", "alias.h", "body.h", "consumer.h")
+        )
+        vec = self.contents[self.include / "common/vec.h"]
+        start = vec.index("struct Vec3 {")
+        body = vec[start : vec.index("};", start) + 2]
+        placed = next(
+            line for line in self.contents[self.include / "shared/placed.h"].splitlines() if "Shared_Placed" in line
+        )
+        contents = {
+            scalar: self.contents[scalar],
+            alias: "typedef struct Vec3 Vec3;",
+            consumer: placed,
+            definition: body,
+        }
+        selected = required_headers(contents, "struct Shared_Placed placed;")
+        self.assertEqual(selected, set(contents))
+        ordered = ordered_headers({path: contents[path] for path in contents if path in selected})
+        source = "\n".join(contents[path] for path in ordered)
+        _, compiled = self.native(source)
+        self.assertEqual(compiled.returncode, 0, compiled.stderr)
+        self.assertEqual(self.native_calls, 2)

@@ -50,6 +50,21 @@ def _includes(contents: dict[Path, str]) -> dict[Path, set[Path]]:
     return closure
 
 
+def _complete_tags(header: Declarations, aliases: dict[str, str]) -> set[str]:
+    """By-value aliases need their terminal aggregate; pointer aliases need only the typedef."""
+    complete = set(header.complete_uses)
+    for alias in header.complete_alias_uses:
+        seen = set()
+        target = alias
+        while target in aliases and target not in seen:
+            seen.add(target)
+            target = re.sub(r"\b(?:const|volatile|restrict|__restrict|__restrict__)\b", "", aliases[target]).strip()
+        tag = re.fullmatch(r"(?:struct|union)\s+(\w+)(?:\s*\[[^]]*\])*", target)
+        if tag:
+            complete.add(tag[1])
+    return complete
+
+
 def ordered_headers(
     contents: dict[Path, str], *, aliases: dict[str, str] | None = None, roots: Iterable[Path] | None = None
 ) -> list[Path]:
@@ -104,17 +119,7 @@ def ordered_headers(
         for name in header.tags:
             tag_providers.setdefault(name, set()).add(path)
     for path, header in parsed.items():
-        complete = set(header.complete_uses)
-        for alias in header.complete_alias_uses:
-            seen = set()
-            target = alias
-            while target in mapping and target not in seen:
-                seen.add(target)
-                target = re.sub(r"\b(?:const|volatile|restrict|__restrict|__restrict__)\b", "", mapping[target]).strip()
-            tag = re.fullmatch(r"(?:struct|union)\s+(\w+)(?:\s*\[[^]]*\])*", target)
-            if tag:
-                complete.add(tag[1])
-        for name in complete - header.tags:
+        for name in _complete_tags(header, mapping) - header.tags:
             offered = tag_providers.get(name, set()) - {path}
             dependencies[path] |= (offered & included[path]) or offered
     ordered: list[Path] = []
@@ -162,24 +167,53 @@ def ordered_declarations(text: str, path: Path, *, aliases: dict[str, str] | Non
 
 def required_headers(contents: dict[Path, str], output: str) -> set[Path]:
     """Select declaration providers and their transitive type dependencies."""
+    from unbake.typemap.header_names import alias_types
+
     providers: dict[str, Path] = {}
+    tags: dict[str, Path] = {}
+    parsed = {path: declarations(text) for path, text in contents.items()}
+    aliases = {name: target for text in contents.values() for name, target in alias_types(text).items()}
     selected: set[Path] = set()
     for path in ordered_headers(contents):
-        text = _clean(contents[path])
-        header = declarations(contents[path])
-        names = header.typedefs | header.exports
+        header = parsed[path]
+        names = header.typedefs | header.declared | (header.exports - header.tags)
         # Keep one primitive type prelude for standalone scalar drafts.
-        if names and "{" not in text and not selected:
+        if (
+            not selected
+            and "{" not in _clean(contents[path])
+            and any(
+                re.fullmatch(
+                    r"(?:(?:signed|unsigned|char|short|int|long|float|double|void)\s*)+", aliases.get(name, "")
+                )
+                for name in header.typedefs
+            )
+        ):
             selected.add(path)
         for name in names:
             providers.setdefault(name, path)
-    pending = [output, *(contents[path] for path in selected)]
-    while pending:
-        for name in re.findall(r"\b[A-Za-z_]\w*\b", _clean(pending.pop())):
-            provider = providers.get(name)
+        for name in header.tags:
+            tags.setdefault(name, path)
+
+    def ordinary(text: str) -> set[str]:
+        # A tag reference shares spelling with, but never supplies or uses,
+        # an ordinary typedef/variable of the same name.
+        text = re.sub(r"\b(?:struct|union|enum)\s+[A-Za-z_]\w*", " ", _clean(text))
+        return set(re.findall(r"\b[A-Za-z_]\w*\b", text))
+
+    def select(names: set[str], offered: dict[str, Path]) -> None:
+        for name in sorted(names):
+            provider = offered.get(name)
             if provider is not None and provider not in selected:
                 selected.add(provider)
-                pending.append(contents[provider])
+                pending.append(provider)
+
+    pending = list(selected)
+    select(ordinary(output), providers)
+    select(set(re.findall(r"\b(?:struct|union|enum)\s+([A-Za-z_]\w*)", _clean(output))), tags)
+    while pending:
+        path = pending.pop()
+        select(ordinary(contents[path]), providers)
+        select(_complete_tags(parsed[path], aliases), tags)
     return selected
 
 

@@ -238,6 +238,39 @@ class HeaderDeclarationsTests(unittest.TestCase):
         self.assertEqual(result, [wrapper, consumer])
         self.assertEqual(parse.call_count, 3)
 
+    def test_selected_alias_consumer_closes_over_the_separate_complete_tag(self) -> None:
+        scalar, alias, body, consumer = map(Path, ("types.h", "alias.h", "body.h", "consumer.h"))
+        contents = {
+            scalar: "typedef int s32;",
+            alias: "typedef struct Item Value; typedef const Value Final;",
+            body: "struct Item { s32 word; };",
+            consumer: "struct Holder { Final item; };",
+        }
+        with patch("unbake.decomp.draft_context.declarations", wraps=declarations) as parse:
+            self.assertEqual(required_headers(contents, "struct Holder holder;"), set(contents))
+        # Two bounded catalogue passes; closure traversal reuses those rows.
+        self.assertEqual(parse.call_count, 2 * len(contents))
+
+    def test_selector_keeps_tag_and_ordinary_providers_separate(self) -> None:
+        scalar, alias, tag = map(Path, ("types.h", "alias.h", "tag.h"))
+        contents = {
+            scalar: "typedef int s32;",
+            tag: "struct Value { s32 word; };",
+            alias: "typedef s32 Value;",
+        }
+        self.assertEqual(required_headers(contents, "Value value;"), {scalar, alias})
+        self.assertEqual(required_headers(contents, "struct Value value;"), {scalar, tag})
+
+    def test_pointer_alias_needs_no_unreferenced_definition_or_arbitrary_prelude(self) -> None:
+        alias, tag, unused = map(Path, ("alias.h", "tag.h", "unused.h"))
+        contents = {
+            alias: "typedef struct Value *Pointer;",
+            tag: "struct Value { int word; };",
+            unused: "struct Unused { int word; };",
+        }
+        self.assertEqual(required_headers(contents, "Pointer pointer;"), {alias})
+        self.assertEqual(required_headers(contents, "int alpha(void) {return 0;}"), set())
+
     def test_aggregates_forward_tags_enums_and_unnamed_bitfields(self) -> None:
         parsed = declarations(
             "struct Forward; typedef struct Tag { Field value; int : 3; "
