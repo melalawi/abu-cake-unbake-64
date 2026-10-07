@@ -48,8 +48,6 @@ HEADER_SCHEMA = 7
 ASSEMBLED_SCHEMA = 4
 # Header parts of one version per job: headers in path order share their own include expansions.
 HEADERS_PER_JOB = 16
-# Shared alias maps and layout templates a process keeps between solves.
-SHARED_KEPT = 16384
 # Placeholders for the provenance fields that differ between tasks sharing one unit text.
 _FUNCTION = "\x00function"
 _VERSION = "\x00version"
@@ -318,7 +316,7 @@ class Store:
     def __init__(self, project: Project, cache: Cache | None) -> None:
         self.project = project
         self.cache = cache if cache is not None else Cache(project.root / "build/cache")
-        self.written: dict[int, tuple[Any, str]] = {}
+        self.written: dict[int | str, tuple[Any, str]] = {}
 
     def _put_shared(self, value: Any) -> str:
         known = self.written.get(id(value))
@@ -327,6 +325,7 @@ class Store:
         data = json.dumps(value, separators=(",", ":")).encode()
         digest = hashlib.sha256(data).hexdigest()
         self.written[id(value)] = value, digest
+        self.written.setdefault(digest, (value, digest))
         self.cache.produce(SHARED, digest, functools.partial(_write, data=data))
         return digest
 
@@ -336,9 +335,13 @@ class Store:
             raise Held(
                 cause_named("facts.shared", f"facts.shared: missing {digest}", owner="typemap.facts", stage="solve")
             )
+        known = self.written.get(digest)
+        if known is not None:
+            return known[0]
         binary = self.cache.get("facts-shared-pickle", digest)
         value = self.cache.decode(binary or path, retention.PICKLE if binary else retention.JSON)
         self.written[id(value)] = value, digest
+        self.written[digest] = value, digest
         return value
 
     def encode(self, seed: dict[str, Any]) -> dict[str, Any]:
@@ -1118,6 +1121,7 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
         for bundle, indices in bundles:
             data = pickle.dumps([encoded[index] for index in indices], protocol=5)
             output.cache.produce("facts-unit", bundle, functools.partial(_write, data=data))
+    del results
     from unbake import effort
 
     effort.count("facts", counts["sources"], len(groups))
@@ -1141,6 +1145,8 @@ def published(project: Project, policy: Host | None, output: Store, keys: list[s
             pending_encoded = {position: encoded[index] for position, index in enumerate(pending_indices)}
             jobs_ = facts_decode.jobs(pending_encoded, len(pending_indices), Path(directory))
             jobs_ = [[(pending_indices[index], payload) for index, payload in job] for job in jobs_]
+            pending_encoded.clear()
+            encoded.clear()
             cache_root = None if output.cache is None else output.cache.root
             done = (
                 pool.run(policy, _decode_job, jobs_, (cache_root,))

@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from tests.kit import TempCase
 from unbake import cache, pool
+from unbake.config import Held
 from unbake.project.headers import Graph
 from unbake.typemap import declarations, facts, facts_decode
 
@@ -76,6 +77,55 @@ class DecodeMemoryTests(TempCase):
         # A retry overwrites private partial output, and still reads the same input.
         Path(decoded[0][1]).write_bytes(b"interrupted output")
         self.assertEqual(facts_decode.read(facts._decode_job(job[:1])[0][1]), expected)
+
+
+class SharedParentDecodeTests(TempCase):
+    def test_real_layouts_intern_once_per_content_and_keep_receipts_isolated(self):
+        original = json.loads(SLICE.read_bytes())[0]
+        template = {
+            name: {key: value for key, value in row.items() if key != "provenance"}
+            for name, row in original["structs"].items()
+        }
+        seed = {
+            **original,
+            "structs": declarations.ProvenStructs(template, {"function": "first", "kind": "proven"}),
+            "aliases": template["World"]["typedefs"],
+            "shared_typedefs": {},
+        }
+        project = SimpleNamespace(root=self.root)
+        output = facts.Store(project, None)
+        encoded = output.encode(seed)
+        output.written.clear()
+        gc.collect()
+        tracemalloc.start()
+        try:
+            with patch.object(output.cache, "decode", wraps=output.cache.decode) as decode:
+                decoded = [
+                    output.decode(
+                        {
+                            **encoded,
+                            "structs": {**encoded["structs"], "provenance": {"function": f"owner_{index}"}},
+                        }
+                    )
+                    for index in range(512)
+                ]
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(decode.call_count, 3)
+        self.assertLess(peak, BUDGET, f"parent shared decode peak {peak:,} bytes exceeds {BUDGET:,}")
+        self.assertEqual(len({id(row["structs"].template) for row in decoded}), 1)
+        self.assertEqual(len({id(row["aliases"]) for row in decoded}), 1)
+        for index, row in enumerate(decoded):
+            self.assertEqual(row["structs"]["World"]["provenance"], {"function": f"owner_{index}"})
+            self.assertEqual(row["structs"].template, template)
+            self.assertEqual(row["functions"], original["functions"])
+        separate = facts.Store(project, None).decode(encoded)
+        self.assertIsNot(separate["structs"].template, decoded[0]["structs"].template)
+        output.cache.path(facts.SHARED, encoded["structs"]["$template"]).unlink()
+        with self.assertRaises(Held) as caught:
+            output.decode(encoded)
+        self.assertEqual(caught.exception.key, "facts.shared")
 
 
 class PublishedDecodeTests(TempCase):
