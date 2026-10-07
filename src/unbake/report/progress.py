@@ -18,7 +18,7 @@ from unbake.process import named as cause_named
 from unbake.report import files, readme_layout
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 4
+SCHEMA = 5
 # Only C earns exact matched credit. Original assembly remains a separate denominator category.
 DONE = {"c": ("c", "Matched C", ".c")}
 
@@ -161,18 +161,8 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
             )
         byte_line = _line("bytes    ", document, version)
         function_line = _line("functions", document, version, functions=True)
-        draft: dict[str, Any] = next(
-            (category["measures"] for category in document.get("categories", []) if category["id"] == "draft"), {}
-        )
-        detail = (
-            f"Retained drafts: {int(draft.get('total_code', 0)):,} bytes / "
-            f"{int(draft.get('total_functions', 0)):,} functions; "
-            f"declared data: {int(document['measures'].get('total_data', 0)):,} bytes (matching unknown). "
-            "Fuzzy % is known similarity; unknown scores remain unknown."
-        )
         blocks.append(
-            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br>"
-            f"<code>{function_line}</code></pre> {detail} |"
+            f"| {description} |\n|---|\n| <pre><code>{byte_line}</code><br><code>{function_line}</code></pre> |"
         )
     if len(reports) > 1:
         summaries = {"all": _aggregate(reports), **reports}
@@ -181,14 +171,7 @@ def progress(reports: dict[str, dict[str, Any]], descriptions: dict[str, str]) -
             f"<code>{_line(version.ljust(width), document, version)} bytes</code>"
             for version, document in summaries.items()
         ]
-        data = int(summaries["all"]["measures"].get("total_data", 0))
-        blocks.insert(
-            0,
-            "<pre>"
-            + "<br>".join(lines)
-            + "</pre>\n"
-            + f"All versions: {data:,} declared data bytes (matching unknown); opaque binary assets excluded.",
-        )
+        blocks.insert(0, "<pre>" + "<br>".join(lines) + "</pre>")
     return "\n\n".join(blocks)
 
 
@@ -198,34 +181,6 @@ _FIGURE = re.compile(
     r"(?: \(~[0-9]+\.[0-9]+%\))?(?P<count_pad> +)"
     r"[0-9,]+ of [0-9,]+(?P<suffix> bytes)?"
 )
-
-
-def _retain_spacing(original: str, generated: str) -> str:
-    """Keep owner spacing even when a percentage gains or loses a digit."""
-    table_pattern = r"^\| ([\w-]+) \([^\n|]+ \|\r?$"
-
-    def key(match: re.Match[str], tables: list[tuple[int, str]]) -> tuple[str, str]:
-        label = match["label"]
-        version = ""
-        if label in {"bytes", "functions"}:
-            version = next((name for offset, name in reversed(tables) if offset < match.start()), "")
-        return version, label
-
-    tables = [(match.start(), match[1]) for match in re.finditer(table_pattern, original, re.MULTILINE)]
-    fields = ("pad", "percent_pad", "count_pad")
-    spacing = {key(match, tables): tuple(match[field] for field in fields) for match in _FIGURE.finditer(original)}
-    tables = [(match.start(), match[1]) for match in re.finditer(table_pattern, generated, re.MULTILINE)]
-
-    def replace(match: re.Match[str]) -> str:
-        pads = spacing.get(key(match, tables))
-        content = match[0]
-        if pads is not None:
-            for field, pad in reversed(list(zip(fields, pads, strict=True))):
-                start, stop = match.span(field)
-                content = content[: start - match.start()] + pad + content[stop - match.start() :]
-        return content
-
-    return _FIGURE.sub(replace, generated)
 
 
 def _replace_figures(content: str, document: dict[str, Any], version: str, table: bool) -> str:
@@ -279,8 +234,17 @@ def _aggregate(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {"version": 2, "measures": measures}
 
 
+def _owner_rename(labels: list[str], versions: list[str]) -> dict[str, str]:
+    """Resolve the existing unique configured rename without changing owner labels."""
+    missing = set(versions) - set(labels)
+    obsolete = set(labels) - set(versions)
+    if len(missing) == len(obsolete) == 1:
+        return {next(iter(missing)): next(iter(obsolete))}
+    return {}
+
+
 def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: dict[str, str] | None = None) -> str:
-    """Update the Progress body and retain every other owner byte."""
+    """Replace progress figures in place; generate the original layout only for an empty section."""
     before, block, after = readme_layout.section(template)
     if not reports:
         raise Held(cause_named("reports", "reports: missing VERSION values", owner="report.progress", stage="report"))
@@ -295,17 +259,14 @@ def render(template: str, reports: dict[str, dict[str, Any]], *, descriptions: d
                 )
             )
         reports = {version: reports[version] for version in descriptions}
-        newline = "\r\n" if before.endswith("\r\n") else "\n"
-        generated_body = _retain_spacing(block, progress(reports, descriptions))
-        return before + generated_body.replace("\n", newline) + newline + after
+        if not block.strip():
+            newline = "\r\n" if before.endswith("\r\n") else "\n"
+            return before + progress(reports, descriptions).replace("\n", newline) + newline + after
     # A unique configured rename selects the matching report, while the live
     # table description and summary label remain the owner's text.
     labels = re.findall(r"^\| ([\w-]+) \([^\n|]+ \|\r?$", block, re.MULTILINE)
-    missing = set(reports) - set(labels)
-    obsolete = set(labels) - set(reports)
-    if len(missing) == len(obsolete) == 1:
-        old, new = next(iter(obsolete)), next(iter(missing))
-        reports = {old if version == new else version: document for version, document in reports.items()}
+    rename = _owner_rename(labels, list(reports))
+    reports = {rename.get(version, version): document for version, document in reports.items()}
     descriptions = {}
     matches = []
     for version in reports:
@@ -639,8 +600,11 @@ def owner_descriptions(project: Project, template: str) -> dict[str, str]:
     """Retain the owner table order and release/ROM labels without requiring ROMs."""
     _, block, _ = readme_layout.section(template)
     descriptions = {}
-    for match in re.finditer(r"^\| (([\w-]+) \([^\n|]+) \|\r?$", block, re.M):
-        version = match[2]
+    matches = list(re.finditer(r"^\| (([\w-]+) \([^\n|]+) \|\r?$", block, re.M))
+    rename = _owner_rename([match[2] for match in matches], list(project.versions))
+    configured = {owner: version for version, owner in rename.items()}
+    for match in matches:
+        version = configured.get(match[2], match[2])
         if version not in project.versions or version in descriptions:
             raise Held(
                 cause_named(

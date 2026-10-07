@@ -290,14 +290,14 @@ class ReportAccuracyTests(ProjectCase):
         with self.assertRaisesRegex(Held, "report.semantic"):
             verify.validate(self.project)
 
-    def test_readme_data_caption_and_generated_ci_inventory_cannot_lie(self):
+    def test_readme_figures_and_generated_ci_inventory_cannot_lie(self):
         from unbake.report import verify
 
         self.exact()
         self.save()
         readme = self.project.root / "README.md"
         original = readme.read_text()
-        readme.write_text(original.replace("declared data: 0", "declared data: 100"))
+        readme.write_text(original.replace("12 of 36", "13 of 36"))
         with self.assertRaisesRegex(Held, "report.readme"):
             verify.validate(self.project)
         readme.write_text(original)
@@ -441,6 +441,25 @@ class ReportAccuracyTests(ProjectCase):
         self.public_progress_fixture()
         readme = self.project.root / "README.md"
         original = readme.read_text().replace("Owner release.", "Reviewed owner label.")
+        readme.write_text(original)
+        for version in self.versions:
+            self.project.version(version).baserom.unlink()
+        with (
+            patch.object(progress, "readme_descriptions") as rom_labels,
+            patch.object(progress, "render", wraps=progress.render) as renders,
+        ):
+            progress.write(self.project, None, source_only=True)
+        rom_labels.assert_not_called()
+        self.assertEqual(renders.call_count, 1)
+        self.assertEqual(readme.read_text(), original)
+        verify.validate(self.project)
+
+    def test_source_only_regeneration_preserves_unique_owner_version_rename(self):
+        from unbake.report import verify
+
+        self.public_progress_fixture()
+        readme = self.project.root / "README.md"
+        original = readme.read_text().replace("| eu (", "| owner-eu (").replace("<code>eu ", "<code>owner-eu ")
         readme.write_text(original)
         for version in self.versions:
             self.project.version(version).baserom.unlink()
