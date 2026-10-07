@@ -14,15 +14,15 @@ from unbake import cache as content_cache
 from unbake import inputs, tui
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
-from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, namespace, shards, storage
+from unbake.typemap import abi_declarations, closure, declarations, evidence, layouts, namespace, o32, shards, storage
 from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 13
+SCHEMA = 14
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
 ABI_SCHEMA = 8
-MACHINE_SCHEMA = 6
+MACHINE_SCHEMA = 7
 
 
 _MERGE_IGNORED = ("provenance", "prototype", "declaration", "aliases", "typedefs", "registers", "declaration_conflict")
@@ -237,6 +237,25 @@ def _by_address() -> dict[int, list[str]]:
     return defaultdict(list)
 
 
+def _transport(signature: dict[str, Any], structs: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
+    """Keep the original C declaration while seeding its actual aggregate words."""
+    if not any(
+        declarations.canonical(param["type"], aliases).startswith(("struct ", "union "))
+        and not declarations.canonical(param["type"], aliases).endswith(" *")
+        for param in signature["params"]
+    ):
+        return signature
+    slots = o32.declared_slots(signature, structs, aliases)
+    return {
+        **signature,
+        "source_params": signature["params"],
+        "params": [] if slots is None else slots,
+        "registers": [] if slots is None else [slot["register"] for slot in slots],
+        "arity_known": signature["arity_known"] and slots is not None,
+        "transport_known": slots is not None,
+    }
+
+
 def _addresses(facts: dict[str, Any], functions: set[str]) -> dict[str, dict[int, list[str]]]:
     """Global names by version and address; a picklable mapping, because the pool ships it to its workers."""
     addresses: dict[str, dict[int, list[str]]] = defaultdict(_by_address)
@@ -278,11 +297,13 @@ def infer(
         structs = _merge_records(seeds, "structs", declared)
         arrays = _merge_records(seeds, "arrays", declared)
         function_names = namespace.reconcile(inventory, facts, functions, globals_, arrays, declared.facts)
+        functions = {name: _transport(signature, structs, aliases) for name, signature in functions.items()}
         addresses = _addresses(facts, function_names)
         # canonical() under the one solve-wide alias map, once per spelling: thousands of seeds repeat each type.
         resolve = _Canonical().bound(aliases)
         for seed in seeds:
             for name, signature in seed["functions"].items():
+                signature = _transport(signature, seed["structs"], seed["aliases"])
                 for param, reg in zip(signature["params"], signature["registers"], strict=True):
                     if reg is not None:
                         declared.use(f"param:{name}:{reg}", name)
@@ -366,12 +387,24 @@ def infer(
     with tui.task("Rendering solved type records"):
         neighbours = machine.neighbours
         fields = machine.fields
-        shared_fields = machine.shared_fields
+        shared_fields = dict(machine.shared_fields)
         # Authored layouts override machine storage observations.
         layout_index = {name: record for name, record in structs.items()}
         for _name, record in structs.items():
             for alias in record["aliases"]:
                 layout_index[alias] = record
+        # Multiple callers need not share one object address. A declared entry
+        # identity still supports a local storage view of that callee's reads;
+        # retain it without asserting a common source among those callers.
+        local_storage: set[str] = set()
+        for origin, offsets in fields.items():
+            base_type = graph.resolved.get(origin, {}).get("type")
+            if machine.bases[origin] is not None or not base_type or not base_type.endswith(" *"):
+                continue
+            base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
+            if base in layout_index and not layouts.covers(layout_index[base], offsets):
+                shared_fields[origin] = offsets
+                local_storage.add(origin)
         for origin, offsets in shared_fields.items():
             base_type = graph.resolved.get(origin, {}).get("type")
             if not base_type or not base_type.endswith(" *"):
@@ -438,14 +471,22 @@ def infer(
         taken: dict[str, int] = {}
         for origin in sorted(shared_fields):
             users = sorted({access["function"] for accesses in shared_fields[origin].values() for access in accesses})
-            if len(users) >= 2:
+            base_type = graph.resolved.get(origin, {}).get("type")
+            base = (
+                base_type[:-2].removeprefix("struct ").removeprefix("union ")
+                if base_type and base_type.endswith(" *")
+                else None
+            )
+            declared_base = layout_index.get(base or "")
+            supplemental = declared_base is not None and not layouts.covers(declared_base, shared_fields[origin])
+            if len(users) >= 2 or supplemental:
                 base = "Shape_" + users[0]
                 taken[base] = taken.get(base, 0) + 1
                 readable[origin] = base if taken[base] == 1 else f"{base}_{taken[base]}"
         for origin, offsets in shared_fields.items():
             users = sorted({access["function"] for accesses in offsets.values() for access in accesses})
             base_type = graph.resolved.get(origin, {}).get("type")
-            if len(users) < 2:
+            if origin not in readable:
                 continue
             name = readable[origin]
 
@@ -474,7 +515,11 @@ def infer(
             if base_type and base_type.endswith(" *"):
                 base = base_type[:-2].removeprefix("struct ").removeprefix("union ")
                 if base in layout_index and (base != name or name in authored_structs):
-                    continue
+                    if layouts.covers(layout_index[base], offsets):
+                        continue
+                    # This is a supplementary storage view of the very same
+                    # source, not a replacement for its authored C identity.
+                    name = "Storage_" + name.removeprefix("Shape_")
             authority = origin
             while authority.startswith("field:"):
                 authority = authority.removeprefix("field:").rsplit(":", 1)[0]
@@ -522,8 +567,13 @@ def infer(
                 unresolved("common base is not a global or a known-signature parameter/return")
                 continue
             inferred_structs[name] = layouts.observed(name, origin, offsets, graph.resolved, users)
+            if base_type and base_type.endswith(" *"):
+                inferred_structs[name]["canonical_pointer"] = base_type
+            if origin in local_storage:
+                inferred_structs[name]["source_binding"] = "callee entry only; caller object identity unresolved"
             inferred_structs[name]["base_nodes"] = sorted(
-                {origin} | {node for node in fields if machine.bases[node] == origin}
+                {origin}
+                | {node for node in fields if machine.bases[node] == origin and not machine.base_offsets.get(node, 0)}
             )
         shape_components: dict[int, list[dict[str, Any]]] = defaultdict(list)
         for record in inferred_structs.values():
@@ -686,7 +736,7 @@ def infer(
                 "type": prototype,
                 "return": returned,
                 "params": params,
-                "arity": len(params)
+                "arity": (len(signature.get("source_params", params)) if signature else len(params))
                 if (signature and signature["arity_known"])
                 or (not signature and signatures[name]["arity_known"] and ordered is not None)
                 else None,
@@ -695,6 +745,9 @@ def infer(
                 "provenance": [signature["provenance"]] if signature else [],
                 "prototype": prototype,
             }
+            if signature is not None and "source_params" in signature:
+                output_functions[name]["source_params"] = signature["source_params"]
+                output_functions[name]["transport_known"] = signature["transport_known"]
             if signature is None:
                 # A complete register signature need not have a unique C spelling:
                 # leading floating words in GPRs can belong to by-value aggregates.

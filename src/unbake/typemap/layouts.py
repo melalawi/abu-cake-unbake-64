@@ -8,6 +8,21 @@ from unbake.layout.structs_types import SCALARS
 from unbake.typemap import declarations, evidence
 
 
+def covers(record: dict[str, Any], offsets: dict[int, list[dict[str, Any]]]) -> bool:
+    """A declared field, rather than opaque padding, covers each measured access."""
+    for offset, accesses in offsets.items():
+        members = [
+            field
+            for field in record["fields"]
+            if field["offset"] == offset
+            and not field.get("extent")
+            and not field["name"].startswith(("padding", "gap", "unknown_"))
+        ]
+        if len(members) != 1 or any(access["partial"] or access["width"] != members[0]["size"] for access in accesses):
+            return False
+    return True
+
+
 def observed(
     name: str,
     origin: str,

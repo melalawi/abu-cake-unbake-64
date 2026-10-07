@@ -288,6 +288,7 @@ class Machine:
     shared_fields: dict[str, dict[int, list[dict[str, Any]]]]
     bases: dict[str, str | None]
     arrays: dict[str, dict[str, Any]]
+    base_offsets: dict[str, int] = field(default_factory=dict)
     constraints: list[dict[str, Any]] = field(default_factory=list)
     shard: dict[str, Any] | None = None
 
@@ -440,7 +441,11 @@ def _function_body(
                     continue
                 node = origin_node(value, addresses[version])
                 formal = f"param:{callee}:{reg}"
-                forwarded[formal].add(node if node is not None else "unknown")
+                origins = value.get("origins", [])
+                storage_source = node
+                if storage_source is None and len(origins) == 1 and not origins[0]["id"].startswith("stack:"):
+                    storage_source = f"offset:{origins[0]['id']}:{origins[0]['offset']}"
+                forwarded[formal].add(storage_source if storage_source is not None else "unknown")
                 if node is not None:
                     graph.link(node, formal, call)
                     graph.use(node, function)
@@ -529,13 +534,17 @@ def build(
                 for node, others in local_neighbours.items():
                     neighbours[node] |= others
                 _merge_arrays(candidates, function, arrays)
-        base_cache: dict[str, str | None] = {}
+        base_cache: dict[str, tuple[str, int] | None] = {}
 
-        def common_base(origin: str, active: frozenset[str] = frozenset()) -> str | None:
+        def common_base(origin: str, active: frozenset[str] = frozenset()) -> tuple[str, int] | None:
             if origin == "unknown" or origin in active:
                 return None
             if origin in base_cache:
                 return base_cache[origin]
+            if origin.startswith("offset:"):
+                source, offset = origin.removeprefix("offset:").rsplit(":", 1)
+                root = common_base(source, active | {origin})
+                return (root[0], root[1] + int(offset)) if root is not None else None
             if origin in memory_sources:
                 root = common_base(memory_sources[origin], active | {origin})
                 base_cache[origin] = root
@@ -543,25 +552,29 @@ def build(
             if origin.startswith("field:"):
                 source, offset = origin.removeprefix("field:").rsplit(":", 1)
                 root = common_base(source, active | {origin})
-                return f"field:{root}:{offset}" if root is not None else None
+                return (f"field:{root[0]}:{int(offset) + root[1]}", 0) if root is not None else None
             sources = forwarded.get(origin, set())
             if not sources:
-                return origin
+                return origin, 0
             roots = {common_base(source, active | {origin}) for source in sources}
             root = next(iter(roots)) if len(roots) == 1 and None not in roots else None
             base_cache[origin] = root
             return root
 
         bases: dict[str, str | None] = {}
+        base_offsets: dict[str, int] = {}
         shared_fields: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
         for origin, offsets in fields.items():
-            root = bases[origin] = common_base(origin)
-            if root is None:
+            binding = common_base(origin)
+            bases[origin] = None if binding is None else binding[0]
+            if binding is None:
                 continue
+            root, bias = binding
+            base_offsets[origin] = bias
             for offset, accesses in offsets.items():
-                shared_fields[root][offset].extend(accesses)
-                if root != origin:
-                    graph.connect(f"field:{origin}:{offset}", f"field:{root}:{offset}", accesses[0])
+                shared_fields[root][offset + bias].extend(accesses)
+                if root != origin or bias:
+                    graph.connect(f"field:{origin}:{offset}", f"field:{root}:{offset + bias}", accesses[0])
         graph.instantiate_fields()
         graph.instantiate()
         groups = graph.groups()
@@ -576,6 +589,7 @@ def build(
             fields={origin: dict(offsets) for origin, offsets in fields.items()},
             shared_fields={origin: dict(offsets) for origin, offsets in shared_fields.items()},
             bases=bases,
+            base_offsets=base_offsets,
             arrays=candidates,
             constraints=graph.facts,
         )

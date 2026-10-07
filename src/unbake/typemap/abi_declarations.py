@@ -50,6 +50,12 @@ def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dic
         elif type_ is None or declarations.unknown(type_):
             type_ = "int"
             reasons.append(f"types.abi.word: {reg}: semantic type {param['state']}; one O32 word carrier")
+        elif type_ == "float":
+            # A scalar leading float would select f12/f14. A measured GPR
+            # word can instead be an aggregate member's entire IEEE value.
+            # Keep its semantics in the record; this declaration carries bits.
+            type_ = "int"
+            reasons.append(f"types.abi.float_word: {reg}: full 32-bit floating representation in an O32 word")
         carriers.append(type_)
     if not unspecified:
         expected = declarations.parameter_registers([{"type": t} for t in carriers], aliases)

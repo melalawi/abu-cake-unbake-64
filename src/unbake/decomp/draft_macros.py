@@ -77,6 +77,25 @@ def lower(source: str, context: str, *, allow_fields: bool = False) -> str:
             addressable = False
         if not addressable:
             if (
+                target in ("s32", "u32", "int", "unsigned int")
+                and isinstance(expression, c_ast.FuncCall)
+                and isinstance(expression.name, c_ast.ID)
+            ):
+                signature = re.search(
+                    r"\b(?:f32|float)\s+" + re.escape(expression.name.name) + r"\s*\([^;{}]*\)\s*;",
+                    context,
+                )
+                if signature:
+                    helper = "m2c_float_to_word"
+                    while re.search(r"\b" + helper + r"\b", source + context):
+                        helper += "_"
+                    helpers[helper] = (
+                        f"static {target} {helper}(float value) {{\n"
+                        "    union { unsigned int bits; float value; } word;\n"
+                        "    word.value = value;\n    return word.bits;\n}\n"
+                    )
+                    return f"{helper}({value})"
+            if (
                 target in ("f32", "float")
                 and isinstance(expression, c_ast.FuncCall)
                 and isinstance(expression.name, c_ast.ID)

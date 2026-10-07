@@ -9,6 +9,79 @@ from unbake.config import Held
 from unbake.typemap import declarations
 
 
+def declared_slots(
+    signature: dict[str, Any], layouts: dict[str, Any], aliases: dict[str, str]
+) -> list[dict[str, Any]] | None:
+    """Expand an existing dense C struct contract, never guess aggregate grouping.
+
+    A field's floating representation does not move a by-value struct into
+    leading FP registers. Incomplete, padded or union layouts stay unresolved.
+    """
+    from unbake.layout.structs_types import SCALARS
+
+    slots: list[dict[str, Any]] = []
+    slot = 0
+    floating_prefix = not signature.get("variadic")
+    for index, parameter in enumerate(signature["params"]):
+        type_ = declarations.canonical(parameter["type"], aliases)
+        if type_.startswith(("struct ", "union ")) and not type_.endswith(" *"):
+            layout = layouts.get(type_.split(" ", 1)[1])
+            if (
+                layout is None
+                or layout.get("declaration_conflict")
+                or not type_.startswith("struct ")
+                or not layout.get("size")
+                or layout["size"] % 4
+                or layout.get("alignment") not in (4, 8)
+            ):
+                return None
+            slot = (slot * 4 + layout["alignment"] - 1) // layout["alignment"] * layout["alignment"] // 4
+            covered = 0
+            for field in layout["fields"]:
+                member = declarations.canonical(field["type"], aliases)
+                width = 4 if member.endswith(" *") else SCALARS.get(member, (0,))[0]
+                if (
+                    field.get("extent")
+                    or field.get("bit_size") is not None
+                    or field["offset"] != covered
+                    or width not in (4, 8)
+                    or field["size"] != width
+                    or field["offset"] % width
+                ):
+                    return None
+                word = slot + field["offset"] // 4
+                slots.append(
+                    {
+                        "name": parameter["name"] + "_" + field["name"],
+                        "type": member,
+                        "register": f"r{4 + word}" if word < 4 else f"stack{word * 4}",
+                        "parameter": index,
+                        "offset": field["offset"],
+                    }
+                )
+                covered += width
+            if covered != layout["size"]:
+                return None
+            slot += layout["size"] // 4
+            floating_prefix = False
+        else:
+            width = 2 if type_ in ("double", "long long", "unsigned long long") else 1
+            if width == 2:
+                slot += slot % 2
+            floating = type_ in ("float", "double")
+            register = (
+                ("f12" if index == 0 else "f14")
+                if floating and floating_prefix and index < 2
+                else f"r{4 + slot}"
+                if slot < 4
+                else f"stack{slot * 4}"
+            )
+            slots.append({**parameter, "type": type_, "register": register, "parameter": index, "offset": 0})
+            floating_prefix &= floating
+            slot += width
+    return slots
+
+
 def equivalent(source: str, signature: dict[str, Any], machine: dict[str, Any], aliases: dict[str, str]) -> bool:
     """Validate the supplied aggregate grouping without inferring a C grouping."""
     if machine.get("state") != "known" or not signature.get("arity_known"):
