@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from unbake import atomic as atomic_files
-from unbake import tui
+from unbake import cdecl, tui
 from unbake.compilers import drivers
 from unbake.config import Held, Host, Project
 from unbake.decomp import draft_abi, gbi, measured_storage, similar
@@ -30,6 +30,19 @@ from unbake.decomp.draft_syntax import address_arithmetic
 from unbake.decomp.field_access import share
 from unbake.process import read_text, run_tool
 from unbake.project.headers import include_headers
+
+
+def _shared_type_gate(output: str, function: str) -> None:
+    """Local storage overlays do not introduce a shared aggregate contract."""
+    # Blank implementation bodies, retaining signatures and global initializers.
+    # The same declaration boundary is used by canonical ABI extraction.
+    from unbake.typemap.declarations import cleaned_unit
+
+    source = cdecl.declaration_source(output)
+    source = cdecl.SOURCE_TOKEN.sub(lambda m: " " if m[0].startswith(('"', "'")) else m[0], source)
+    declarations = cleaned_unit(source)
+    if re.search(r"\btypedef\b|\b(?:struct|union)\s+\w*\s*\{", declarations):
+        raise Held("types", f"types.declaration: {function}: draft must reuse solved shared types")
 
 
 def _headers(project: Project) -> list[tuple[Path, str]]:
@@ -262,8 +275,8 @@ def _draft(
             reason = item.reason.replace("*/", "* /").replace("\n", " ")
             raw_lines[item.line - 1] = raw_lines[item.line - 1].rstrip("\n") + f" /* GBI_RAW: {reason} */\n"
     output = "".join(raw_lines)
-    if type_context and re.search(r"\btypedef\b|\b(?:struct|union)\s+\w*\s*\{", output):
-        raise Held("types", f"types.declaration: {function}: draft must reuse solved shared types")
+    if type_context:
+        _shared_type_gate(output, function)
     if "gbi" in commands.headers:
         includes += gbi.install(project)
     if "abi" in commands.headers:
