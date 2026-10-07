@@ -371,7 +371,7 @@ def run(
     worker task reads one complete tree, and every task that read the tree before a write is done again after it."""
     from unbake import land, pool, steps
 
-    before = land.dirty(project)
+    before = land.snapshot(project)
     started = steps.ensure(project, host, PICK_STEPS)
     picked = choose(project, host, pick, functions)
     if not picked:
