@@ -41,9 +41,9 @@ class ExistingDraftPreflight(ProjectCase):
             patch.object(draft, "published_seed", return_value=None),
             patch.object(split, "holding_versions", return_value=("us",)),
             patch.object(draft, "draft", wraps=draft.draft) as backend,
+            self.assertRaisesRegex(Held, "draft.exists") as held,
         ):
-            with self.assertRaisesRegex(Held, "draft.exists") as held:
-                verb.run(self.context())
+            verb.run(self.context())
         self.assertEqual(prerequisites.call_count, 0)
         self.assertEqual(backend.call_count, 0)
         self.assertEqual(file.read_bytes(), content)
