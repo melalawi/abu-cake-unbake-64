@@ -121,6 +121,38 @@ def imported(text: str, root: Path | tuple[Path, ...], outputs: Mapping[Path, by
     return result
 
 
+def _staged_headers(project: Project, outputs: Mapping[Path, bytes | Path]) -> dict[str, str]:
+    """Catalogue staged providers at their include spelling, honoring private shadows and links.
+
+    The catalogue is a source view, not an ownership transfer: output destinations remain untouched.
+    A project provider can live outside the draft's first include root. A payload Path is only where
+    its bytes are stored; the mapping key identifies the provider's home.
+    """
+    names = set()
+    for path, data in outputs.items():
+        if path.suffix != ".h" or not isinstance(data, (bytes, Path)):
+            continue
+        root = next((root for root in project.include if path.is_relative_to(root)), None)
+        if root is None:
+            raise Held("layout", f"layout.provider: {path}: staged header is outside the effective include roots")
+        names.add(path.relative_to(root).as_posix())
+    changes = {}
+    for name in sorted(names):
+        for root in project.include:
+            home = root / name
+            payload = outputs.get(home)
+            if payload is None:
+                payload = outputs.get(home.resolve())
+            if isinstance(payload, (bytes, Path)):
+                changes[name] = (payload.read_bytes() if isinstance(payload, Path) else payload).decode()
+                break
+            if home.is_file():
+                # An earlier unstaged provider shadows this staged destination.
+                changes[name] = home.read_text()
+                break
+    return changes
+
+
 def source(
     project: Project,
     text: str,
@@ -138,12 +170,7 @@ def source(
         pending = outputs.get(index.path(project))
         lookup = json.loads(pending) if isinstance(pending, bytes) else index.load(project)
         if not isinstance(pending, bytes):
-            changes = {}
-            for path, data in outputs.items():
-                if path.suffix != ".h" or not isinstance(data, (bytes, Path)):
-                    continue
-                name = path.relative_to(project.include[0]).as_posix()
-                changes[name] = (data.read_bytes() if isinstance(data, Path) else data).decode()
+            changes = _staged_headers(project, outputs)
             # imports.resolve has already selected live canonical homes. Their
             # installed bytes can be newer than the disposable layout index;
             # catalogue only these imports and their listed dependencies.
