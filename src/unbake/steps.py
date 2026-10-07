@@ -413,9 +413,35 @@ def _merge_units(project: Project, host: Host) -> None:
     merge_units.run(project, host)
 
 
+def _compiler_headers_key(project: Project, host: Host) -> str:
+    from unbake.compilers import headers
+
+    return headers.input_key(project)
+
+
+def _compiler_headers(project: Project, host: Host) -> None:
+    from unbake.compilers import headers
+
+    headers.run(project)
+
+
+def _compiler_headers_outputs(project: Project) -> Iterable[Path]:
+    from unbake.compilers import headers
+
+    return headers.outputs(project)
+
+
 STEPS: dict[str, Step] = {
     step.name: step
     for step in (
+        Step(
+            "compiler-headers",
+            "Provisioning public compiler headers",
+            "compiler providers or imported types changed",
+            _compiler_headers_key,
+            _compiler_headers,
+            outputs=_compiler_headers_outputs,
+        ),
         Step(
             "extract", "Splitting the ROMs into code and data", "ROM sha1 or split rows changed", _extract_key, _extract
         ),

@@ -211,6 +211,9 @@ def _ready_readme(project: PendingProject | Project, census: Census, layout: Lay
 
 
 def _sdk_headers(project: Project) -> None:
+    from unbake.compilers.headers import run as provision_headers
+
+    provision_headers(project)
     """Install the open macro asset and one shared SDK display-list type."""
     from unbake.decomp.gbi_source import gfx_typedefs
 

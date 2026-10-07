@@ -12,12 +12,32 @@ from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
-    from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, RuntimeHelper, View
+    from unbake.compilers.families.types import (
+        Allocation,
+        Pseudo,
+        PublicHeader,
+        RegisterDifference,
+        RuntimeHelper,
+        View,
+    )
     from unbake.compilers.registry import CompilerSpec
     from unbake.config import Host, PendingProject, Project
 
 
 class Gcc:
+    def source_intrinsics(self) -> tuple[str, ...]:
+        return ("__builtin_next_arg",)
+
+    def public_headers(self) -> tuple[PublicHeader, ...]:
+        from unbake.compilers.families.gcc.stdarg import header
+
+        return (header(),)
+
+    def public_defines(self) -> tuple[str, ...]:
+        from unbake.compilers.families.gcc.stdarg import SELECTOR
+
+        return ("-D" + SELECTOR + "=1",)
+
     def region_name(self) -> str:
         return "main"
 
@@ -161,6 +181,7 @@ class Gcc:
         """Language/macro input, excluding code generation optimization."""
         return (
             *preprocess,
+            *self.public_defines(),
             *(
                 flag
                 for flag in codegen

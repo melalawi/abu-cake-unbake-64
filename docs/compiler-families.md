@@ -31,3 +31,11 @@ implementation and all of its actual ROM literals. Other implementations and
 other helper operations require further family evidence. No generic library
 catalogue is implied. Conflicting native addresses are refused. Bindings preserve
 ROM bytes; code/data split repair remains the layout owner's operation.
+
+Public compiler headers are described by the family protocol. `unbake recompute
+compiler-headers` provisions missing providers without ROM extraction or a type
+solve; setup uses the same flow. Compatible existing type owners are imported,
+conflicting owners are refused and installed SDK or human providers are retained.
+Native selectors and reserved source operators come only from the family adapter.
+Standard vararg retrieval captures its cursor lvalue once; native evidence covers
+target sizes, alignment holes, floating prefixes and independent list copies.

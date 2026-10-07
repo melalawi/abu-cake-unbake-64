@@ -13,12 +13,32 @@ from unbake.objects.rodata import Pool
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
-    from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, RuntimeHelper, View
+    from unbake.compilers.families.types import (
+        Allocation,
+        Pseudo,
+        PublicHeader,
+        RegisterDifference,
+        RuntimeHelper,
+        View,
+    )
     from unbake.compilers.registry import CompilerSpec
     from unbake.config import Host, PendingProject, Project
 
 
 class Ido:
+    def source_intrinsics(self) -> tuple[str, ...]:
+        return ("__builtin_classof", "__builtin_alignof")
+
+    def public_headers(self) -> tuple[PublicHeader, ...]:
+        from unbake.compilers.families.ido.stdarg import header
+
+        return (header(),)
+
+    def public_defines(self) -> tuple[str, ...]:
+        from unbake.compilers.families.ido.stdarg import SELECTOR
+
+        return ("-D" + SELECTOR + "=1",)
+
     def region_name(self) -> str:
         return "ido"
 
@@ -205,7 +225,17 @@ class Ido:
             copy_out=retention.clone,
         )
         # Both pinned cfe versions evaluate high-bit character constants unsigned.
-        return ("-undef", "-nostdinc", "-funsigned-char", *removed, *defines, *preprocess, *includes, *final)
+        return (
+            "-undef",
+            "-nostdinc",
+            "-funsigned-char",
+            "-D__UNBAKE_HEADER_ANALYSIS=1",
+            *removed,
+            *defines,
+            *preprocess,
+            *includes,
+            *final,
+        )
 
     def preprocess_flags(self, preprocess: tuple[str, ...], codegen: tuple[str, ...]) -> tuple[str, ...]:
         """Language/macro input, excluding code generation optimization."""
@@ -217,7 +247,7 @@ class Ido:
                 from unbake.config import Held
 
                 raise Held("compile", f"compile.flags: {flag}: unsupported by the ido driver")
-        return (*preprocess, *(flag for flag in codegen if not flag.startswith(("-O", "-g"))))
+        return (*preprocess, *self.public_defines(), *(flag for flag in codegen if not flag.startswith(("-O", "-g"))))
 
     def shape(self, compiler: str, cflags: tuple[str, ...]) -> Shape:
         """O32; objects align .text to 16 bytes; bodies up to 64 bytes are judged as fragments.

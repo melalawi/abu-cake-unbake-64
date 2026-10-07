@@ -80,3 +80,11 @@ class RuntimeHelper:
     arguments: tuple[tuple[str, str], ...]
     result: tuple[str, str]
     proof: str
+
+
+@dataclass(frozen=True)
+class PublicHeader:
+    name: str
+    selector: str
+    aliases: tuple[tuple[str, str, str], ...]
+    body: str

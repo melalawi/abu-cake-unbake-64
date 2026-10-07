@@ -1,0 +1,80 @@
+{
+  "ido-7.1": {
+    "exit": 0,
+    "stderr": "",
+    "sizes": [
+      4,
+      4,
+      8,
+      8,
+      4,
+      4
+    ],
+    "emulator": "qemu-mips -cpu24Kf",
+    "getter_calls_expected": 15,
+    "named_fp_case": true,
+    "fp_mode": "FP32",
+    "elf_sha256": "3338767f381a9d05ed6f54458782310e4ecbda9c4005ddd2a78d41d403726ec6",
+    "object_sha256": "0f3ab0d151f2f82470e1bcffba7c54ad18c7a396ffdfe6990b6a50ab820edbea",
+    "source_call_admission_passed": true
+  },
+  "ido-5.3": {
+    "exit": 0,
+    "stderr": "",
+    "sizes": [
+      4,
+      4,
+      8,
+      8,
+      4,
+      4
+    ],
+    "emulator": "qemu-mips -cpu24Kf",
+    "getter_calls_expected": 15,
+    "named_fp_case": true,
+    "fp_mode": "FP32",
+    "elf_sha256": "2a2af25c115e840edcea3d4f491bd3a5e5f79ea9cb176b29b8dedd3fb0a0c0b0",
+    "object_sha256": "03e3475e3a6a55e0d0240ea3347db5a38043900a78ade4668f645806fec03df4",
+    "source_call_admission_passed": true
+  },
+  "gcc-2.7.2-kmc": {
+    "exit": 0,
+    "stderr": "",
+    "sizes": [
+      4,
+      4,
+      8,
+      8,
+      4,
+      4
+    ],
+    "emulator": "qemu-mips -cpu24Kf",
+    "getter_calls_expected": 15,
+    "named_fp_case": true,
+    "raw_15_text_equal": true,
+    "fp_mode": "FP32",
+    "elf_sha256": "9a86bbc9c26cafe24989a9c96dfc2edb4958559e108984a95ca86a7c80cc3155",
+    "object_sha256": "fba04419fa70a328ecfe33a8c606623c68c0c5004d97b6f3ff2225ddfd9ba2dc",
+    "source_call_admission_passed": true
+  },
+  "gcc-2.8.1-sn64": {
+    "exit": 0,
+    "stderr": "",
+    "sizes": [
+      4,
+      4,
+      8,
+      8,
+      4,
+      4
+    ],
+    "emulator": "qemu-mips -cpu24Kf",
+    "getter_calls_expected": 15,
+    "named_fp_case": true,
+    "raw_15_text_equal": true,
+    "fp_mode": "FP64 ELF metadata, matching -mfp64",
+    "elf_sha256": "9fa5ab8959a740ddb8799387e220ae5227ddbe70f6be88c3c5006855256ad6c7",
+    "object_sha256": "dac1ad1ded9ceb32e14126512591d0030fd0c54a1382b028d58404fde38a9a5b",
+    "source_call_admission_passed": true
+  }
+}

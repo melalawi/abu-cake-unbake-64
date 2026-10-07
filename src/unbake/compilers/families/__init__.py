@@ -10,7 +10,14 @@ from unbake.compilers.families.types import Schedule
 
 if TYPE_CHECKING:
     from unbake.compilers.families.mips import Relocation, Shape
-    from unbake.compilers.families.types import Allocation, Pseudo, RegisterDifference, RuntimeHelper, View
+    from unbake.compilers.families.types import (
+        Allocation,
+        Pseudo,
+        PublicHeader,
+        RegisterDifference,
+        RuntimeHelper,
+        View,
+    )
     from unbake.compilers.registry import CompilerSpec
     from unbake.config import Host, PendingProject, Project
     from unbake.objects.elf import Object
@@ -26,6 +33,9 @@ class CompilerIdentity(Protocol):
 
 @runtime_checkable
 class Family(Protocol):
+    def source_intrinsics(self) -> tuple[str, ...]: ...
+    def public_headers(self) -> tuple[PublicHeader, ...]: ...
+    def public_defines(self) -> tuple[str, ...]: ...
     def region_name(self) -> str: ...
     def recognizes_idioms(self, counts: Mapping[str, int], minimum: int, numerator: int, denominator: int) -> bool: ...
     def probe_commands(

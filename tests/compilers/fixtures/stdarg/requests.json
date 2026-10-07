@@ -1,0 +1,17 @@
+[
+  "int",
+  "long",
+  "long long",
+  "int",
+  "long",
+  "long long",
+  "int",
+  "double",
+  "double",
+  "unsigned short *",
+  "unsigned long *",
+  "unsigned long long *",
+  "unsigned int *",
+  "void *",
+  "unsigned char *"
+]

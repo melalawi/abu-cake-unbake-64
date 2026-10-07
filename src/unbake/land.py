@@ -350,6 +350,7 @@ def _prove_versions(
 
 def _fuzzy_signature(project: Project, function: str, version: str, source: str) -> None:
     """A nonmatching body cannot use byte equality to excuse an invented entry ABI."""
+    from unbake.compilers.families import family_for
     from unbake.decomp.draft_abi import leaf_entry_record, mapped_body
     from unbake.layout import redeclarations
     from unbake.typemap import declarations, header_names, o32, types_db
@@ -380,7 +381,7 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
         and own is not None
         and o32.admits(source, own, record.get("machine_signature", {}), aliases)
     ):
-        _fuzzy_calls(function, source)
+        _fuzzy_calls(function, source, intrinsics=family_for(project.compiler_for(function)).source_intrinsics())
         return
     if (
         expected
@@ -414,10 +415,10 @@ def _fuzzy_signature(project: Project, function: str, version: str, source: str)
             "land", f"land.fuzzy_abi: {function} VERSION {version}: definition differs from canonical `{expected}`"
         )
 
-    _fuzzy_calls(function, source)
+    _fuzzy_calls(function, source, intrinsics=family_for(project.compiler_for(function)).source_intrinsics())
 
 
-def _fuzzy_calls(function: str, source: str) -> None:
+def _fuzzy_calls(function: str, source: str, *, intrinsics: tuple[str, ...] = ()) -> None:
     """Old compilers accept implicit function declarations; retained C must declare its calls."""
     from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
@@ -429,6 +430,7 @@ def _fuzzy_calls(function: str, source: str) -> None:
         raise Held("land", f"land.fuzzy_source: {function}: cannot validate call declarations: {error}") from error
     declared = {node.name for node in tree.ext if isinstance(node, (c_ast.Decl, c_ast.Typedef))}
     declared.update(node.decl.name for node in tree.ext if isinstance(node, c_ast.FuncDef))
+    declared.update(intrinsics)
     definition = next(
         (node for node in tree.ext if isinstance(node, c_ast.FuncDef) and node.decl.name == function), None
     )
