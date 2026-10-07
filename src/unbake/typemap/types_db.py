@@ -19,9 +19,9 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from unbake import sqlite
+from unbake import effort, sqlite
 from unbake.config import Held, Project
 
 DB_SCHEMA = 1
@@ -140,6 +140,31 @@ def compatible(file: Path) -> bool:
         return True
 
 
+def _sync(
+    connection: sqlite3.Connection,
+    table: str,
+    columns: tuple[str, ...],
+    keys: int,
+    desired: dict[tuple[str, ...], tuple[str, ...]],
+) -> None:
+    """Compare stored encoded rows, writing only new/changed/deleted values in the staged copy."""
+    before = {
+        tuple(row[:keys]): tuple(row[keys:])
+        for row in connection.execute("SELECT " + ",".join(columns) + " FROM " + table)
+    }
+    removed = sorted(before.keys() - desired.keys())
+    changed = sorted(name for name, value in desired.items() if before.get(name) != value)
+    if removed:
+        where = " AND ".join(column + "=?" for column in columns[:keys])
+        connection.executemany("DELETE FROM " + table + " WHERE " + where, removed)
+    if changed:
+        marks = ",".join("?" for _ in columns)
+        connection.executemany(
+            "INSERT OR REPLACE INTO " + table + " VALUES (" + marks + ")", (name + desired[name] for name in changed)
+        )
+    effort.count("types.publish." + table, len(changed) + len(removed), len(before.keys() | desired.keys()))
+
+
 def stage(
     destination: Path,
     encoded: Encoded,
@@ -152,36 +177,56 @@ def stage(
     os.close(descriptor)
     staged = Path(name)
     digest = content_digest(encoded)
+    connection: sqlite3.Connection | None = None
     try:
         staged.unlink()
         connection = sqlite.connect(staged)
+        retained = destination.is_file() and compatible(destination)
+        if retained:
+            with _connection(destination) as source:
+                source.backup(connection)
         with connection:
-            connection.execute(f"PRAGMA user_version = {DB_SCHEMA}")
-            for statement in SCHEMA:
-                connection.execute(statement)
+            if not retained:
+                connection.execute(f"PRAGMA user_version = {DB_SCHEMA}")
+                for statement in SCHEMA:
+                    connection.execute(statement)
             meta = {key: item for key, item in encoded.items() if key not in KINDS}
             meta["content_sha256"] = _encode(digest)
             meta["solution_sha256"] = _encode(solution_digest(encoded))
-            connection.executemany("INSERT INTO meta VALUES (?, ?)", sorted(meta.items()))
+            if any(not isinstance(item, str) for item in meta.values()):
+                raise Held("types", "types.sqlite: expected encoded metadata strings")
+            _sync(connection, "meta", ("key", "value"), 1, {(key,): (cast(str, item),) for key, item in meta.items()})
+            entries: dict[tuple[str, ...], tuple[str, ...]] = {}
             for kind in KINDS:
                 rows = encoded.get(kind, {})
                 if not isinstance(rows, dict):
                     raise Held("types", f"types.sqlite: {kind}: expected rows by name")
-                connection.executemany(
-                    "INSERT INTO entries VALUES (?, ?, ?)", ((kind, k, v) for k, v in sorted(rows.items()))
-                )
-            for kind, summaries in summary.items():
-                connection.executemany(
-                    "INSERT INTO summary VALUES (?, ?, ?, ?)",
-                    ((kind, k, row["semantic_sha256"], _encode(row["users"])) for k, row in sorted(summaries.items())),
-                )
-            connection.executemany(
-                "INSERT INTO redraft VALUES (?, ?)", ((k, _encode(v)) for k, v in sorted(marks.items()))
+                entries.update({(kind, name): (value,) for name, value in rows.items()})
+            _sync(connection, "entries", ("kind", "name", "value"), 2, entries)
+            _sync(
+                connection,
+                "summary",
+                ("kind", "name", "semantic_sha256", "users"),
+                2,
+                {
+                    (kind, name): (row["semantic_sha256"], _encode(row["users"]))
+                    for kind, rows in summary.items()
+                    for name, row in rows.items()
+                },
             )
-        connection.close()
+            _sync(
+                connection,
+                "redraft",
+                ("function", "value"),
+                1,
+                {(name,): (_encode(value),) for name, value in marks.items()},
+            )
     except BaseException:
         staged.unlink(missing_ok=True)
         raise
+    finally:
+        if connection is not None:
+            connection.close()
     return staged, digest
 
 
