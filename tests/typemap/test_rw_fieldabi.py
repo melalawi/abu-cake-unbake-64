@@ -65,6 +65,17 @@ class RwFieldAbiTests(unittest.TestCase):
         counts = {}
 
         class Reads(UserDict):
+            def __init__(self, records):
+                super().__init__(records)
+                # Real map shards keep code interval metadata independently
+                # of decoded bodies, including the namespace identity pass.
+                self.inventory = {
+                    name: {
+                        "versions": {version: {"address": body["address"]} for version, body in row["versions"].items()}
+                    }
+                    for name, row in records.items()
+                }
+
             def __getitem__(self, key):
                 counts[key] = counts.get(key, 0) + 1
                 return super().__getitem__(key)
