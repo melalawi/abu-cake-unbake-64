@@ -152,12 +152,23 @@ def prepare(project: Project, function: str, source: str, assembly: str) -> tupl
                 "\n",
                 source,
             )
-        token = re.compile(r"/\*.*?\*/|//[^\n]*|\b[A-Za-z_]\w*\b", re.S)
-        source = token.sub(lambda m: f"frame.storage.slot_{m[0]}.{m[0]}" if m[0] in fields else m[0], source)
         entry = re.search(r"\b" + re.escape(function) + r"\s*\([^{};]*\)\s*\{", source)
         if entry is None:
             raise Held("m2c", f"{function}: missing measured stack body")
-        source = source[: entry.end()] + f"\n    struct {tag} frame;" + source[entry.end() :]
+        # The template measures the local SP origin. Use that same byte
+        # storage for dynamic addresses, leaving their index and field offset
+        # intact so static and dynamic accesses continue to alias.
+        body = SOURCE_TOKEN.sub(
+            lambda m: (
+                f"frame.storage.slot_{m[0]}.{m[0]}"
+                if m[0] in fields
+                else "frame.storage.bytes"
+                if m[0] == "sp"
+                else m[0]
+            ),
+            source[entry.end() :],
+        )
+        source = source[: entry.end()] + f"\n    struct {tag} frame;" + body
         # Unknown pointer arithmetic in m2c is byte arithmetic. The stack
         # interval proves storage, but does not establish an aggregate type.
         source = re.sub(r"\bM2C_UNK\s*\*\s*(\w+)\s*;", r"unsigned char *\1;", source)

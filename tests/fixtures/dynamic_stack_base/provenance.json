@@ -1,0 +1,12 @@
+{
+  "function": "func_80115084_us",
+  "main_red": "0dca9f1a0530a47e8ffb6c42930d0352323999a6",
+  "route_tested_pin": "31df86dc357d2045ee5e93eb4142eeabe1302c26",
+  "original_generated_source_sha256": "bef47799ac44418ff5a37aad524ddfdf68229c8924fec8c07a95f5a5d661832c",
+  "raw_sha256": "ffe31b0e7e74c9869cf644625f6b35ba12519f2e68872a0c88e10fca00058a90",
+  "measured_header_sha256": "2c1fb139a379676bbbc9ef7e7a0c34d69939f92c5aff919505ce6d1f8d636663",
+  "frame_bytes": 80,
+  "view_offset": 36,
+  "view_bytes": 32,
+  "indexed_store_instructions": 1
+}
