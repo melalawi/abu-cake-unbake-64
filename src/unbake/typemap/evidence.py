@@ -109,6 +109,11 @@ def _summaries(
                                     for origin in value.get("origins", [])
                                     if origin["id"].startswith(f"param:{name}:")
                                 ],
+                                "dependencies": [
+                                    dependency
+                                    for dependency in value.get("dependencies", [])
+                                    if dependency.startswith(f"param:{name}:")
+                                ],
                             }
                             for reg, value in call["arguments"].items()
                             if argument(reg)
@@ -175,10 +180,14 @@ def abi(
                 used = inputs[name, version]
                 for call in body["calls"]:
                     for reg in inputs.get((call["callee"], version), set()):
-                        for origin in call["arguments"].get(reg, {}).get("origins", []):
+                        value = call["arguments"].get(reg, {})
+                        origins = {origin["id"] for origin in value.get("origins", [])} | set(
+                            value.get("dependencies", [])
+                        )
+                        for origin in origins:
                             prefix = f"param:{name}:"
-                            if origin["id"].startswith(prefix):
-                                actual = origin["id"][len(prefix) :]
+                            if origin.startswith(prefix):
+                                actual = origin[len(prefix) :]
                                 actual = stack_aliases[name, version].get(actual, actual)
                                 if argument(actual) and actual not in used:
                                     used.add(actual)
@@ -401,7 +410,7 @@ def abi(
                 and all(
                     not exit_["values"][reg].get("defined", False)
                     and {"id": f"param:{name}:{reg}", "offset": 0} in exit_["values"][reg].get("origins", [])
-                    and not exit_["values"][reg].get("dependencies")
+                    and set(exit_["values"][reg].get("dependencies", [])) <= {f"param:{name}:{reg}"}
                     for reg in ("r2", "f0")
                     if reg in body["register_outputs"]
                     for exit_ in body["returns"]

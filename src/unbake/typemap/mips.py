@@ -64,7 +64,15 @@ class Value:
     def merge(self, other: Value) -> Value:
         if self == other:
             return self
-        dependencies = tuple(sorted(set(self.dependencies + other.dependencies)))
+        # Widening an origin against a constant destroys pointer identity, not
+        # entry/result liveness. Keep those dependencies when the joined value
+        # is subsequently used; a dead join still consumes nothing.
+        dependencies = tuple(
+            sorted(
+                set(self.dependencies + other.dependencies)
+                | {name for name, _ in self.origins + other.origins if name.startswith(("param:", "return:"))}
+            )
+        )
         left_types = self.types or (("int",) if self.constant is not None else ())
         right_types = other.types or (("int",) if other.constant is not None else ())
         types = tuple(sorted(set(left_types + right_types))) if left_types and right_types else ()
@@ -174,7 +182,7 @@ class Analysis:
 
     def use(self, value: Value, index: int, record: bool) -> None:
         if record:
-            for origin, _ in value.origins:
+            for origin in {name for name, _ in value.origins} | set(value.dependencies):
                 if origin.startswith(f"param:{self.function}:"):
                     self.inputs.add(origin.rsplit(":", 1)[1])
                 if origin.startswith("return:"):
@@ -382,7 +390,8 @@ class Analysis:
             if kind == "return":
                 if record:
                     for r in RETURNS:
-                        for origin, _ in state.registers[r].origins:
+                        value = state.registers[r]
+                        for origin in {name for name, _ in value.origins} | set(value.dependencies):
                             if origin.startswith(f"param:{self.function}:stack"):
                                 self.inputs.add(origin.rsplit(":", 1)[1])
                     self.returns[index] = {

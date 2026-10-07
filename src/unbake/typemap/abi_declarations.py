@@ -7,6 +7,43 @@ from typing import Any
 from unbake.typemap import declarations, evidence
 
 
+def reconcile_entry(
+    name: str, record: dict[str, Any], signature: dict[str, Any], aliases: dict[str, str]
+) -> dict[str, Any] | None:
+    """Name a declared word the measured callee never reads, retaining both contracts.
+
+    Entry liveness alone cannot rewrite a published C definition or infer an
+    aggregate boundary. This diagnostic supplies the measured carrier and the
+    exact formals requiring source reconciliation, without caller operands.
+    """
+    abi = record.get("abi") or {}
+    if not signature.get("arity_known") or not abi.get("inputs"):
+        return None
+    declared = set(signature["registers"])
+    observed = set(abi["registers"])
+    unread = declared - observed
+    if not unread:
+        return None
+    measured = {**record, "params": [param for param in record["params"] if param["register"] in observed]}
+    return {
+        "canonical_prototype": signature["prototype"],
+        "declared_registers": signature["registers"],
+        "consumed_registers": abi["registers"],
+        "unread_declared_words": [
+            {"register": reg, "name": param["name"], "type": param["type"]}
+            for param, reg in zip(signature["params"], signature["registers"], strict=True)
+            if reg in unread
+        ],
+        "inputs": abi["inputs"],
+        "versions": record["versions"],
+        "call_sites": abi["call_sites"],
+        "missing": abi["missing"],
+        "conflicts": abi["conflicts"],
+        "measured_declaration": prototype(name, measured, aliases),
+        "resolution": "canonical C retained; unread words require definition and consumer reconciliation",
+    }
+
+
 def prototype(name: str, record: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
     """Do not turn a register carrier into a solved semantic signature."""
     abi = record.get("abi")

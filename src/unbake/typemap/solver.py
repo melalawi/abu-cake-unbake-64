@@ -19,9 +19,9 @@ from unbake.typemap.closure import Constraints
 from unbake.typemap.mapping import refresh_map
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 14
+SCHEMA = 15
 # The value formats of the two cached evidence kinds (the input key above names the solve itself).
-ABI_SCHEMA = 8
+ABI_SCHEMA = 9
 MACHINE_SCHEMA = 7
 
 
@@ -748,6 +748,10 @@ def infer(
             if signature is not None and "source_params" in signature:
                 output_functions[name]["source_params"] = signature["source_params"]
                 output_functions[name]["transport_known"] = signature["transport_known"]
+            if signature is not None:
+                reconciliation = abi_declarations.reconcile_entry(name, output_functions[name], signature, aliases)
+                if reconciliation is not None:
+                    output_functions[name]["entry_reconciliation"] = reconciliation
             if signature is None:
                 # A complete register signature need not have a unique C spelling:
                 # leading floating words in GPRs can belong to by-value aggregates.

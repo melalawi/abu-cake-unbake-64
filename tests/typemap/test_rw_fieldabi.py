@@ -53,6 +53,18 @@ class RwFieldAbiTests(unittest.TestCase):
             cls.facts = payload()
         cls.analyzer_calls = analyze.call_count
 
+    def test_real_falloff_word_survives_the_branch_zero_join(self):
+        for version, body in self.facts["functions"]["func_80266810_de"]["versions"].items():
+            with self.subTest(version=version):
+                self.assertIn("stack32", body["register_inputs"])
+                loads = [
+                    row
+                    for row in body["memory"]
+                    if row.get("loaded", {}).get("origins") == [{"id": "param:func_80266810_de:stack32", "offset": 0}]
+                ]
+                self.assertEqual(len(loads), 1)
+                self.assertEqual(loads[0]["width"], 4)
+
     def test_fixture_work_is_sixty_five_bounded_real_bodies(self):
         self.assertEqual(self.analyzer_calls, 65)
         self.assertEqual(sum(len(item["versions"]) for item in self.facts["functions"].values()), 65)
@@ -95,6 +107,10 @@ class RwFieldAbiTests(unittest.TestCase):
         self.assertNotIn("r6", record["abi"]["registers"])
         self.assertFalse(record["abi"]["missing"])
         self.assertIn("Triple", record.get("prototype") or record["abi_declaration"]["prototype"])
+        reconciliation = record["entry_reconciliation"]
+        self.assertEqual([word["register"] for word in reconciliation["unread_declared_words"]], ["r6"])
+        self.assertFalse(reconciliation["measured_declaration"]["parameters_known"])
+        self.assertIn("Triple", reconciliation["canonical_prototype"])
 
     def test_struct_members_use_gprs_and_do_not_invent_padding_or_union_transport(self):
         seed = aggregate_seed()
@@ -231,6 +247,36 @@ f32 func_80296930_de(f32 *, f32 *, f32 *);
         self.assertEqual(record["versions"], VERSIONS)
         self.assertEqual(len(record["params"]), 2)
         self.assertIn("arg1", record.get("prototype") or record["abi_declaration"]["prototype"])
+        reconciliation = record["entry_reconciliation"]
+        self.assertEqual(reconciliation["consumed_registers"], ["r4"])
+        self.assertEqual(reconciliation["unread_declared_words"], [{"register": "r5", "name": "arg1", "type": "s32"}])
+        self.assertEqual(reconciliation["call_sites"], 5)
+        self.assertEqual(reconciliation["versions"], VERSIONS)
+        self.assertEqual(reconciliation["measured_declaration"]["prototype"], "void func_80200538_de(int);")
+        self.assertIn("arg1", reconciliation["canonical_prototype"])
+        self.assertEqual(reconciliation["inputs"], {version: ["r4"] for version in VERSIONS})
+        self.assertNotIn("operands", reconciliation)
+
+    def test_entry_reconciliation_retains_real_missing_caller_evidence(self):
+        names = {"func_80200500_de", "func_80200538_de", "func_80201A74_de"}
+        facts = {
+            "functions": {n: copy.deepcopy(row) for n, row in self.facts["functions"].items() if n in names},
+            "globals": {},
+        }
+        calls = facts["functions"]["func_80201A74_de"]["versions"]["eu"]["calls"]
+        call = next(row for row in calls if row["callee"] == "func_80200538_de")
+        call["arguments"]["r4"]["defined"] = False
+        source = "typedef int s32;\n" + (FIXTURE / "func_80200500_de.c").read_text()
+        record = infer(SimpleNamespace(), facts, [declarations.extract(source, {"kind": "proven"})])["functions"][
+            "func_80200538_de"
+        ]
+        reconciliation = record["entry_reconciliation"]
+        self.assertEqual(len(reconciliation["missing"]), 1)
+        self.assertEqual(reconciliation["missing"][0]["version"], "eu")
+        self.assertEqual(reconciliation["missing"][0]["register"], "r4")
+        self.assertTrue(any("types.abi.arguments" in r for r in reconciliation["measured_declaration"]["reasons"]))
+        self.assertEqual(len(record["params"]), 2)
+        self.assertIn("arg1", reconciliation["canonical_prototype"])
 
     def test_existing_complete_fields_do_not_emit_redundant_storage_views(self):
         accesses = [{"partial": False, "width": 4}]
