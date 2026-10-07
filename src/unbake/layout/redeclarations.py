@@ -12,6 +12,7 @@ from unbake import cdecl
 from unbake.cdecl import declaration_source, declarations
 from unbake.config import Held
 from unbake.typemap.declarations import _type, canonical
+from unbake.typemap.header_names import type_identity
 
 
 def spans(text: str) -> list[tuple[int, int]]:
@@ -59,25 +60,37 @@ def _primitive_types(tree: c_ast.Node) -> None:
     Types().visit(tree)
 
 
+class _AliasTypes(dict[str, str]):
+    """Typedefs and aggregate definitions in their separate C namespaces."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.aggregates: dict[str, str] = {}
+
+
 @lru_cache(maxsize=8192)
-def _aliases(text: str) -> dict[str, str]:
+def _aliases(text: str) -> _AliasTypes:
     rows = [text[start:end] for start, end in spans(text) if re.match(r"typedef\b", text[start:end])]
     names = {name for row in rows for name in declarations(row).typedefs}
-    result = {}
+    result = _AliasTypes()
+    masked = declaration_source(text)
+    for tag, bodies in tag_definitions(text).items():
+        for begin, end in bodies:
+            kind = re.search(r"\b(struct|union|enum)\s+" + re.escape(tag) + r"\s*$", masked[:begin])
+            if kind:
+                result.aggregates[kind[1] + " " + tag] = kind[1] + " " + tag + " " + masked[begin:end]
     for row in rows:
         masked = declaration_source(row)
         if "{" in masked:
             named = re.match(r"typedef\s+(?:struct|union|enum)\s+\w+\s*\{", masked)
-            if named is None:
-                # Anonymous aggregates retain their typedef identity.
-                continue
-            begin = named.end() - 1
-            depth = 0
-            for token in re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{}]', masked[begin:]):
-                depth += (token[0] == "{") - (token[0] == "}")
-                if depth == 0 and token[0] == "}":
-                    row = row[:begin] + row[begin + token.end() :]
-                    break
+            if named is not None:
+                begin = named.end() - 1
+                depth = 0
+                for token in re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[{}]', masked[begin:]):
+                    depth += (token[0] == "{") - (token[0] == "}")
+                    if depth == 0 and token[0] == "}":
+                        row = row[:begin] + row[begin + token.end() :]
+                        break
         try:
             tree = cdecl.parse(declaration_source(row), typedefs=names)
         except Exception:
@@ -90,15 +103,19 @@ def _aliases(text: str) -> dict[str, str]:
 
 
 def aliases(texts: list[str]) -> dict[str, str]:
-    """Read simple and declarator typedefs; preserve aggregate identities."""
-    return {name: type_ for text in texts for name, type_ in _aliases(text).items()}
+    """Read typedefs and preserve layouts without expanding recursive tag spellings."""
+    result = _AliasTypes()
+    for text in texts:
+        row = _aliases(text)
+        result.update(row)
+        result.aggregates.update(row.aggregates)
+    return result
 
 
 @lru_cache(maxsize=16384)
-def _signature(text: str, items: tuple[tuple[str, str], ...]) -> str:
+def _signature(text: str, items: tuple[tuple[str, str], ...], aggregate_items: tuple[tuple[str, str], ...]) -> object:
     mapping = dict(items)
-    if "{" in declaration_source(text):
-        return normalized(text)
+    aggregates = {**dict(aggregate_items), **_aliases(text).aggregates}
     row = declarations(text)
     scope = dict.fromkeys(row.uses | row.typedefs | mapping.keys(), True)
     try:
@@ -106,15 +123,17 @@ def _signature(text: str, items: tuple[tuple[str, str], ...]) -> str:
     except Exception:
         # Unsupported compiler syntax is equal only when its bytes agree.
         return normalized(text)
-    _primitive_types(tree)
     result = []
-    for node in tree.ext:
-        if isinstance(node, (c_ast.Decl, c_ast.Typedef)):
-            kind = "typedef" if isinstance(node, c_ast.Typedef) else "extern"
-            result.append(kind + ":" + str(node.name) + ":" + normalized(canonical(_type(node.type), mapping)))
-        else:
-            return normalized(text)
-    return "|".join(result)
+    try:
+        for node in tree.ext:
+            if isinstance(node, (c_ast.Decl, c_ast.Typedef)):
+                kind = "typedef" if isinstance(node, c_ast.Typedef) else "extern"
+                result.append((kind, node.name, type_identity(_type(node.type), mapping, aggregates=aggregates)))
+            else:
+                return normalized(text)
+    except Held:
+        return normalized(text)
+    return tuple(result)
 
 
 def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
@@ -122,7 +141,8 @@ def equivalent(left: str, right: str, mapping: dict[str, str]) -> bool:
 
     An empty parameter list `f()` is compatible with `f(void)`; it is never equivalent to any other list."""
     items = tuple(sorted(mapping.items()))
-    return _signature(left, items).replace("()", "(void)") == _signature(right, items).replace("()", "(void)")
+    aggregates = tuple(sorted(getattr(mapping, "aggregates", {}).items()))
+    return _signature(left, items, aggregates) == _signature(right, items, aggregates)
 
 
 _DECLARATOR = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\)\s*)*[\[(;=,]")

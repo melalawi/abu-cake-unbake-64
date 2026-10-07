@@ -148,16 +148,18 @@ def alias_types(source: str) -> dict[str, str]:
     return dict(memo("headers.aliases", source, parse, keep=32768))
 
 
-def type_identity(type_: str, aliases: dict[str, str]) -> object:
+def type_identity(type_: str, aliases: dict[str, str], *, aggregates: dict[str, str] | None = None) -> object:
     """Compare declarator structure, not parameter names or typedef spelling."""
     from pycparser import c_ast, c_generator  # type: ignore[import-untyped]
 
     from unbake import cdecl
-    from unbake.typemap.declarations import canonical, declarator
+    from unbake.typemap.declarations import canonical
 
     def parse(spelling: str) -> Any:
         parser = cdecl.parser(aliases)
-        return parser.parse("typedef " + declarator(spelling, "__type_identity") + ";").ext[0].type
+        # A parameter accepts every abstract declarator, including a bare
+        # function or an aggregate with arrays inside its body.
+        return parser.parse("void __type_identity(" + spelling + ");").ext[0].type.args.params[0].type
 
     def shape(node: Any, active: tuple[str, ...] = ()) -> object:
         if isinstance(node, c_ast.TypeDecl):
@@ -169,7 +171,14 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
             return ("qualified", tuple(sorted(node.quals)), target)
         if isinstance(node, c_ast.IdentifierType):
             name = " ".join(node.names)
-            if name in aliases and name not in active:
+            if name in aliases:
+                if name in active:
+                    # A recursive typedef normally resolves to a tag. Resolve
+                    # that leaf too so alias and explicit-tag walks agree.
+                    target = aliases[name]
+                    if re.fullmatch(r"(?:struct|union|enum)\s+\w+", target):
+                        return shape(parse(target), active)
+                    return ("recursive_alias", active.index(name))
                 return shape(parse(aliases[name]), (*active, name))
             name = " ".join(node.names)
             words = node.names
@@ -178,13 +187,34 @@ def type_identity(type_: str, aliases: dict[str, str]) -> object:
                 name = ("unsigned " if "unsigned" in words else "") + (width.strip() or "int")
             return ("scalar", canonical(name, {}))
         if isinstance(node, (c_ast.Struct, c_ast.Union, c_ast.Enum)):
-            return (type(node).__name__, node.name)
+            kind = type(node).__name__
+            key = kind.lower() + " " + node.name if node.name else ""
+            members = node.values if isinstance(node, c_ast.Enum) else node.decls
+            if members is None:
+                if key in active:
+                    level = sum(" " in item for item in active[: active.index(key)])
+                    return ("recursive", kind, level)
+                if key and aggregates and key in aggregates:
+                    return shape(parse(aggregates[key]), (*active, key))
+                return (kind, node.name)
+            nested = active if not key or key in active else (*active, key)
+            generator = c_generator.CGenerator()
+            if isinstance(node, c_ast.Enum):
+                return (kind, tuple((item.name, generator.visit(item.value)) for item in members.enumerators))
+            # Member spelling does not change storage; order, type, extent and
+            # bit width do. Anonymous aggregates must never all compare as None.
+            return (
+                kind,
+                tuple((shape(member.type, nested), generator.visit(member.bitsize)) for member in members),
+            )
         if isinstance(node, c_ast.PtrDecl):
             return ("pointer", tuple(sorted(node.quals)), shape(node.type, active))
         if isinstance(node, c_ast.ArrayDecl):
             return ("array", c_generator.CGenerator().visit(node.dim) if node.dim else "", shape(node.type, active))
         if isinstance(node, c_ast.FuncDecl):
-            params = None if node.args is None else tuple(parameter(param, active) for param in node.args.params)
+            params = () if node.args is None else tuple(parameter(param, active) for param in node.args.params)
+            if params == (("scalar", "void"),):
+                params = ()
             return ("function", shape(node.type, active), params)
         if isinstance(node, c_ast.EllipsisParam):
             return ("variadic",)
