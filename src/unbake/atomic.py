@@ -9,12 +9,36 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import IO, Any
 
 from unbake.process import temporary_environment
+
+_recorder: ContextVar[Callable[[Path], None] | None] = ContextVar("atomic.recorder", default=None)
+
+
+def before_write(path: Path) -> None:
+    """Notify the owning operation before changing one destination."""
+    callback = _recorder.get()
+    if callback is not None:
+        callback(Path(path))
+
+
+@contextmanager
+def recording(callback: Callable[[Path], None]) -> Iterator[None]:
+    token = _recorder.set(callback)
+    try:
+        yield
+    finally:
+        _recorder.reset(token)
+
+
+def remove(path: Path, *, missing_ok: bool = False) -> None:
+    before_write(path)
+    path.unlink(missing_ok=missing_ok)
 
 
 @contextmanager
@@ -38,6 +62,7 @@ def publish(temporary: Path, path: Path, *, durable: bool = True) -> None:
     if durable:
         with temporary.open("rb") as source:
             os.fsync(source.fileno())
+    before_write(path)
     os.replace(temporary, path)
 
 
@@ -59,7 +84,9 @@ def stream(
     path.parent.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:
         if "a" in mode or "+" in mode:
-            lock = stack.enter_context(path.with_name("." + path.name + ".append.lock").open("a+b"))
+            lock_path = path.with_name("." + path.name + ".append.lock")
+            before_write(lock_path)
+            lock = stack.enter_context(lock_path.open("a+b"))
             fcntl.flock(lock, fcntl.LOCK_EX)
         if permissions is None:
             permissions = path.stat().st_mode & 0o777 if path.exists() else 0o644
@@ -81,6 +108,7 @@ def write(path: Path, content: bytes | bytearray, *, mode: int | None = None, du
 
 def fresh(path: Path, content: bytes) -> None:
     """Fill a private path that a cache producer renames into place; a re-derivable entry is not synced."""
+    before_write(path)
     with path.open("xb") as output:
         output.write(content)
 

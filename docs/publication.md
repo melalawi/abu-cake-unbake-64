@@ -28,6 +28,14 @@ prefix and the still-ready suffix; its Next command names only that suffix.
 A committed prefix remains committed if subsequent maintenance is interrupted.
 This classification does not introduce a resumable proof cache or attempt store.
 
+Publication records destination files with the existing journal immediately
+before changing them. A rejected or interrupted item restores its own writes,
+including newly created providers and deleted headers. It preserves edits that
+were present before the invocation. Each accepted Git commit advances the
+checkpoint; a later refused sibling or maintenance step restores only the
+uncommitted suffix. Byte content, file modes, modification times and symlink
+entries are restored without scanning or copying the entire project.
+
 Equal guarded aggregate definitions and typedefs use one installed shared owner.
 Comparison stages the same ownership view without editing the draft headers.
 Publication reconciles both its initial catalogue and final proposed headers

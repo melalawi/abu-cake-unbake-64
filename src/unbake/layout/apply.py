@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unbake import atomic as atomic_files
 from unbake import pool
 from unbake.cdecl import SOURCE_TOKEN
 from unbake.config import Held, Host, Project
@@ -319,5 +320,5 @@ def install(project: Project, outputs: dict[Path, bytes | Path], *, dry_run: boo
             else:
                 storage.write(path, data)
         for path in obsolete:
-            path.unlink(missing_ok=True)
+            atomic_files.remove(path, missing_ok=True)
     return len(changed) + len(obsolete)

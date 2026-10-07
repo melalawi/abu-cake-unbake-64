@@ -79,6 +79,7 @@ def link_private_includes(project: Project, function: str) -> None:
             target = Path(os.path.normpath(shared.parent / name))
             if mirror.is_relative_to(root) and target.is_file() and not mirror.exists():
                 mirror.parent.mkdir(parents=True, exist_ok=True)
+                atomic_files.before_write(mirror)
                 mirror.symlink_to(target)
 
 

@@ -29,6 +29,7 @@ from unbake import cache as retention
 from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
+from unbake.project import publication_transaction
 from unbake.work import attempts, compare
 
 
@@ -196,6 +197,7 @@ def _commit(project: Project, host: Host, paths: list[Path], message: str) -> No
         else:
             atomic_files.write(index, before)
         raise
+    publication_transaction.accepted()
 
 
 def record(project: Project, host: Host) -> tuple[str, tuple[str, ...]] | None:
@@ -670,6 +672,7 @@ def _receipt(
     }
 
 
+@publication_transaction.transactional
 def land(
     project: Project,
     host: Host,
@@ -889,6 +892,7 @@ def land(
     return commit
 
 
+@publication_transaction.transactional
 def land_original(
     project: Project, host: Host, function: str, *, on_commit: Callable[[dict[str, Any]], None] | None = None
 ) -> str:
@@ -990,6 +994,7 @@ def publish(
     committed_records: dict[str, dict[str, Any]] = {}
 
     def committed(record: dict[str, Any]) -> None:
+        publication_transaction.accepted()
         committed_records[record["function"]] = {
             "commit": record["commit"],
             "proof": {"versions": record["proof"]["versions"]},
@@ -1015,9 +1020,10 @@ def publish(
         committed_records.clear()
         current = config.load(project.root)
         try:
-            if compare_first and position < len(files):
-                compare.compare(current, host, files[position], required_versions=required_versions)
-            commit = action(current)
+            with publication_transaction.transaction(current):
+                if compare_first and position < len(files):
+                    compare.compare(current, host, files[position], required_versions=required_versions)
+                commit = action(current)
         except KeyboardInterrupt:
             result.interrupted = True
             record = committed_records.get(name)
@@ -1044,7 +1050,8 @@ def publish(
         )
         try:
             if not fuzzy:
-                steps.ensure(config.load(project.root), host, ["merge-units"])
+                with publication_transaction.transaction(config.load(project.root)):
+                    steps.ensure(config.load(project.root), host, ["merge-units"])
         except KeyboardInterrupt:
             result.interrupted = True
             result.ready = [item for item, _ in work[position + 1 :]]

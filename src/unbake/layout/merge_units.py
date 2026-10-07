@@ -197,7 +197,7 @@ def run(project: Project, host: Host) -> list[str]:
                 starts.setdefault(version, set()).update(_row(owners, m, version).start for m in members[1:])
             atomic_files.text(project.src / f"{members[0]}.c", source)
             for member in members[1:]:
-                (project.src / f"{member}.c").unlink()
+                atomic_files.remove(project.src / f"{member}.c")
             absorbed.update((member, ()) for member in members[1:])
             firsts.append(members[0])
             touched += [project.src / f"{m}.c" for m in members]
