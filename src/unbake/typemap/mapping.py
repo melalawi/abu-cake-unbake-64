@@ -7,15 +7,15 @@ import struct
 from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from unbake import cache as retention
-from unbake import inputs, pool, tui
+from unbake import inputs, pool, strict_json, tui
 from unbake.config import Held, Host, Project
 from unbake.decomp.indexed import indexed_references
 from unbake.extract import discovered_symbols, read_symbol_table
 from unbake.layout import split
-from unbake.process import capture
+from unbake.process import Action, capture
 from unbake.process import named as cause_named
 from unbake.typemap import shards, storage
 from unbake.typemap.mips import Analysis, control
@@ -389,19 +389,52 @@ def _map(project: Project, host: Host, previous: dict[str, Any] | None = None) -
     return result
 
 
+def validate_contract(project: Project) -> dict[str, Any] | None:
+    """Check the present compact manifest before hashes, shard scans or native work.
+
+    A missing disposable map can still be prepared by its owner. A present
+    incompatible map must be explicitly regenerated before publication starts.
+    """
+    path = project.build / "map/facts.json"
+    action = Action("command", argv=("recompute", "rom-facts"))
+
+    def refuse(key: str, reason: str) -> None:
+        raise Held(cause_named(key, reason, owner="typemap.mapping", stage="map", action=action))
+
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+        refuse("map.facts", "map.facts: compact sharded map required; run unbake recompute rom-facts")
+    try:
+        result = strict_json.read(path)
+    except (OSError, ValueError) as error:
+        raise Held(
+            capture(
+                error,
+                cause=cause_named(
+                    "map.facts",
+                    f"map.facts: {path}: {error}; run unbake recompute rom-facts",
+                    owner="typemap.mapping",
+                    stage="map",
+                    action=action,
+                ),
+            )
+        ) from error
+    if not isinstance(result, dict) or type(result.get("schema")) is not int or result["schema"] != 1:
+        refuse("map.facts", "map.facts: schema=1 object required; run unbake recompute rom-facts")
+    if type(result.get("map_schema")) is not int or result["map_schema"] != SCHEMA:
+        refuse("map.schema", f"map.schema: expected {SCHEMA}; run unbake recompute rom-facts")
+    if any(result.get(field) != expected for field, expected in storage.identity(project).items()):
+        refuse("map.facts", "map.facts: project/ROM identity changed; run unbake recompute rom-facts")
+    if result.get("format") != "sqlite-zlib-v1":
+        refuse("map.facts", "map.facts: compact sharded map required; run unbake recompute rom-facts")
+    return cast(dict[str, Any], result)
+
+
 def _read_map(project: Project) -> dict[str, Any]:
     path = project.build / "map/facts.json"
-    if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
-        raise Held(
-            cause_named(
-                "map.facts",
-                "map.facts: compact sharded map required; run unbake recompute rom-facts",
-                owner="typemap.mapping",
-                stage="solve",
-            )
-        )
-    result = storage.read(path, "map.facts")
-    if result.get("format") != "sqlite-zlib-v1":
+    result = validate_contract(project)
+    if result is None:
         raise Held(
             cause_named(
                 "map.facts",
@@ -425,17 +458,7 @@ def _read_map(project: Project) -> dict[str, Any]:
                 stage="solve",
             )
         )
-    storage.validate_identity(project, result, "map.facts")
     shards.validate_inventory(shard_path, result["functions"])
-    if result.get("map_schema") != SCHEMA:
-        raise Held(
-            cause_named(
-                "map.schema",
-                f"map.schema: expected {SCHEMA}; run unbake recompute rom-facts",
-                owner="typemap.mapping",
-                stage="map",
-            )
-        )
     return result
 
 

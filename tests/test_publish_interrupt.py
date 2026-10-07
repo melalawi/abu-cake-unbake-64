@@ -90,7 +90,7 @@ class PublishInterruptTests(ProjectCase):
     def test_main_emits_exit_130_without_a_held_cause(self):
         out, err = io.StringIO(), io.StringIO()
         with (
-            patch.object(main, "_root", return_value=None),
+            patch.object(main, "_root", return_value=self.project.root),
             patch.object(main.config, "load_host", return_value=self.host),
             patch.object(main.admission, "command", return_value=nullcontext()),
             patch.object(publish, "run", side_effect=KeyboardInterrupt()),

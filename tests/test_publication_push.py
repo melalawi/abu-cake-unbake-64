@@ -39,7 +39,7 @@ class PublicationPushTests(ProjectCase):
         return (
             patch.object(flow.split, "functions", side_effect=lambda p, v: self.rows[v]),
             patch.object(flow.drivers, "flags", side_effect=lambda p, v, u, **kwargs: ["-O2", "-D" + v]),
-            patch.object(flow.attempts, "fuzzy_sources", return_value={}),
+            patch.object(flow.attempts.Ledger, "fuzzy_sources", return_value={}),
         )
 
     def test_snapshot_reads_each_actual_input_once_with_two_version_scans_and_no_native_work(self):
@@ -238,14 +238,14 @@ class PublicationPushTests(ProjectCase):
 
     def test_rebase_conflict_aborts_without_any_native_work_or_push(self):
         result, calls, snapshots, workers, native = self.run_push(conflict=True)
-        self.assertEqual(result.key, "publish.push_conflict")
+        self.assertEqual(result.key, "git.rebase")
         self.assertEqual((snapshots, workers, native), (1, 0, 0))
         self.assertEqual(calls[-1], ("rebase", "--abort"))
         self.assertEqual(sum(call[0] == "push" for call in calls), 0)
 
     def test_unchanged_remote_transport_refusal_does_not_loop_or_rebase_again(self):
         result, calls, snapshots, workers, native = self.run_push(fail_push=True)
-        self.assertEqual(result.key, "publish.push_transport")
+        self.assertEqual(result.key, "git.push")
         self.assertEqual(sum(call[0] == "push" for call in calls), 1)
         self.assertEqual(sum(call[0] == "fetch" for call in calls), 2)
         self.assertEqual((snapshots, workers, native), (2, 1, 4))

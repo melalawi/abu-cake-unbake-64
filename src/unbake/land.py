@@ -1290,6 +1290,11 @@ def publish(
             )
         )
 
+    if files or originals:
+        from unbake.typemap import mapping
+
+        mapping.validate_contract(project)
+
     committed_records: dict[str, dict[str, Any]] = {}
 
     def committed(record: dict[str, Any]) -> None:
