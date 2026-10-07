@@ -27,7 +27,7 @@ class HeaderParseConditionalBodiesTests(TempCase):
         root = self.root / "project"
         root.mkdir()
         (root / "include").mkdir()
-        compiler = Compiler("test", "sn64", Path("cc"), Path("as"), (), Path("sha256"))
+        compiler = Compiler("test", "gnu", Path("cc"), Path("as"), (), Path("sha256"))
         versions = {
             name: Version(name, Path("rom"), "", Path("split"), Path("symbols"), ("VERSION_" + name.upper(),))
             for name in ("de", "eu", "eu_x", "us", "us_rev1")

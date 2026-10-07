@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, overload
 
+from unbake.compilers.config import BUILD_KEYS, build_values
+
 
 def relative_text(root: Path, text: str) -> str:
     return re.sub(r"(?<![\w])/(?:[^\s\"']+)", lambda match: os.path.relpath(match[0], root), text)
@@ -67,7 +69,6 @@ class Unfinished(Held, NotImplementedError):
 SCHEMA_VERSION = 1
 CONFIG_SECTIONS = frozenset({"schema", "project", "compilers", "units", "version", "build"})
 RETIRED_SECTIONS = ("paths", "workspace")
-BUILD_KEYS = frozenset({"asflags", "cppflags", "sn64_asflags", "resident_mappings"})
 
 
 @dataclass(frozen=True)
@@ -151,7 +152,7 @@ class Project:
     layout_cap: int
     asflags: tuple[str, ...]
     cppflags: tuple[str, ...]
-    sn64_asflags: tuple[str, ...]
+    gnu_asflags: tuple[str, ...]
     resident_mappings: dict[str, tuple[ResidentMapping, ...]] = field(default_factory=dict)
     unit_flags: dict[str, tuple[str, ...]] = field(default_factory=dict)
     work_include: tuple[Path, ...] = ()
@@ -217,7 +218,7 @@ class PendingProject(Layout):
     def flags(self, key: str) -> tuple[str, ...]:
         """A [build] flag list that setup needs before it can probe compilers."""
         label = _label(self.root / "config.toml", "build", key)
-        values = dict(self.build_table)
+        values = build_values(dict(self.build_table), str(self.root / "config.toml"))
         if key not in values:
             raise Held("config", f"{label}: missing value; set it in config.toml before setup")
         return _strings(values[key], label)
@@ -231,8 +232,8 @@ class PendingProject(Layout):
         return self.flags("cppflags")
 
     @property
-    def sn64_asflags(self) -> tuple[str, ...]:
-        return self.flags("sn64_asflags")
+    def gnu_asflags(self) -> tuple[str, ...]:
+        return self.flags("gnu_asflags")
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -485,6 +486,8 @@ def load(root: Path, *, text: str | None = None) -> Project:
         if not version_map[v].baserom.is_relative_to(Layout(root).roms):
             raise Held("config", f"{_label(path, section, 'baserom')}: expected a path under roms/")
 
+    build = build_values(build, str(path))
+
     def flags(key: str) -> tuple[str, ...]:
         return _strings(value(build, "build", key), _label(path, "build", key))
 
@@ -502,7 +505,7 @@ def load(root: Path, *, text: str | None = None) -> Project:
         pending.layout_cap,
         flags("asflags"),
         flags("cppflags"),
-        flags("sn64_asflags"),
+        flags("gnu_asflags"),
         _resident(path, build["resident_mappings"]) if "resident_mappings" in build else {},
         unit_flags,
     )

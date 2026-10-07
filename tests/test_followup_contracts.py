@@ -37,7 +37,7 @@ class FollowupContracts(ProjectCase):
 
         with (
             patch.object(solver, "refresh_map", side_effect=refresh) as refreshed,
-            patch("unbake.typemap.abi_facts.refine", side_effect=lambda project, value: value),
+            patch("unbake.typemap.abi_facts.refine", side_effect=lambda project, value, host=None: value),
             patch.object(facts, "published_keys", return_value=[]),
         ):
             for path in changed_files:
@@ -101,7 +101,7 @@ class FollowupContracts(ProjectCase):
         cc.write_text("compiler fixture")
         compiler = Compiler(
             "gcc-2.8.1-sn64",
-            "sn64",
+            "gnu",
             cc,
             cc,
             ("-G0", "-mips3", "-mgp32", "-mfp32", "-O2"),

@@ -108,6 +108,12 @@ def splat_rows(project: Project, version: str) -> str:
     )
 
 
+def _compiler_mode(project: Project) -> str:
+    from unbake.compilers.registry import specification
+
+    return specification(project.default_compiler).splat
+
+
 def _version_key(project: Project, host: Host, version: str) -> str:
     configured = project.version(version)
     return key(
@@ -117,7 +123,7 @@ def _version_key(project: Project, host: Host, version: str) -> str:
         splat_rows(project, version),
         configured.symbols,
         inputs.digest(host.splat),
-        "SN64" if project.compilers[project.default_compiler].kind == "sn64" else "IDO",
+        _compiler_mode(project),
     )
 
 
@@ -127,7 +133,6 @@ def input_key(project: Project, host: Host) -> str:
 
 def _options(project: Project, version: str, staging: Path, symbols: Path) -> dict[str, object]:
     configured = project.version(version)
-    sn64 = project.compilers[project.default_compiler].kind == "sn64"
     return {
         "base_path": str(staging),
         "target_path": str(configured.baserom.resolve()),
@@ -145,7 +150,7 @@ def _options(project: Project, version: str, staging: Path, symbols: Path) -> di
         "create_asm_dependencies": False,
         "dump_symbols": True,
         "extensions_path": str(project.tools / "splat_ext"),
-        "compiler": "SN64" if sn64 else "IDO",
+        "compiler": _compiler_mode(project),
     }
 
 

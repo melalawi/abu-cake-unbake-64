@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from unbake.compilers.families.mips import Shape
     from unbake.project.flow import ProviderRecord
 
-M2C_KINDS = ("sn64", "ido")
+M2C_KINDS = ("gnu", "ido")
 
 
 @dataclass(frozen=True)

@@ -34,8 +34,8 @@ class SourceKeyTests(TempCase):
         compiler.cc = self.host.cpp
         compiler.sha256 = self.root / "compiler.pin"
         compiler.sha256.write_text("fixture compiler pin")
-        compiler.kind = "sn64"
-        self.project.sn64_asflags = ()
+        compiler.kind = "gnu"
+        self.project.gnu_asflags = ()
         self.project.unit_flags = {}
         self.project.compiler_for = lambda unit: compiler
         self.project.versions = ("us", "eu")

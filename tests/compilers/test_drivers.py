@@ -15,7 +15,7 @@ class DriverTests(ProjectCase):
     def setUp(self) -> None:
         super().setUp()
         tools = self.project.tools
-        sn64 = Compiler("gcc-2.8.1-sn", "sn64", tools / "sn/cc1", tools / "sn/as", ("-O2", "-G0"), tools / "x")
+        sn64 = Compiler("gcc-2.8.1-sn", "gnu", tools / "sn/cc1", tools / "sn/as", ("-O2", "-G0"), tools / "x")
         self.project = replace(
             self.project,
             compilers={**self.project.compilers, sn64.id: sn64},
@@ -39,7 +39,7 @@ class DriverTests(ProjectCase):
 
     def test_sn64_uses_host_cpp_and_assembles_through_n64link(self) -> None:
         steps = self.steps("beta")
-        self.assertEqual((steps.kind, steps.preprocess[0]), ("sn64", "/bin/cpp"))
+        self.assertEqual((steps.kind, steps.preprocess[0]), ("gnu", "/bin/cpp"))
         self.assertIn("-DFOO", steps.preprocess)
         self.assertIn("-quiet", steps.compile)
         assert steps.assemble is not None
@@ -56,7 +56,7 @@ class DriverTests(ProjectCase):
     def test_runner_and_makefile_render_the_same_template(self) -> None:
         self.assertEqual(self.steps("beta"), self.steps("beta"))
         made = drivers.render(
-            drivers.TEMPLATES["sn64"]["compile"] or (), {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)}
+            drivers.TEMPLATES["gnu"]["compile"] or (), {"cc": ("$(CC)",), "codegen": ("$(CG)",), "name": ("$*",)}
         )
         self.assertEqual(made, ("$(CC)", "-quiet", "$(CG)", "$*.i", "-o", "$*.s"))
 

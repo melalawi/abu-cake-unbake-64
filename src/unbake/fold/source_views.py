@@ -216,7 +216,7 @@ def _version_lines(project: Project, policy: Host, text: str, version: str, unit
     from unbake.compilers import drivers
 
     compiler = project.compiler_for(unit)
-    values = [*(project.cppflags if compiler.kind == "sn64" else ()), *drivers.flags(project, version, unit)]
+    values = [*(project.cppflags if compiler.kind == "gnu" else ()), *drivers.flags(project, version, unit)]
     preprocess, _ = drivers._options(values)
     if "-include" in preprocess or "-imacros" in preprocess:
         return None

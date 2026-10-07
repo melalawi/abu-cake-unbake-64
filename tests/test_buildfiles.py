@@ -92,7 +92,7 @@ class BuildfileTests(ProjectCase):
         self.assertIn("build/$1/src/%.i: src/%.c Makefile units.mk | verify build/$1/src build/cas\n", text)
 
     def test_preprocess_writes_dependencies_in_one_cpp_pass(self) -> None:
-        for kind, depend_pass in (("sn64", False), ("ido", True)):
+        for kind, depend_pass in (("gnu", False), ("ido", True)):
             with self.subTest(kind=kind):
                 recipe = buildfiles._kind_recipes(kind)
                 preprocess = recipe.splitlines()[0]

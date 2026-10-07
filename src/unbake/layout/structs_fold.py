@@ -828,7 +828,7 @@ def _compile_includers(project: Project, edits: list[Edit], policy: Host, republ
                 if compiler.id not in verified:
                     toolchain.verify(project.tools / compiler.id, toolchain.specification(compiler.id))
                     verified.add(compiler.id)
-                if compiler.kind not in ("sn64", "ido"):
+                if compiler.kind not in ("gnu", "ido"):
                     held(label, f"cannot prove {source} VERSION {version}: unsupported compiler {compiler.kind}")
                 flags = [flag.replace(str(project.root) + "/", str(overlay) + "/") for flag in flags]
                 for nonmatching in (False, True):

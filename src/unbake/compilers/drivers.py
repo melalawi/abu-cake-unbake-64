@@ -2,7 +2,7 @@
 
 Two invocation kinds exist in the registry:
 - ido:  the compiler's own driver preprocesses (`cc -E`), then compiles the .i (`cc ... -c UNIT.i`).
-- sn64: host cpp preprocesses, cc1 compiles to assembly, `n64link asn64` normalises it for GNU as,
+- gnu: host cpp preprocesses, cc1 compiles to assembly, `n64link asn64` normalises it for GNU as,
         and GNU as assembles (KMC gcc 2.7.2 and SN64 gcc 2.8.1 both use this path).
 Every path is relative to the project root, where make and the runner both run.
 """
@@ -39,7 +39,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...] | None]] = {
         "compile": ("{cc}", "{codegen}", "-c", "{name}.i", "-o", "{name}.o"),
         "assemble": None,
     },
-    "sn64": {
+    "gnu": {
         "preprocess": ("{cpp}", "{cppflags}", "{preprocess}", "{source}"),
         "compile": ("{cc}", "-quiet", "{codegen}", "{name}.i", "-o", "{name}.s"),
         "assemble": ("{n64link}", "asn64", "--as", "{as}", "{asflags}", "{name}.s", "-o", "{name}.o"),
@@ -47,7 +47,7 @@ TEMPLATES: dict[str, dict[str, tuple[str, ...] | None]] = {
 }
 DEPEND = ("{cpp}", "-MM", "-MG", "{cppflags}", "{preprocess}", "{source}")
 # Kinds whose objects keep trailing zero padding after the last function (n64link place --trim otherwise).
-UNTRIMMED = frozenset({"sn64"})
+UNTRIMMED = frozenset({"gnu"})
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ def stage_flags(kind: str, values: list[str]) -> tuple[tuple[str, ...], tuple[st
     preprocess, codegen = _options(values)
     _supported(kind, codegen)
     adapter: Gcc | Ido
-    if kind == "sn64":
+    if kind == "gnu":
         adapter = Gcc()
     elif kind == "ido":
         adapter = Ido()
@@ -175,7 +175,7 @@ def stage_flags(kind: str, values: list[str]) -> tuple[tuple[str, ...], tuple[st
 
 def gnu_as_flags(project: Project) -> tuple[str, ...]:
     """The proven replacement for ASN64's -mips3 recipe."""
-    return (*GNU_AS_FLAGS, *(flag for flag in project.sn64_asflags if flag != "-mips3"))
+    return (*GNU_AS_FLAGS, *(flag for flag in project.gnu_asflags if flag != "-mips3"))
 
 
 def _split(values: list[str]) -> tuple[list[str], list[str], list[str]]:
@@ -285,7 +285,7 @@ def analysis_command(project: Project, policy: Host, version: str, unit: str) ->
     options = family_for(compiler).analysis_flags(
         compiler.cc, cpp, project.root, tuple(preprocess), tuple(codegen), scratch.root(policy, project, "compile")
     )
-    return [cpp, *(project.cppflags if compiler.kind == "sn64" else ()), *options, "-x", "c", "-"]
+    return [cpp, *(project.cppflags if compiler.kind == "gnu" else ()), *options, "-x", "c", "-"]
 
 
 def preprocess_text(project: Project, cpp: str, version: str, unit: str, text: str, phase: str) -> str:

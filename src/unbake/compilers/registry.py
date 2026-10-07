@@ -49,6 +49,7 @@ class CompilerSpec:
     downloads: tuple[Download, ...]
     family: str
     decompme: str
+    splat: str
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -97,8 +98,8 @@ def registry() -> dict[str, CompilerSpec]:
             name: _text(_required(table, name, label), f"{label}.{name}")
             for name in ("kind", "source", "host", "cc", "as")
         }
-        if fields["kind"] not in ("ido", "sn64"):
-            raise Held("setup", f"{label}.kind: expected ido or sn64")
+        if fields["kind"] not in ("ido", "gnu"):
+            raise Held("setup", f"{label}.kind: expected ido or gnu")
         if fields["source"] not in ("download", "supplied", "mixed"):
             raise Held("setup", f"{label}.source: expected download, supplied or mixed")
         pins = _required(table, "pins", label)
@@ -141,6 +142,7 @@ def registry() -> dict[str, CompilerSpec]:
             tuple(downloads),
             _text(_required(table, "family", label), label + ".family"),
             _text(_required(table, "decompme", label), label + ".decompme"),
+            _text(_required(table, "splat", label), label + ".splat"),
         )
     return result
 

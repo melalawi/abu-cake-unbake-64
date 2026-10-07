@@ -102,7 +102,7 @@ def reproduce(
                             [
                                 str(policy.mips_as),
                                 *project.asflags,
-                                *project.sn64_asflags,
+                                *project.gnu_asflags,
                                 str(work / "probe.s"),
                                 "-o",
                                 str(work / "probe.o"),

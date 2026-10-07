@@ -16,7 +16,7 @@ Create a new project folder (a git repository) with config.toml, layout.toml and
 Example:
   unbake init MyGame --functions-per-header 32
 
-Then: put the ROM files in MyGame/roms/, set [build] asflags, cppflags and sn64_asflags in
+Then: put the ROM files in MyGame/roms/, set [build] asflags, cppflags and gnu_asflags in
 MyGame/config.toml, and run `unbake setup` inside MyGame.
 
 When no host config exists yet (--config FILE, $UNBAKE_CONFIG or ~/.config/unbake/unbake.toml),

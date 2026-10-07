@@ -151,10 +151,10 @@ class DeclarationTests(unittest.TestCase):
                 root=root,
                 include=(include,),
                 compiler_for=lambda path: SimpleNamespace(
-                    id="gcc-2.8.1-sn64", kind="sn64", cc=root / "fixture-cc", cflags=("-DOTHER=1",)
+                    id="gcc-2.8.1-sn64", kind="gnu", cc=root / "fixture-cc", cflags=("-DOTHER=1",)
                 ),
                 unit_flags={},
-                sn64_asflags=(),
+                gnu_asflags=(),
                 version=lambda version: SimpleNamespace(macros=("ACTIVE=1",)),
             )
             policy = SimpleNamespace(cpp=Path(cpp))
@@ -196,10 +196,10 @@ class FoldTests(unittest.TestCase):
                 include=(include,),
                 versions=("us", "eu"),
                 compiler_for=lambda path: SimpleNamespace(
-                    id="gcc-2.8.1-sn64", kind="sn64", cc=root / "fixture-cc", cflags=()
+                    id="gcc-2.8.1-sn64", kind="gnu", cc=root / "fixture-cc", cflags=()
                 ),
                 unit_flags={},
-                sn64_asflags=(),
+                gnu_asflags=(),
                 version=lambda version: SimpleNamespace(
                     macros=(), split=root / (version + ".yaml"), symbols=root / (version + ".txt")
                 ),

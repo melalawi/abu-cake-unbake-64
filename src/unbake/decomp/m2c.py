@@ -126,7 +126,7 @@ def _draft(
     project.version(v)
     assembly_text, address = assembly_source(project, v, function, extracted)
     executable_path = str(policy.m2c)
-    targets = {"sn64": "mips-gcc-c", "ido": "mips-ido-c"}
+    targets = {"gnu": "mips-gcc-c", "ido": "mips-ido-c"}
     compiler = project.compiler_for(project.src / (function + ".c"))
     if compiler.kind not in targets:
         raise Held(

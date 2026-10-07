@@ -176,7 +176,7 @@ def _build_options(project: PendingProject, layout: LayoutManifest) -> dict[str,
     return {
         "asflags": list(project.asflags),
         "cppflags": list(project.cppflags),
-        "sn64_asflags": list(project.sn64_asflags),
+        "gnu_asflags": list(project.gnu_asflags),
         "resident_mappings": {
             version: record["evidence"].get("resident_mappings", []) for version, record in layout["versions"].items()
         },

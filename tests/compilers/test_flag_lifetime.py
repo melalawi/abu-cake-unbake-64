@@ -24,11 +24,11 @@ class FlagLifetimeTests(TempCase):
             return real(file, *args, **named)
 
         with patch.object(registry, "REGISTRY_PATH", path), patch.object(Path, "read_text", read):
-            stages = [drivers.stage_flags("sn64", ["-O2", "-funsigned-char"]) for _ in range(64)]
+            stages = [drivers.stage_flags("gnu", ["-O2", "-funsigned-char"]) for _ in range(64)]
             before = len(reads)
             self.assertTrue(all(stage == stages[0] for stage in stages))
             self.assertIn("-funsigned-char", stages[0][0])
             path.write_text(source.replace('"-funsigned-char"', '"-fsigned-char"'))
             with self.assertRaisesRegex(Held, "unsupported"):
-                drivers.stage_flags("sn64", ["-O2", "-funsigned-char"])
+                drivers.stage_flags("gnu", ["-O2", "-funsigned-char"])
         self.assertEqual(before, 1)
