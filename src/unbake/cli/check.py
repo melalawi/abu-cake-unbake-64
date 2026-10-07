@@ -34,4 +34,11 @@ def run(context: Context) -> Result:
     outcome = build.check(context.project(), context.require_host(), files_only=context.args.files_only)
     if outcome.ok:
         return Result.ok(NAME, outcome.document(), outcome.lines(), context.cmd("next"))
-    return Result(NAME, "held", "check.failed", outcome.document(), context.cmd("next"), tuple(outcome.lines()))
+    return Result(
+        NAME,
+        "held",
+        outcome.preflight.get("key", "check.failed"),
+        outcome.document(),
+        outcome.preflight.get("next") or context.cmd("next"),
+        tuple(outcome.lines()),
+    )

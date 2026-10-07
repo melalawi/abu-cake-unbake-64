@@ -14,12 +14,106 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from unbake import atomic as atomic_files
 from unbake import effort, tui
 from unbake.cache import key
 from unbake.config import Held, Host, Project
+
+if TYPE_CHECKING:
+    from unbake.decomp.checks import Findings, SourceFinding
+
+
+@dataclass(frozen=True)
+class PrepareRequest:
+    operation: str
+    sources: tuple[Path, ...]
+    proposed: dict[Path, str] = field(default_factory=dict)
+    required_steps: tuple[str, ...] = ()
+    resume_command: str | None = None
+    project_scope: bool = False
+    rules: str = "unmarked"
+
+
+@dataclass(frozen=True)
+class Prepared:
+    request: PrepareRequest
+    findings: Findings
+    source_inventory: tuple[Path, ...]
+
+    @property
+    def blocked(self) -> tuple[SourceFinding, ...]:
+        return self.findings.rows if self.request.rules == "all" else self.findings.unmarked
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "phase": "preflight",
+            "blocked_before_build": bool(self.blocked),
+            "built": False,
+            "reused": self.findings.source_scans == 0,
+            "findings": [row.document() for row in self.blocked],
+            "dependency_hashes": self.findings.dependency_hashes,
+            "resume_command": self.request.resume_command,
+            "work": {"source_scans": self.findings.source_scans, "step_runs": 0, "make_invocations": 0},
+        }
+
+    def refuse(self) -> None:
+        if not self.blocked:
+            return
+        first = self.blocked[0]
+        finding = first.finding
+        place = f"{first.path}:{finding.line}"
+        provenance = "; present before edit" if first.predates_edit else ""
+        resume = self.request.resume_command
+        action = f"stop: fix {finding.rule} at {place}" + (f", then run {resume}" if resume else "")
+        raise Held(
+            "preflight",
+            f"check.source_rules: {place} {finding.rule}{provenance}; build not started",
+            next_action=action,
+            data=self.document(),
+        )
+
+    def assert_current(self, project: Project) -> None:
+        from unbake import inputs
+        from unbake.decomp import checks
+
+        expected = self.findings.dependency_hashes
+        if checks.recipe() != expected["recipe:source-rules"]:
+            raise Held("preflight", "prepare.changed: source-rule recipe changed since preparation")
+        if self.request.project_scope and tuple(sorted(project.src.glob("*.c"))) != self.source_inventory:
+            raise Held("preflight", "prepare.changed: source inventory changed since preparation")
+        for name, digest in expected.items():
+            if name.startswith("recipe:"):
+                continue
+            path = project.root / name
+            current = inputs.digest(path) if path.is_file() else "missing"
+            if current != digest:
+                raise Held("preflight", f"prepare.changed: {name}: changed since preparation")
+
+
+def prepare(project: Project, host: Host, request: PrepareRequest) -> Prepared:
+    """Cheap request/rule checks precede freshness work and every proposed file installation."""
+    from unbake.cache import Cache
+    from unbake.decomp import checks
+
+    if request.rules not in ("all", "unmarked"):
+        raise Held("preflight", "prepare.rules: expected all or unmarked")
+    inventory = tuple(sorted(project.src.glob("*.c")))
+    paths = tuple(sorted(set(inventory if request.project_scope else request.sources) | set(request.proposed)))
+    for path in paths:
+        if not path.resolve().is_relative_to(project.root.resolve()):
+            raise Held("preflight", f"prepare.source: {path}: outside project")
+        if path not in request.proposed and not path.is_file():
+            raise Held("preflight", f"prepare.source: {path}: missing source")
+    result = Prepared(
+        request, checks.findings(project, paths, Cache(project.build / "cache"), proposed=request.proposed), inventory
+    )
+    result.refuse()
+    result.assert_current(project)
+    if request.required_steps:
+        ensure(project, host, request.required_steps)
+    return result
 
 
 def _path(project: Project) -> Path:

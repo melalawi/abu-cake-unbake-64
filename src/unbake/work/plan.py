@@ -137,7 +137,9 @@ def candidates(project: Project, host: Host, *, selected: frozenset[str] | None 
         for source in sorted(project.src.glob("*.c"))
         if source.stem in published and (selected is None or source.stem in selected)
     ]
-    for source in checks.dirty(project, Cache(project.cache), sources, host):
+    for source in sorted(
+        {project.root / row.path for row in checks.findings(project, sources, Cache(project.cache)).unmarked}
+    ):
         versions, row = published[source.stem]
         summary = history.get(source.stem)
         result.append(

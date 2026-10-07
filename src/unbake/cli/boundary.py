@@ -55,10 +55,28 @@ def register(parser: argparse.ArgumentParser) -> None:
 
 
 def run(context: Context) -> Result:
+    from unbake import steps
     from unbake.layout import boundary_ops
 
     args = context.args
     project, host = context.project(), context.require_host()
+    if args.apply:
+        words = ["boundary", args.verb]
+        if args.verb in ("import", "same-symbol"):
+            words.append(str(args.file))
+        else:
+            words.append(args.subject)
+            for option in ("version", "start", "end", "address", "rename_from"):
+                value = getattr(args, option, None)
+                if value is not None:
+                    words.extend(("--" + option.replace("_", "-"), str(value)))
+            if getattr(args, "all_versions", False):
+                words.append("--all-versions")
+        words.append("--apply")
+        prepared = steps.prepare(
+            project, host, steps.PrepareRequest("boundary", (), project_scope=True, resume_command=context.cmd(*words))
+        )
+        prepared.assert_current(project)
     if args.verb == "import":
         outcome = boundary_ops.import_file(project, host, args.file, apply=args.apply)
     elif args.verb == "same-symbol":

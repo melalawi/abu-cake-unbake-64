@@ -37,6 +37,7 @@ class Held(Exception):
         next_action: str | None = None,
         failures: tuple[dict[str, Any], ...] = (),
         fault: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
     ) -> None:
         self.phase = phase
         self.reason = reason
@@ -44,6 +45,7 @@ class Held(Exception):
         # Every (key, reason) when one refusal gathers several (all units a check found, not only the first).
         self.failures = failures
         self.fault = fault
+        self.data = data or {}
         super().__init__(reason)
 
     def __reduce__(self) -> tuple[Any, ...]:

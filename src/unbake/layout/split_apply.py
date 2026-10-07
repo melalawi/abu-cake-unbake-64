@@ -111,11 +111,22 @@ def _write_staging(project: Project, edits: Iterable[split.Edit]) -> None:
 
 def apply(project: Project, policy: Host, edits: Iterable[split.Edit]) -> Outcome | None:
     """Write the edits, regenerate the build files and prove every version with make check; revert on failure."""
-    from unbake import build, buildfiles
+    from unbake import build, buildfiles, steps
 
     edits, _versions = _validated(project, edits)
     if not edits:
         return None
+    prepared = steps.prepare(
+        project,
+        policy,
+        steps.PrepareRequest(
+            "boundary",
+            (),
+            proposed={edit.path: edit.after for edit in edits if edit.path.suffix == ".c"},
+            project_scope=True,
+        ),
+    )
+    prepared.assert_current(project)
     written: list[tuple[split.Edit, bool]] = []
     before = {path: path.read_bytes() for path in buildfiles.generate(project, policy) if path.is_file()}
 
@@ -129,6 +140,8 @@ def apply(project: Project, policy: Host, edits: Iterable[split.Edit]) -> Outcom
             atomic_files.write(path, content)
 
     try:
+        prepared.assert_current(project)
+        _validated(project, edits)
         for edit in edits:
             existed = Path(edit.path).exists()
             write(edit.path, edit.after)

@@ -25,6 +25,7 @@ import toml  # type: ignore[import-untyped]
 
 from unbake import atomic as atomic_files
 from unbake import buildfiles, process, runner, scratch, steps
+from unbake.cache import Cache
 from unbake.config import Held, Host, Project
 from unbake.layout import split
 from unbake.work import attempts, compare
@@ -246,7 +247,7 @@ def exact_attempt(
     attempt = found[-1]
     if required_versions is not None:
         publication_versions(project, function, attempt, required_versions)
-        broken = checks.unmarked(file)
+        broken = [row.finding for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
         if broken:
             raise Held("land", f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken))
         return attempt
@@ -255,7 +256,7 @@ def exact_attempt(
             "land", f"land.not_exact: {function}: native comparison is unavailable; compare after resolving its fault"
         )
     if attempt.exact:
-        broken = checks.unmarked(file)
+        broken = [row.finding for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
         if broken:
             raise Held("land", f"land.rules: {function}: " + "; ".join(checks.plain(f) for f in broken))
         return attempt
@@ -266,7 +267,7 @@ def exact_attempt(
             f"land.not_exact: {function} matches only {attempt.best_percent:.2f}% (lowest version {version}). "
             "Publish needs 100% in every version",
         )
-    lines = [checks.plain(finding) for finding in checks.unmarked(file)]
+    lines = [checks.plain(row.finding) for row in checks.findings(project, (file,), Cache(project.cache)).unmarked]
     raise Held("land", f"land.rules: {function} matches 100% but breaks the source rules: {'; '.join(lines)}")
 
 
@@ -684,7 +685,8 @@ def land(
     config_before = config_path.read_bytes()
     project = _with_compiler(project, function, ident)
     folded = fold_apply.fold(project, host, function, text, versions=selected)
-    broken = checks.run(folded.source) if fuzzy else checks.unmarked(folded.source)
+    result = checks.findings(project, (file,), Cache(project.cache), proposed={file: folded.source})
+    broken = [row.finding for row in (result.rows if fuzzy else result.unmarked)]
     if broken:
         rule_key = "land.fuzzy_rules" if fuzzy else "land.rules"
         raise Held("land", f"{rule_key}: {function}: " + "; ".join(checks.plain(row) for row in broken))

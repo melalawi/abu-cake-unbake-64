@@ -35,7 +35,7 @@ class Result:
     def held(cls, command: str, error: Held, next_: str | None, data: dict[str, Any] | None = None) -> Result:
         from unbake.process import fault
 
-        body = {"phase": error.phase, "reason": error.reason, "fault": fault(error), **(data or {})}
+        body = {"phase": error.phase, "reason": error.reason, "fault": fault(error), **error.data, **(data or {})}
         return cls(command, "held", error.key, body, next_)
 
     def document(self) -> dict[str, Any]:

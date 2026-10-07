@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from unbake import atomic as atomic_files
 from unbake.cache import Cache, key
-from unbake.config import Held, Host, Project
+from unbake.config import Held, Project
 from unbake.decomp.gbi_source import invocations, macros, typedefs
 from unbake.decomp.needs import GuardFinding, Need, register_resolver
 from unbake.layout.split import Edit
-from unbake.typemap import storage
 
-SOURCE_FINDINGS_SCHEMA = 3
+SOURCE_FINDINGS_SCHEMA = 4
 
 
 @dataclass(frozen=True)
@@ -565,27 +564,82 @@ def unmarked(source: str | Path) -> list[GuardFinding]:
     return [finding for finding in run(source) if finding.fakematch is None]
 
 
-def _has_unmarked(source: Path) -> bool:
-    """Pool worker: SOURCE has a finding without a FAKEMATCH reason."""
-    return bool(unmarked(source))
+@dataclass(frozen=True)
+class SourceFinding:
+    path: str
+    finding: GuardFinding
+    predates_edit: bool
+
+    def document(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            **asdict(self.finding),
+            "predates_edit": self.predates_edit,
+            "gate": "source-rules",
+        }
 
 
-def dirty(project: Project, cache: Cache, sources: list[Path], host: Host) -> list[Path]:
-    """The sources with an unmarked finding, cached on every source's stat signature (a change to any source
-    rescans them all once, in the worker pool). The cache holds project-relative paths."""
-    from unbake import inputs, pool
+@dataclass(frozen=True)
+class Findings:
+    rows: tuple[SourceFinding, ...]
+    dependency_hashes: dict[str, str]
+    source_scans: int
 
-    named = [storage.relative(project, path) for path in sources]
-    content_key = key(
-        str(SOURCE_FINDINGS_SCHEMA),
-        *(f"{name}\0{inputs.signature(path)}" for name, path in zip(named, sources, strict=True)),
-    )
+    @property
+    def unmarked(self) -> tuple[SourceFinding, ...]:
+        return tuple(row for row in self.rows if row.finding.fakematch is None)
 
-    def make(path: Path) -> None:
-        found = pool.run(host, _has_unmarked, sources)
-        atomic_files.fresh(path, json.dumps([name for name, bad in zip(named, found, strict=True) if bad]).encode())
 
-    return [project.root / name for name in json.loads(cache.produce("source-findings", content_key, make).read_text())]
+def recipe() -> str:
+    """Only the source-rule implementation and its semantic helpers affect these results."""
+    from unbake import inputs
+
+    modules = (Path(__file__), Path(__file__).with_name("gbi_source.py"), Path(__file__).with_name("needs.py"))
+    return key(str(SOURCE_FINDINGS_SCHEMA), *(inputs.digest(path) for path in modules))
+
+
+def findings(
+    project: Project,
+    paths: Iterable[Path],
+    cache: Cache,
+    *,
+    proposed: Mapping[Path, str] | None = None,
+) -> Findings:
+    """Complete rule rows per source content; policy and project-relative names remain caller-owned."""
+    from unbake import inputs
+
+    recipe_key = recipe()
+    pins = {"recipe:source-rules": recipe_key}
+    scans = 0
+    rows: list[SourceFinding] = []
+
+    def read(text: str) -> tuple[GuardFinding, ...]:
+        content_key = key(recipe_key, text)
+
+        def make(path: Path) -> None:
+            nonlocal scans
+            scans += 1
+            atomic_files.fresh(path, json.dumps([asdict(row) for row in run(text)]).encode())
+
+        try:
+            data = json.loads(cache.produce("source-findings", content_key, make).read_text())
+            if not isinstance(data, list):
+                raise ValueError("expected finding rows")
+            return tuple(GuardFinding(**row) for row in data)
+        except (ValueError, TypeError) as error:
+            raise Held("checks", f"check.findings: corrupt source-rule result {content_key}: {error}") from error
+
+    for path in sorted(set(paths)):
+        name = path.relative_to(project.root).as_posix()
+        pins[name] = inputs.digest(path) if path.is_file() else "missing"
+        baseline = path.read_text() if path.is_file() else ""
+        old = read(baseline)
+        proposed_text = (proposed or {}).get(path, baseline)
+        # Line movement does not erase the provenance of an existing offending token sequence.
+        identities = {(row.rule, " ".join(row.text.split())) for row in old}
+        current = old if proposed_text == baseline else read(proposed_text)
+        rows.extend(SourceFinding(name, row, (row.rule, " ".join(row.text.split())) in identities) for row in current)
+    return Findings(tuple(rows), pins, scans)
 
 
 def message(finding: GuardFinding) -> str:

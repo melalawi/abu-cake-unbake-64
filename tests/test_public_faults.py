@@ -59,7 +59,7 @@ class PublicFaultTests(ProjectCase):
         error = self.native_error()
         source = self.source()
         with patch.object(runner, "compile_unit", side_effect=error):
-            result = header_step._compile((self.project, self.host, source, "us", "alpha"))
+            result = header_step._compile((self.project, self.host, source, "us", "alpha", False, False))
         self.assertEqual(result["fault"], process.fault(error))
 
     def test_unexpected_worker_failure_keeps_the_exception_cause_chain(self):

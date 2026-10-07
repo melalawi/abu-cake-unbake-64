@@ -76,7 +76,9 @@ def _draft_task(spec: tuple[Path, Host, str, bool]) -> dict[str, Any]:
     root, host, function, replace = spec
     started = time.monotonic()
     try:
-        made = draft.draft(config.load(root), host, function, replace=replace)
+        project = config.load(root)
+        expected_output = draft.check_existing(project, function, replace=replace)
+        made = draft.draft(project, host, function, replace=replace, expected_output=expected_output)
     except Held as error:
         return {
             "ok": False,

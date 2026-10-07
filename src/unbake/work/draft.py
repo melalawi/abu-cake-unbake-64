@@ -52,7 +52,7 @@ def published_seed(project: Project, function: str) -> str | None:
     return prelude.fields(prelude.resolve(source.read_text()))
 
 
-def check_existing(project: Project, function: str, *, replace: bool) -> None:
+def check_existing(project: Project, function: str, *, replace: bool) -> str | None:
     """A cheap refusal; the backend repeats it after prerequisites to protect against intervening writes."""
     file = project.work / function / f"{function}.c"
     if file.exists() and not replace:
@@ -60,17 +60,33 @@ def check_existing(project: Project, function: str, *, replace: bool) -> None:
             "draft",
             f"draft.exists: {file} already exists; edit it, or redraft with --replace",
             next_action=f"unbake compare {file}",
+            data={
+                "phase": "preflight",
+                "blocked_before_build": True,
+                "built": False,
+                "work": {"source_scans": 0, "step_runs": 0, "make_invocations": 0},
+            },
         )
+    from unbake import inputs
+
+    return inputs.digest(file) if file.is_file() else None
 
 
-def draft(project: Project, host: Host, function: str, *, replace: bool) -> Drafted:
+def draft(project: Project, host: Host, function: str, *, replace: bool, expected_output: str | None) -> Drafted:
+    pin = check_existing(project, function, replace=replace)
+    if pin != expected_output:
+        raise Held("draft", "draft.changed: existing draft changed during preparation")
+
+    def guard() -> None:
+        if check_existing(project, function, replace=replace) != pin:
+            raise Held("draft", "draft.changed: output changed since preparation")
+
     seed = published_seed(project, function)
     if seed is None and function in exclusions.load(project):
         raise Held("draft", f"draft.excluded: {function}: listed in {exclusions.MANIFEST}")
     versions = split.holding_versions(project, function)
     directory = attempts.directory(project, function)
     file = directory / f"{function}.c"
-    check_existing(project, function, replace=replace)
     if seed is not None:
         if replace:
             shutil.rmtree(directory / "include", ignore_errors=True)
@@ -87,6 +103,7 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
                 includes = list(re.finditer(r"^[ \t]*#[ \t]*include[^\n]*\n", seed, re.M))
                 boundary = includes[-1].end() if includes else 0
                 seed = seed[:boundary] + f'#include "{relative}"\n' + seed[boundary:]
+        guard()
         atomic_files.text(file, seed, encoding="utf-8")
         return Drafted(function, file, versions)
     version = naming_version(project, versions)
@@ -109,6 +126,7 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
         unproven = scratch / "compile-proof" / f"{function}.c"
         if not unproven.is_file():
             raise
+        guard()
         atomic_files.text(file, unproven.read_text(encoding="utf-8"), encoding="utf-8")
         shutil.rmtree(scratch, ignore_errors=True)
         raise Held(
@@ -116,6 +134,7 @@ def draft(project: Project, host: Host, function: str, *, replace: bool) -> Draf
             f"draft.unproven: {file} does not compile yet; edit it: {error.reason}",
             next_action=f"unbake compare {file}",
         ) from error
+    guard()
     atomic_files.text(file, content, encoding="utf-8")
     shutil.rmtree(scratch, ignore_errors=True)
     return Drafted(function, file, versions)

@@ -20,6 +20,7 @@ class Outcome:
     make_tail: list[str] = field(default_factory=list)
     seconds: float = 0.0
     fault: dict[str, Any] | None = None
+    preflight: dict[str, Any] = field(default_factory=dict)
 
     def document(self) -> dict[str, Any]:
         return {
@@ -28,6 +29,7 @@ class Outcome:
             "findings": list(self.findings),
             "make_tail": list(self.make_tail),
             "seconds": round(self.seconds, 3),
+            **self.preflight,
             **({"fault": self.fault} if self.fault is not None else {}),
         }
 
@@ -37,16 +39,6 @@ class Outcome:
             "every version byte-identical" if self.built and self.ok else ("build skipped" if not self.built else "")
         )
         return [f"{head}{': ' + detail if detail else ''} ({self.seconds:.1f}s)", *self.findings, *self.make_tail]
-
-
-def source_findings(project: Project) -> list[str]:
-    """C source rules: no inline asm, no unmarked fakematch patterns (decomp.checks)."""
-    from unbake.decomp import checks
-
-    findings = []
-    for path in sorted(project.src.glob("*.c")):
-        findings += [f"{path.relative_to(project.root)}: {checks.message(f)}" for f in checks.unmarked(path)]
-    return findings
 
 
 def environment(host: Host) -> dict[str, str]:
@@ -86,17 +78,31 @@ def check(project: Project, host: Host, *, files_only: bool = False) -> Outcome:
     from unbake.project import hygiene
 
     started = time.monotonic()
+    try:
+        prepared = steps.prepare(project, host, steps.PrepareRequest("check", (), project_scope=True))
+    except Held as error:
+        if error.key != "check.source_rules":
+            raise
+        return Outcome(
+            False,
+            False,
+            [error.reason],
+            seconds=time.monotonic() - started,
+            preflight={**error.data, "key": error.key, "next": error.next_action},
+        )
+    findings = hygiene.tracked_findings(project, host)
     if files_only:
         drifted = [str(path.relative_to(project.root)) for path in buildfiles.drift(project, host)]
-        findings = [f"{name}: differs from buildfiles output; run unbake recompute buildfiles" for name in drifted]
-        findings += [*hygiene.tracked_findings(project, host), *source_findings(project)]
-        return Outcome(not findings, False, findings, [], time.monotonic() - started)
+        findings += [f"{name}: differs from buildfiles output; run unbake recompute buildfiles" for name in drifted]
+    if findings or files_only:
+        return Outcome(not findings, False, findings, seconds=time.monotonic() - started, preflight=prepared.document())
     steps.ensure(project, host, ["buildfiles"])
-    findings = [*hygiene.tracked_findings(project, host), *source_findings(project)]
+    prepared.assert_current(project)
     python = python_visible(host)
     if python is not None:
         raise Held("check", f"tools.path: {python} is visible; [tools].path must not contain Python")
     try:
+        prepared.assert_current(project)
         process.run_native(
             make_command(host, "check"),
             project.root,

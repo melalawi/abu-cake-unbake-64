@@ -78,3 +78,35 @@ class ExistingDraftPreflight(ProjectCase):
             verb.run(self.context())
         self.assertEqual(backend.call_count, 1)
         self.assertEqual(file.read_bytes(), content)
+
+    def test_replace_rejects_draft_changed_during_prerequisites(self):
+        file = self.file()
+        file.write_text("int alpha(void) { return 1; }\n")
+
+        def changed(*args, **kwargs):
+            file.write_text("int alpha(void) { return 2; }\n")
+            return []
+
+        with (
+            patch.object(steps, "ensure", side_effect=changed),
+            patch.object(draft, "published_seed") as seed,
+            self.assertRaisesRegex(Held, "draft.changed"),
+        ):
+            verb.run(self.context(replace=True))
+        self.assertEqual(seed.call_count, 0)
+        self.assertEqual(file.read_text(), "int alpha(void) { return 2; }\n")
+
+    def test_replace_cannot_overwrite_new_draft_not_in_prepared_snapshot(self):
+        file = self.file()
+
+        def changed(*args, **kwargs):
+            file.write_text("int alpha(void) { return 2; }\n")
+            return []
+
+        with (
+            patch.object(steps, "ensure", side_effect=changed),
+            patch.object(draft, "published_seed") as seed,
+            self.assertRaisesRegex(Held, "draft.changed"),
+        ):
+            verb.run(self.context(replace=True))
+        self.assertEqual(seed.call_count, 0)

@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.project_fixture import ProjectCase
-from unbake import build, buildfiles, config, land
+from unbake import buildfiles, config, land
+from unbake.cache import Cache
 from unbake.config import Held
 from unbake.decomp import checks
 from unbake.fold.apply import Folded
@@ -86,7 +87,9 @@ class FuzzyCleanupTests(ProjectCase):
         self.assertEqual(receipt["score"], 20.0)
         self.assertEqual(receipt["source_sha256"], hashlib.sha256(self.source.read_bytes()).hexdigest())
         self.assertEqual({v: self.project.version(v).split.read_bytes() for v in self.versions}, splits)
-        self.assertEqual(build.source_findings(self.project), [])
+        self.assertEqual(
+            checks.findings(self.project, self.project.src.glob("*.c"), Cache(self.project.cache)).unmarked, ()
+        )
 
     def test_real_cleanup_lower_or_unknown_score_never_replaces(self):
         self.seed()
@@ -174,6 +177,8 @@ class FuzzyCleanupTests(ProjectCase):
         self.assertEqual({finding.rule for finding in checks.unmarked(COMMITTED)}, {"raw-gfx"})
         self.assertEqual(checks.run(CLEANED), [])
         self.source.write_text(COMMITTED)
-        self.assertTrue(build.source_findings(self.project))
+        self.assertTrue(checks.findings(self.project, self.project.src.glob("*.c"), Cache(self.project.cache)).unmarked)
         self.source.write_text(attempts.guarded(CLEANED))
-        self.assertEqual(build.source_findings(self.project), [])
+        self.assertEqual(
+            checks.findings(self.project, self.project.src.glob("*.c"), Cache(self.project.cache)).unmarked, ()
+        )

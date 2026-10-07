@@ -221,6 +221,8 @@ def apply(project: Project, policy: Host, changes: Sequence[Change]) -> Outcome 
     try:
         results = split_apply.apply(project, policy, edits)
     except Held as error:
+        if error.phase == "preflight":
+            raise
         names = ", ".join(f"{item.version}:{item.function}" for item in changes)
         raise Held("boundary-map", f"refused {names}; all map edits rolled back; {error.reason}") from error
     if results is not None and not results.ok:
