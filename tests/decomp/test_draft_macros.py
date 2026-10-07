@@ -8,6 +8,7 @@ from pathlib import Path
 from pycparser import c_parser  # type: ignore[import-untyped]
 
 from tests.decomp.support import fixture, solved
+from unbake.cdecl import records
 from unbake.config import Held
 from unbake.decomp.draft_context import required_headers
 from unbake.decomp.draft_macros import lower
@@ -16,6 +17,58 @@ from unbake.typemap.declarations import clean
 
 
 class DraftMacroTests(unittest.TestCase):
+    def test_real_callback_copy_and_published_call_preserve_signature(self) -> None:
+        payloads = Path(__file__).parent / "fixtures" / "callback_fields"
+        context = (payloads / "contract.h").read_text()
+        source = (payloads / "func_8011DFE0_us.c").read_text()
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
+            output, shared = share(project, "func_8011DFE0_us", source, context)
+            self.assertIsNotNone(shared)
+            header = shared.read_text()
+            self.assertEqual(header.count("s32 (*value)(void *);"), 2)
+            layouts = records(context + header)
+            measured = [row for row in layouts if row.name.startswith("Measured_")]
+            self.assertEqual(len(measured), 2)
+            self.assertEqual(sorted(row.fields[-1].offset for row in measured), [0x10, 0x24])
+            self.assertEqual([row.fields[-1].size for row in measured], [4, 4])
+            self.assertEqual(output.count("->value"), 3)
+            self.assertNotIn("M2C_FIELD", output)
+            self.assertIn("func_8011E564(var_s3,", output)
+            c_parser.CParser().parse(clean(context + header + output))
+            from unbake.decomp.checks import run
+
+            self.assertFalse(run(output))
+
+    def test_declared_callback_field_uses_existing_member_without_writes(self) -> None:
+        context = "typedef int s32; struct Existing { char pad[36]; s32 (*callback)(void *); };"
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
+            source = "void alpha(struct Existing *p) { M2C_FIELD(p, s32 (**)(void *), 0x24)(p); }"
+            output, shared = share(project, "alpha", source, context)
+            self.assertIsNone(shared)
+            self.assertIn("(p)->callback(p)", output)
+            c_parser.CParser().parse(context + output)
+
+    def test_callback_signatures_remain_distinct_and_invalid_fields_hold(self) -> None:
+        context = "typedef int s32;"
+        with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
+            project, _, _ = fixture(Path(directory).resolve(), case=self)
+            source = (
+                "void alpha(void *p) { M2C_FIELD(p, s32 (**)(void *), 0x24)(p);"
+                " M2C_FIELD(p, void (**)(s32), 0x24)(1); }"
+            )
+            output, shared = share(project, "alpha", source, context)
+            self.assertEqual(len(records(context + "\n" + shared.read_text())), 2)
+            self.assertIn("s32 (*value)(void *);", shared.read_text())
+            self.assertIn("void (*value)(s32);", shared.read_text())
+            c_parser.CParser().parse(clean(context + "\n" + shared.read_text() + output))
+            for pointer in ("s32", "s32 (void *)", "s32 (*)(void *)", "s32 (**)(void *) extra"):
+                with self.subTest(pointer=pointer), self.assertRaisesRegex(Held, "unresolved M2C_FIELD"):
+                    share(project, "alpha", "void alpha(void *p) { M2C_FIELD(p, " + pointer + ", 0); }", context)
+            with self.assertRaisesRegex(Held, "unaligned field"):
+                share(project, "alpha", "void alpha(void *p) { M2C_FIELD(p, s32 (**)(void *), 0x25); }", context)
+
     def test_placeholders_preserve_signed_nested_lvalues_and_declared_unknowns(self) -> None:
         with tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"]) as directory:
             project, _, _ = fixture(Path(directory).resolve(), case=self)

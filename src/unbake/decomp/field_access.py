@@ -4,7 +4,10 @@ import hashlib
 import re
 from pathlib import Path
 
+from pycparser import c_ast  # type: ignore[import-untyped]
+
 from unbake import atomic as atomic_files
+from unbake import cdecl
 from unbake.cdecl import LayoutParser
 from unbake.config import Held, Project
 from unbake.decomp.draft_macros import calls
@@ -83,22 +86,40 @@ def share(
             observed[local] = observed[source]
 
     views: dict[str, str] = {}
+    from unbake.typemap.declarations import declarator, node_type
 
     def replace(args: list[str]) -> str:
         if len(args) != 3:
             raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
         base, pointer, literal = (value.strip() for value in args)
-        if not pointer.endswith("*") or not re.fullmatch(r"[+-]?(?:0[xX][\da-fA-F]+|\d+)", literal):
+        if not re.fullmatch(r"[+-]?(?:0[xX][\da-fA-F]+|\d+)", literal):
             raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")")
         offset = int(literal, 0)
-        scalar = LayoutParser(pointer[:-1].strip() + " measured;")
+        declaration = declarator(pointer, "measured") + ";"
+        scalar = LayoutParser(declaration)
         scalar.types = parser.types  # a measured declaration defines no type
         try:
             member = scalar.declaration()[0]
-            type_name = scalar.type_name(member.base, member.operations)
-        except Held:
-            type_name = pointer[:-1].strip()
+            if not member.operations or member.operations[0][0] != "pointer":
+                raise Held("m2c", "field type requires an outer pointer")
+            type_name = scalar.type_name(member.base, member.operations[1:])
+        except Held as error:
+            raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")") from error
+        record_type = type_name
         width = 4 if type_name.endswith(" *") else SCALARS.get(type_name, (None, None))[0]
+        alignment = 4 if type_name.endswith(" *") else SCALARS.get(type_name, (None, None))[1]
+        if "(" in type_name:
+            # The macro supplies a pointer to its lvalue. A callback lvalue
+            # is itself a pointer, whose target ABI width is known without
+            # changing or guessing its return and parameter declarations.
+            try:
+                value = cdecl.parse(declaration, typedefs=parser.types).ext[0].type
+                if not isinstance(value, c_ast.PtrDecl) or not isinstance(value.type, c_ast.PtrDecl):
+                    raise Held("m2c", "field value is not a pointer")
+                type_name = node_type(value.type)
+                width, alignment = 4, 4
+            except (cdecl.ParseError, Held) as error:
+                raise Held("m2c", "unresolved M2C_FIELD(" + ", ".join(args) + ")") from error
         layout = observed.get(base)
         if layout is not None:
             fields = [
@@ -121,7 +142,7 @@ def share(
                 member
                 for member in record.fields
                 if member.offset == offset
-                and member.type == type_name
+                and member.type == record_type
                 and not member.extent
                 and not member.fields
                 and member.bit_size is None
@@ -130,11 +151,8 @@ def share(
                 return f"({base})->{members[0].name}"
         if width is None or width <= 0:
             raise Held("m2c", f"{function}: field at {literal} has no measured scalar width: {pointer}")
-        alignment = 4 if type_name.endswith(" *") else SCALARS[type_name][1]
         if alignment is None or offset % alignment:
             raise Held("m2c", f"{function}: unaligned field at {literal}: {pointer}")
-        from unbake.typemap.declarations import declarator
-
         key = hashlib.sha256(f"{offset}:{type_name}".encode()).hexdigest()[:12]
         tag = f"Measured_{function}_{key}"
         if offset >= 0:
