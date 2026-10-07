@@ -21,7 +21,7 @@ from typing import Any
 from unbake import config, strict_json
 from unbake.config import Held, Project
 from unbake.process import named as cause_named
-from unbake.report import progress, state
+from unbake.report import data, progress, state
 
 BUNDLE = "tools/report-verifier.zip"
 MANIFEST = "report-state.json"
@@ -69,6 +69,8 @@ def source_paths(project: Project) -> tuple[Path, ...]:
     paths = {
         project.root / "config.toml",
         project.root / BUNDLE,
+        project.root / "Makefile",
+        project.root / "units.mk",
         project.root / ".github/workflows/progress.yml",
         project.root / ".gitlab-ci.yml",
         project.tools / "compilers.sha256",
@@ -77,7 +79,16 @@ def source_paths(project: Project) -> tuple[Path, ...]:
     paths.update(path for root in project.include for path in root.rglob("*") if path.is_file())
     for version in project.versions:
         meta = project.version(version)
-        paths.update((meta.split, meta.symbols))
+        paths.update(
+            (
+                meta.split,
+                meta.symbols,
+                project.root / "layout.toml",
+                project.tools / "n64link.version",
+                project.root / "versions" / version / "symbols.ld",
+                project.root / "versions" / version / f"{project.name}.ld",
+            )
+        )
     paths.add(project.root / "unbake-original-asm.json")
     return tuple(sorted(paths))
 
@@ -92,6 +103,7 @@ def source_pins(project: Project, *, receipts: dict[str, dict[str, Any]] | None 
             for path in source_paths(project)
             if path.is_file()
         },
+        "native-data-proofs": data.identity(data.snapshots(project)),
         "publication-state": inputs.bytes_digest(
             encoded(ledger(project).fuzzy_sources() if receipts is None else receipts), algorithm="sha256"
         ),
@@ -135,7 +147,16 @@ def document(project: Project, current: state.Inventory, reports: dict[str, dict
             / report["measures"]["total_code"]
             if report["measures"]["total_code"]
             else 0,
-            "data_match_state": "unknown",
+            "data_match_state": current.data_coverage[version].manifest["state"],
+            "data_coverage": current.data_coverage[version].manifest,
+            "opaque_rom_bytes": max(
+                0,
+                current.data_coverage[version].manifest["rom_bytes"]
+                - report["measures"]["total_code"]
+                - report["measures"]["total_data"],
+            )
+            if current.data_coverage[version].manifest["rom_bytes"] is not None
+            else None,
         }
     payload = project.root / BUNDLE
     if not payload.is_file():
@@ -154,7 +175,8 @@ def document(project: Project, current: state.Inventory, reports: dict[str, dict
         "source_pins": pins,
         "versions": versions,
         "scope": "Declared split code and data intervals only; opaque top-level binary assets excluded. "
-        "Data matching is unknown; zero verified data numerator. Fuzzy scalar is the known lower bound; "
+        "Data credit requires current source-owned final linked extent proof; unmeasured coverage is explicit. "
+        "BSS is outside ROM-data coverage. Fuzzy scalar is the known lower bound; "
         "unknown similarity remains null in drafts. Coverage is independent of similarity.",
     }
 

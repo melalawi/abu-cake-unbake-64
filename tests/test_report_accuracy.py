@@ -161,7 +161,7 @@ class ReportAccuracyTests(ProjectCase):
         self.assertEqual((measures["total_code"], measures["matched_code"], measures["total_data"]), (32, 12, 4))
         self.assertEqual((measures["total_functions"], measures["matched_functions"]), (3, 1))
         self.assertEqual(measures["matched_data"], 0)
-        self.assertNotIn("matched_data_percent", measures)
+        self.assertEqual(measures["matched_data_percent"], 0.0)
         categories = {row["id"]: row["measures"] for row in report["categories"]}
         self.assertEqual(categories["original_asm"]["total_code"], 8)
         self.assertEqual(categories["original_asm"]["matched_code"], 0)

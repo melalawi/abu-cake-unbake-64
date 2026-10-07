@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ from unbake.fold import source_views
 from unbake.layout import split
 from unbake.process import capture
 from unbake.process import named as cause_named
+from unbake.report import data
 from unbake.work import attempts
 
 
@@ -25,17 +26,24 @@ class Inventory:
     input_pins: dict[Path, inputs.Signature | None]
     receipt_pin: str
     ledger_signature: inputs.Signature | None
+    data_coverage: dict[str, data.Coverage] = field(default_factory=dict)
+    data_pin: str = ""
 
 
 def input_signatures(project: Project) -> dict[Path, inputs.Signature | None]:
     from unbake.report import verify
 
-    return {path: inputs.signature(path) if path.is_file() else None for path in verify.source_paths(project)}
+    paths = (*verify.source_paths(project), *(project.version(v).baserom for v in project.versions))
+    return {path: inputs.signature(path) if path.is_file() else None for path in paths}
 
 
 def assert_current(project: Project, current: Inventory) -> None:
     if input_signatures(project) != current.input_pins or (
-        ledger_signature(project) != current.ledger_signature and receipt_identity(project) != current.receipt_pin
+        ledger_signature(project) != current.ledger_signature
+        and (
+            receipt_identity(project) != current.receipt_pin
+            or data.identity(data.snapshots(project)) != current.data_pin
+        )
     ):
         raise Held(
             cause_named(
@@ -85,6 +93,8 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
             definitions[unit, version] = parsed_views[clean]
             names.update(parsed_views[clean])
         sources[unit] = (hashlib.sha256(raw).hexdigest(), names, guarded)
+    records = data.snapshots(project)
+    coverage = {version: data.coverage(project, version, sources, records[version]) for version in project.versions}
     result = Inventory(
         units,
         receipts,
@@ -93,6 +103,8 @@ def inventory(project: Project, *, receipts: dict[str, dict[str, Any]] | None = 
         pins,
         inputs.bytes_digest(attempts.encoded(receipts), algorithm="sha256"),
         ledger_signature(project),
+        coverage,
+        data.identity(records),
     )
     validate(project, result)
     assert_current(project, result)

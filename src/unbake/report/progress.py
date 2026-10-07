@@ -18,7 +18,7 @@ from unbake.process import named as cause_named
 from unbake.report import files, readme_layout
 
 # Bump when this step's output changes for the same inputs. Keys never digest the tool's code.
-SCHEMA = 5
+SCHEMA = 6
 # Only C earns exact matched credit. Original assembly remains a separate denominator category.
 DONE = {"c": ("c", "Matched C", ".c")}
 
@@ -448,6 +448,8 @@ def _sum_measures(units: list[dict[str, Any]]) -> dict[str, Any]:
         ("matched_code", "total_code"),
         ("complete_code", "total_code"),
         ("matched_functions", "total_functions"),
+        ("matched_data", "total_data"),
+        ("complete_data", "total_data"),
     ):
         result[field + "_percent"] = _share(result[field], result[total])
     weighted = sum(
@@ -455,7 +457,12 @@ def _sum_measures(units: list[dict[str, Any]]) -> dict[str, Any]:
         for unit in units
     )
     result["fuzzy_match_percent"] = _share(weighted, result["total_code"])
-    # Data matching is unknown: zero verified numerator, no fabricated percentage.
+    if not 0 <= result["complete_data"] <= result["matched_data"] <= result["total_data"]:
+        raise Held(
+            cause_named(
+                "data.counter", "verified data exceeds declared denominator", owner="report.progress", stage="report"
+            )
+        )
     return result
 
 
@@ -472,30 +479,26 @@ def measure(project: Project, policy: Host | None, version: str, *, current: Any
         _unit(row, members=split.unit_members(row), receipts=current.receipts, version=version)
         for row in current.units[version]
     ]
-    _, _, segments = split.layout(project.version(version).split)
-    for segment in segments:
-        for index, row in enumerate(segment.rows):
-            if row.kind in split.CODE_KINDS:
-                continue
-            stop = segment.rows[index + 1].start if index + 1 < len(segment.rows) else segment.end
-            if stop is None:
-                raise Held(
-                    cause_named(
-                        "data.boundary",
-                        f"data.boundary: VERSION {version} {row.path}: missing end",
-                        owner="report.progress",
-                        stage="report",
-                    )
-                )
-            units.append(
-                {
-                    "name": f"{row.kind}:{row.path}@{row.start:X}",
-                    "measures": {"total_data": str(stop - row.start), "total_units": 1},
-                    "sections": [{"name": row.kind, "size": str(stop - row.start), "metadata": {}}],
-                    "functions": [],
-                    "metadata": {"complete": False, "progress_categories": ["data"]},
-                }
-            )
+    coverage = current.data_coverage[version]
+    for interval in coverage.intervals:
+        size = interval.end - interval.start
+        matched = coverage.bytes_in(interval.start, interval.end)
+        units.append(
+            {
+                "name": f"{interval.kind}:{interval.path}@{interval.start:X}",
+                "measures": {
+                    "total_data": str(size),
+                    "matched_data": str(matched),
+                    "complete_data": str(matched),
+                    "matched_data_percent": _share(matched, size),
+                    "complete_data_percent": _share(matched, size),
+                    "total_units": 1,
+                },
+                "sections": [{"name": interval.kind, "size": str(size), "metadata": {}}],
+                "functions": [],
+                "metadata": {"complete": matched == size, "progress_categories": ["data"]},
+            }
+        )
     category_units: dict[str, list[dict[str, Any]]] = {
         kind: [] for kind in ("c", "original_asm", "draft", "asm", "data")
     }
